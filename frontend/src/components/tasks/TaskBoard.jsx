@@ -46,7 +46,7 @@ export const BOARD_STATUSES = ['pending', 'in_progress', 'waiting', 'review', 'c
 
 const DELIVERY_POLL_ATTEMPTS = 8
 const DELIVERY_POLL_INTERVAL_MS = 1500
-const DELIVERY_PENDING_STATUSES = new Set(['queued', 'sending'])
+const DELIVERY_PENDING_STATUSES = new Set(['queued', 'sending', 'submitted'])
 
 const hasPendingDelivery = (columns = []) => columns.some((column) => (
   (column.items || []).some((task) => DELIVERY_PENDING_STATUSES.has(task.delivery?.status))
@@ -284,6 +284,19 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
           </span>
         </p>
       )}
+      {task.pending_action?.type === 'sms_client' && (
+        <p
+          data-testid="pending-sms-badge"
+          className="mt-2 flex items-start gap-1 rounded-lg bg-brand-accent/[0.07] px-2 py-1.5 text-[11px] text-brand-accent-2"
+        >
+          <MessageSquareText size={11} className="mt-0.5 shrink-0" />
+          <span>
+            {task.status === 'review'
+              ? <>Approval submits one consented SMS to {task.pending_action.recipient_bindings?.[0]?.phone}</>
+              : <>Draft SMS remains unsent for {task.pending_action.recipient_bindings?.[0]?.phone}</>}
+          </span>
+        </p>
+      )}
       {task.pending_action?.type === 'matter_document_draft' && (
         <p data-testid="pending-document-badge" className="mt-2 flex items-start gap-1 rounded-lg bg-brand-accent/[0.07] px-2 py-1.5 text-[11px] text-brand-accent-2">
           <FileText size={11} className="mt-0.5 shrink-0" />
@@ -308,8 +321,12 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
         <p role="alert" className={`mt-2 rounded-lg px-2 py-1.5 text-[11px] ${task.delivery.delivery_certainty === 'not_attempted' ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-800'}`}>
           {task.delivery.action_type === 'matter_document_draft' ? (
             <>The cloud document could not be verified for approval: {task.delivery.error_message || 'document integrity check failed'}. Open the task to reconcile the working copy.</>
+          ) : task.delivery.reconciliation_required ? (
+            <>SMS outcome is unknown: {task.delivery.error_message || 'the provider response was lost'}. Reconcile message {task.delivery.sms_message_id || 'in the SMS queue'} before approving a replacement.</>
+          ) : task.delivery.action_type === 'sms_client' ? (
+            <>The prior SMS attempt cannot be reused: {task.delivery.error_message || 'provider delivery was not confirmed'}. Create and review a new proposal with a new idempotency key before another submission.</>
           ) : task.delivery.delivery_certainty === 'not_attempted' ? (
-            <>Email was not sent: {task.delivery.error_message || 'delivery stopped before a provider attempt'}. Resolve the issue and approve again.</>
+            <>{task.delivery.action_type === 'sms_client' ? 'SMS' : 'Email'} was not sent: {task.delivery.error_message || 'delivery stopped before a provider attempt'}. Resolve the issue and approve again.</>
           ) : (
             <>Delivery not confirmed: {task.delivery.error_message || 'the provider did not confirm delivery'}. Check the connected mailbox&apos;s Sent Items before retrying; another attempt could send a duplicate.</>
           )}
@@ -323,6 +340,11 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
       {task.delivery?.status === 'sending' && (
         <p role="status" className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
           {task.delivery.action_type === 'matter_document_draft' ? 'Creating and filing the Word document…' : 'Delivery attempt in progress. Not yet confirmed sent.'}
+        </p>
+      )}
+      {task.delivery?.status === 'submitted' && (
+        <p role="status" className="mt-2 rounded-lg bg-blue-50 px-2 py-1.5 text-[11px] text-blue-900">
+          Provider accepted the SMS. Delivery is not confirmed until the signed status callback arrives.
         </p>
       )}
       {task.delivery?.status === 'sent' && (
@@ -429,6 +451,7 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
   const [reviewer, setReviewer] = useState(null)
   const [error, setError] = useState(null)
   const [deliveryRiskAcknowledged, setDeliveryRiskAcknowledged] = useState(false)
+  const [smsApprovalAcknowledged, setSmsApprovalAcknowledged] = useState(false)
   const dialogRef = useRef(null)
   useFocusTrap(dialogRef, () => { if (!saving) onClose() })
   const target = request.toStatus
@@ -439,13 +462,46 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
   const documentApproval = request.task.status === 'review'
     && request.task.pending_action?.type === 'matter_document_draft'
     && target === 'in_progress'
-  const activeDelivery = emailApproval
-    && ['queued', 'sending'].includes(request.task.delivery?.status)
-  const confirmedDelivery = emailApproval
+  const smsApproval = request.task.status === 'review'
+    && request.task.pending_action?.type === 'sms_client'
+    && target === 'in_progress'
+  const smsEvidence = smsApproval ? request.task.pending_action.consent_evidence?.[0] : null
+  const smsSourcesVerified = !smsApproval || (request.task.pending_action.sources || []).every(
+    source => source.verification_state === 'exact' && Boolean(source.snapshot_sha256),
+  )
+  const smsApprovalEvidenceValid = !smsApproval || Boolean(
+    smsEvidence?.evidence_sha256
+    && smsEvidence.phone_verified
+    && smsEvidence.mobile_e164 === request.task.pending_action.recipient_bindings?.[0]?.phone
+    && smsEvidence.disclosure_version
+    && smsEvidence.consent_source
+    && (smsEvidence.allowed_categories || []).includes(request.task.pending_action.category)
+    && smsSourcesVerified,
+  )
+  const outboundApproval = emailApproval || smsApproval
+  const activeDelivery = outboundApproval
+    && ['queued', 'sending', 'submitted'].includes(request.task.delivery?.status)
+  const confirmedDelivery = outboundApproval
     && request.task.delivery?.status === 'sent'
   const unknownOutcomeRetry = emailApproval
     && request.task.delivery?.status === 'failed'
     && request.task.delivery?.delivery_certainty !== 'not_attempted'
+  const smsReconciliationRequired = smsApproval
+    && request.task.delivery?.reconciliation_required
+  const smsPriorAttemptNeedsReplacement = smsApproval
+    && !smsReconciliationRequired
+    && request.task.delivery?.status === 'failed'
+    && (
+      !request.task.delivery?.action_sha256
+      || request.task.delivery.action_sha256 === request.task.pending_action_sha256
+    )
+  const smsDispatchClaimed = request.task.delivery?.action_type === 'sms_client'
+    && ['queued', 'sending', 'submitted'].includes(request.task.delivery?.status)
+  const smsActionHash = smsApproval && request.task.pending_action_sha256
+  const smsConsentSnapshotHash = smsApproval && (
+    smsEvidence?.evidence_sha256
+    || smsEvidence?.consent_snapshot_sha256
+  )
   const submit = async event => {
     event.preventDefault()
     if (target === 'waiting' && !reason.trim()) {
@@ -464,6 +520,26 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
       setError('Check Sent Items and acknowledge the duplicate-delivery risk before retrying.')
       return
     }
+    if (smsReconciliationRequired) {
+      setError('Reconcile the prior uncertain SMS before approving a replacement.')
+      return
+    }
+    if (smsPriorAttemptNeedsReplacement) {
+      setError('Create and review a new SMS proposal before another attempt.')
+      return
+    }
+    if (smsApproval && !smsApprovalEvidenceValid) {
+      setError('Approval is blocked because the consent or source evidence is incomplete or unverified.')
+      return
+    }
+    if (smsApproval && !smsApprovalAcknowledged) {
+      setError('Review the SMS destination, content, consent, and delivery risk before approval.')
+      return
+    }
+    if (target === 'cancelled' && smsDispatchClaimed) {
+      setError('This SMS dispatch is already claimed by the provider workflow. Refresh for delivery truth before cancelling the task.')
+      return
+    }
     setError(null)
     await onConfirm({
       reason: reason.trim() || undefined,
@@ -472,6 +548,14 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
       ...(unknownOutcomeRetry && deliveryRiskAcknowledged
         ? { acknowledge_prior_delivery_risk: true }
         : {}),
+      // Bind the approval click to the exact server-computed action hash and
+      // the reviewed consent snapshot; either changing invalidates this click.
+      ...(smsApproval ? {
+        sms_acknowledgement: {
+          action_sha256: smsActionHash || null,
+          consent_snapshot_sha256: smsConsentSnapshotHash || null,
+        },
+      } : {}),
     })
   }
   return (
@@ -479,8 +563,8 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
       <form ref={dialogRef} onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="transition-title" className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
         <header className="flex items-start justify-between border-b border-brand-line px-5 py-4">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-brand-accent">{documentApproval ? 'Document approval' : 'Move task'}</p>
-            <h2 id="transition-title" className="mt-1 text-lg font-serif font-bold text-brand-ink">{documentApproval ? 'Approve verified cloud revision' : `Move to ${config?.label || target}`}</h2>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-brand-accent">{documentApproval ? 'Document approval' : smsApproval ? 'SMS approval' : 'Move task'}</p>
+            <h2 id="transition-title" className="mt-1 text-lg font-serif font-bold text-brand-ink">{documentApproval ? 'Approve verified cloud revision' : smsApproval ? 'Approve consented SMS' : `Move to ${config?.label || target}`}</h2>
             <p className="mt-1 line-clamp-2 text-xs text-brand-muted">{request.task.title}</p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} aria-label="Close move dialog" className="rounded p-1 text-brand-muted hover:bg-brand-bg-soft"><X size={17} /></button>
@@ -507,6 +591,55 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
             <div role="note" className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
               <p className="flex items-center gap-1.5 text-xs font-bold text-blue-800"><FileText size={12} /> Approve this document</p>
               <p className="mt-1 text-[11px] leading-relaxed text-brand-ink">LawHand will read back “{request.task.pending_action.title}” from the tenant cloud and approve only the exact registered DOCX bytes. Nothing is emailed to the client.</p>
+            </div>
+          )}
+          {request.task.status === 'review'
+            && request.task.pending_action?.type === 'sms_client'
+            && target !== 'review'
+            && target !== 'in_progress' && (
+            <div role="note" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
+              <p className="flex items-center gap-1.5 text-xs font-bold text-amber-900">
+                <MessageSquareText size={12} /> This move does not submit the SMS
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-brand-ink">
+                The draft remains unsent. Only the dedicated Review to In Progress approval submits it.
+              </p>
+            </div>
+          )}
+          {smsApproval && (
+            <div role="note" className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-2.5">
+              <p className="flex items-center gap-1.5 text-xs font-bold text-blue-900">
+                <MessageSquareText size={12} /> This approval submits one SMS
+              </p>
+              <dl className="mt-2 space-y-1 text-[11px] leading-relaxed text-brand-ink">
+                <div><dt className="inline font-semibold">Recipient:</dt> <dd className="inline">{request.task.pending_action.recipient_bindings?.[0]?.phone}</dd></div>
+                <div><dt className="inline font-semibold">Category:</dt> <dd className="inline">{request.task.pending_action.category}</dd></div>
+                <div><dt className="inline font-semibold">Message:</dt> <dd className="inline whitespace-pre-wrap">{request.task.pending_action.body}</dd></div>
+                <div><dt className="inline font-semibold">Consent source:</dt> <dd className="inline">{smsEvidence?.consent_source || 'Not bound'}</dd></div>
+                <div><dt className="inline font-semibold">Disclosure:</dt> <dd className="inline">{smsEvidence?.disclosure_version || 'Not bound'}</dd></div>
+                <div><dt className="inline font-semibold">Consented at:</dt> <dd className="inline">{smsEvidence?.consented_at ? new Date(smsEvidence.consented_at).toLocaleString() : 'Not bound'}</dd></div>
+                <div><dt className="inline font-semibold">Consent expiry:</dt> <dd className="inline">{smsEvidence?.consent_expires_at ? new Date(smsEvidence.consent_expires_at).toLocaleString() : 'No recorded expiry'}</dd></div>
+                <div><dt className="inline font-semibold">Verified mobile:</dt> <dd className="inline">{smsEvidence?.phone_verified ? 'Yes' : 'No'} · {smsEvidence?.mobile_e164 || 'Not bound'}</dd></div>
+                <div><dt className="inline font-semibold">Allowed categories:</dt> <dd className="inline">{(smsEvidence?.allowed_categories || []).join(', ') || 'None'}</dd></div>
+                <div><dt className="inline font-semibold">Quiet hours:</dt> <dd className="inline">{smsEvidence ? `${smsEvidence.quiet_hours_start}–${smsEvidence.quiet_hours_end} ${smsEvidence.consent_timezone}` : 'Not bound'}</dd></div>
+                <div><dt className="inline font-semibold">Evidence hash:</dt> <dd className="inline break-all font-mono">{smsEvidence?.evidence_sha256 || 'Not bound'}</dd></div>
+              </dl>
+              {(request.task.pending_action.sources || []).length > 0 && (
+                <ul aria-label="SMS proposal sources" className="mt-2 flex flex-wrap gap-1">
+                  {request.task.pending_action.sources.map(source => <li key={source.source_id}><TaskSourceChip source={source} /></li>)}
+                </ul>
+              )}
+              <label className="mt-3 flex items-start gap-2 text-[11px] font-semibold text-blue-950">
+                <input
+                  type="checkbox"
+                  checked={smsApprovalAcknowledged}
+                  onChange={event => setSmsApprovalAcknowledged(event.target.checked)}
+                  disabled={saving || smsReconciliationRequired || smsPriorAttemptNeedsReplacement || !smsApprovalEvidenceValid}
+                  className="mt-0.5"
+                />
+                I reviewed the recipient, exact body, verified sources, consent snapshot and hash, category, quiet-hours policy, and duplicate-delivery risk.
+              </label>
+              {!smsApprovalEvidenceValid && !smsReconciliationRequired && !smsPriorAttemptNeedsReplacement && <p role="alert" className="mt-2 text-[11px] font-semibold text-red-800">Approval is blocked until consent and every cited source are bound to exact server-verified evidence.</p>}
             </div>
           )}
           {request.task.status === 'review'
@@ -550,6 +683,31 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
               This delivery is already confirmed sent; another approval is disabled.
             </p>
           )}
+          {smsApproval && activeDelivery && (
+            <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-[11px] font-semibold text-amber-950">
+              The previous SMS is still {request.task.delivery.status}; another approval is disabled.
+            </p>
+          )}
+          {smsApproval && confirmedDelivery && (
+            <p role="status" className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2.5 text-[11px] font-semibold text-emerald-950">
+              This SMS is already confirmed delivered; another approval is disabled.
+            </p>
+          )}
+          {target === 'cancelled' && smsDispatchClaimed && (
+            <p role="alert" className="rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-[11px] font-semibold text-red-950">
+              Cancellation is unavailable while this SMS is {request.task.delivery.status}. The provider workflow has claimed the dispatch; refresh to see signed delivery truth.
+            </p>
+          )}
+          {smsApproval && smsReconciliationRequired && (
+            <p role="alert" className="rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-[11px] font-semibold text-red-950">
+              The prior provider outcome is unknown. Reconcile SMS {request.task.delivery.sms_message_id || ''} before approving any replacement.
+            </p>
+          )}
+          {smsPriorAttemptNeedsReplacement && (
+            <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-[11px] font-semibold text-amber-950">
+              The prior SMS attempt cannot be reused. Create a new reviewed proposal with a new idempotency key before another submission.
+            </p>
+          )}
           {target === 'waiting' && (
             <>
               <div>
@@ -575,7 +733,7 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
         </div>
         <footer className="flex justify-end gap-2 border-t border-brand-line px-5 py-4">
           <button type="button" onClick={onClose} disabled={saving} className="rounded-lg px-4 py-2 text-sm text-brand-muted hover:bg-brand-bg-soft">Cancel</button>
-          <button type="submit" disabled={saving || activeDelivery || confirmedDelivery || (unknownOutcomeRetry && !deliveryRiskAcknowledged) || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} {documentApproval ? 'Approve exact revision' : 'Move task'}</button>
+          <button type="submit" disabled={saving || activeDelivery || smsDispatchClaimed || confirmedDelivery || smsReconciliationRequired || smsPriorAttemptNeedsReplacement || (smsApproval && (!smsApprovalEvidenceValid || !smsApprovalAcknowledged)) || (unknownOutcomeRetry && !deliveryRiskAcknowledged) || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} {documentApproval ? 'Approve exact revision' : smsApproval ? 'Approve and submit SMS' : 'Move task'}</button>
         </footer>
       </form>
     </div>
@@ -754,6 +912,44 @@ function PendingDocumentDraftPanel({ task, draft, editable, onOpen, onSync, sync
   )
 }
 
+function PendingSmsDraftPanel({
+  task, draft, editable, editing, saving, body, category, notice, error,
+  onEdit, onBodyChange, onCategoryChange, onSave, onCancel,
+}) {
+  const evidence = draft.consent_evidence?.[0]
+  return (
+    <section aria-labelledby={'sms-draft-' + task.id} className="rounded-xl border border-blue-300 bg-blue-50 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 id={'sms-draft-' + task.id} className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-blue-900"><MessageSquareText size={13} /> Reviewable SMS draft</h3>
+          <p className="mt-1 text-[11px] text-blue-900">The recipient is server-bound and cannot be edited. Saving body or category creates a fresh reviewed action and resets staged approval.</p>
+        </div>
+        {editable && !editing && <button type="button" onClick={onEdit} className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-brand-ink">Edit SMS</button>}
+      </div>
+      <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+        <div><dt className="font-bold text-brand-muted">Recipient</dt><dd className="font-mono text-brand-ink">{draft.recipient_bindings?.[0]?.phone}</dd></div>
+        <div><dt className="font-bold text-brand-muted">Consent source</dt><dd className="text-brand-ink">{evidence?.consent_source || 'Not bound'}</dd></div>
+        <div><dt className="font-bold text-brand-muted">Disclosure</dt><dd className="text-brand-ink">{evidence?.disclosure_version || 'Not bound'}</dd></div>
+        <div><dt className="font-bold text-brand-muted">Verified mobile</dt><dd className="text-brand-ink">{evidence?.phone_verified ? 'Yes' : 'No'} · {evidence?.mobile_e164 || 'Unknown'}</dd></div>
+        <div><dt className="font-bold text-brand-muted">Consent expiry</dt><dd className="text-brand-ink">{evidence?.consent_expires_at ? new Date(evidence.consent_expires_at).toLocaleString() : 'No recorded expiry'}</dd></div>
+        <div><dt className="font-bold text-brand-muted">Quiet hours</dt><dd className="text-brand-ink">{evidence ? `${evidence.quiet_hours_start}–${evidence.quiet_hours_end} ${evidence.consent_timezone}` : 'Not bound'}</dd></div>
+        <div className="sm:col-span-2"><dt className="font-bold text-brand-muted">Allowed categories</dt><dd className="text-brand-ink">{(evidence?.allowed_categories || []).join(', ') || 'None'}</dd></div>
+        {evidence?.evidence_sha256 && <div className="sm:col-span-2"><dt className="font-bold text-brand-muted">Consent evidence hash</dt><dd className="break-all font-mono text-[10px] text-brand-ink">{evidence.evidence_sha256}</dd></div>}
+      </dl>
+      {editing ? (
+        <form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); onSave() }}>
+          <label className="block text-xs font-semibold text-brand-ink">Category<input value={category} onChange={event => onCategoryChange(event.target.value)} maxLength={50} disabled={saving} className="mt-1 w-full rounded-lg border border-brand-line bg-white px-3 py-2 text-sm" /></label>
+          <label className="block text-xs font-semibold text-brand-ink">SMS body<textarea value={body} onChange={event => onBodyChange(event.target.value)} maxLength={1600} rows={6} disabled={saving} className="mt-1 w-full rounded-lg border border-brand-line bg-white px-3 py-2 text-sm" /></label>
+          <div className="flex gap-2"><button type="submit" disabled={saving} className="btn-primary disabled:opacity-50">Save fresh SMS review</button><button type="button" onClick={onCancel} disabled={saving} className="rounded-lg border border-brand-line px-3 py-2 text-sm">Cancel</button></div>
+        </form>
+      ) : <><p className="mt-3 whitespace-pre-wrap rounded-lg bg-white p-3 text-sm text-brand-ink">{draft.body}</p><p className="mt-2 text-xs font-semibold text-brand-muted">Category: {draft.category}</p></>}
+      {(draft.sources || []).length > 0 && <ul className="mt-3 flex flex-wrap gap-1" aria-label="SMS draft sources">{draft.sources.map(source => <li key={source.source_id}><TaskSourceChip source={source} />{source.verification_state !== 'exact' && <span className="ml-1 text-[10px] font-bold text-red-700">Unverified — approval blocked</span>}</li>)}</ul>}
+      {notice && <p role="status" className="mt-3 text-xs font-semibold text-emerald-700">{notice}</p>}
+      {error && <p role="alert" className="mt-3 text-xs font-semibold text-red-700">{error}</p>}
+    </section>
+  )
+}
+
 function DeliveryAttemptHistory({ attempts }) {
   if (!Array.isArray(attempts) || attempts.length < 1) return null
   const isDocumentHistory = attempts.some((attempt) => attempt.action_type === 'matter_document_draft' || attempt.action_snapshot?.type === 'matter_document_draft')
@@ -811,6 +1007,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
   const [error, setError] = useState(null)
   const [draftSubject, setDraftSubject] = useState('')
   const [draftBody, setDraftBody] = useState('')
+  const [draftCategory, setDraftCategory] = useState('')
   const [draftEditing, setDraftEditing] = useState(false)
   const [draftSaving, setDraftSaving] = useState(false)
   const [draftError, setDraftError] = useState(null)
@@ -829,6 +1026,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
         setTask(loadedTask)
         setDraftSubject(loadedTask.pending_action?.subject || loadedTask.pending_action?.title || '')
         setDraftBody(loadedTask.pending_action?.body || '')
+        setDraftCategory(loadedTask.pending_action?.category || '')
         setDraftEditing(false)
         setDraftError(null)
         setDraftNotice(null)
@@ -855,6 +1053,10 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
   const livePendingDocument = (
     task?.pending_action?.type === 'matter_document_draft' && task.pending_action
   ) || null
+  const livePendingSms = (
+    task?.pending_action?.type === 'sms_client' && task.pending_action
+  ) || null
+  const draftSmsEditable = Boolean(livePendingSms) && task?.status === 'review'
   const officeSnapshot = livePendingDocument?.document_edit_mode === 'office_snapshot'
   const draftDocumentEditable = Boolean(livePendingDocument) && task?.status === 'review' && !officeSnapshot
   const pendingDocumentStorageState = task?.delivery?.status === 'failed' ? 'conflict' : (livePendingDocument?.document_id ? 'verified' : 'pending')
@@ -869,6 +1071,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
   const resetDraft = (sourceTask = task) => {
     setDraftSubject(sourceTask?.pending_action?.subject || sourceTask?.pending_action?.title || '')
     setDraftBody(sourceTask?.pending_action?.body || '')
+    setDraftCategory(sourceTask?.pending_action?.category || '')
     setDraftEditing(false)
     setDraftError(null)
   }
@@ -878,6 +1081,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
     setTask(merged)
     setDraftSubject(merged.pending_action?.subject || merged.pending_action?.title || '')
     setDraftBody(merged.pending_action?.body || '')
+    setDraftCategory(merged.pending_action?.category || '')
     onTaskUpdated?.(merged)
   }
 
@@ -929,6 +1133,21 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
       const updated = await updateTaskPendingAction(task.id, { title, body: draftBody, expected_version: task.version })
       applyUpdatedTask(updated); setDraftEditing(false); setDraftNotice('New DOCX revision saved to tenant cloud; review reset.')
     } catch (err) { setDraftError(apiError(err, 'The document draft could not be saved.')) } finally { setDraftSaving(false) }
+  }
+  const savePendingSmsDraft = async () => {
+    const category = draftCategory.trim()
+    if (!category || !draftBody.trim()) { setDraftError('An SMS category and body are required.'); return }
+    if (!Number.isInteger(task?.version) || task.version < 1) { setDraftError('The live task version is unavailable. Close and reopen the task before editing.'); return }
+    setDraftSaving(true); setDraftError(null); setDraftNotice(null)
+    try {
+      const updated = await updateTaskPendingAction(task.id, { body: draftBody, category, expected_version: task.version })
+      applyUpdatedTask(updated); setDraftEditing(false); setDraftNotice('Fresh SMS action saved; staged review was reset and a new idempotency identity was created.')
+    } catch (err) {
+      setDraftError(apiError(err, 'The SMS draft could not be saved.'))
+      if (err?.response?.status === 409) {
+        try { applyUpdatedTask(await getTask(task.id)); setDraftEditing(false) } catch { /* preserve conflict */ }
+      }
+    } finally { setDraftSaving(false) }
   }
   const syncCloudDocument = async () => {
     if (!task?.id || !Number.isInteger(task?.version)) return
@@ -1008,8 +1227,26 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
                   onOpen={() => { setDocumentWorkspaceOpen(true); setDraftError(null); setDraftNotice(null) }}
                 />
               )}
+              {livePendingSms && (
+                <PendingSmsDraftPanel
+                  task={task}
+                  draft={livePendingSms}
+                  editable={draftSmsEditable}
+                  editing={draftEditing}
+                  saving={draftSaving}
+                  body={draftBody}
+                  category={draftCategory}
+                  notice={draftNotice}
+                  error={draftError}
+                  onEdit={() => { setDraftEditing(true); setDraftError(null); setDraftNotice(null) }}
+                  onBodyChange={setDraftBody}
+                  onCategoryChange={setDraftCategory}
+                  onSave={savePendingSmsDraft}
+                  onCancel={resetDraft}
+                />
+              )}
               <DeliveryAttemptHistory attempts={task.delivery_history} />
-              {task.description && !pendingEmail && !livePendingDocument && <section><h3 className="text-xs font-bold uppercase tracking-wide text-brand-muted">Notes</h3><p className="mt-2 whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-4 text-sm leading-relaxed text-brand-ink">{task.description}</p></section>}
+              {task.description && !pendingEmail && !livePendingDocument && !livePendingSms && <section><h3 className="text-xs font-bold uppercase tracking-wide text-brand-muted">Notes</h3><p className="mt-2 whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-4 text-sm leading-relaxed text-brand-ink">{task.description}</p></section>}
               {task.waiting_reason && <section className="rounded-xl border border-amber-200 bg-amber-50 p-4"><h3 className="text-xs font-bold uppercase tracking-wide text-amber-800">Waiting on</h3><p className="mt-1 text-sm text-amber-950">{task.waiting_reason}</p>{task.waiting_follow_up_date && <p className="mt-2 text-xs text-amber-800">Follow up {localDate(task.waiting_follow_up_date).toLocaleDateString()}</p>}</section>}
               <section>
                 <h3 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-brand-muted"><History size={13} /> Activity</h3>

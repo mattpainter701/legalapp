@@ -2,6 +2,7 @@
 
 import time
 
+from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.types import ASGIApp
@@ -71,6 +72,13 @@ async def _write_log(
             # This is a new session, so it does not inherit the request's
             # transaction-local RLS context. Establish it before the insert.
             await set_tenant_context(db, tenant_id)
+            # Best-effort: never let an access-log write hold up the response.
+            # An in-flight SMS dispatch holds a FOR UPDATE lock on the actor's
+            # user row across provider I/O (send_sms authorization fence); this
+            # insert's user foreign key takes a KEY SHARE on that same row and
+            # would otherwise block the whole request until the provider call
+            # resolves. Bound the wait so the row simply isn't written.
+            await db.execute(text("SET LOCAL lock_timeout = '2s'"))
             db.add(
                 ApiAccessLog(
                     tenant_id=tenant_id,

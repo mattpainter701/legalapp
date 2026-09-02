@@ -1280,7 +1280,7 @@ async def test_stale_purge_claim_is_fenced_by_an_existing_advisory_lock(
     def _filesystem_delete_must_not_start(_tenant_id):
         pytest.fail("filesystem deletion began while the advisory lock was held")
 
-    def _table_plan_must_not_start():
+    def _table_plan_must_not_start(**_kwargs):
         pytest.fail("database purge planning began while the advisory lock was held")
 
     monkeypatch.setattr(
@@ -1320,7 +1320,9 @@ async def test_purge_stamps_the_claim_so_the_next_worker_measures_its_own_window
     monkeypatch.setattr(
         demo_purge,
         "_purge_tables",
-        lambda: (_ for _ in ()).throw(DemoPurgeRefused("stop after the claim")),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            DemoPurgeRefused("stop after the claim")
+        ),
     )
     expired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     db_session.add_all(

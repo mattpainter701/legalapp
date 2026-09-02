@@ -282,6 +282,7 @@ class _ToolSequence:
         if tool_name in {
             "propose_task",
             "propose_client_email",
+            "propose_client_sms",
             "propose_matter_document",
         }:
             if matter_id not in self.tasks_checked:
@@ -290,6 +291,14 @@ class _ToolSequence:
                     "Call list_matter_tasks before proposing work",
                 )
         if tool_name == "propose_client_email":
+            discovered = self.recipients_by_matter.get(matter_id)
+            requested = set(getattr(arguments, "recipient_party_ids", ()))
+            if discovered is None or not requested.issubset(discovered):
+                raise ChatToolError(
+                    "recipient_lookup_required",
+                    "Use recipient ids returned by list_matter_recipients",
+                )
+        if tool_name == "propose_client_sms":
             discovered = self.recipients_by_matter.get(matter_id)
             requested = set(getattr(arguments, "recipient_party_ids", ()))
             if discovered is None or not requested.issubset(discovered):

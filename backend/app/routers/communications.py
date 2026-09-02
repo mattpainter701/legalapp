@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
@@ -26,9 +26,34 @@ from app.schemas.communication_log import (
     CommunicationLogUpdate,
 )
 from app.services.cache import ExpertiseCacheManager
+from app.services.rbac_service import get_user_capabilities
+from app.services.matter_access import can_access_matter, matter_access_predicate
 
 router = APIRouter(prefix="/api/communications", tags=["communications"])
 communication_context_cache = ExpertiseCacheManager()
+
+
+async def _can_access_sms(db: AsyncSession, user_id: uuid.UUID) -> bool:
+    return "manage_matters" in await get_user_capabilities(db, user_id)
+
+
+def _require_sms_access(*, channel: str | None, allowed: bool) -> None:
+    if channel == "sms" and not allowed:
+        raise HTTPException(status_code=403, detail="SMS communication access required")
+
+
+async def _can_access_sms_record(db: AsyncSession, user, matter_id) -> bool:
+    return bool(
+        matter_id
+        and await _can_access_sms(db, user.id)
+        and await can_access_matter(
+            db,
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            is_admin=user.role == "admin",
+            matter_id=matter_id,
+        )
+    )
 
 
 async def _record_client_contact(
@@ -101,6 +126,8 @@ async def list_communications(
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    can_access_sms = await _can_access_sms(db, current_user.id)
+    _require_sms_access(channel=channel, allowed=can_access_sms)
 
     stmt = select(CommunicationLog).where(
         CommunicationLog.tenant_id == uuid.UUID(tenant_id),
@@ -112,6 +139,32 @@ async def list_communications(
         stmt = stmt.where(CommunicationLog.contact_id == contact_id)
     if channel:
         stmt = stmt.where(CommunicationLog.channel == channel)
+    if channel == "sms" and can_access_sms:
+        stmt = stmt.where(
+            matter_access_predicate(
+                tenant_id=current_user.tenant_id,
+                user_id=current_user.id,
+                is_admin=current_user.role == "admin",
+                matter_id_column=CommunicationLog.matter_id,
+            )
+        )
+    elif not channel and can_access_sms:
+        stmt = stmt.where(
+            or_(
+                CommunicationLog.channel != "sms",
+                and_(
+                    CommunicationLog.channel == "sms",
+                    matter_access_predicate(
+                        tenant_id=current_user.tenant_id,
+                        user_id=current_user.id,
+                        is_admin=current_user.role == "admin",
+                        matter_id_column=CommunicationLog.matter_id,
+                    ),
+                ),
+            )
+        )
+    elif not can_access_sms:
+        stmt = stmt.where(CommunicationLog.channel != "sms")
     if direction:
         stmt = stmt.where(CommunicationLog.direction == direction)
     if occurred_after:
@@ -139,6 +192,18 @@ async def create_communication_log(
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    if payload.channel == "sms":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Provider SMS communication evidence can only be created by the "
+                "signed SMS lifecycle"
+            ),
+        )
+    _require_sms_access(
+        channel=payload.channel,
+        allowed=await _can_access_sms(db, current_user.id),
+    )
 
     data = payload.model_dump(exclude_none=True)
     if "occurred_at" not in data:
@@ -177,6 +242,10 @@ async def get_communication_log(
     log = result.scalar_one_or_none()
     if not log:
         raise HTTPException(status_code=404, detail="Communication log not found")
+    if log.channel == "sms" and not await _can_access_sms_record(
+        db, current_user, log.matter_id
+    ):
+        raise HTTPException(status_code=404, detail="Communication log not found")
     return CommunicationLogResponse.model_validate(log)
 
 
@@ -191,14 +260,25 @@ async def update_communication_log(
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
-        select(CommunicationLog).where(
+        select(CommunicationLog)
+        .where(
             CommunicationLog.id == log_id,
             CommunicationLog.tenant_id == uuid.UUID(tenant_id),
         )
+        .with_for_update()
     )
     log = result.scalar_one_or_none()
     if not log:
         raise HTTPException(status_code=404, detail="Communication log not found")
+    if log.channel == "sms" and not await _can_access_sms_record(
+        db, current_user, log.matter_id
+    ):
+        raise HTTPException(status_code=404, detail="Communication log not found")
+    if log.channel == "sms":
+        raise HTTPException(
+            status_code=409,
+            detail="Provider SMS communication evidence is immutable",
+        )
 
     previous_matter_id = log.matter_id
     for field, value in payload.model_dump(exclude_none=True).items():
@@ -225,14 +305,25 @@ async def delete_communication_log(
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
-        select(CommunicationLog).where(
+        select(CommunicationLog)
+        .where(
             CommunicationLog.id == log_id,
             CommunicationLog.tenant_id == uuid.UUID(tenant_id),
         )
+        .with_for_update()
     )
     log = result.scalar_one_or_none()
     if not log:
         raise HTTPException(status_code=404, detail="Communication log not found")
+    if log.channel == "sms" and not await _can_access_sms_record(
+        db, current_user, log.matter_id
+    ):
+        raise HTTPException(status_code=404, detail="Communication log not found")
+    if log.channel == "sms":
+        raise HTTPException(
+            status_code=409,
+            detail="Provider SMS communication evidence is immutable",
+        )
 
     log.status = "deleted"
     await db.commit()

@@ -542,8 +542,9 @@ async def test_stale_reserved_request_becomes_unknown_without_losing_its_hold(
                 BackgroundAIUsageReservation.id == reservation.id
             )
         )
-    assert snapshot["value"]["monthly"]["spent_usd"] == 0.40
+    assert snapshot["value"]["five_hour"]["spent_usd"] == 0.40
     assert snapshot["value"]["unreconciled"]["requests"] == 1
+    assert snapshot["value"]["unreconciled"]["held_usd"] == 0.40
     assert row.status == "unknown"
     assert row.error_code == "reconcile_pending"
 
@@ -576,7 +577,7 @@ async def test_reconciliation_settles_a_confirmed_billed_request(
     async with factory() as db:
         snapshot = await background_quota_snapshot(db)
     # 100 in at $0.60/M + 100 out at $2.40/M = 300 micros, replacing $0.90.
-    assert snapshot["value"]["monthly"]["spent_micros"] == 300
+    assert snapshot["value"]["five_hour"]["spent_micros"] == 300
     assert snapshot["value"]["unreconciled"]["requests"] == 0
 
 
@@ -605,7 +606,7 @@ async def test_reconciliation_releases_a_confirmed_unbilled_request(
 
     async with factory() as db:
         snapshot = await background_quota_snapshot(db)
-    assert snapshot["value"]["monthly"]["spent_usd"] == 0.0
+    assert snapshot["value"]["five_hour"]["spent_usd"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -634,7 +635,8 @@ async def test_a_failing_lookup_never_releases_capacity_it_cannot_verify(
 
     async with factory() as db:
         snapshot = await background_quota_snapshot(db)
-    assert snapshot["value"]["monthly"]["spent_usd"] == 0.50
+    assert snapshot["value"]["five_hour"]["spent_usd"] == 0.50
+    assert snapshot["value"]["unreconciled"]["held_usd"] == 0.50
 
 
 @pytest.mark.asyncio
@@ -669,6 +671,7 @@ async def test_unresolvable_reservations_age_out_but_keep_holding_their_estimate
         snapshot = await background_quota_snapshot(db)
         # Spend is retained in an active quota window even when backdating the
         # reservation crosses a UTC month boundary.
+        # Spend is retained...
         assert snapshot["value"]["five_hour"]["spent_usd"] == 0.60
         # ...and remains visible after retries stop, rather than disappearing
         # from the operator's accounting view.

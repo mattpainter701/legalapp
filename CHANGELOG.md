@@ -60,6 +60,31 @@
   rollback reviewable without destructive history deletion. This slice does
   not add arbitrary triggers/actions, outbound email,
   native DOCX/Smart Fill, generalized Studio automation, or a no-code builder.
+- **Consent-aware provider-backed SMS:** tenant administrators can keep SMS
+  inactive until provider credentials, sender readiness, ownership, consent,
+  and quiet-hours evidence are configured. Outbound messages require verified,
+  provenance-bearing consent and stable idempotency; provider account and
+  account-scoped active destination ownership, locked configuration-generation
+  checks, dispatch-admission/credential-rotation serialization, and signed
+  tenant-bound inbound/status callbacks fail closed on
+  cross-tenant routing; inactive senders cannot ingest new inbound messages.
+  Durable unknown-outcome recovery retains one authorized timeline marker and
+  sanitized audit record, rebinds matching in-flight task runs, and does not
+  claim delivery. Unauthorized SMS tasks are omitted from generic task, report,
+  calendar, and Workspace MCP reads. SMS proposals are never copied to assignment
+  email or third-party calendars; ordinary approval/update responses do not
+  depend on external calendar cleanup, while assignment revocation requires an
+  exact-user, verified delete-or-absence result for legacy copies. Provider
+  timeline rows cannot be fabricated,
+  edited, or deleted through the generic communications API. SMS proposal and
+  task-event evidence cannot be hard-deleted. STOP-family replies revoke consent;
+  ambiguous inbound routes prove access to every candidate matter before
+  returning status or target errors and may be resolved only to exact stored
+  candidates. Assistant proposals require live
+  matter access before creation and idempotent replay, remain human-approved,
+  and recheck consent at approval. Demo purge treats pre-SMS and complete-SMS
+  schemas coherently, including retired credential history, and refuses a
+  partially installed SMS table family.
 - **Template Studio Phase 1 shell:** the existing document-template library is
   now a first-class Template Studio with response-derived continue-setup,
   needs-attention, ready-to-generate, and recent queues; canonical persistent

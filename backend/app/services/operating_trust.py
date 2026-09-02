@@ -7,7 +7,7 @@ import hmac
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal, TypedDict
 from zoneinfo import ZoneInfo
 
 from itsdangerous import BadData, SignatureExpired, URLSafeTimedSerializer
@@ -23,14 +23,38 @@ TENANT_EXPORT_SNAPSHOT_MAX_AGE_SECONDS = 3600
 _TENANT_EXPORT_SNAPSHOT_SALT = "operating-trust-tenant-export-snapshot-v1"
 
 _SENSITIVE_KEYS = {
+    "auth_token",
     "authorization",
     "credential",
+    "encrypted_auth_token",
     "password",
     "prompt",
     "raw_content",
     "secret",
     "token",
 }
+ExportMode = Literal[
+    "existing-product-export-path",
+    "security-metadata-only-no-secret-values",
+    "immutable-evidence-summary",
+    "customer-or-provider-export-path",
+    "existing-file-export-path",
+]
+
+
+class ExportInventoryCategory(TypedDict):
+    category: str
+    record_count: int
+    export_mode: ExportMode
+
+
+class ExportProvider(TypedDict):
+    provider: str
+    record_count: int
+    bytes: int
+    export_state: Literal["customer-or-provider-path-required"]
+
+
 _SECURITY_METADATA_ONLY_TABLES = frozenset(
     {
         "api_access_logs",
@@ -53,6 +77,37 @@ _EVIDENCE_ONLY_TABLES = frozenset(
         "retention_actions",
         "tenant_agreement_acceptances",
         "workspace_mcp_audit_events",
+    }
+)
+_SMS_TABLE_EXPORT_MODES: dict[str, ExportMode] = {
+    "sms_messages": "existing-product-export-path",
+    "sms_number_suppressions": "existing-product-export-path",
+    "lead_channel_consents": "existing-product-export-path",
+    "sms_consent_events": "immutable-evidence-summary",
+    "sms_number_suppression_events": "immutable-evidence-summary",
+    "sms_review_items": "immutable-evidence-summary",
+    "sms_provider_configs": "security-metadata-only-no-secret-values",
+    "sms_provider_credentials": "security-metadata-only-no-secret-values",
+}
+_SMS_COPY_EXPORT_MODES: dict[str, ExportMode] = {
+    "communication_logs:sms": "existing-product-export-path",
+    "tasks:sms": "existing-product-export-path",
+    "task_events:sms": "immutable-evidence-summary",
+    "task_automation_runs:sms": "immutable-evidence-summary",
+}
+_SMS_RETENTION_COPY_NAMES = {
+    "sms_timeline_copies": "communication_logs:sms",
+    "sms_task_proposal_copies": "tasks:sms",
+    "sms_task_event_copies": "task_events:sms",
+    "sms_automation_action_snapshots": "task_automation_runs:sms",
+}
+_EXPORT_MODES = frozenset(
+    {
+        "existing-product-export-path",
+        "security-metadata-only-no-secret-values",
+        "immutable-evidence-summary",
+        "customer-or-provider-export-path",
+        "existing-file-export-path",
     }
 )
 _UNSAFE_PUBLIC_PATTERNS = (
@@ -128,6 +183,147 @@ def normalized_counts(value: dict[str, int] | None) -> dict[str, int]:
     return result
 
 
+def database_export_mode(table_name: str) -> ExportMode:
+    """Return an explicit export mode and fail closed for new SMS stores."""
+
+    sms_mode = _SMS_TABLE_EXPORT_MODES.get(table_name)
+    if sms_mode is not None:
+        return sms_mode
+    if table_name.startswith("sms_"):
+        raise ValueError(f"SMS export table is unclassified: {table_name}")
+    if table_name in _SECURITY_METADATA_ONLY_TABLES:
+        return "security-metadata-only-no-secret-values"
+    if table_name in _EVIDENCE_ONLY_TABLES:
+        return "immutable-evidence-summary"
+    return "existing-product-export-path"
+
+
+def sms_copy_export_mode(copy_name: str) -> ExportMode:
+    """Classify SMS-bearing rows stored in shared workflow/timeline tables."""
+    try:
+        return _SMS_COPY_EXPORT_MODES[copy_name]
+    except KeyError as exc:
+        raise ValueError(f"SMS shared-table copy is unclassified: {copy_name}") from exc
+
+
+def _validated_export_categories(value: Any) -> list[ExportInventoryCategory]:
+    if not isinstance(value, list):
+        raise ValueError("tenant export categories must be a list")
+    result: list[ExportInventoryCategory] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {
+            "category",
+            "record_count",
+            "export_mode",
+        }:
+            raise ValueError("tenant export category is malformed")
+        category = item.get("category")
+        count = item.get("record_count")
+        export_mode = item.get("export_mode")
+        if (
+            not isinstance(category, str)
+            or not category.strip()
+            or category in seen
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+            or export_mode not in _EXPORT_MODES
+        ):
+            raise ValueError("tenant export category is malformed")
+        seen.add(category)
+        result.append(
+            {
+                "category": category,
+                "record_count": count,
+                "export_mode": export_mode,
+            }
+        )
+    return result
+
+
+def _validated_export_providers(value: Any) -> list[ExportProvider]:
+    if not isinstance(value, list):
+        raise ValueError("tenant export providers must be a list")
+    result: list[ExportProvider] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {
+            "provider",
+            "record_count",
+            "bytes",
+            "export_state",
+        }:
+            raise ValueError("tenant export provider is malformed")
+        provider = item.get("provider")
+        count = item.get("record_count")
+        byte_count = item.get("bytes")
+        if (
+            not isinstance(provider, str)
+            or not provider.strip()
+            or provider in seen
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+            or not isinstance(byte_count, int)
+            or isinstance(byte_count, bool)
+            or byte_count < 0
+            or item.get("export_state") != "customer-or-provider-path-required"
+        ):
+            raise ValueError("tenant export provider is malformed")
+        seen.add(provider)
+        result.append(
+            {
+                "provider": provider,
+                "record_count": count,
+                "bytes": byte_count,
+                "export_state": "customer-or-provider-path-required",
+            }
+        )
+    return result
+
+
+def _validated_snapshot_inventory(inventory: Any) -> dict[str, Any]:
+    detail = "tenant export inventory is malformed"
+    required_fields = {
+        "schema",
+        "counts",
+        "categories",
+        "tenant_table_count",
+        "providers",
+        "retention_policy_version",
+        "legal_hold",
+        "boundary",
+    }
+    if (
+        not isinstance(inventory, dict)
+        or set(inventory) != required_fields
+        or inventory.get("schema") != "lawhand.tenant-export-inventory"
+        or not isinstance(inventory.get("tenant_table_count"), int)
+        or isinstance(inventory.get("tenant_table_count"), bool)
+        or inventory["tenant_table_count"] < 0
+        or not isinstance(inventory.get("retention_policy_version"), int)
+        or isinstance(inventory.get("retention_policy_version"), bool)
+        or inventory["retention_policy_version"] < 0
+        or not isinstance(inventory.get("legal_hold"), bool)
+        or not isinstance(inventory.get("boundary"), str)
+        or not inventory["boundary"].strip()
+    ):
+        raise ValueError(detail)
+    counts = normalized_counts(inventory.get("counts"))
+    categories = _validated_export_categories(inventory.get("categories"))
+    providers = _validated_export_providers(inventory.get("providers"))
+    category_counts = {item["category"]: item["record_count"] for item in categories}
+    if category_counts != counts:
+        raise ValueError(detail)
+    return {
+        **inventory,
+        "counts": counts,
+        "categories": categories,
+        "providers": providers,
+    }
+
+
 def reconcile_counts(
     expected: dict[str, int] | None, actual: dict[str, int] | None
 ) -> list[dict[str, Any]]:
@@ -185,19 +381,24 @@ def issue_tenant_export_snapshot(
     """Sign a point-in-time inventory so later audit writes cannot move it."""
 
     issued_at = utcnow()
-    snapshot_inventory = {
-        key: inventory[key]
-        for key in (
-            "schema",
-            "counts",
-            "categories",
-            "tenant_table_count",
-            "providers",
-            "retention_policy_version",
-            "legal_hold",
-            "boundary",
+    try:
+        snapshot_inventory = _validated_snapshot_inventory(
+            {
+                key: inventory[key]
+                for key in (
+                    "schema",
+                    "counts",
+                    "categories",
+                    "tenant_table_count",
+                    "providers",
+                    "retention_policy_version",
+                    "legal_hold",
+                    "boundary",
+                )
+            }
         )
-    }
+    except (KeyError, ValueError) as exc:
+        raise ValueError("tenant export inventory is malformed") from exc
     payload = {
         "version": 1,
         "tenant_id": str(tenant_id),
@@ -241,30 +442,12 @@ def verify_tenant_export_snapshot(
         )
     )
     inventory = payload.get("inventory") if isinstance(payload, dict) else None
-    required_inventory_fields = {
-        "schema",
-        "counts",
-        "categories",
-        "tenant_table_count",
-        "providers",
-        "retention_policy_version",
-        "legal_hold",
-        "boundary",
-    }
-    if (
-        not claims_match
-        or not isinstance(inventory, dict)
-        or set(inventory) != required_inventory_fields
-        or inventory.get("schema") != "lawhand.tenant-export-inventory"
-        or not isinstance(inventory.get("categories"), list)
-        or not isinstance(inventory.get("providers"), list)
-        or not isinstance(inventory.get("tenant_table_count"), int)
-        or not isinstance(inventory.get("retention_policy_version"), int)
-        or not isinstance(inventory.get("legal_hold"), bool)
-        or not isinstance(inventory.get("boundary"), str)
-    ):
+    if not claims_match:
         raise ValueError(detail)
-    inventory["counts"] = normalized_counts(inventory.get("counts"))
+    try:
+        inventory = _validated_snapshot_inventory(inventory)
+    except ValueError as exc:
+        raise ValueError(detail) from exc
     assert_safe_evidence(payload)
     return {
         "inventory": inventory,
@@ -305,7 +488,7 @@ async def tenant_export_inventory(
 
     counts: dict[str, int] = {}
     tenant_tables: list[str] = []
-    categories: list[dict[str, Any]] = []
+    categories: list[ExportInventoryCategory] = []
     tables = [
         table
         for table in sorted(Base.metadata.tables.values(), key=lambda item: item.name)
@@ -325,12 +508,7 @@ async def tenant_export_inventory(
     for table in tables:
         tenant_tables.append(table.name)
         counts[f"database:{table.name}"] = row_counts[table.name]
-        if table.name in _SECURITY_METADATA_ONLY_TABLES:
-            export_mode = "security-metadata-only-no-secret-values"
-        elif table.name in _EVIDENCE_ONLY_TABLES:
-            export_mode = "immutable-evidence-summary"
-        else:
-            export_mode = "existing-product-export-path"
+        export_mode = database_export_mode(table.name)
         categories.append(
             {
                 "category": f"database:{table.name}",
@@ -339,7 +517,26 @@ async def tenant_export_inventory(
             }
         )
 
-    providers = []
+    retention_categories = {
+        str(item.get("name")): item
+        for item in retention.get("categories", [])
+        if isinstance(item, dict)
+    }
+    for retention_name, copy_name in _SMS_RETENTION_COPY_NAMES.items():
+        category = f"database-copy:{copy_name}"
+        record_count = int(
+            retention_categories.get(retention_name, {}).get("record_count") or 0
+        )
+        counts[category] = record_count
+        categories.append(
+            {
+                "category": category,
+                "record_count": record_count,
+                "export_mode": sms_copy_export_mode(copy_name),
+            }
+        )
+
+    providers: list[ExportProvider] = []
     for provider in retention.get("matter_file_providers", []):
         name = str(provider.get("provider") or "unknown")
         category = f"provider-files:{name}"

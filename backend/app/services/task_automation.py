@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -44,6 +46,8 @@ from app.models.matter_party import MatterParty
 from app.schemas.chat_action import (
     EmailClientAction,
     MatterDocumentDraftAction,
+    SmsConsentEvidenceBinding,
+    SmsClientAction,
     normalize_single_mailbox,
 )
 from app.services.document_accountability import append_document_integrity_event
@@ -55,6 +59,13 @@ from app.services.connected_mail import (
     send_client_email,
 )
 from app.services.email import email_service
+from app.services.sms import (
+    SmsError,
+    consent_authorizes_sms,
+    load_sms_consent,
+    normalize_e164,
+    send_sms,
+)
 from app.services.task_workflow import (
     append_task_event,
     staged_review_is_approved,
@@ -73,7 +84,7 @@ APPROVAL_TO_STATUSES = frozenset({"in_progress"})
 TASK_AUTOMATION_JOB = "task_automation"
 
 # Delivery states an attorney may see. Only "sent" means the client was contacted.
-DELIVERY_STATUSES = ("queued", "sending", "sent", "failed")
+DELIVERY_STATUSES = ("queued", "sending", "submitted", "sent", "failed")
 TERMINAL_DELIVERY_STATUSES = ("sent", "failed")
 
 
@@ -94,6 +105,42 @@ def transition_is_approval(from_status: str | None, to_status: str | None) -> bo
     generic PATCH approved without ever executing.
     """
     return from_status == APPROVAL_FROM_STATUS and to_status in APPROVAL_TO_STATUSES
+
+
+async def require_sms_cancellation_is_truthful(
+    db: AsyncSession,
+    task: Task,
+) -> None:
+    """Reject cancellation once an SMS dispatch may have crossed the boundary."""
+    run = await db.scalar(
+        select(TaskAutomationRun)
+        .where(
+            TaskAutomationRun.tenant_id == task.tenant_id,
+            TaskAutomationRun.task_id == task.id,
+            TaskAutomationRun.action_type == "sms_client",
+        )
+        .order_by(TaskAutomationRun.created_at.desc(), TaskAutomationRun.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if run is None or run.status == "queued":
+        return
+    dispatch_crossed = bool(
+        run.status in {"sending", "submitted", "sent"}
+        or run.reconciliation_required
+        or run.delivery_certainty
+        in {
+            "outcome_unknown",
+            "provider_rejected",
+            "provider_accepted",
+            "provider_failed_after_acceptance",
+            "confirmed_sent",
+        }
+    )
+    if dispatch_crossed:
+        raise ActionApprovalConflict(
+            "This SMS dispatch was already claimed or accepted. Cancellation cannot represent it as unsent; refresh for delivery or reconciliation truth."
+        )
 
 
 def _canonical_action_snapshot(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -117,6 +164,29 @@ def action_payload_sha256(payload: dict[str, Any] | None) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _require_sms_action_acknowledgement(
+    task: Task,
+    action: SmsClientAction,
+    acknowledgement: dict[str, str] | None,
+) -> None:
+    """Bind the approval click to the exact action and consent snapshot."""
+    if not acknowledgement:
+        raise ActionApprovalConflict(
+            "SMS approval requires acknowledgement of the exact action and consent snapshot"
+        )
+    action_hash = str(acknowledgement.get("action_sha256") or "")
+    consent_hash = str(acknowledgement.get("consent_snapshot_sha256") or "")
+    expected_action_hash = action_payload_sha256(task.pending_action)
+    expected_consent_hash = action.consent_evidence[0].evidence_sha256
+    if not (
+        hmac.compare_digest(action_hash, expected_action_hash)
+        and hmac.compare_digest(consent_hash, expected_consent_hash)
+    ):
+        raise ActionApprovalConflict(
+            "The SMS action or consent evidence changed after review. Refresh and acknowledge the current proposal."
+        )
 
 
 def automation_idempotency_key(task: Task, from_status: str) -> str:
@@ -182,7 +252,8 @@ async def enqueue_automation_run(
             action_snapshot=action_snapshot,
             action_sha256=action_sha256,
             status="queued",
-            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_legacy=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_v2=DELIVERY_NOT_ATTEMPTED,
             triggered_by_user_id=actor_user_id,
         )
         # An existing row already covers this approval — including one still
@@ -223,7 +294,8 @@ async def _claim_run(
             action_snapshot=action_snapshot,
             action_sha256=action_payload_sha256(action_snapshot),
             status="sending",
-            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_legacy=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_v2=DELIVERY_NOT_ATTEMPTED,
             triggered_by_user_id=actor_user_id,
         )
         .on_conflict_do_update(
@@ -233,7 +305,8 @@ async def _claim_run(
                 "error_message": None,
                 "triggered_by_user_id": actor_user_id,
                 "completed_at": None,
-                "delivery_certainty": DELIVERY_NOT_ATTEMPTED,
+                TaskAutomationRun.__table__.c.delivery_certainty: DELIVERY_NOT_ATTEMPTED,
+                TaskAutomationRun.__table__.c.delivery_certainty_v2: DELIVERY_NOT_ATTEMPTED,
             },
             # Failed delivery is terminal until an attorney explicitly edits and
             # re-approves a changed payload. Automatically retrying an ambiguous
@@ -250,7 +323,15 @@ async def _claim_run(
     # tables are FORCE-RLS in production, so rebind before the follow-up SELECT.
     await set_tenant_context(db, str(task.tenant_id))
     return await db.scalar(
-        select(TaskAutomationRun).where(TaskAutomationRun.id == run_id)
+        select(TaskAutomationRun)
+        .where(TaskAutomationRun.id == run_id)
+        # populate_existing: the claim above is a bare UPDATE, so a caller that
+        # already loaded this run holds an instance the ORM will hand straight
+        # back from its identity map -- still reading "queued" for a row this
+        # function just moved to "sending". A session configured with
+        # expire_on_commit hides that; one without it returns the stale claim
+        # state to the caller that is about to act on it.
+        .execution_options(populate_existing=True)
     )
 
 
@@ -278,7 +359,8 @@ async def _record_terminal_no_send(
             status="failed",
             error_message=detail[:500],
             delivery_detail=detail[:500],
-            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_legacy=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_v2=DELIVERY_NOT_ATTEMPTED,
             triggered_by_user_id=actor_user_id,
             completed_at=now,
         )
@@ -288,7 +370,8 @@ async def _record_terminal_no_send(
                 "status": "failed",
                 "error_message": detail[:500],
                 "delivery_detail": detail[:500],
-                "delivery_certainty": DELIVERY_NOT_ATTEMPTED,
+                TaskAutomationRun.__table__.c.delivery_certainty: DELIVERY_NOT_ATTEMPTED,
+                TaskAutomationRun.__table__.c.delivery_certainty_v2: DELIVERY_NOT_ATTEMPTED,
                 "completed_at": now,
             },
             where=TaskAutomationRun.status == "queued",
@@ -322,6 +405,8 @@ class ActionExecutionResult:
     provider: str | None = None
     provider_message_id: str | None = None
     delivery_certainty: str = DELIVERY_OUTCOME_UNKNOWN
+    sms_message_id: uuid.UUID | None = None
+    reconciliation_required: bool = False
 
 
 async def _run_email_client(
@@ -382,6 +467,78 @@ async def _run_email_client(
                 DELIVERY_CONFIRMED_SENT if delivery.result else DELIVERY_OUTCOME_UNKNOWN
             )
         ),
+    )
+
+
+async def _run_sms_client(
+    db: AsyncSession,
+    task: Task,
+    payload: dict[str, Any],
+    actor_user_id,
+) -> ActionExecutionResult:
+    """Send an approved, server-bound SMS through the fail-closed adapter."""
+    try:
+        action = SmsClientAction.model_validate(payload)
+    except ValidationError:
+        return ActionExecutionResult(
+            False,
+            "The stored SMS draft is not a valid action payload",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    if task.matter_id != action.matter_id or not await _sms_bindings_are_current(
+        db, task, action
+    ):
+        return ActionExecutionResult(
+            False,
+            "Not sent: SMS consent, phone, or matter-party binding changed",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    if not await _action_sources_are_current(db, task, action):
+        return ActionExecutionResult(
+            False,
+            "Not sent: one or more cited local documents are no longer available",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    if len(action.recipient_bindings) != 1:
+        return ActionExecutionResult(
+            False,
+            "Not sent: SMS actions must target exactly one matter party",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    binding = action.recipient_bindings[0]
+    try:
+        async with async_session_maker() as delivery_db:
+            await set_tenant_context(delivery_db, str(task.tenant_id))
+            message = await send_sms(
+                delivery_db,
+                tenant_id=task.tenant_id,
+                user_id=actor_user_id,
+                contact_id=binding.contact_id,
+                matter_id=action.matter_id,
+                body=action.body,
+                category=action.category,
+                idempotency_key=action.idempotency_key,
+                required_capabilities=frozenset(
+                    {"approve_legal_work", "manage_matters"}
+                ),
+            )
+    except SmsError as exc:
+        return ActionExecutionResult(
+            False,
+            str(exc),
+            provider="twilio",
+            provider_message_id=None,
+            delivery_certainty=exc.delivery_certainty,
+            sms_message_id=exc.sms_message_id,
+            reconciliation_required=exc.reconciliation_required,
+        )
+    return ActionExecutionResult(
+        True,
+        "SMS was accepted by the configured provider; delivery remains webhook-reconciled.",
+        provider="twilio",
+        provider_message_id=message.provider_message_id,
+        delivery_certainty="provider_accepted",
+        sms_message_id=message.id,
     )
 
 
@@ -635,14 +792,92 @@ async def _recipient_bindings_are_current(
     return True
 
 
+async def _sms_bindings_are_current(
+    db: AsyncSession,
+    task: Task,
+    action: SmsClientAction,
+) -> bool:
+    """Revalidate verified consent immediately before an approved SMS send."""
+    requested_ids = [binding.party_id for binding in action.recipient_bindings]
+    rows = (
+        await db.execute(
+            select(MatterParty.id, MatterParty.contact_id, Contact.phone)
+            .join(Contact, MatterParty.contact_id == Contact.id)
+            .where(
+                MatterParty.id.in_(requested_ids),
+                MatterParty.tenant_id == task.tenant_id,
+                MatterParty.matter_id == action.matter_id,
+                Contact.tenant_id == task.tenant_id,
+            )
+        )
+    ).all()
+    current = {party_id: (contact_id, phone) for party_id, contact_id, phone in rows}
+    if len(current) != len(set(requested_ids)):
+        return False
+    evidence_by_contact = {
+        evidence.contact_id: evidence for evidence in action.consent_evidence
+    }
+    if len(evidence_by_contact) != len(action.recipient_bindings):
+        return False
+    for binding in action.recipient_bindings:
+        row = current.get(binding.party_id)
+        if row is None or row[0] != binding.contact_id:
+            return False
+        try:
+            current_phone = normalize_e164(row[1])
+        except SmsError:
+            return False
+        consent = await load_sms_consent(db, task.tenant_id, binding.contact_id)
+        if current_phone != binding.phone or not consent_authorizes_sms(
+            consent=consent,
+            to_number=current_phone,
+            category=action.category,
+        ):
+            return False
+        evidence = evidence_by_contact.get(binding.contact_id)
+        if evidence is None or consent is None:
+            return False
+        values = {
+            "consent_id": consent.id,
+            "contact_id": binding.contact_id,
+            "mobile_e164": consent.mobile_e164,
+            "phone_verified": consent.phone_verified,
+            "consent_source": consent.consent_source,
+            "disclosure_version": consent.disclosure_version,
+            "consented_at": consent.consented_at,
+            "consent_expires_at": consent.consent_expires_at,
+            "consent_timezone": consent.consent_timezone,
+            "quiet_hours_start": consent.quiet_hours_start,
+            "quiet_hours_end": consent.quiet_hours_end,
+            "allowed_categories": sorted(consent.allowed_categories or []),
+        }
+        current_evidence = SmsConsentEvidenceBinding.model_construct(
+            **values, evidence_sha256=""
+        )
+        if current_evidence.digest() != evidence.evidence_sha256:
+            return False
+    return True
+
+
 async def _action_sources_are_current(
     db: AsyncSession,
     task: Task,
-    action: EmailClientAction,
+    action: EmailClientAction | SmsClientAction,
 ) -> bool:
     """Lock and verify every local source before approval/delivery."""
+    source_ids = [str(source.get("source_id") or "") for source in action.sources]
+    if action.source_ids and source_ids != action.source_ids:
+        return False
+    for source in action.sources:
+        digest = str(source.get("snapshot_sha256") or "")
+        if (
+            source.get("verification_state") != "exact"
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            return False
     if not action.source_document_ids:
-        return True
+        return not action.sources
     documents = (
         (
             await db.execute(
@@ -680,6 +915,11 @@ async def _action_sources_are_current(
         actual_hash = await asyncio.to_thread(_file_sha256, storage_path)
         if actual_hash != expected_hash:
             return False
+        if not any(
+            str(source.get("snapshot_sha256") or "") == actual_hash
+            for source in action.sources
+        ):
+            return False
     return True
 
 
@@ -707,6 +947,7 @@ ACTION_HANDLERS: dict[
     Callable[[AsyncSession, Task, dict, Any], Awaitable[ActionExecutionResult]],
 ] = {
     "email_client": _run_email_client,
+    "sms_client": _run_sms_client,
     "matter_document_draft": _run_matter_document_draft,
 }
 
@@ -903,6 +1144,14 @@ async def run_task_automation(
                 await db.commit()
                 return
 
+            # SMS cancellation truthfulness is gated on the already-claimed run
+            # row (require_sms_cancellation_is_truthful), not on this task lock.
+            # Release the task lock before the provider call so a concurrent
+            # cancellation can reach that gate instead of blocking on this lock
+            # and deadlocking against the worker's in-flight provider request.
+            if action_type == "sms_client":
+                await db.commit()
+
             # `_claim_run` commits, so the earlier feature-flag read is no
             # longer authoritative. Lock and recheck the tenant setting at the
             # irreversible side-effect boundary; an admin disable either wins
@@ -939,6 +1188,7 @@ async def run_task_automation(
             payload_snapshot = _canonical_action_snapshot(
                 run.action_snapshot or task.pending_action
             )
+            claimed_run_id = run.id
             if run.action_snapshot is None:
                 # Compatibility for a queued row created before migration 103.
                 # All new runs already carry these fields before delivery.
@@ -960,36 +1210,85 @@ async def run_task_automation(
             # OAuth token refresh may commit inside the delivery handler, which
             # clears SET LOCAL. Rebind before writing the durable outcome.
             await set_tenant_context(db, str(locked_tenant_id))
-            run.status = "sent" if result.succeeded else "failed"
-            run.error_message = None if result.succeeded else result.detail[:500]
-            run.delivery_detail = result.detail[:500]
-            run.delivery_certainty = result.delivery_certainty
-            run.provider = result.provider[:50] if result.provider else None
-            run.provider_message_id = (
-                result.provider_message_id[:500] if result.provider_message_id else None
+            run = await db.scalar(
+                select(TaskAutomationRun)
+                .where(
+                    TaskAutomationRun.id == claimed_run_id,
+                    TaskAutomationRun.tenant_id == locked_tenant_id,
+                )
+                .execution_options(populate_existing=True)
+                .with_for_update()
             )
-            run.completed_at = datetime.now(timezone.utc)
+            if run is None:
+                raise RuntimeError("Claimed automation run disappeared during delivery")
+            signed_sms_truth_already_won = bool(
+                action_type == "sms_client"
+                and result.sms_message_id
+                and run.sms_message_id == result.sms_message_id
+                and run.status in {"submitted", "sent", "failed"}
+            )
+            if not signed_sms_truth_already_won:
+                run.status = (
+                    "submitted"
+                    if result.succeeded
+                    and result.delivery_certainty == "provider_accepted"
+                    else ("sent" if result.succeeded else "failed")
+                )
+                run.error_message = None if result.succeeded else result.detail[:500]
+                run.delivery_detail = result.detail[:500]
+                run.delivery_certainty = result.delivery_certainty
+                run.provider = result.provider[:50] if result.provider else None
+                run.provider_message_id = (
+                    result.provider_message_id[:500]
+                    if result.provider_message_id
+                    else None
+                )
+                run.sms_message_id = result.sms_message_id
+                run.reconciliation_required = result.reconciliation_required
+            final_succeeded = (
+                run.status in {"submitted", "sent"}
+                if signed_sms_truth_already_won
+                else result.succeeded
+            )
+            final_detail = (
+                run.delivery_detail or run.error_message or result.detail
+                if signed_sms_truth_already_won
+                else result.detail
+            )
+            final_provider = (
+                run.provider or result.provider
+                if signed_sms_truth_already_won
+                else result.provider
+            )
+            final_provider_message_id = (
+                run.provider_message_id or result.provider_message_id
+                if signed_sms_truth_already_won
+                else result.provider_message_id
+            )
+            run.completed_at = run.completed_at or datetime.now(timezone.utc)
             audit_snapshot = run.action_snapshot or {}
             append_task_event(
                 db,
                 task,
                 event_type=(
-                    "automation_succeeded" if result.succeeded else "automation_failed"
+                    "automation_succeeded" if final_succeeded else "automation_failed"
                 ),
                 actor_user_id=actor_user_id,
-                note=None if result.succeeded else result.detail[:500],
+                note=None if final_succeeded else final_detail[:500],
                 metadata={
                     "action_type": action_type,
-                    "detail": result.detail[:200],
+                    "detail": final_detail[:200],
                     "action_sha256": run.action_sha256,
-                    "provider": result.provider,
-                    "provider_message_id": result.provider_message_id,
+                    "provider": final_provider,
+                    "provider_message_id": final_provider_message_id,
+                    "delivery_certainty": run.delivery_certainty,
+                    "delivery_status": run.status,
                     "to": list(audit_snapshot.get("to") or [])[:10],
                     "subject": audit_snapshot.get("subject"),
                     "source_ids": list(audit_snapshot.get("source_ids") or [])[:10],
                 },
             )
-            if result.succeeded:
+            if final_succeeded:
                 # Clear the draft so a later manual transition of the same task
                 # cannot re-enter the automation path at all.
                 task.pending_action = None
@@ -1037,6 +1336,7 @@ async def enqueue_durable_automation(
     to_status: str | None,
     actor_user_id=None,
     acknowledge_prior_delivery_risk: bool = False,
+    sms_acknowledgement: dict[str, str] | None = None,
 ) -> str | None:
     """Persist the send intent in the caller's transaction. Must precede commit.
 
@@ -1086,6 +1386,31 @@ async def enqueue_durable_automation(
                 "A cited local document is no longer available or no longer "
                 "belongs to this matter. Restore the evidence or create a new draft."
             )
+    elif str(task.pending_action.get("type") or "") == "sms_client":
+        try:
+            pending_sms = SmsClientAction.model_validate(task.pending_action)
+        except ValidationError as exc:
+            raise ActionApprovalConflict(
+                "The stored SMS draft has invalid or missing consent bindings. "
+                "Create a new draft before approval."
+            ) from exc
+        _require_sms_action_acknowledgement(
+            task,
+            pending_sms,
+            sms_acknowledgement,
+        )
+        if len(
+            pending_sms.recipient_bindings
+        ) != 1 or not await _sms_bindings_are_current(db, task, pending_sms):
+            raise ActionApprovalConflict(
+                "SMS consent, verified phone, or matter-party membership changed. "
+                "Create and review a new draft."
+            )
+        if not await _action_sources_are_current(db, task, pending_sms):
+            raise ActionApprovalConflict(
+                "A cited local document is no longer available or no longer "
+                "belongs to this matter. Restore the evidence or create a new draft."
+            )
     elif str(task.pending_action.get("type") or "") == "matter_document_draft":
         try:
             pending_document = MatterDocumentDraftAction.model_validate(
@@ -1105,14 +1430,14 @@ async def enqueue_durable_automation(
         .where(
             TaskAutomationRun.tenant_id == task.tenant_id,
             TaskAutomationRun.task_id == task.id,
-            TaskAutomationRun.status.in_(("queued", "sending")),
+            TaskAutomationRun.status.in_(("queued", "sending", "submitted")),
         )
         .order_by(TaskAutomationRun.created_at.desc(), TaskAutomationRun.id.desc())
         .limit(1)
     )
     if active_run is not None:
         raise ActionApprovalConflict(
-            "An earlier email delivery is still queued or in progress. Wait for "
+            "An earlier delivery is still queued, submitted, or in progress. Wait for "
             "its outcome before approving another draft."
         )
 
@@ -1127,9 +1452,28 @@ async def enqueue_durable_automation(
     )
     retry_after_run_id = None
     if latest_run is not None and latest_run.status == "failed":
+        is_sms_action = str(task.pending_action.get("type") or "") == "sms_client"
+        if is_sms_action and latest_run.reconciliation_required:
+            raise ActionApprovalConflict(
+                "A prior SMS has an unknown provider outcome. Reconcile that exact "
+                "message before approving any replacement."
+            )
         certainty = latest_run.delivery_certainty or DELIVERY_OUTCOME_UNKNOWN
+        if is_sms_action and (
+            latest_run.action_sha256 is None
+            or hmac.compare_digest(
+                latest_run.action_sha256,
+                action_payload_sha256(task.pending_action),
+            )
+        ):
+            raise ActionApprovalConflict(
+                "The prior SMS attempt cannot be reused, regardless of its provider "
+                "outcome. Create and review a new SMS proposal with a new idempotency "
+                "key before another submission."
+            )
         if (
-            certainty == DELIVERY_OUTCOME_UNKNOWN
+            not is_sms_action
+            and certainty == DELIVERY_OUTCOME_UNKNOWN
             and not acknowledge_prior_delivery_risk
         ):
             raise ActionApprovalConflict(
@@ -1137,15 +1481,16 @@ async def enqueue_durable_automation(
                 "mailbox's Sent Items and explicitly acknowledge the duplicate-"
                 "delivery risk before approving another attempt."
             )
-        retry_after_run_id = latest_run.id
+        if not is_sms_action:
+            retry_after_run_id = latest_run.id
 
     from app.services.durable_jobs import enqueue_job
 
     approval_key = automation_idempotency_key(task, from_status)
     if retry_after_run_id is not None:
-        # Explicit Review -> In Progress after a terminal attempt is a new
-        # approval event. Include the prior immutable attempt id so an exact,
-        # confirmed-no-send payload can be retried without inventing an edit.
+        # Email-only retry: explicit Review -> In Progress after a terminal
+        # attempt is a new approval event. SMS requires a newly reviewed action
+        # and already receives a distinct payload-derived key above.
         approval_key = f"{approval_key}:retry-after:{retry_after_run_id}"
     await enqueue_automation_run(
         db,

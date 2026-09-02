@@ -14,12 +14,17 @@ logger = logging.getLogger(__name__)
 CALENDAR_BASE = "https://www.googleapis.com/calendar/v3"
 
 
-async def _get_token(tenant_id: str, user_id: str | None = None) -> str | None:
+async def _get_token(
+    tenant_id: str,
+    user_id: str | None = None,
+    *,
+    exact_user: bool = False,
+) -> str | None:
     try:
         async with async_session_maker() as db:
             if user_id:
                 token = await get_fresh_user_token(db, tenant_id, user_id, "google")
-                if token:
+                if token or exact_user:
                     return token
             return await get_fresh_token(db, tenant_id, "google")
     except Exception:
@@ -136,10 +141,16 @@ async def delete_task_event(
     tenant_id: str,
     task_id: str,
     user_id: str | None = None,
+    *,
+    require_exact_user: bool = False,
 ) -> bool:
     """Remove the Google Calendar event for a cancelled/deleted task."""
-    token = await _get_token(tenant_id, user_id)
+    if require_exact_user and not user_id:
+        raise RuntimeError("Google Calendar exact-user principal is required")
+    token = await _get_token(tenant_id, user_id, exact_user=require_exact_user)
     if not token:
+        if require_exact_user:
+            raise RuntimeError("Google Calendar exact-user token is unavailable")
         return False
 
     headers = {"Authorization": f"Bearer {token}"}
@@ -154,16 +165,20 @@ async def delete_task_event(
             },
         )
         if search_resp.status_code != 200:
-            return False
+            raise RuntimeError("Google Calendar task-event lookup failed")
         items = search_resp.json().get("items", [])
         for item in items:
-            await client.delete(
+            delete_resp = await client.delete(
                 f"{CALENDAR_BASE}/calendars/primary/events/{item['id']}",
                 headers=headers,
             )
+            if delete_resp.status_code not in (200, 204, 404):
+                raise RuntimeError("Google Calendar task-event deletion failed")
             logger.info(
                 "Deleted Google Calendar event %s for task %s",
                 item["id"],
                 task_id,
             )
-        return bool(items)
+        # A successful exact-principal lookup with no matching event is verified
+        # absence, not a cleanup failure.
+        return True

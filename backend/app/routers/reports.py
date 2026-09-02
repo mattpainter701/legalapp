@@ -38,6 +38,8 @@ from app.services.matter_budget import (
     expense_client_amount_expression,
     load_matter_billable_totals,
 )
+from app.services.rbac_service import get_user_capabilities
+from app.services.task_visibility import sms_task_visibility_predicate
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -129,13 +131,14 @@ async def _intake_funnel_report(
 
 
 async def _overdue_tasks_report(
-    db: AsyncSession, tenant_id: uuid.UUID
+    db: AsyncSession, tenant_id: uuid.UUID, current_user
 ) -> OverdueTasksReport:
     """Return tasks where due_date < today and status is still open."""
 
     today = date.today()
 
     # Join Task → Matter (outer join — task may have no matter)
+    capabilities = await get_user_capabilities(db, current_user.id)
     rows = await db.execute(
         select(
             Task.id,
@@ -148,6 +151,12 @@ async def _overdue_tasks_report(
             Task.tenant_id == tenant_id,
             Task.due_date < today,
             Task.status.not_in(list(_DONE_STATUSES)),
+            sms_task_visibility_predicate(
+                tenant_id=tenant_id,
+                user_id=current_user.id,
+                is_admin=current_user.role == "admin",
+                has_manage_matters="manage_matters" in capabilities,
+            ),
         )
         .order_by(Task.due_date.asc())
     )
@@ -442,7 +451,7 @@ async def get_overdue_tasks_report(
 ):
     tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
-    return await _overdue_tasks_report(db, tenant_id)
+    return await _overdue_tasks_report(db, tenant_id, current_user)
 
 
 @router.get("/bundle", response_model=FirmReportBundle)
@@ -455,7 +464,7 @@ async def get_reports_bundle(
 
     matter_status = await _matter_status_report(db, tenant_id)
     intake_funnel = await _intake_funnel_report(db, tenant_id)
-    overdue_tasks = await _overdue_tasks_report(db, tenant_id)
+    overdue_tasks = await _overdue_tasks_report(db, tenant_id, current_user)
 
     return FirmReportBundle(
         matter_status=matter_status,

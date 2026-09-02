@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -11,9 +12,13 @@ from jose import jwt
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.routing import Route
 
+from app.schemas.chat_action import ProposeClientSmsArgs
 from app.services import workspace_mcp_protocol
+from app.services.automation_capabilities import CapabilityContext, CapabilityError
+from app.services.chat_tools.handlers import _workspace_sms_idempotency_binding
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session", autouse=True)
@@ -157,6 +162,88 @@ def _initialize() -> dict:
             "clientInfo": {"name": "workspace-test", "version": "1"},
         },
     }
+
+
+def test_workspace_sms_idempotency_binding_is_tenant_tool_global_and_canonical():
+    tenant_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+    party_id = uuid.uuid4()
+
+    def context(*, actor_id: uuid.UUID, request_id: str) -> CapabilityContext:
+        return CapabilityContext(
+            db=None,
+            user=SimpleNamespace(id=actor_id, tenant_id=tenant_id),
+            channel="workspace_mcp",
+            request_id=request_id,
+            idempotency_key="stable-proposal-key",
+        )
+
+    base = ProposeClientSmsArgs(
+        matter_id=matter_id,
+        recipient_party_ids=[party_id],
+        title="Review appointment SMS",
+        body="First line\r\nSecond line",
+        category="appointment",
+    )
+    normalized_transport = base.model_copy(update={"body": "First line\nSecond line"})
+    first = _workspace_sms_idempotency_binding(
+        context(actor_id=uuid.uuid4(), request_id="transport-1"), base
+    )
+    cross_actor_replay = _workspace_sms_idempotency_binding(
+        context(actor_id=uuid.uuid4(), request_id="transport-2"),
+        normalized_transport,
+    )
+
+    assert first == cross_actor_replay
+    assert first is not None
+    key_digest, request_digest, prefix, external_ref = first
+    assert key_digest in prefix
+    assert request_digest in external_ref
+    assert "stable-proposal-key" not in external_ref
+
+    changed_body = _workspace_sms_idempotency_binding(
+        context(actor_id=uuid.uuid4(), request_id="transport-3"),
+        base.model_copy(update={"body": "Changed customer-visible body"}),
+    )
+    changed_matter = _workspace_sms_idempotency_binding(
+        context(actor_id=uuid.uuid4(), request_id="transport-4"),
+        base.model_copy(update={"matter_id": uuid.uuid4()}),
+    )
+    assert changed_body is not None and changed_matter is not None
+    assert changed_body[0] == key_digest == changed_matter[0]
+    assert changed_body[1] != request_digest
+    assert changed_matter[1] != request_digest
+
+    missing = CapabilityContext(
+        db=None,
+        user=SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id),
+        channel="workspace_mcp",
+        request_id="transient-transport-only",
+        idempotency_key=None,
+    )
+    with pytest.raises(CapabilityError) as required:
+        _workspace_sms_idempotency_binding(missing, base)
+    assert required.value.code == "idempotency_key_required"
+
+
+def test_workspace_sms_requires_explicit_idempotency_header_not_request_id_fallback():
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/mcp/workspace",
+            "headers": [(b"x-request-id", b"transient-request")],
+        }
+    )
+    assert workspace_mcp_protocol._workspace_idempotency_key(request) == (
+        "transient-request"
+    )
+    with pytest.raises(CapabilityError) as required:
+        workspace_mcp_protocol._workspace_idempotency_key(
+            request,
+            require_explicit=True,
+        )
+    assert required.value.code == "idempotency_key_required"
 
 
 @pytest.mark.asyncio
@@ -453,6 +540,101 @@ async def test_workspace_call_returns_reviewable_proposal_as_structured_content(
     result = response.json()["result"]
     assert result["isError"] is False
     assert result["structuredContent"]["status"] == "review"
+
+
+@pytest.mark.asyncio
+async def test_workspace_sms_call_preserves_idempotency_identity_and_review_boundary(
+    monkeypatch, protocol_app
+):
+    identity = _identity(
+        scopes={"matters:read", "contacts:read", "communications:propose"},
+        app_capabilities={"manage_matters"},
+    )
+    await _allow_identity(monkeypatch, identity)
+    calls = []
+    task_id = str(uuid.uuid4())
+
+    async def execute(*, name, arguments, request, identity):
+        assert name == "propose_client_sms"
+        assert request.headers["X-Idempotency-Key"] == "mcp-sms-request-1"
+        calls.append(
+            (
+                arguments,
+                identity.user_id,
+                request.headers["X-Request-ID"],
+                workspace_mcp_protocol._workspace_idempotency_key(request),
+            )
+        )
+        return {
+            "task_id": task_id,
+            "status": "review",
+            "approval_effect": "Human approval is required before provider submission.",
+            "pending_action": {
+                "type": "sms_client",
+                "recipient_bindings": [
+                    {
+                        "party_id": arguments["recipient_party_ids"][0],
+                        "contact_id": str(uuid.uuid4()),
+                        "phone": "+15551234567",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(workspace_mcp_protocol, "execute_workspace_capability", execute)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+            "name": "propose_client_sms",
+            "arguments": {
+                "matter_id": str(uuid.uuid4()),
+                "recipient_party_ids": [str(uuid.uuid4())],
+                "title": "Review appointment SMS",
+                "body": "Your appointment is tomorrow.",
+                "category": "appointment",
+            },
+        },
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=protocol_app),
+        base_url="http://localhost:8000",
+    ) as client:
+        responses = []
+        for request_id in (9, 10):
+            response_payload = {**payload, "id": request_id}
+            responses.append(
+                await client.post(
+                    workspace_mcp_protocol.MCP_ENDPOINT_PATH,
+                    headers={
+                        **_headers(),
+                        "Mcp-Protocol-Version": workspace_mcp_protocol.MCP_PROTOCOL_VERSION,
+                        "X-Idempotency-Key": "mcp-sms-request-1",
+                        "X-Request-ID": f"transport-request-{request_id}",
+                    },
+                    json=response_payload,
+                )
+            )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert [
+        response.json()["result"]["structuredContent"]["task_id"]
+        for response in responses
+    ] == [task_id, task_id]
+    assert all(
+        response.json()["result"]["structuredContent"]["status"] == "review"
+        for response in responses
+    )
+    assert len(calls) == 2
+    assert [call[2] for call in calls] == [
+        "transport-request-9",
+        "transport-request-10",
+    ]
+    assert [call[3] for call in calls] == [
+        "mcp-sms-request-1",
+        "mcp-sms-request-1",
+    ]
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.services import google_calendar, microsoft_calendar
 from app.services.email import EmailDeliveryResult, email_service
+from app.services.task_visibility import task_contains_sms
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -194,6 +195,47 @@ def remove_task_from_calendars(
     )
 
 
+async def remove_task_from_calendars_now(
+    task_id: str, tenant_id: str, user_id: str | None = None
+) -> tuple[object, object]:
+    """Synchronously remove calendar copies before revoking task access."""
+    results = await asyncio.gather(
+        google_calendar.delete_task_event(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            user_id=user_id,
+            require_exact_user=True,
+        ),
+        microsoft_calendar.delete_task_event(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            user_id=user_id,
+            require_exact_user=True,
+        ),
+        return_exceptions=True,
+    )
+    failures: list[Exception] = []
+    for provider, result in zip(("google", "microsoft"), results, strict=True):
+        if isinstance(result, Exception) or result is not True:
+            failure = (
+                result
+                if isinstance(result, Exception)
+                else RuntimeError("Calendar cleanup was not verified")
+            )
+            failures.append(failure)
+            logger.warning(
+                "%s calendar cleanup failed for SMS task %s (%s)",
+                provider,
+                task_id,
+                type(failure).__name__,
+            )
+    if failures:
+        raise RuntimeError("External calendar cleanup did not complete") from failures[
+            0
+        ]
+    return results[0], results[1]
+
+
 async def send_task_assignment_alert(
     db: AsyncSession, task: Task, assignment_note: str | None = None
 ) -> EmailDeliveryResult | bool:
@@ -201,6 +243,12 @@ async def send_task_assignment_alert(
     if await _demo_notifications_disabled(db, str(task.tenant_id)):
         return EmailDeliveryResult.NOT_REQUIRED
     if not task.assigned_to_user_id:
+        return EmailDeliveryResult.NOT_REQUIRED
+    if await task_contains_sms(db, task):
+        logger.info(
+            "Task %s assignment alert skipped: SMS review content stays in LawHand",
+            task.id,
+        )
         return EmailDeliveryResult.NOT_REQUIRED
     assignee = (
         await db.execute(
@@ -271,6 +319,10 @@ async def notify_task_created(
     """Notify external systems and assignee after a new task is created."""
     if await _demo_notifications_disabled(db, tenant_id):
         return EmailDeliveryResult.NOT_REQUIRED
+    if await task_contains_sms(db, task):
+        # SMS proposals contain phone/body and are intentionally never copied to
+        # assignment email or third-party calendars. Review stays in LawHand.
+        return EmailDeliveryResult.NOT_REQUIRED
     creator, contact, _matter = await _load_task_context(db, task)
     push_task_to_calendars(
         task,
@@ -296,6 +348,12 @@ async def notify_task_updated(
 ) -> EmailDeliveryResult | bool:
     """Notify external systems after a task update."""
     if await _demo_notifications_disabled(db, tenant_id):
+        return EmailDeliveryResult.NOT_REQUIRED
+    if await task_contains_sms(db, task):
+        # New SMS proposals never create calendar copies. Ordinary task updates
+        # must not return a false 500 after their state/run commit because a
+        # legacy provider cleanup failed; access revocation owns the explicit,
+        # fail-closed legacy cleanup boundary.
         return EmailDeliveryResult.NOT_REQUIRED
     if calendar_changed:
         if assignment_changed and previous_calendar_user_id:

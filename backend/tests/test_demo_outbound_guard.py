@@ -271,6 +271,8 @@ async def test_demo_worker_terminalizes_preexisting_queued_action_without_dispat
     )
     assert run.status == "failed"
     assert run.delivery_certainty == DELIVERY_NOT_ATTEMPTED
+    assert run._delivery_certainty_legacy == DELIVERY_NOT_ATTEMPTED
+    assert run._delivery_certainty_v2 == DELIVERY_NOT_ATTEMPTED
     assert "disabled in demo" in run.delivery_detail
     assert calls == []
     event = await db_session.scalar(

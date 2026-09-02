@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import uuid
-from hashlib import blake2b
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from hashlib import blake2b
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,11 +21,22 @@ from app.models.compliance import (
     RetentionPolicy,
     TenantAgreementAcceptance,
 )
+from app.models.communication_log import CommunicationLog
+from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
 from app.models.conversation import Conversation, Message
 from app.models.document import Document
 from app.models.document_template import DocumentTemplate
 from app.models.inbound_email import InboundEmail
 from app.models.matter_document import MatterDocument
+from app.models.sms import (
+    SmsMessage,
+    SmsNumberSuppression,
+    SmsNumberSuppressionEvent,
+    SmsProviderConfig,
+    SmsProviderCredential,
+    SmsReviewItem,
+)
+from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.tenant import Tenant
 
 settings = get_settings()
@@ -32,6 +44,137 @@ settings = get_settings()
 CHAT_ATTACHMENTS_POLICY_KEY = "chat_attachments_days"
 MIN_CHAT_ATTACHMENT_DAYS = 1
 MAX_CHAT_ATTACHMENT_DAYS = 365
+
+SmsDataClassification = Literal[
+    "customer_communication_content",
+    "compliance_suppression_state",
+    "current_consent_state",
+    "immutable_consent_evidence",
+    "immutable_stop_start_evidence",
+    "operational_review_evidence",
+    "security_configuration_metadata",
+    "customer_communication_timeline_copy",
+    "workflow_sms_proposal_copy",
+    "workflow_sms_event_metadata",
+    "workflow_sms_action_snapshot",
+]
+SmsRetentionMode = Literal[
+    "firm_records_policy_with_reconciliation_evidence",
+    "compliance_suppression_record",
+    "current_consent_record",
+    "consent_evidence",
+    "stop_start_evidence",
+    "review_evidence",
+    "security_configuration_metadata",
+    "firm_records_policy_sms_copy",
+    "workflow_evidence_copy",
+]
+SmsExportBoundary = Literal[
+    "customer_export_includes_content_and_delivery_state",
+    "customer_export_includes_current_suppression_state",
+    "customer_export_includes_current_consent_state",
+    "immutable_evidence_summary_only",
+    "security_metadata_only_no_secret_values",
+    "customer_export_includes_timeline_copy",
+    "customer_export_includes_workflow_copy",
+]
+
+
+class SmsRetentionCategory(TypedDict):
+    name: str
+    system: Literal["postgres"]
+    record_count: int
+    oldest_at: datetime | None
+    bytes: None
+    retention_mode: SmsRetentionMode
+    deletion_supported: Literal[False]
+    data_classification: SmsDataClassification
+    export_boundary: SmsExportBoundary
+    legal_hold_behavior: Literal["preserve_when_active"]
+
+
+@dataclass(frozen=True)
+class _SmsRetentionSpec:
+    name: str
+    data_classification: SmsDataClassification
+    retention_mode: SmsRetentionMode
+    export_boundary: SmsExportBoundary
+
+
+_SMS_RETENTION_SPECS: dict[str, _SmsRetentionSpec] = {
+    "sms_messages": _SmsRetentionSpec(
+        name="sms_content_and_delivery",
+        data_classification="customer_communication_content",
+        retention_mode="firm_records_policy_with_reconciliation_evidence",
+        export_boundary="customer_export_includes_content_and_delivery_state",
+    ),
+    "sms_number_suppressions": _SmsRetentionSpec(
+        name="sms_suppressions",
+        data_classification="compliance_suppression_state",
+        retention_mode="compliance_suppression_record",
+        export_boundary="customer_export_includes_current_suppression_state",
+    ),
+    "lead_channel_consents": _SmsRetentionSpec(
+        name="sms_current_consent_state",
+        data_classification="current_consent_state",
+        retention_mode="current_consent_record",
+        export_boundary="customer_export_includes_current_consent_state",
+    ),
+    "sms_consent_events": _SmsRetentionSpec(
+        name="sms_consent_evidence",
+        data_classification="immutable_consent_evidence",
+        retention_mode="consent_evidence",
+        export_boundary="immutable_evidence_summary_only",
+    ),
+    "sms_number_suppression_events": _SmsRetentionSpec(
+        name="sms_number_evidence",
+        data_classification="immutable_stop_start_evidence",
+        retention_mode="stop_start_evidence",
+        export_boundary="immutable_evidence_summary_only",
+    ),
+    "sms_review_items": _SmsRetentionSpec(
+        name="sms_review_evidence",
+        data_classification="operational_review_evidence",
+        retention_mode="review_evidence",
+        export_boundary="immutable_evidence_summary_only",
+    ),
+    "sms_provider_configs": _SmsRetentionSpec(
+        name="sms_provider_configuration",
+        data_classification="security_configuration_metadata",
+        retention_mode="security_configuration_metadata",
+        export_boundary="security_metadata_only_no_secret_values",
+    ),
+    "sms_provider_credentials": _SmsRetentionSpec(
+        name="sms_provider_credential_generations",
+        data_classification="security_configuration_metadata",
+        retention_mode="security_configuration_metadata",
+        export_boundary="security_metadata_only_no_secret_values",
+    ),
+    "communication_logs_sms": _SmsRetentionSpec(
+        name="sms_timeline_copies",
+        data_classification="customer_communication_timeline_copy",
+        retention_mode="firm_records_policy_sms_copy",
+        export_boundary="customer_export_includes_timeline_copy",
+    ),
+    "tasks_sms": _SmsRetentionSpec(
+        name="sms_task_proposal_copies",
+        data_classification="workflow_sms_proposal_copy",
+        retention_mode="firm_records_policy_sms_copy",
+        export_boundary="customer_export_includes_workflow_copy",
+    ),
+    "task_events_sms": _SmsRetentionSpec(
+        name="sms_task_event_copies",
+        data_classification="workflow_sms_event_metadata",
+        retention_mode="workflow_evidence_copy",
+        export_boundary="immutable_evidence_summary_only",
+    ),
+    "task_automation_runs_sms": _SmsRetentionSpec(
+        name="sms_automation_action_snapshots",
+        data_classification="workflow_sms_action_snapshot",
+        retention_mode="workflow_evidence_copy",
+        export_boundary="immutable_evidence_summary_only",
+    ),
+}
 
 
 def _utcnow() -> datetime:
@@ -169,6 +312,40 @@ async def _aggregate(
     }
 
 
+def _sms_retention_category(
+    table_name: str, aggregate: dict[str, Any]
+) -> SmsRetentionCategory:
+    """Build an explicit, metadata-only SMS retention classification."""
+
+    spec = _SMS_RETENTION_SPECS.get(table_name)
+    if spec is None:
+        raise ValueError(f"SMS retention store is unclassified: {table_name}")
+    if set(aggregate) != {"record_count", "oldest_at", "bytes"}:
+        raise ValueError(f"SMS retention aggregate is malformed: {table_name}")
+    record_count = aggregate["record_count"]
+    oldest_at = aggregate["oldest_at"]
+    if (
+        not isinstance(record_count, int)
+        or isinstance(record_count, bool)
+        or record_count < 0
+        or (oldest_at is not None and not isinstance(oldest_at, datetime))
+        or aggregate["bytes"] is not None
+    ):
+        raise ValueError(f"SMS retention aggregate is malformed: {table_name}")
+    return {
+        "name": spec.name,
+        "system": "postgres",
+        "record_count": record_count,
+        "oldest_at": oldest_at,
+        "bytes": None,
+        "retention_mode": spec.retention_mode,
+        "deletion_supported": False,
+        "data_classification": spec.data_classification,
+        "export_boundary": spec.export_boundary,
+        "legal_hold_behavior": "preserve_when_active",
+    }
+
+
 async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, Any]:
     """Return metadata-only counts for each customer-data store in this app."""
 
@@ -244,6 +421,99 @@ async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
         id_column=TenantAgreementAcceptance.id,
         created_column=TenantAgreementAcceptance.accepted_at,
         where=[TenantAgreementAcceptance.tenant_id == tenant_id],
+    )
+    sms_content = await _aggregate(
+        db,
+        id_column=SmsMessage.id,
+        created_column=SmsMessage.created_at,
+        where=[SmsMessage.tenant_id == tenant_id],
+    )
+    sms_suppressions = await _aggregate(
+        db,
+        id_column=SmsNumberSuppression.id,
+        created_column=SmsNumberSuppression.created_at,
+        where=[SmsNumberSuppression.tenant_id == tenant_id],
+    )
+    sms_consent_evidence = await _aggregate(
+        db,
+        id_column=SmsConsentEvent.id,
+        created_column=SmsConsentEvent.occurred_at,
+        where=[SmsConsentEvent.tenant_id == tenant_id],
+    )
+    sms_current_consent_state = await _aggregate(
+        db,
+        id_column=LeadChannelConsent.id,
+        created_column=LeadChannelConsent.updated_at,
+        where=[LeadChannelConsent.tenant_id == tenant_id],
+    )
+    sms_number_evidence = await _aggregate(
+        db,
+        id_column=SmsNumberSuppressionEvent.id,
+        created_column=SmsNumberSuppressionEvent.occurred_at,
+        where=[SmsNumberSuppressionEvent.tenant_id == tenant_id],
+    )
+    sms_review_evidence = await _aggregate(
+        db,
+        id_column=SmsReviewItem.id,
+        created_column=SmsReviewItem.created_at,
+        where=[SmsReviewItem.tenant_id == tenant_id],
+    )
+    sms_provider_configuration = await _aggregate(
+        db,
+        id_column=SmsProviderConfig.id,
+        created_column=SmsProviderConfig.created_at,
+        where=[SmsProviderConfig.tenant_id == tenant_id],
+    )
+    sms_provider_credentials = await _aggregate(
+        db,
+        id_column=SmsProviderCredential.id,
+        created_column=SmsProviderCredential.created_at,
+        where=[SmsProviderCredential.tenant_id == tenant_id],
+    )
+    historical_sms_task_ids = select(TaskAutomationRun.task_id).where(
+        TaskAutomationRun.tenant_id == tenant_id,
+        TaskAutomationRun.action_type == "sms_client",
+    )
+    sms_task_condition = or_(
+        func.coalesce(Task.pending_action["type"].as_string(), "") == "sms_client",
+        Task.id.in_(historical_sms_task_ids),
+    )
+    sms_timeline_copies = await _aggregate(
+        db,
+        id_column=CommunicationLog.id,
+        created_column=CommunicationLog.created_at,
+        where=[
+            CommunicationLog.tenant_id == tenant_id,
+            CommunicationLog.channel == "sms",
+        ],
+    )
+    sms_task_copies = await _aggregate(
+        db,
+        id_column=Task.id,
+        created_column=Task.created_at,
+        where=[Task.tenant_id == tenant_id, sms_task_condition],
+    )
+    sms_task_ids = select(Task.id).where(
+        Task.tenant_id == tenant_id,
+        sms_task_condition,
+    )
+    sms_task_event_copies = await _aggregate(
+        db,
+        id_column=TaskEvent.id,
+        created_column=TaskEvent.created_at,
+        where=[
+            TaskEvent.tenant_id == tenant_id,
+            TaskEvent.task_id.in_(sms_task_ids),
+        ],
+    )
+    sms_automation_snapshots = await _aggregate(
+        db,
+        id_column=TaskAutomationRun.id,
+        created_column=TaskAutomationRun.created_at,
+        where=[
+            TaskAutomationRun.tenant_id == tenant_id,
+            TaskAutomationRun.action_type == "sms_client",
+        ],
     )
 
     provider_rows = (
@@ -323,6 +593,18 @@ async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
             "retention_mode": "contract_evidence",
             "deletion_supported": False,
         },
+        _sms_retention_category("sms_messages", sms_content),
+        _sms_retention_category("sms_number_suppressions", sms_suppressions),
+        _sms_retention_category("lead_channel_consents", sms_current_consent_state),
+        _sms_retention_category("sms_consent_events", sms_consent_evidence),
+        _sms_retention_category("sms_number_suppression_events", sms_number_evidence),
+        _sms_retention_category("sms_review_items", sms_review_evidence),
+        _sms_retention_category("sms_provider_configs", sms_provider_configuration),
+        _sms_retention_category("sms_provider_credentials", sms_provider_credentials),
+        _sms_retention_category("communication_logs_sms", sms_timeline_copies),
+        _sms_retention_category("tasks_sms", sms_task_copies),
+        _sms_retention_category("task_events_sms", sms_task_event_copies),
+        _sms_retention_category("task_automation_runs_sms", sms_automation_snapshots),
     ]
 
     actions = list(

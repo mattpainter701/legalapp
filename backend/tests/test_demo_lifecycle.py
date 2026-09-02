@@ -12,7 +12,13 @@ from app.middleware.demo_quota import _surface
 from app.models.tenant import Tenant
 from app.services.demo_access import reject_demo_premium
 from app.services.demo_clone import _remap_embedded, _required_dependency_order
-from app.services.demo_purge import _delete_order, _purge_tables
+from app.services.demo_purge import (
+    DemoPurgeRefused,
+    _delete_order,
+    _purge_tables,
+    _SMS_TABLES,
+    _sms_purge_schema_present,
+)
 
 
 def test_embedded_fixture_identifiers_are_recursively_remapped():
@@ -55,6 +61,22 @@ def test_runtime_purge_plan_registers_every_demo_table():
     from app.services.demo_registry import DEMO_TABLE_REGISTRY
 
     assert set(_purge_tables()) == set(DEMO_TABLE_REGISTRY)
+
+
+@pytest.mark.asyncio
+async def test_sms_purge_schema_guard_accepts_all_or_none_and_rejects_partial():
+    class _SchemaProbe:
+        def __init__(self, rows):
+            self.rows = rows
+
+        async def scalars(self, _statement):
+            return self.rows
+
+    assert await _sms_purge_schema_present(_SchemaProbe([])) is False
+    assert await _sms_purge_schema_present(_SchemaProbe(_SMS_TABLES)) is True
+    with pytest.raises(DemoPurgeRefused, match="partially installed"):
+        await _sms_purge_schema_present(_SchemaProbe(sorted(_SMS_TABLES)[:-1]))
+    assert not (_SMS_TABLES & set(_purge_tables(include_sms=False)))
 
 
 def test_runtime_purge_plan_is_complete_in_a_fresh_process(monkeypatch):

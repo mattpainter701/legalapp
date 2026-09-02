@@ -112,6 +112,7 @@ _APP_CAPABILITIES_BY_TOOL: dict[str, frozenset[str]] = {
     "list_matter_recipients": frozenset({"manage_matters"}),
     "propose_task": frozenset({"manage_matters"}),
     "propose_client_email": frozenset({"manage_matters"}),
+    "propose_client_sms": frozenset({"manage_matters"}),
     "propose_matter_document": frozenset({"manage_matters", "manage_documents"}),
     "propose_document_from_template": frozenset({"manage_matters", "manage_documents"}),
 }
@@ -265,6 +266,31 @@ def _tool_success(payload: dict[str, Any]) -> mcp_types.CallToolResult:
     )
 
 
+def _workspace_idempotency_key(
+    request: Request, *, require_explicit: bool = False
+) -> str | None:
+    """Return mutation identity independently from request correlation."""
+
+    explicit = request.headers.get("X-Idempotency-Key")
+    if explicit is None and require_explicit:
+        raise CapabilityError(
+            "idempotency_key_required",
+            "This workspace tool requires an explicit stable X-Idempotency-Key",
+        )
+    candidate = (
+        explicit if explicit is not None else request.headers.get("X-Request-ID")
+    )
+    if candidate is None:
+        return None
+    candidate = candidate.strip()
+    if not candidate or len(candidate) > 200:
+        raise CapabilityError(
+            "invalid_idempotency_key",
+            "X-Idempotency-Key must contain between 1 and 200 characters",
+        )
+    return candidate
+
+
 def _success_audit_metadata(spec: CapabilitySpec, result: dict[str, Any]) -> dict:
     """Keep tool audit useful without retaining private search text or snippets."""
     metadata: dict[str, Any] = {"effect": spec.effect.value}
@@ -380,6 +406,10 @@ async def execute_workspace_capability(
                 request_id=(
                     request.headers.get("X-Request-ID")
                     or request.headers.get("X-Idempotency-Key")
+                ),
+                idempotency_key=_workspace_idempotency_key(
+                    request,
+                    require_explicit=spec.name == "propose_client_sms",
                 ),
                 granted_scopes=identity.scopes,
                 redis=getattr(

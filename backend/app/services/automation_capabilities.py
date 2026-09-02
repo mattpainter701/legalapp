@@ -34,6 +34,7 @@ from app.schemas.chat_action import (
     ListMatterRecipientsArgs,
     ListMatterTasksArgs,
     ProposeClientEmailArgs,
+    ProposeClientSmsArgs,
     ProposeMatterDocumentArgs,
     ProposeTaskArgs,
 )
@@ -85,6 +86,11 @@ class CapabilityContext:
     channel: str = "matter_chat"
     conversation_id: uuid.UUID | None = None
     request_id: str | None = None
+    # Transport request correlation and mutation idempotency are separate
+    # identities. Workspace MCP supplies this from an explicit
+    # X-Idempotency-Key, so retries may use a fresh request id without creating
+    # a second proposal.
+    idempotency_key: str | None = None
     # Normal in-app sessions are already authorized by LawHand's route/RBAC
     # layer and leave this as ``None``. External adapters must provide the
     # consented grant explicitly; workspace MCP fails closed without it.
@@ -403,6 +409,23 @@ CAPABILITY_SPECS: tuple[CapabilitySpec, ...] = (
         ),
         args_model=ProposeClientEmailArgs,
         handler_name="propose_client_email",
+        effect=CapabilityEffect.PROPOSE,
+        approval_policy=ApprovalPolicy.LAWHAND_REVIEW,
+        required_scopes=(
+            "matters:read",
+            "contacts:read",
+            "communications:propose",
+        ),
+    ),
+    CapabilitySpec(
+        name="propose_client_sms",
+        description=(
+            "Draft a consented client SMS as reviewable work. A human must "
+            "review and approve it; the assistant never sends SMS autonomously. "
+            "Recipients must be verified, consented matter parties."
+        ),
+        args_model=ProposeClientSmsArgs,
+        handler_name="propose_client_sms",
         effect=CapabilityEffect.PROPOSE,
         approval_policy=ApprovalPolicy.LAWHAND_REVIEW,
         required_scopes=(

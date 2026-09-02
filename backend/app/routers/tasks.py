@@ -31,7 +31,7 @@ from app.models.plugin import Matter
 from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.tenant import TenantSettings
 from app.models.user import User
-from app.schemas.chat_action import MatterDocumentDraftAction
+from app.schemas.chat_action import MatterDocumentDraftAction, SmsClientAction
 from app.services.cloud_artifact_materialization import (
     CloudArtifactMaterializationError,
     cloud_artifact_materializer,
@@ -46,9 +46,11 @@ from app.services.generated_artifacts import (
     GeneratedArtifactError,
     create_generated_artifact_revision,
 )
+from app.services.matter_access import accessible_matter_ids, can_access_matter
 from app.services.matter_file_store import MatterFileReadError, MatterFileTooLarge
 from app.services.provider_http import ProviderError
 from app.services.task_history import record_customer_contact, record_task_event
+from app.services.task_visibility import user_can_receive_sms_task
 from app.services.task_notifications import (
     notify_task_created,
     notify_task_updated,
@@ -57,7 +59,9 @@ from app.services.task_notifications import (
 )
 from app.services.task_automation import (
     ActionApprovalConflict,
+    action_payload_sha256,
     enqueue_durable_automation,
+    require_sms_cancellation_is_truthful,
 )
 from app.services.task_workflow import (
     TaskVersionConflict,
@@ -195,6 +199,7 @@ async def _require_action_reviewer_or_approver(
     """
     if not task.pending_action:
         return
+    await _require_sms_task_access(db, task, user)
     if task.reviewer_user_id == user.id:
         return
     from app.services.rbac_service import get_user_capabilities
@@ -238,8 +243,168 @@ async def _delivery_history(db: AsyncSession, task: Task) -> list[TaskDeliverySt
     return [TaskDeliveryState.model_validate(run) for run in runs]
 
 
-async def _task_response_with_delivery(db: AsyncSession, task: Task) -> TaskResponse:
+def _pending_action_is_sms(task: Task) -> bool:
+    return str((task.pending_action or {}).get("type") or "") == "sms_client"
+
+
+async def _sms_task_ids(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    task_ids: list[uuid.UUID],
+) -> set[uuid.UUID]:
+    if not task_ids:
+        return set()
+    return set(
+        (
+            await db.scalars(
+                select(TaskAutomationRun.task_id).where(
+                    TaskAutomationRun.tenant_id == tenant_id,
+                    TaskAutomationRun.task_id.in_(task_ids),
+                    TaskAutomationRun.action_type == "sms_client",
+                )
+            )
+        ).all()
+    )
+
+
+async def _task_contains_sms(db: AsyncSession, task: Task) -> bool:
+    if _pending_action_is_sms(task):
+        return True
+    return bool(
+        await db.scalar(
+            select(TaskAutomationRun.id)
+            .where(
+                TaskAutomationRun.tenant_id == task.tenant_id,
+                TaskAutomationRun.task_id == task.id,
+                TaskAutomationRun.action_type == "sms_client",
+            )
+            .limit(1)
+        )
+    )
+
+
+async def _can_access_sms_task(db: AsyncSession, task: Task, user) -> bool:
+    """One authorization rule for every generic Task surface carrying SMS data."""
+    if not await _task_contains_sms(db, task):
+        return True
+    if task.matter_id is None:
+        return False
+    from app.services.rbac_service import get_user_capabilities
+
+    capabilities = await get_user_capabilities(db, user.id)
+    return "manage_matters" in capabilities and await can_access_matter(
+        db,
+        tenant_id=task.tenant_id,
+        user_id=user.id,
+        is_admin=user.role == "admin",
+        matter_id=task.matter_id,
+    )
+
+
+async def _sms_aggregate_visibility(db: AsyncSession, user):
+    """Return the SQL visibility fence and matter set for aggregate task reads."""
+    from app.services.rbac_service import get_user_capabilities
+
+    tenant_id = uuid.UUID(str(user.tenant_id))
+    capabilities = await get_user_capabilities(db, user.id)
+    visible_matter_ids = (
+        await accessible_matter_ids(
+            db,
+            tenant_id=tenant_id,
+            user_id=user.id,
+            is_admin=user.role == "admin",
+        )
+        if "manage_matters" in capabilities
+        else set()
+    )
+    historical_sms = (
+        select(TaskAutomationRun.id)
+        .where(
+            TaskAutomationRun.tenant_id == tenant_id,
+            TaskAutomationRun.task_id == Task.id,
+            TaskAutomationRun.action_type == "sms_client",
+        )
+        .correlate(Task)
+        .exists()
+    )
+    is_sms = or_(
+        func.coalesce(Task.pending_action["type"].as_string(), "") == "sms_client",
+        historical_sms,
+    )
+    visible_sms_matter = Task.matter_id.is_not(None)
+    if visible_matter_ids is not None:
+        visible_sms_matter = Task.matter_id.in_(visible_matter_ids)
+    return or_(~is_sms, visible_sms_matter), visible_matter_ids
+
+
+async def _require_sms_task_access(db: AsyncSession, task: Task, user) -> None:
+    if not await _can_access_sms_task(db, task, user):
+        # Do not reveal whether a matter-bound SMS task exists.
+        raise HTTPException(status_code=404, detail="Task not found")
+
+
+def _redact_sms_fields(response: TaskResponse | TaskBoardCard):
+    # SMS proposal producers historically embedded the verified phone and body
+    # in Task.description, and callers may also place sensitive text in the
+    # title. Generic task surfaces must not retain either derived search/display
+    # field when the actor lacks the SMS task's live matter authorization.
+    response.title = "Restricted SMS task"
+    if isinstance(response, TaskResponse):
+        response.description = None
+    response.pending_action = None
+    response.pending_action_sha256 = None
+    response.delivery = None
+    if isinstance(response, TaskResponse):
+        response.delivery_history = []
+    return response
+
+
+async def _task_list_items(
+    db: AsyncSession, tasks: list[Task], user
+) -> list[TaskResponse]:
+    responses = {task.id: TaskResponse.model_validate(task) for task in tasks}
+    sms_ids = await _sms_task_ids(
+        db,
+        tenant_id=uuid.UUID(str(user.tenant_id)),
+        task_ids=[task.id for task in tasks],
+    )
+    sms_ids.update(task.id for task in tasks if _pending_action_is_sms(task))
+    if not sms_ids:
+        return [responses[task.id] for task in tasks]
+
+    from app.services.rbac_service import get_user_capabilities
+
+    capabilities = await get_user_capabilities(db, user.id)
+    visible_matter_ids = (
+        await accessible_matter_ids(
+            db,
+            tenant_id=uuid.UUID(str(user.tenant_id)),
+            user_id=user.id,
+            is_admin=user.role == "admin",
+        )
+        if "manage_matters" in capabilities
+        else set()
+    )
+    for task in tasks:
+        if task.id not in sms_ids:
+            continue
+        if task.matter_id is None or (
+            visible_matter_ids is not None and task.matter_id not in visible_matter_ids
+        ):
+            _redact_sms_fields(responses[task.id])
+    return [responses[task.id] for task in tasks]
+
+
+async def _task_response_with_delivery(
+    db: AsyncSession, task: Task, user
+) -> TaskResponse:
     response = TaskResponse.model_validate(task)
+    if not await _can_access_sms_task(db, task, user):
+        return _redact_sms_fields(response)
+    response.pending_action_sha256 = (
+        action_payload_sha256(task.pending_action) if task.pending_action else None
+    )
     # Only assistant-drafted work can carry an action, so skip the extra read
     # for the overwhelming majority of tasks.
     if task.source == "assistant":
@@ -250,7 +415,7 @@ async def _task_response_with_delivery(db: AsyncSession, task: Task) -> TaskResp
     return response
 
 
-def _task_card_from_row(row) -> TaskBoardCard:
+def _task_card_from_row(row, *, allow_sms_fields: bool = True) -> TaskBoardCard:
     (
         task,
         matter_name,
@@ -261,7 +426,7 @@ def _task_card_from_row(row) -> TaskBoardCard:
         reviewer_email,
         delivery_run,
     ) = row
-    return TaskBoardCard(
+    response = TaskBoardCard(
         id=task.id,
         title=task.title,
         task_type=task.task_type,
@@ -308,12 +473,16 @@ def _task_card_from_row(row) -> TaskBoardCard:
         external_ref=task.external_ref,
         version=task.version,
         pending_action=task.pending_action,
+        pending_action_sha256=(
+            action_payload_sha256(task.pending_action) if task.pending_action else None
+        ),
         delivery=(
             TaskDeliveryState.model_validate(delivery_run) if delivery_run else None
         ),
         status_changed_at=task.status_changed_at,
         updated_at=task.updated_at,
     )
+    return response if allow_sms_fields else _redact_sms_fields(response)
 
 
 @router.get("/overdue", response_model=TaskListResponse)
@@ -325,35 +494,26 @@ async def get_overdue_tasks(
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    sms_visibility, _ = await _sms_aggregate_visibility(db, current_user)
 
     today = date.today()
     stmt = select(Task).where(
         Task.tenant_id == uuid.UUID(tenant_id),
         Task.due_date < today,
         Task.status.notin_(["completed", "cancelled"]),
+        sms_visibility,
     )
     if matter_id:
         stmt = stmt.where(Task.matter_id == matter_id)
     if assigned_to:
         stmt = stmt.where(Task.assigned_to_user_id == assigned_to)
 
-    stmt = stmt.order_by(Task.due_date)
-    result = await db.execute(stmt)
-    tasks = result.scalars().all()
-
-    count_stmt = select(func.count()).select_from(
-        select(Task)
-        .where(
-            Task.tenant_id == uuid.UUID(tenant_id),
-            Task.due_date < today,
-            Task.status.notin_(["completed", "cancelled"]),
-        )
-        .subquery()
-    )
+    count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
+    tasks = (await db.scalars(stmt.order_by(Task.due_date))).all()
 
     return TaskListResponse(
-        items=[TaskResponse.model_validate(t) for t in tasks],
+        items=await _task_list_items(db, tasks, current_user),
         total=total,
     )
 
@@ -370,6 +530,7 @@ async def get_upcoming_tasks(
 
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    sms_visibility, _ = await _sms_aggregate_visibility(db, current_user)
 
     today = date.today()
     end_date = today + timedelta(days=days)
@@ -379,6 +540,7 @@ async def get_upcoming_tasks(
         Task.due_date >= today,
         Task.due_date <= end_date,
         Task.status.notin_(["completed", "cancelled"]),
+        sms_visibility,
     )
     if matter_id:
         stmt = stmt.where(Task.matter_id == matter_id)
@@ -391,7 +553,7 @@ async def get_upcoming_tasks(
     total = len(tasks)
 
     return TaskListResponse(
-        items=[TaskResponse.model_validate(t) for t in tasks],
+        items=await _task_list_items(db, tasks, current_user),
         total=total,
     )
 
@@ -413,8 +575,12 @@ async def list_tasks(
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    sms_visibility, _ = await _sms_aggregate_visibility(db, current_user)
 
-    stmt = select(Task).where(Task.tenant_id == uuid.UUID(tenant_id))
+    stmt = select(Task).where(
+        Task.tenant_id == uuid.UUID(tenant_id),
+        sms_visibility,
+    )
 
     if matter_id:
         stmt = stmt.where(Task.matter_id == matter_id)
@@ -442,7 +608,7 @@ async def list_tasks(
     tasks = result.scalars().all()
 
     return TaskListResponse(
-        items=[TaskResponse.model_validate(t) for t in tasks],
+        items=await _task_list_items(db, tasks, current_user),
         total=total,
     )
 
@@ -545,6 +711,11 @@ async def get_task_board(
         )
     elif due_window == "none":
         base_conditions.append(Task.due_date.is_(None))
+
+    sms_visibility, board_visible_matter_ids = await _sms_aggregate_visibility(
+        db, current_user
+    )
+    base_conditions.append(sms_visibility)
 
     open_conditions = [Task.status.in_(OPEN_TASK_STATUSES)]
     risk_counts = TaskBoardRiskCounts(
@@ -679,13 +850,36 @@ async def get_task_board(
             .limit(per_column_limit)
         )
         rows = (await db.execute(stmt)).all()
+        row_sms_ids = await _sms_task_ids(
+            db,
+            tenant_id=tenant_uuid,
+            task_ids=[row[0].id for row in rows],
+        )
         next_offset = offset + len(rows)
         columns.append(
             TaskBoardColumn(
                 status=status_value,
                 label=BOARD_STATUS_LABELS[status_value],
                 total=total,
-                items=[_task_card_from_row(row) for row in rows],
+                items=[
+                    _task_card_from_row(
+                        row,
+                        allow_sms_fields=(
+                            not (
+                                _pending_action_is_sms(row[0])
+                                or row[0].id in row_sms_ids
+                            )
+                            or (
+                                row[0].matter_id is not None
+                                and (
+                                    board_visible_matter_ids is None
+                                    or row[0].matter_id in board_visible_matter_ids
+                                )
+                            )
+                        ),
+                    )
+                    for row in rows
+                ],
                 next_cursor=str(next_offset) if next_offset < total else None,
             )
         )
@@ -805,6 +999,7 @@ async def qualify_intake_task(
     await set_tenant_context(db, tenant_id)
 
     partner_task = await _load_task_or_404(db, task_id, tenant_uuid)
+    await _require_sms_task_access(db, partner_task, current_user)
     lead_id = _lead_id_from_intake_task(partner_task)
     if (
         partner_task.assigned_to_user_id
@@ -1023,7 +1218,8 @@ async def get_task_events(
 ):
     tenant_uuid = uuid.UUID(str(current_user.tenant_id))
     await set_tenant_context(db, str(tenant_uuid))
-    await _load_task_or_404(db, task_id, tenant_uuid)
+    task = await _load_task_or_404(db, task_id, tenant_uuid)
+    await _require_sms_task_access(db, task, current_user)
     total = (
         await db.scalar(
             select(func.count())
@@ -1092,6 +1288,7 @@ async def review_task_as_staff(
     ).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_sms_task_access(db, task, current_user)
     try:
         if payload.expected_version != task.version:
             raise TaskVersionConflict()
@@ -1109,7 +1306,7 @@ async def review_task_as_staff(
     await set_tenant_context(db, str(tenant_uuid))
 
     await db.refresh(task)
-    return await _task_response_with_delivery(db, task)
+    return await _task_response_with_delivery(db, task, current_user)
 
 
 async def _approve_staged_task(
@@ -1132,6 +1329,7 @@ async def _approve_staged_task(
     ).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_sms_task_access(db, task, current_user)
     if payload.expected_version != task.version:
         raise HTTPException(
             status_code=409, detail="This task changed after it was loaded"
@@ -1171,7 +1369,7 @@ async def _approve_staged_task(
     await db.commit()
     await set_tenant_context(db, tenant_id)
     await db.refresh(task)
-    return await _task_response_with_delivery(db, task)
+    return await _task_response_with_delivery(db, task, current_user)
 
 
 @router.post("/{task_id}/review/attorney", response_model=TaskResponse)
@@ -1193,6 +1391,7 @@ async def review_task_as_attorney(
         ).scalar_one_or_none()
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
+        await _require_sms_task_access(db, task, current_user)
         if payload.expected_version != task.version:
             raise HTTPException(
                 status_code=409, detail="This task changed after it was loaded"
@@ -1211,7 +1410,7 @@ async def review_task_as_attorney(
         await db.commit()
         await set_tenant_context(db, str(tenant_uuid))
         await db.refresh(task)
-        return await _task_response_with_delivery(db, task)
+        return await _task_response_with_delivery(db, task, current_user)
     return await _approve_staged_task(task_id, payload, current_user, db)
 
 
@@ -1234,6 +1433,7 @@ async def transition_task_status(
 ):
     tenant_uuid = uuid.UUID(str(current_user.tenant_id))
     tenant_id = str(tenant_uuid)
+    current_user_id = current_user.id
     await set_tenant_context(db, tenant_id)
     task = (
         await db.execute(
@@ -1244,6 +1444,8 @@ async def transition_task_status(
     ).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_sms_task_access(db, task, current_user)
+    is_sms_task = await _task_contains_sms(db, task)
 
     if (
         task.review_policy == "staff_then_attorney"
@@ -1279,6 +1481,27 @@ async def transition_task_status(
         )
     previous_calendar_user_id = task_calendar_user_id(task)
     previous_status = task.status
+    if payload.to_status == "cancelled" and task.status != "cancelled":
+        try:
+            await require_sms_cancellation_is_truthful(db, task)
+        except ActionApprovalConflict as exc:
+            # Release the task/run FOR UPDATE locks before returning the
+            # conflict. Otherwise a worker that is still finalizing the claimed
+            # run blocks on those locks until this request's session is torn
+            # down. The commit is read-only here: cancellation is rejected
+            # before any task mutation.
+            await db.commit()
+            await set_tenant_context(db, tenant_id)
+            current_response = await _task_response_with_delivery(
+                db, task, current_user
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": exc.detail,
+                    "current_task": current_response.model_dump(mode="json"),
+                },
+            ) from exc
     try:
         changed = transition_task(
             db,
@@ -1302,7 +1525,7 @@ async def transition_task_status(
             payload.expected_version,
             task.version,
         )
-        current_response = await _task_response_with_delivery(db, task)
+        current_response = await _task_response_with_delivery(db, task, current_user)
         raise HTTPException(
             status_code=409,
             detail={
@@ -1348,12 +1571,21 @@ async def transition_task_status(
                 acknowledge_prior_delivery_risk=(
                     payload.acknowledge_prior_delivery_risk
                 ),
+                sms_acknowledgement=(
+                    payload.sms_acknowledgement.model_dump()
+                    if payload.sms_acknowledgement
+                    else None
+                ),
             )
         except ActionApprovalConflict as exc:
             await db.rollback()
             await set_tenant_context(db, tenant_id)
             current_task = await _load_task_or_404(db, task_id, tenant_uuid)
-            current_response = await _task_response_with_delivery(db, current_task)
+            current_user = await db.get(User, current_user_id)
+            await _require_sms_task_access(db, current_task, current_user)
+            current_response = await _task_response_with_delivery(
+                db, current_task, current_user
+            )
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -1364,7 +1596,7 @@ async def transition_task_status(
     await db.commit()
     await set_tenant_context(db, tenant_id)
     await db.refresh(task)
-    if changed:
+    if changed and not is_sms_task:
         await notify_task_updated(
             db,
             task,
@@ -1384,7 +1616,7 @@ async def transition_task_status(
         changed,
         task.version,
     )
-    return await _task_response_with_delivery(db, task)
+    return await _task_response_with_delivery(db, task, current_user)
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
@@ -1397,11 +1629,12 @@ async def get_task(
     await set_tenant_context(db, tenant_id)
 
     task = await _load_task_or_404(db, task_id, uuid.UUID(tenant_id))
+    await _require_sms_task_access(db, task, current_user)
     if task.assigned_to_user_id == current_user.id and task.viewed_at is None:
         task.viewed_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(task)
-    return await _task_response_with_delivery(db, task)
+    return await _task_response_with_delivery(db, task, current_user)
 
 
 @router.post("/{task_id}/view", response_model=TaskResponse)
@@ -1419,11 +1652,12 @@ async def mark_task_viewed(
     await set_tenant_context(db, tenant_id)
 
     task = await _load_task_or_404(db, task_id, uuid.UUID(tenant_id))
+    await _require_sms_task_access(db, task, current_user)
     if task.assigned_to_user_id == current_user.id and task.viewed_at is None:
         task.viewed_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(task)
-    return TaskResponse.model_validate(task)
+    return await _task_response_with_delivery(db, task, current_user)
 
 
 @router.post("/{task_id}/contacted", response_model=TaskResponse)
@@ -1438,6 +1672,7 @@ async def mark_customer_contacted(
     await set_tenant_context(db, tenant_id)
 
     task = await _load_task_or_404(db, task_id, uuid.UUID(tenant_id))
+    await _require_sms_task_access(db, task, current_user)
     if (
         task.assigned_to_user_id
         and task.assigned_to_user_id != current_user.id
@@ -1485,7 +1720,7 @@ async def mark_customer_contacted(
     await db.commit()
     await set_tenant_context(db, tenant_id)
     await db.refresh(task)
-    return TaskResponse.model_validate(task)
+    return await _task_response_with_delivery(db, task, current_user)
 
 
 @router.patch("/{task_id}/pending-action", response_model=TaskResponse)
@@ -1497,11 +1732,10 @@ async def update_pending_action(
 ):
     """Revise the text of a drafted action before approving it.
 
-    Narrow on purpose. Only the subject and body are editable: recipients were
-    resolved from the matter's own parties, and accepting them here would undo
-    that guarantee. The automation key is derived from the canonical action
-    payload, so a meaningful draft edit creates a reviewable new attempt while
-    unrelated task/version changes and unchanged re-approvals still collide.
+    Narrow on purpose. Only content fields (including an SMS category) are
+    editable: recipients were resolved from the matter's own parties, and
+    accepting them here would undo that guarantee. A meaningful SMS edit gets
+    a new provider idempotency identity and resets staged review.
     """
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
@@ -1517,6 +1751,7 @@ async def update_pending_action(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_sms_task_access(db, task, current_user)
     if not task.pending_action:
         raise HTTPException(
             status_code=409, detail="This task has no drafted action to edit"
@@ -1537,11 +1772,12 @@ async def update_pending_action(
 
     updates = payload.model_dump(exclude_none=True, exclude={"expected_version"})
     if not updates:
-        return await _task_response_with_delivery(db, task)
+        return await _task_response_with_delivery(db, task, current_user)
 
     action_type = str(task.pending_action.get("type") or "")
     allowed_fields = {
         "email_client": {"subject", "body"},
+        "sms_client": {"body", "category"},
         "matter_document_draft": {"title", "body"},
     }.get(action_type, set())
     if set(updates) - allowed_fields:
@@ -1554,6 +1790,18 @@ async def update_pending_action(
     action = dict(task.pending_action)
     action.update(updates)
     artifact_revision_no = None
+    if action_type == "sms_client":
+        action["idempotency_key"] = f"task-sms-{task.id}-{uuid.uuid4()}"
+        try:
+            action = SmsClientAction.model_validate(action).model_dump(mode="json")
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The revised SMS must stay within the displayed consent and "
+                    "approved categories"
+                ),
+            ) from exc
     if action_type == "matter_document_draft" and action.get("artifact_id"):
         try:
             bound_action = MatterDocumentDraftAction.model_validate(action)
@@ -1649,7 +1897,7 @@ async def update_pending_action(
     await db.commit()
     await set_tenant_context(db, tenant_id)
     await db.refresh(task)
-    return await _task_response_with_delivery(db, task)
+    return await _task_response_with_delivery(db, task, current_user)
 
 
 @router.post(
@@ -1680,6 +1928,7 @@ async def sync_pending_action_from_cloud(
     )
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_sms_task_access(db, task, current_user)
     if not task.pending_action:
         raise HTTPException(
             status_code=409, detail="This task has no cloud document to refresh"
@@ -1800,7 +2049,7 @@ async def sync_pending_action_from_cloud(
         await set_tenant_context(db, tenant_id)
         await db.refresh(task)
         return TaskCloudSyncResponse(
-            task=await _task_response_with_delivery(db, task),
+            task=await _task_response_with_delivery(db, task, current_user),
             changed=False,
             message="Cloud working copy already matches the review revision.",
         )
@@ -1919,7 +2168,7 @@ async def sync_pending_action_from_cloud(
     await set_tenant_context(db, tenant_id)
     await db.refresh(task)
     return TaskCloudSyncResponse(
-        task=await _task_response_with_delivery(db, task),
+        task=await _task_response_with_delivery(db, task, current_user),
         changed=True,
         message=(
             "Cloud edits were preserved byte-for-byte as a new verified DOCX "
@@ -1936,6 +2185,7 @@ async def update_task(
     db: AsyncSession = Depends(get_db),
 ):
     tenant_id = str(current_user.tenant_id)
+    current_user_id = current_user.id
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -1949,6 +2199,8 @@ async def update_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_sms_task_access(db, task, current_user)
+    is_sms_task = await _task_contains_sms(db, task)
     if (
         task.review_policy == "staff_then_attorney"
         and payload.status == "in_progress"
@@ -1978,6 +2230,7 @@ async def update_task(
     acknowledge_prior_delivery_risk = updates.pop(
         "acknowledge_prior_delivery_risk", False
     )
+    sms_acknowledgement = updates.pop("sms_acknowledgement", None)
     if (
         task.status == "review"
         and task.pending_action
@@ -2027,8 +2280,23 @@ async def update_task(
     await _require_task_references_for_tenant(
         db, uuid.UUID(tenant_id), changed_references
     )
+    if is_sms_task:
+        for field in ("assigned_to_user_id", "reviewer_user_id"):
+            if field not in payload.model_fields_set:
+                continue
+            target_user_id = changed_references.get(field)
+            if target_user_id is not None and not await user_can_receive_sms_task(
+                db, task=task, user_id=target_user_id
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "SMS task assignees and reviewers must be active, hold "
+                        "manage_matters, and have access to the linked matter"
+                    ),
+                )
     if expected_version is not None and expected_version != task.version:
-        current_response = await _task_response_with_delivery(db, task)
+        current_response = await _task_response_with_delivery(db, task, current_user)
         raise HTTPException(
             status_code=409,
             detail={
@@ -2073,6 +2341,27 @@ async def update_task(
             )
         new_status = task.status
     if new_status is not None:
+        if new_status == "cancelled" and task.status != "cancelled":
+            try:
+                await require_sms_cancellation_is_truthful(db, task)
+            except ActionApprovalConflict as exc:
+                # Release the task/run FOR UPDATE locks before returning the
+                # conflict. Otherwise a worker that is still finalizing the
+                # claimed run blocks on those locks until this request's
+                # session is torn down. The commit is read-only here:
+                # cancellation is rejected before any task mutation.
+                await db.commit()
+                await set_tenant_context(db, tenant_id)
+                current_response = await _task_response_with_delivery(
+                    db, task, current_user
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": exc.detail,
+                        "current_task": current_response.model_dump(mode="json"),
+                    },
+                ) from exc
         try:
             transition_changed = transition_task(
                 db,
@@ -2170,12 +2459,25 @@ async def update_task(
             to_status=task.status,
             actor_user_id=current_user.id,
             acknowledge_prior_delivery_risk=acknowledge_prior_delivery_risk,
+            sms_acknowledgement=(
+                sms_acknowledgement
+                if isinstance(sms_acknowledgement, dict)
+                else (
+                    sms_acknowledgement.model_dump()
+                    if sms_acknowledgement is not None
+                    else None
+                )
+            ),
         )
     except ActionApprovalConflict as exc:
         await db.rollback()
         await set_tenant_context(db, tenant_id)
         current_task = await _load_task_or_404(db, task_id, uuid.UUID(tenant_id))
-        current_response = await _task_response_with_delivery(db, current_task)
+        current_user = await db.get(User, current_user_id)
+        await _require_sms_task_access(db, current_task, current_user)
+        current_response = await _task_response_with_delivery(
+            db, current_task, current_user
+        )
         raise HTTPException(
             status_code=409,
             detail={
@@ -2188,20 +2490,21 @@ async def update_task(
     await set_tenant_context(db, tenant_id)
     await db.refresh(task)
 
-    await notify_task_updated(
-        db,
-        task,
-        tenant_id,
-        calendar_changed=calendar_changed,
-        assignment_changed=reassigned,
-        previous_calendar_user_id=previous_calendar_user_id,
-        assignment_note=assignment_note,
-    )
+    if not is_sms_task:
+        await notify_task_updated(
+            db,
+            task,
+            tenant_id,
+            calendar_changed=calendar_changed,
+            assignment_changed=reassigned,
+            previous_calendar_user_id=previous_calendar_user_id,
+            assignment_note=assignment_note,
+        )
     # Connected-mail token refresh can commit during assignment notification,
     # which clears SET LOCAL before the delivery-state query below.
     await set_tenant_context(db, tenant_id)
 
-    return await _task_response_with_delivery(db, task)
+    return await _task_response_with_delivery(db, task, current_user)
 
 
 @router.delete("/{task_id}", status_code=204)
@@ -2224,6 +2527,15 @@ async def delete_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_sms_task_access(db, task, current_user)
+    if await _task_contains_sms(db, task):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "SMS proposal and event evidence cannot be hard-deleted. "
+                "Cancel the task to preserve its review history."
+            ),
+        )
 
     delivery_audit_id = await db.scalar(
         select(TaskAutomationRun.id)
@@ -2267,6 +2579,7 @@ async def send_task_reminder(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_sms_task_access(db, task, current_user)
 
     if not task.assigned_to_user_id:
         raise HTTPException(

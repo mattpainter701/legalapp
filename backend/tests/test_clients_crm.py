@@ -12,6 +12,17 @@ from app.models.tenant import Tenant
 
 @pytest.mark.asyncio
 async def test_client_crm_create_update_summary_and_consent(client, db_session):
+    rejected_grant = await client.post(
+        "/api/clients",
+        json={
+            "client_number": "CL-SMS-UNPROVEN",
+            "first_name": "Unproven",
+            "last_name": "Consent",
+            "sms_opt_in": True,
+        },
+    )
+    assert rejected_grant.status_code == 422
+    assert "intake consent workflow" in rejected_grant.json()["detail"]
     response = await client.post(
         "/api/clients",
         json={
@@ -36,7 +47,7 @@ async def test_client_crm_create_update_summary_and_consent(client, db_session):
                 "phone": "+1 701 555 0199",
             },
             "preferred_contact_method": "sms",
-            "sms_opt_in": True,
+            "sms_opt_in": False,
             "preferred_payment_method": "check",
             "billing_delivery_method": "portal",
             "payment_terms_days": 15,
@@ -47,8 +58,8 @@ async def test_client_crm_create_update_summary_and_consent(client, db_session):
     created = response.json()
     assert created["display_name"] == "Jordan Rivera"
     assert created["client_status"] == "active"
-    assert created["sms_opt_in"] is True
-    assert created["sms_opt_in_at"] is not None
+    assert created["sms_opt_in"] is False
+    assert created["sms_opt_in_at"] is None
     assert created["emergency_contact"]["name"] == "Alex Rivera"
 
     updated = await client.patch(
@@ -150,7 +161,7 @@ async def test_client_csv_import_export_and_formula_hardening(client, db_session
             "first_name": '=HYPERLINK("https://example.invalid")',
             "last_name": "Imported",
             "email": "imported@example.com",
-            "sms_opt_in": "yes",
+            "sms_opt_in": "no",
             "preferred_payment_method": "ach",
             "internal_notes": "Imported securely",
         }
@@ -168,7 +179,7 @@ async def test_client_csv_import_export_and_formula_hardening(client, db_session
             select(Contact).where(Contact.client_number == "CL-CSV-1")
         )
     ).scalar_one()
-    assert stored.sms_opt_in is True
+    assert stored.sms_opt_in is False
     assert stored.notes == "Imported securely"
 
     exported = await client.get("/api/clients/export.csv")

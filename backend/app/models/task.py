@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -352,6 +353,22 @@ class TaskAutomationRun(Base):
             "status",
             "created_at",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id"],
+            ["tasks.tenant_id", "tasks.id"],
+            name="fk_task_automation_runs_tenant_task",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "sms_message_id"],
+            ["sms_messages.tenant_id", "sms_messages.id"],
+            name="fk_task_automation_runs_tenant_sms_message",
+        ),
+        Index(
+            "idx_task_automation_runs_tenant_sms_message",
+            "tenant_id",
+            "sms_message_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -378,7 +395,7 @@ class TaskAutomationRun(Base):
     # cleared after a confirmed send, but legal audit evidence must remain.
     action_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     action_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # "queued" -> "sending" -> "sent" | "failed"
+    # "queued" -> "sending" -> "submitted" -> "sent" | "failed"
     #
     # Distinguishing queued from sending matters to the attorney: "we have not
     # tried yet" and "we tried and do not know the outcome" are different states,
@@ -390,9 +407,45 @@ class TaskAutomationRun(Base):
     provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     provider_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
     delivery_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Distinguishes a confirmed no-send (safe to retry) from a transport
-    # interruption where the provider may have accepted the message.
-    delivery_certainty: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Migration 149 expands this audit value without an in-place type rewrite.
+    # The legacy column remains mapped for rolling deploy/rollback compatibility;
+    # a database trigger synchronizes it with the exact v2 vocabulary.
+    _delivery_certainty_legacy: Mapped[str | None] = mapped_column(
+        "delivery_certainty", String(30), nullable=True
+    )
+    _delivery_certainty_v2: Mapped[str | None] = mapped_column(
+        "delivery_certainty_v2", String(50), nullable=True
+    )
+
+    @property
+    def delivery_certainty(self) -> str | None:
+        """Return exact v2 truth, falling back to a pre-149 legacy row."""
+        value = self._delivery_certainty_v2 or self._delivery_certainty_legacy
+        if value == "failed_after_acceptance":
+            return "provider_failed_after_acceptance"
+        return value
+
+    @delivery_certainty.setter
+    def delivery_certainty(self, value: str | None) -> None:
+        """Dual-write the expand-phase columns with a legacy-safe alias."""
+        canonical = (
+            "provider_failed_after_acceptance"
+            if value == "failed_after_acceptance"
+            else value
+        )
+        self._delivery_certainty_v2 = canonical
+        self._delivery_certainty_legacy = (
+            "failed_after_acceptance"
+            if canonical == "provider_failed_after_acceptance"
+            else canonical
+        )
+
+    sms_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    reconciliation_required: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     triggered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

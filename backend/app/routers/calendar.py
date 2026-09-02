@@ -28,7 +28,9 @@ from app.schemas.calendar import (
     ScheduledEventUpdate,
 )
 from app.services.calendar_sync import calendar_sync
+from app.services.rbac_service import get_user_capabilities
 from app.services.scheduled_events import create_external_event, delete_external_event
+from app.services.task_visibility import sms_task_visibility_predicate
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
@@ -115,11 +117,18 @@ async def get_calendar_events(
 
     # ── Query 1: Tasks with due_date in range ─────────────────────────────────
     # Include completed tasks so they show as done on the calendar (not vanish).
+    capabilities = await get_user_capabilities(db, current_user.id)
     task_stmt = select(Task).where(
         Task.tenant_id == tid,
         Task.due_date >= start,
         Task.due_date <= end,
         Task.status.notin_(["cancelled"]),
+        sms_task_visibility_predicate(
+            tenant_id=tid,
+            user_id=current_user.id,
+            is_admin=current_user.role == "admin",
+            has_manage_matters="manage_matters" in capabilities,
+        ),
     )
     task_result = await db.execute(task_stmt)
     tasks = task_result.scalars().all()

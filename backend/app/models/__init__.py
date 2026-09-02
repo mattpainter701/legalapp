@@ -77,6 +77,14 @@ from app.models.matter_document import MatterDocument
 from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.scheduled_event import ScheduledEvent
 from app.models.communication_log import CommunicationLog
+from app.models.sms import (  # noqa: F401
+    SmsMessage,
+    SmsNumberSuppression,
+    SmsNumberSuppressionEvent,
+    SmsProviderConfig,
+    SmsProviderCredential,
+    SmsReviewItem,
+)
 from app.models.document_template import DocumentTemplate
 from app.models.studio_render import (
     StudioPreferredRenderEvidence,
@@ -154,6 +162,7 @@ from app.models.conversion_loop import (
     IntakeForm,
     IntakeSubmission,
     LeadChannelConsent,
+    SmsConsentEvent,
     LeadAppointment,
     LeadFunnelEvent,
 )
@@ -284,6 +293,7 @@ __all__ = [
     "IntakeForm",
     "IntakeSubmission",
     "LeadChannelConsent",
+    "SmsConsentEvent",
     "LeadAppointment",
     "LeadFunnelEvent",
     "DocumentTemplate",

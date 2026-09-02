@@ -275,6 +275,14 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
     ): "verifies provider HMAC signature and tenant binding",
     (
         frozenset({"POST"}),
+        "/api/sms/webhooks/{tenant_id}/inbound",
+    ): "verifies Twilio signature plus exact account and tenant-owned destination",
+    (
+        frozenset({"POST"}),
+        "/api/sms/webhooks/{tenant_id}/status",
+    ): "verifies Twilio signature plus message-bound account and tenant context",
+    (
+        frozenset({"POST"}),
         "/api/integrations/zoom-phone/webhook",
     ): "verifies per-tenant webhook secret",
     (

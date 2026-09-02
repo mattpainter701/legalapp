@@ -49,7 +49,9 @@ class DB:
         return Result(self.value)
 
     async def scalar(self, _stmt):
-        return self.value
+        # A generic fake has no rows: the SMS access gate's historical-run
+        # probe must see "no SMS automation run", not the task fixture value.
+        return None
 
     async def commit(self):
         self.commits += 1

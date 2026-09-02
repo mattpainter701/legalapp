@@ -466,6 +466,8 @@ async def test_chaining_then_proposing_halts_after_the_mutation(
             "citation": "2026 ND 42",
             "locator": "Paragraph 12",
             "source_type": "public_authority",
+            "snapshot_sha256": None,
+            "verification_state": "unverified_external",
         }
     ]
     assert public_source_id in llm.requests[0]["messages"][0]["content"]

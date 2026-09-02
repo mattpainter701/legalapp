@@ -15,7 +15,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_, select, func
+from sqlalchemy import and_, or_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
@@ -250,15 +250,42 @@ async def contact_communications(
     db: AsyncSession = Depends(get_db),
 ):
     from app.schemas.communication_log import CommunicationLogResponse
+    from app.services.rbac_service import get_user_capabilities
+    from app.services.matter_access import matter_access_predicate
 
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    contact_exists = await db.scalar(
+        select(Contact.id).where(
+            Contact.tenant_id == uuid.UUID(tenant_id), Contact.id == contact_id
+        )
+    )
+    if contact_exists is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    can_access_sms = "manage_matters" in await get_user_capabilities(
+        db, current_user.id
+    )
+    sms_visibility = matter_access_predicate(
+        tenant_id=uuid.UUID(tenant_id),
+        user_id=current_user.id,
+        is_admin=current_user.role == "admin",
+        matter_id_column=CommunicationLog.matter_id,
+    )
+    channel_visibility = (
+        or_(
+            CommunicationLog.channel != "sms",
+            and_(CommunicationLog.channel == "sms", sms_visibility),
+        )
+        if can_access_sms
+        else CommunicationLog.channel != "sms"
+    )
 
     stmt = (
         select(CommunicationLog)
         .where(
             CommunicationLog.tenant_id == uuid.UUID(tenant_id),
             CommunicationLog.contact_id == contact_id,
+            channel_visibility,
         )
         .order_by(CommunicationLog.occurred_at.desc())
         .limit(limit)
@@ -270,6 +297,7 @@ async def contact_communications(
     count_stmt = select(func.count()).where(
         CommunicationLog.tenant_id == uuid.UUID(tenant_id),
         CommunicationLog.contact_id == contact_id,
+        channel_visibility,
     )
     total = (await db.execute(count_stmt)).scalar_one()
 

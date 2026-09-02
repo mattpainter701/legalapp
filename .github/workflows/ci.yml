@@ -291,8 +291,13 @@ jobs:
       - name: Upgrade through COMP-09 and verify rerun safety
         working-directory: backend
         run: |
-          alembic upgrade head
-          alembic upgrade head
+          alembic upgrade 148_configurable_workflows
+          alembic upgrade 148_configurable_workflows
+      - name: Verify current purge is safe on the coherent pre-SMS schema
+        run: python backend/scripts/rehearse_demo_purge_schema_guard.py --expected none
+      - name: Advance to the current application schema for the full rehearsal
+        working-directory: backend
+        run: alembic upgrade head
       - name: Provision a production-shaped runtime role
         env:
           PGPASSWORD: test
@@ -383,6 +388,110 @@ jobs:
             exit 1
           fi
           pytest $files -q --tb=short
+
+  sms-lifecycle-rehearsal:
+    name: SMS lifecycle PostgreSQL/provider rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+        env:
+          POSTGRES_DB: sms_lifecycle_rehearsal
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd "pg_isready -U test -d sms_lifecycle_rehearsal"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine@sha256:bb186d083732f669da90be8b0f975a37812b15e913465bb14d845db72a4e3e08
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports:
+          - 6379:6379
+    env:
+      DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/sms_lifecycle_rehearsal
+      TEST_DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/sms_lifecycle_rehearsal
+      MIGRATOR_DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/sms_lifecycle_rehearsal
+      RLS_TEST_DATABASE_URL: postgresql+asyncpg://sms_runtime:sms-runtime-password@127.0.0.1:5432/sms_lifecycle_rehearsal
+      REDIS_URL: redis://127.0.0.1:6379/13
+      TEST_REDIS_URL: redis://127.0.0.1:6379/13
+      SECRET_KEY: ci-sms-lifecycle-secret-not-for-production
+      TOKEN_ENCRYPTION_KEY: KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY=
+      PYTHONPATH: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - name: Apply the verified COMP-09 migration head
+        working-directory: backend
+        run: alembic upgrade 148_configurable_workflows
+      - name: Upgrade to the sole SMS head and verify rerun safety
+        working-directory: backend
+        run: |
+          alembic upgrade 153_sms_lifecycle
+          alembic upgrade 153_sms_lifecycle
+      - name: Verify current purge sees the complete SMS schema family
+        run: python backend/scripts/rehearse_demo_purge_schema_guard.py --expected all
+      - name: Rehearse SMS expand-contract downgrade compatibility
+        working-directory: backend
+        env:
+          PGPASSWORD: test
+        run: |
+          alembic downgrade 148_configurable_workflows
+          psql -h 127.0.0.1 -U test -d sms_lifecycle_rehearsal -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+            legacy_fk_count integer;
+            composite_fk_count integer;
+            v2_column_count integer;
+          BEGIN
+            SELECT count(*) INTO legacy_fk_count
+              FROM pg_constraint
+             WHERE conrelid = 'task_automation_runs'::regclass
+               AND conname = 'task_automation_runs_task_id_fkey';
+            SELECT count(*) INTO composite_fk_count
+              FROM pg_constraint
+             WHERE conrelid = 'task_automation_runs'::regclass
+               AND conname = 'fk_task_automation_runs_tenant_task';
+            SELECT count(*) INTO v2_column_count
+              FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'task_automation_runs'
+               AND column_name = 'delivery_certainty_v2';
+            IF legacy_fk_count <> 1 OR composite_fk_count <> 0 OR v2_column_count <> 0 THEN
+              RAISE EXCEPTION
+                'SMS downgrade contract failed: legacy_fk=%, composite_fk=%, v2_column=%',
+                legacy_fk_count, composite_fk_count, v2_column_count;
+            END IF;
+          END $$;
+          SQL
+          alembic upgrade 153_sms_lifecycle
+      - name: Provision a production-shaped SMS runtime role
+        env:
+          PGPASSWORD: test
+        run: |
+          psql -h 127.0.0.1 -U test -d sms_lifecycle_rehearsal -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE sms_runtime LOGIN PASSWORD 'sms-runtime-password'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          GRANT CONNECT ON DATABASE sms_lifecycle_rehearsal TO sms_runtime;
+          GRANT USAGE ON SCHEMA public TO sms_runtime;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sms_runtime;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sms_runtime;
+          SQL
+      - name: Rehearse provider, consent, webhook, tenant, purge, and replay controls
+        run: >-
+          python -m pytest -vv --maxfail=1 -o faulthandler_timeout=120
+          backend/tests/test_sms_migration.py
+          backend/tests/test_sms_unit.py
+          backend/tests/test_sms_lifecycle_db.py
 
   # ─── Backend: Test shards ───────────────────────────────────
   # Split by file, balanced on collected test count weighted by database use.
@@ -988,6 +1097,7 @@ jobs:
       - authority-control-plane-rehearsal
       - research-workspace-rehearsal
       - configurable-workflow-rehearsal
+      - sms-lifecycle-rehearsal
     runs-on: ubuntu-latest
     permissions: {}
     steps:

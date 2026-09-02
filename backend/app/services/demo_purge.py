@@ -61,6 +61,30 @@ _CONFIG_WORKFLOW_PURGE_ORDER = (
 _CONFIG_WORKFLOW_TABLES = frozenset(_CONFIG_WORKFLOW_PURGE_ORDER)
 _CONFIG_WORKFLOW_PURGE_TENANT_GUC = "app.config_workflow_demo_purge_tenant_id"
 _CONFIG_WORKFLOW_PURGE_SESSION_GUC = "app.config_workflow_demo_purge_session_id"
+_SMS_IMMUTABLE_TABLES = (
+    "sms_number_suppression_events",
+    "sms_consent_events",
+)
+_SMS_PURGE_ORDER = (
+    "sms_review_items",
+    "sms_messages",
+    "sms_provider_credentials",
+    "sms_provider_configs",
+)
+_SMS_PURGE_TABLES = frozenset(_SMS_PURGE_ORDER)
+_SMS_TABLES = frozenset(
+    {
+        "sms_provider_configs",
+        "sms_provider_credentials",
+        "sms_messages",
+        "sms_review_items",
+        "sms_consent_events",
+        "sms_number_suppressions",
+        "sms_number_suppression_events",
+    }
+)
+_SMS_PURGE_TENANT_GUC = "app.sms_demo_purge_tenant_id"
+_SMS_PURGE_SESSION_GUC = "app.sms_demo_purge_session_id"
 
 # A worker that dies between claiming a session and reaching a terminal state
 # leaves the row in "purging".  Without a reclaim window the hourly job would
@@ -115,11 +139,38 @@ async def _tenant_purge_lock(db: AsyncSession, tenant_id: uuid.UUID):
         await connection.close()
 
 
-def _purge_tables():
+def _purge_tables(*, include_sms: bool = True):
     missing = [name for name in DEMO_TABLE_REGISTRY if name not in Base.metadata.tables]
     if missing:
         raise DemoPurgeRefused(f"Purge tables are not registered: {sorted(missing)}")
-    return {name: Base.metadata.tables[name] for name in DEMO_TABLE_REGISTRY}
+    return {
+        name: Base.metadata.tables[name]
+        for name in DEMO_TABLE_REGISTRY
+        if include_sms or name not in _SMS_TABLES
+    }
+
+
+async def _sms_purge_schema_present(db: AsyncSession) -> bool:
+    """Accept a pre-149 schema or the complete SMS family, never a partial family."""
+
+    names = ", ".join(f"'{name}'" for name in sorted(_SMS_TABLES))
+    present = frozenset(
+        await db.scalars(
+            text(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = current_schema() "
+                f"AND table_name IN ({names})"
+            )
+        )
+    )
+    if present and present != _SMS_TABLES:
+        missing = sorted(_SMS_TABLES - present)
+        unexpected = sorted(present - _SMS_TABLES)
+        raise DemoPurgeRefused(
+            "SMS purge schema is partially installed; refusing destructive work "
+            f"(missing={missing}, unexpected={unexpected})"
+        )
+    return bool(present)
 
 
 async def _purge_immutable_research_history(
@@ -172,6 +223,31 @@ async def _authorize_config_workflow_demo_purge(
             "value": str(session_id),
         },
     )
+
+
+async def _purge_immutable_sms_evidence(
+    db: AsyncSession,
+    tables,
+    *,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+) -> dict[str, int]:
+    """Delete append-only SMS evidence only for the exact expired demo claim."""
+    await db.execute(
+        text("SELECT set_config(:setting, :value, true)"),
+        {"setting": _SMS_PURGE_TENANT_GUC, "value": str(tenant_id)},
+    )
+    await db.execute(
+        text("SELECT set_config(:setting, :value, true)"),
+        {"setting": _SMS_PURGE_SESSION_GUC, "value": str(session_id)},
+    )
+    deleted = {}
+    for name in _SMS_IMMUTABLE_TABLES:
+        result = await db.execute(
+            delete(tables[name]).where(tables[name].c.tenant_id == tenant_id)
+        )
+        deleted[name] = int(result.rowcount or 0)
+    return deleted
 
 
 def _delete_order(tables) -> list[str]:
@@ -290,6 +366,13 @@ async def _purge_demo_tenant_locked(
 
     try:
         tables = _purge_tables()
+        # Current application workers may briefly share a database still at
+        # migration 148. No SMS tables is a coherent pre-feature schema; all
+        # SMS tables is the current schema. A partial family is never safe to
+        # purge because it could strand secrets or immutable evidence.
+        sms_schema_present = await _sms_purge_schema_present(db)
+        _remove_tenant_files(tenant_id)
+        tables = _purge_tables(include_sms=sms_schema_present)
         await set_tenant_context(db, str(tenant_id))
         deleted = await _purge_immutable_research_history(
             db, tables, tenant_id=tenant_id, session_id=session_id
@@ -315,12 +398,20 @@ async def _purge_demo_tenant_locked(
                 delete(table).where(table.c.tenant_id == tenant_id)
             )
             deleted[name] = int(result.rowcount or 0)
+        if sms_schema_present:
+            deleted.update(
+                await _purge_immutable_sms_evidence(
+                    db, tables, tenant_id=tenant_id, session_id=session_id
+                )
+            )
         # Break optional cycles (invoice/retainer and self-references) first.
         for name, table in tables.items():
             if (
                 name in _RESEARCH_IMMUTABLE_TABLES
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
+                or name in _SMS_IMMUTABLE_TABLES
+                or name in _SMS_PURGE_TABLES
             ):
                 continue
             values = {}
@@ -334,11 +425,28 @@ async def _purge_demo_tenant_locked(
                     update(table).where(table.c.tenant_id == tenant_id).values(**values)
                 )
 
+        if sms_schema_present:
+            # Detach and remove SMS children before their provider parents. A
+            # message holds a provider_credential_id back-reference and review
+            # items hold a non-nullable message id, so both must be gone before
+            # the bounded credential history is deleted. Credential history must
+            # never null retired_by_user_id: retirement evidence requires its
+            # actor, so credentials (then live config) are removed here before
+            # the generic plan can remove users.
+            for name in _SMS_PURGE_ORDER:
+                table = tables[name]
+                result = await db.execute(
+                    delete(table).where(table.c.tenant_id == tenant_id)
+                )
+                deleted[name] = int(result.rowcount or 0)
+
         for name in _delete_order(tables):
             if (
                 name in _RESEARCH_IMMUTABLE_TABLES
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
+                or name in _SMS_IMMUTABLE_TABLES
+                or name in _SMS_PURGE_TABLES
             ):
                 continue
             table = tables[name]

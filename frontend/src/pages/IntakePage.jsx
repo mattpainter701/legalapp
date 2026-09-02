@@ -7,6 +7,8 @@ import { useAuth } from '../App'
 import CreatableCombobox from '../components/CreatableCombobox'
 import useMatterFieldOptions from '../hooks/useMatterFieldOptions'
 import AfterCallConcierge from '../components/intake/AfterCallConcierge'
+import SmsReviewQueue from '../components/intake/SmsReviewQueue'
+import SmsReconciliationQueue from '../components/intake/SmsReconciliationQueue'
 
 const AFTER_CALL_ASSISTANT_ENABLED = import.meta.env.VITE_ENABLE_AFTER_CALL_ASSISTANT === 'true'
 
@@ -265,6 +267,9 @@ export default function IntakePage() {
             <Plus size={16} /> New Lead
           </button>
         </div>
+
+        <SmsReconciliationQueue />
+        <SmsReviewQueue />
 
         {/* Pipeline header */}
         <div className="grid grid-cols-5 gap-2 mb-6">

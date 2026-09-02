@@ -146,6 +146,24 @@ export const isLongRunningPath = (url) => (
   typeof url === 'string' && LONG_REQUEST_PATTERNS.some((pattern) => pattern.test(url))
 )
 
+export const getSmsReviewItems = () => api.get('/sms/review').then(response => response.data)
+
+export const decideSmsReviewItem = (reviewItemId, decision) => (
+  api.post(`/sms/review/${reviewItemId}`, decision).then(response => response.data)
+)
+
+export const getSmsReconciliationItems = () => (
+  api.get('/sms/reconciliation').then(response => response.data)
+)
+
+export const getSmsReconciliationItem = smsMessageId => (
+  api.get(`/sms/reconciliation/${smsMessageId}`).then(response => response.data)
+)
+
+export const reconcileSmsMessage = (smsMessageId, resolution) => (
+  api.post(`/sms/messages/${smsMessageId}/reconcile`, resolution).then(response => response.data)
+)
+
 const api = axios.create({
   baseURL: BASE_URL,
   timeout: REQUEST_TIMEOUT_MS,

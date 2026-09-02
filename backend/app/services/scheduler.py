@@ -518,6 +518,7 @@ class LegalScheduler:
             process_pending_zoom_phone_jobs,
             renew_teams_voice_subscriptions,
         )
+        from app.services.sms import mark_stale_sms_dispatches_for_reconciliation
 
         self.scheduler.add_job(
             process_pending_jobs,
@@ -525,6 +526,18 @@ class LegalScheduler:
             seconds=5,
             id="durable-job-worker",
             name="Durable Document Job Worker",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            self._guarded(
+                "sms-dispatch-reconciliation",
+                mark_stale_sms_dispatches_for_reconciliation,
+            ),
+            "interval",
+            minutes=1,
+            id="sms-dispatch-reconciliation",
+            name="SMS Dispatch Reconciliation",
             replace_existing=True,
             max_instances=1,
         )
