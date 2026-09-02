@@ -274,13 +274,19 @@ async def test_broker_survives_a_peer_that_vanishes_before_the_error_reply(monke
 
     stop = asyncio.Event()
     accepted = []
+    created = []
 
-    def accept(_name):
-        accepted.append(_name)
+    def create(_name, *, first_instance):
+        created.append(first_instance)
+        return f"pipe{len(created)}"
+
+    def accept(handle):
+        accepted.append(handle)
         if len(accepted) == 3:
             stop.set()
-        return (f"pipe{len(accepted)}", "1", "S-1-5-21-1-1-1-1")
+        return ("1", "S-1-5-21-1-1-1-1")
 
+    monkeypatch.setattr(file_opener, "_create_pipe", create)
     monkeypatch.setattr(file_opener, "_accept_pipe", accept)
     monkeypatch.setattr(
         file_opener, "_read_message", lambda handle: {"action": "shutdown"}
@@ -301,3 +307,176 @@ async def test_broker_survives_a_peer_that_vanishes_before_the_error_reply(monke
     # Three full accepts means the loop kept serving through both failures.
     assert len(accepted) == 3
     assert closed == ["pipe1", "pipe2", "pipe3"]
+    # Only the very first instance claims the name; the rest deliberately do
+    # not, because the name is still held by the instance being replaced.
+    assert created == [True, False, False]
+
+
+def test_interactive_pipe_grant_withholds_the_create_instance_right():
+    """0x0004 is FILE_APPEND_DATA on a file and pipe-instance creation on a pipe.
+
+    GENERIC_WRITE quietly includes it, which is what lets an interactive user
+    stand up a rival instance of the broker's pipe name and answer the opener
+    in the service's place.
+    """
+    assert file_opener.PIPE_CLIENT_ACCESS & 0x0004 == 0
+    # Still enough for the protocol itself: read, write and wait.
+    assert file_opener.PIPE_CLIENT_ACCESS & 0x0001  # FILE_READ_DATA
+    assert file_opener.PIPE_CLIENT_ACCESS & 0x0002  # FILE_WRITE_DATA
+    assert file_opener.PIPE_CLIENT_ACCESS & 0x00100000  # SYNCHRONIZE
+
+
+def test_pipe_dacl_grants_exactly_the_access_the_client_requests(monkeypatch):
+    """A DACL narrower than the client's requested access fails every connect.
+
+    The two are a matched pair, so pin them to one constant here: this test is
+    what catches a later edit that tightens one end and strands the other.
+    """
+    captured = {}
+
+    def convert(sddl, revision):
+        captured["sddl"] = sddl
+        return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "win32security",
+        SimpleNamespace(
+            ConvertStringSecurityDescriptorToSecurityDescriptor=convert,
+            SDDL_REVISION_1=1,
+            SECURITY_ATTRIBUTES=lambda: SimpleNamespace(SECURITY_DESCRIPTOR=None),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "win32pipe",
+        SimpleNamespace(
+            PIPE_ACCESS_DUPLEX=3,
+            PIPE_TYPE_BYTE=0,
+            PIPE_READMODE_BYTE=0,
+            PIPE_WAIT=0,
+            PIPE_REJECT_REMOTE_CLIENTS=8,
+            CreateNamedPipe=lambda *args: captured.setdefault("access", args[1]),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "win32file",
+        SimpleNamespace(
+            CreateFile=lambda *args: captured.setdefault("requested", args[1]),
+            OPEN_EXISTING=3,
+        ),
+    )
+
+    monkeypatch.setattr(file_opener, "_own_service_sid", lambda: "S-1-5-21-9-9-9-500")
+    file_opener._create_pipe("\\\\.\\pipe\\x", first_instance=False)
+    file_opener._connect_pipe("\\\\.\\pipe\\x")
+
+    assert f"0x{file_opener.PIPE_CLIENT_ACCESS:08x};;;IU)" in captured["sddl"]
+    # The running identity, not just SYSTEM. The installer supports
+    # SERVICE_ACCOUNT=CORP\svc-lawhand and a custom account matches neither SY
+    # nor IU, so without an ACE of its own it cannot create the replacement
+    # instance the broker loop depends on — it would serve one open and stop.
+    assert "(A;;GA;;;S-1-5-21-9-9-9-500)" in captured["sddl"]
+    assert "GRGW" not in captured["sddl"]
+    assert captured["requested"] == file_opener.PIPE_CLIENT_ACCESS
+    # SYSTEM keeps full control: the service creates the instances itself.
+    assert "(A;;GA;;;SY)" in captured["sddl"]
+    assert captured["access"] & file_opener._FILE_FLAG_FIRST_PIPE_INSTANCE == 0
+
+
+def test_first_pipe_instance_flag_refuses_a_name_somebody_already_owns(monkeypatch):
+    captured = {}
+    monkeypatch.setitem(
+        sys.modules,
+        "win32security",
+        SimpleNamespace(
+            ConvertStringSecurityDescriptorToSecurityDescriptor=lambda sddl, rev: None,
+            SDDL_REVISION_1=1,
+            SECURITY_ATTRIBUTES=lambda: SimpleNamespace(SECURITY_DESCRIPTOR=None),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "win32pipe",
+        SimpleNamespace(
+            PIPE_ACCESS_DUPLEX=3,
+            PIPE_TYPE_BYTE=0,
+            PIPE_READMODE_BYTE=0,
+            PIPE_WAIT=0,
+            PIPE_REJECT_REMOTE_CLIENTS=8,
+            CreateNamedPipe=lambda *args: captured.setdefault("access", args[1]),
+        ),
+    )
+
+    monkeypatch.setattr(file_opener, "_own_service_sid", lambda: "S-1-5-18")
+    file_opener._create_pipe("\\\\.\\pipe\\x", first_instance=True)
+
+    assert captured["access"] & file_opener._FILE_FLAG_FIRST_PIPE_INSTANCE
+
+
+def test_wake_broker_will_not_let_the_listener_act_as_the_service(monkeypatch):
+    """Shutdown connects as the service account and has nothing to authorize.
+
+    Impersonation level here would hand a listener that was not ours the one
+    thing worth stealing from this pipe: the service token.
+    """
+    monkeypatch.setattr(file_opener.sys, "platform", "win32")
+    captured = {}
+    monkeypatch.setitem(
+        sys.modules,
+        "win32file",
+        SimpleNamespace(
+            CreateFile=lambda *args: captured.setdefault("flags", args[5]),
+            OPEN_EXISTING=3,
+            CloseHandle=lambda handle: None,
+        ),
+    )
+    monkeypatch.setattr(file_opener, "_write_message", lambda handle, value: None)
+
+    file_opener.wake_broker(AGENT_ID)
+
+    assert captured["flags"] == file_opener._SQOS_IDENTIFICATION
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\secret.pdf",
+        "\\\\?\\C:\\Windows\\System32\\calc.exe",
+        "\\\\.\\pipe\\somebody-elses-pipe",
+        "\\\\FS01\\Legal\\..\\..\\Windows\\evil.lnk",
+        "C:\\Windows\\System32\\calc.exe",
+    ],
+)
+def test_opener_refuses_a_path_the_broker_should_never_have_returned(monkeypatch, path):
+    """The interactive side re-checks before it hands anything to ShellExecute.
+
+    A startswith("\\\\") test passes the Win32 device namespace as readily as a
+    share, so this is the check that keeps a listener that was not ours from
+    choosing what this process opens.
+    """
+    monkeypatch.setattr(file_opener.sys, "platform", "win32")
+    opened = []
+    monkeypatch.setattr(file_opener, "_shell_open", lambda p, action: opened.append(p))
+    monkeypatch.setitem(
+        sys.modules,
+        "win32file",
+        SimpleNamespace(CloseHandle=lambda handle: None),
+    )
+    monkeypatch.setitem(sys.modules, "pywintypes", SimpleNamespace(error=OSError))
+    monkeypatch.setattr(file_opener, "_connect_pipe", lambda *a, **k: "pipe")
+    monkeypatch.setattr(file_opener, "_write_message", lambda handle, value: None)
+    monkeypatch.setattr(
+        file_opener,
+        "_read_message",
+        lambda handle: {"status": "ok", "path": path},
+    )
+
+    with pytest.raises(file_opener.FileOpenError) as caught:
+        file_opener.request_open(
+            file_opener.LaunchIntent(action="open", agent_id=AGENT_ID, handle=HANDLE)
+        )
+
+    assert caught.value.outcome == "invalid"
+    assert opened == []

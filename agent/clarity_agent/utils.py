@@ -39,6 +39,13 @@ def normalize_unc_path(path: str) -> str:
     value = (path or "").replace("/", "\\").strip()
     if not value.startswith("\\\\"):
         raise ValueError(f"Invalid UNC path: {path}")
+    # \\?\ and \\.\ are the Win32 device namespace, not servers. They reach
+    # \\?\GLOBALROOT, raw volumes and \\.\pipe, and they bypass the path
+    # canonicalization every root check below depends on. A share is never
+    # named this way, so refuse the prefix rather than normalizing it away:
+    # the "." form otherwise survives as a plausible-looking \\pipe\name.
+    if value[:4] in ("\\\\?\\", "\\\\.\\"):
+        raise ValueError(f"Invalid UNC path: {path}")
     parts = [part for part in value[2:].split("\\") if part not in ("", ".")]
     if len(parts) < 2 or any(part == ".." for part in parts):
         raise ValueError(f"Invalid UNC path: {path}")
