@@ -501,9 +501,7 @@ async def _lock_sms_replay(
     contact = await db.scalar(
         select(Contact)
         .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
-        # FOR NO KEY UPDATE: see the resolution fence for why FOR UPDATE here
-        # closes a dispatch/resolution lock cycle through a foreign key.
-        .with_for_update(key_share=True)
+        .with_for_update()
     )
     if contact is None:
         raise SmsError(
@@ -1904,9 +1902,7 @@ async def send_sms(
         select(Contact)
         .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
         .execution_options(populate_existing=True)
-        # FOR NO KEY UPDATE: fence the phone/consent state without blocking the
-        # FOR KEY SHARE that a foreign key reference to this contact takes.
-        .with_for_update(key_share=True)
+        .with_for_update()
     )
     locked_consent = (
         await load_sms_consent(db, tenant_id, contact_id, lock=True)
@@ -2025,7 +2021,20 @@ async def send_sms(
         ordered_contact = await db.scalar(
             select(Contact.id)
             .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
-            .with_for_update(key_share=True)
+            # FOR KEY SHARE: exactly the lock the communication_logs foreign
+            # key will take on this row later, taken now, before Matter. The
+            # cycle was never about strength, it was about when. Dispatch
+            # reached that foreign key while already holding Matter, and
+            # resolution holds Contact while reaching for Matter. Waiting here
+            # instead is harmless because nothing is held yet.
+            #
+            # It must stay this weak. FOR KEY SHARE conflicts only with FOR
+            # UPDATE, so an ordinary contact update -- which takes FOR NO KEY
+            # UPDATE -- still commits straight through this fence, and
+            # test_target_change_committed_before_final_fence_refreshes_retained_rows
+            # depends on that. Taking FOR NO KEY UPDATE here instead blocked
+            # those mutations and hung the whole suite in CI.
+            .with_for_update(read=True, key_share=True)
         )
         if ordered_contact is None:
             raise SmsError("SMS target was not found", 404, code="sms_target_not_found")
@@ -2303,9 +2312,7 @@ async def apply_inbound(
             select(Contact)
             .where(Contact.tenant_id == tenant_id)
             .order_by(Contact.id)
-            # FOR NO KEY UPDATE: routing must see a stable phone, not block
-            # foreign key references to these contacts.
-            .with_for_update(key_share=True)
+            .with_for_update()
         )
     ).all()
     candidates = []
@@ -2561,19 +2568,10 @@ async def resolve_review_item(
         # evidence is fenced, take the target Contact before actor/matter locks.
         # Dispatch takes Contact before its final actor/matter fence, so review
         # must use the same order or the two paths can deadlock deterministically.
-        #
-        # FOR NO KEY UPDATE, not FOR UPDATE. What this fence needs is that the
-        # phone checked below cannot change under it, and that is exactly what
-        # FOR NO KEY UPDATE denies. FOR UPDATE additionally blocks FOR KEY
-        # SHARE, the lock PostgreSQL takes on a parent row when a child row
-        # references it -- and dispatch inserts a communication_logs row whose
-        # foreign key points at this contact. That extra strength bought
-        # nothing and closed a lock cycle: resolution holding Contact and
-        # waiting on Matter, dispatch holding Matter and waiting on Contact.
         contact = await db.scalar(
             select(Contact)
             .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
-            .with_for_update(key_share=True)
+            .with_for_update()
         )
         if contact is None:
             raise SmsError("Resolution target was not found", 404)
