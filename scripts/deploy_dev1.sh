@@ -128,18 +128,46 @@ echo "==> Building and starting dev1 without writer services"
   exit 4
 }
 
+healthy=""
 for _ in $(seq 1 60); do
   if curl --fail --silent --show-error --max-time 10 \
       --cacert "$(get_env ORIGIN_TLS_CA_FILE)" \
       --resolve origin.getlawhand.internal:18443:127.0.0.1 \
       https://origin.getlawhand.internal:18443/health >/dev/null; then
-    echo "DEV1_DEPLOYED_COMMIT=$release_sha"
-    exit 0
+    healthy=1
+    break
   fi
   sleep 2
 done
 
-"${compose[@]}" ps
-"${compose[@]}" logs --tail=100 backend frontend nginx
-echo "ERROR: dev1 did not become healthy" >&2
-exit 5
+if [[ -z "$healthy" ]]; then
+  "${compose[@]}" ps
+  "${compose[@]}" logs --tail=100 backend frontend nginx
+  echo "ERROR: dev1 did not become healthy" >&2
+  exit 5
+fi
+
+# The fixture tenant is a database row, so a rebuilt dev1 comes up with demo
+# mode correctly configured and still answers 503 on every login attempt. Seed
+# it here so a working demo survives a volume rebuild without a manual step.
+# The seed refuses to overwrite an existing fixture, so this stays idempotent;
+# only an unrecognised outcome fails the deploy, because silently continuing
+# would hand back a healthy stack that nobody can log in to.
+if [[ "$demo_mode" == true ]]; then
+  echo "==> Ensuring the demo fixture tenant exists"
+  demo_domain="$(get_env DEMO_FIXTURE_TENANT_DOMAIN)"
+  seed_output="$("${compose[@]}" exec -T backend \
+    python scripts/seed_demo_fixture.py --domain "$demo_domain" 2>&1)" || true
+  if grep -Fq "Fixture already exists" <<<"$seed_output"; then
+    echo "    fixture already present; left untouched"
+  elif grep -Fq "Created synthetic demo fixture" <<<"$seed_output"; then
+    echo "    seeded a new synthetic fixture tenant"
+  else
+    printf '%s\n' "$seed_output" >&2
+    echo "ERROR: demo fixture seeding failed; the demo login would answer 503" >&2
+    exit 6
+  fi
+fi
+
+echo "DEV1_DEPLOYED_COMMIT=$release_sha"
+exit 0
