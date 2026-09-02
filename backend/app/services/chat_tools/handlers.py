@@ -860,6 +860,17 @@ async def _create_proposed_task(
             "reviewer_configuration_required",
             "A staged document review requires separate staff and attorney reviewers",
         )
+    if idempotency_prefix is not None:
+        # Serialize concurrent proposals for one idempotency key BEFORE taking
+        # any row lock. Two requests otherwise acquire the matter row lock and
+        # this advisory lock in opposite orders and deadlock: one holds the
+        # matter lock and waits on the advisory lock while the other holds the
+        # advisory lock and waits on the matter lock. Taking the advisory lock
+        # first gives a single, consistent global ordering.
+        await context.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": idempotency_prefix},
+        )
     current_reviewer_id = staff_reviewer_user_id if staged else context.actor_user_id
     values = {
         "matter_id": matter_id,

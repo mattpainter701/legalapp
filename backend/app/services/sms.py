@@ -1417,6 +1417,11 @@ async def _await_sms_dispatch_terminal(
         seconds=_SMS_IDEMPOTENCY_POLL_TIMEOUT
     )
     while True:
+        # End the previous read transaction and clear the identity map before
+        # each read. SQLAlchemy otherwise returns the same cached SmsMessage
+        # object (still "dispatching") for the primary key on every iteration,
+        # so the poll would never observe the winner's terminal commit.
+        await db.rollback()
         row = await db.scalar(
             select(SmsMessage).where(
                 SmsMessage.id == replay_id,
