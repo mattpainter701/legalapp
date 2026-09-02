@@ -32,6 +32,23 @@ _ACTIONS = frozenset({"open", "show"})
 MAX_PIPE_MESSAGE = 4096
 OPENER_EXE = "lawhand-file-opener.exe"
 
+# FILE_GENERIC_READ | FILE_GENERIC_WRITE with one bit cleared: 0x0004 is
+# FILE_APPEND_DATA on a file but FILE_CREATE_PIPE_INSTANCE on a pipe, so the
+# ordinary "read and write" grant also lets any interactive user stand up
+# another instance of this pipe name and answer the opener in our place.
+# Granting it is the whole squatting exposure, and GENERIC_WRITE hides it
+# behind a letter, so both ends of the pipe use this explicit mask instead.
+# The client asks for exactly what the DACL grants — a narrower DACL than the
+# client's requested access fails the connect outright, so they share one
+# constant and cannot drift apart.
+PIPE_CLIENT_ACCESS = 0x0012019B
+# SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION. Named-pipe clients default
+# to impersonation level, which lets the listener act as the caller.
+_SQOS_IDENTIFICATION = 0x00100000 | 0x00010000
+# Refuse to start on a pipe name somebody already owns, rather than quietly
+# becoming a second instance beside a squatter.
+_FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
+
 
 class FileOpenError(RuntimeError):
     def __init__(self, outcome: str, message: str):
@@ -161,16 +178,23 @@ def _write_message(handle, value: dict) -> None:
     win32file.WriteFile(handle, struct.pack("!I", len(payload)) + payload)
 
 
-def _connect_pipe(name: str):
+def _connect_pipe(name: str, *, allow_impersonation: bool = True):
+    """Open the broker pipe with the exact access its DACL grants.
+
+    ``allow_impersonation`` stays on for a real open: the broker authorizes the
+    file by impersonating this client and stat-ing the path as the signed-in
+    user, so identification level would break the check that makes the whole
+    flow safe. Callers with nothing to authorize turn it off.
+    """
     import win32file
 
     return win32file.CreateFile(
         name,
-        win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+        PIPE_CLIENT_ACCESS,
         0,
         None,
         win32file.OPEN_EXISTING,
-        0,
+        0 if allow_impersonation else _SQOS_IDENTIFICATION,
         None,
     )
 
@@ -252,7 +276,11 @@ def wake_broker(agent_id: str) -> None:
     import win32file
 
     try:
-        handle = _connect_pipe(pipe_name(agent_id))
+        # This connect runs as the service account. Nothing here needs the
+        # listener to be able to act as us, and if the pipe were ever answered
+        # by somebody else that ability is exactly what they would want, so
+        # hand over identification only.
+        handle = _connect_pipe(pipe_name(agent_id), allow_impersonation=False)
         try:
             _write_message(handle, {"handle": "shutdown", "action": "shutdown"})
         finally:
@@ -283,8 +311,17 @@ def request_open(intent: LaunchIntent) -> dict:
                 str(response.get("message") or "The file could not be opened."),
             )
         path = str(response.get("path") or "")
-        if not path.startswith("\\\\"):
-            raise FileOpenError("invalid", "The local agent returned an invalid file.")
+        # The broker already bound this path to an assigned share root, so this
+        # is the second line: a startswith("\\\\") test passes \\?\GLOBALROOT
+        # and \\.\pipe just as happily as a share, and this process hands the
+        # result straight to ShellExecute. Re-canonicalize before opening so a
+        # listener that was not ours cannot pick the target.
+        try:
+            path = normalize_unc_path(path)
+        except ValueError as exc:
+            raise FileOpenError(
+                "invalid", "The local agent returned an invalid file."
+            ) from exc
         try:
             _shell_open(path, intent.action)
         except FileOpenError as exc:
@@ -299,29 +336,56 @@ def request_open(intent: LaunchIntent) -> dict:
     return {"status": "ok", "outcome": "opened" if intent.action == "open" else "shown"}
 
 
-def _accept_pipe(name: str):
-    """Create a local-only pipe and return its handle plus actual peer identity."""
+def _own_service_sid() -> str:
+    """Return the SID this process actually runs as.
+
+    The service account is deployment-chosen: LocalSystem is only the
+    clean-install fallback and ``SERVICE_ACCOUNT=CORP\\svc-lawhand`` is
+    supported. A custom account is neither SYSTEM nor Interactive, so it
+    matches no other ACE below and could not create the replacement instance
+    the loop depends on. Naming the running identity keeps the DACL correct
+    whichever account the installer chose.
+    """
     import ntsecuritycon
-    import pywintypes
     import win32api
-    import win32con
-    import win32file
+    import win32security
+
+    token = win32security.OpenProcessToken(
+        win32api.GetCurrentProcess(), ntsecuritycon.TOKEN_QUERY
+    )
+    try:
+        sid = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+        return str(win32security.ConvertSidToStringSid(sid))
+    finally:
+        token.Close()
+
+
+def _create_pipe(name: str, *, first_instance: bool):
+    """Create one instance of the local-only broker pipe."""
     import win32pipe
     import win32security
-    import win32ts
 
     sd = win32security.ConvertStringSecurityDescriptorToSecurityDescriptor(
         # Interactive users may connect, but the peer image is then pinned to
-        # the installed opener in protected Program Files. SYSTEM is retained
-        # only so the service can wake its own blocking accept during shutdown.
-        "D:(A;;GA;;;SY)(A;;GRGW;;;IU)",
+        # the installed opener in protected Program Files. The service's own
+        # identity keeps full control so it can stand up each replacement
+        # instance; SYSTEM is listed too so a LocalSystem install is readable
+        # as such. The interactive grant is a literal mask rather than GRGW
+        # because the generic form silently includes FILE_CREATE_PIPE_INSTANCE
+        # — see PIPE_CLIENT_ACCESS.
+        f"D:(A;;GA;;;{_own_service_sid()})"
+        f"(A;;GA;;;SY)"
+        f"(A;;0x{PIPE_CLIENT_ACCESS:08x};;;IU)",
         win32security.SDDL_REVISION_1,
     )
     attrs = win32security.SECURITY_ATTRIBUTES()
     attrs.SECURITY_DESCRIPTOR = sd
-    handle = win32pipe.CreateNamedPipe(
+    access = win32pipe.PIPE_ACCESS_DUPLEX
+    if first_instance:
+        access |= _FILE_FLAG_FIRST_PIPE_INSTANCE
+    return win32pipe.CreateNamedPipe(
         name,
-        win32pipe.PIPE_ACCESS_DUPLEX,
+        access,
         win32pipe.PIPE_TYPE_BYTE
         | win32pipe.PIPE_READMODE_BYTE
         | win32pipe.PIPE_WAIT
@@ -332,33 +396,39 @@ def _accept_pipe(name: str):
         1000,
         attrs,
     )
+
+
+def _accept_pipe(handle):
+    """Await a peer on an existing instance and return its actual identity."""
+    import ntsecuritycon
+    import pywintypes
+    import win32api
+    import win32con
+    import win32pipe
+    import win32security
+    import win32ts
+
     try:
+        win32pipe.ConnectNamedPipe(handle, None)
+    except pywintypes.error as exc:
+        if getattr(exc, "winerror", exc.args[0]) != 535:  # ERROR_PIPE_CONNECTED
+            raise
+    process_id = win32pipe.GetNamedPipeClientProcessId(handle)
+    session_id = win32ts.ProcessIdToSessionId(process_id)
+    process = win32api.OpenProcess(
+        win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, process_id
+    )
+    try:
+        _require_trusted_opener(process_id, process)
+        token = win32security.OpenProcessToken(process, ntsecuritycon.TOKEN_QUERY)
         try:
-            win32pipe.ConnectNamedPipe(handle, None)
-        except pywintypes.error as exc:
-            if getattr(exc, "winerror", exc.args[0]) != 535:  # ERROR_PIPE_CONNECTED
-                raise
-        process_id = win32pipe.GetNamedPipeClientProcessId(handle)
-        session_id = win32ts.ProcessIdToSessionId(process_id)
-        process = win32api.OpenProcess(
-            win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, process_id
-        )
-        try:
-            _require_trusted_opener(process_id, process)
-            token = win32security.OpenProcessToken(process, ntsecuritycon.TOKEN_QUERY)
-            try:
-                sid = win32security.GetTokenInformation(token, win32security.TokenUser)[
-                    0
-                ]
-                user_sid = win32security.ConvertSidToStringSid(sid)
-            finally:
-                token.Close()
+            sid = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+            user_sid = win32security.ConvertSidToStringSid(sid)
         finally:
-            process.Close()
-        return handle, str(session_id), user_sid
-    except Exception:
-        win32file.CloseHandle(handle)
-        raise
+            token.Close()
+    finally:
+        process.Close()
+    return str(session_id), user_sid
 
 
 async def run_broker(
@@ -371,13 +441,22 @@ async def run_broker(
     import win32file
 
     name = pipe_name(config.agent_id)
+    # Claim the name once, before serving anything. If it already exists this
+    # raises and the broker does not start: a pipe we did not create is one
+    # somebody else is listening on, and quietly adding an instance beside them
+    # would let them answer opener requests as us.
+    listener = await asyncio.to_thread(_create_pipe, name, first_instance=True)
     logger.info("File opener broker listening for local interactive sessions")
     while not stop_event.is_set():
-        handle = None
+        if listener is None:
+            # The replacement instance below could not be created, so there is
+            # nothing left to accept on. Stop rather than spin.
+            break
+        handle, listener = listener, None
         outcome = "failed"
         intent_id = None
         try:
-            handle, session_id, user_sid = await asyncio.to_thread(_accept_pipe, name)
+            session_id, user_sid = await asyncio.to_thread(_accept_pipe, handle)
             request = await asyncio.to_thread(_read_message, handle)
             action = str(request.get("action") or "")
             opaque = str(request.get("handle") or "")
@@ -459,6 +538,18 @@ async def run_broker(
                     await client.report_open_outcome(str(intent_id), outcome)
                 except Exception:
                     logger.warning("Could not report file opener outcome")
+            if not stop_event.is_set():
+                # Stand the next instance up before releasing this one. Closing
+                # first would drop the last handle and unregister the name for
+                # as long as the next create takes, and a name that exists
+                # nobody owns is a name anybody may create — the DACL above
+                # only binds instances of a pipe that already exists.
+                try:
+                    listener = await asyncio.to_thread(
+                        _create_pipe, name, first_instance=False
+                    )
+                except Exception:
+                    logger.warning("Could not reopen the file opener pipe")
             if handle is not None:
                 # Also inside the loop's finally: a raise here would escape the
                 # while and stop the broker, so a doomed handle is not fatal.
@@ -466,6 +557,11 @@ async def run_broker(
                     await asyncio.to_thread(win32file.CloseHandle, handle)
                 except Exception:
                     logger.warning("Could not close the file opener pipe handle")
+    if listener is not None:
+        try:
+            await asyncio.to_thread(win32file.CloseHandle, listener)
+        except Exception:
+            logger.warning("Could not close the file opener pipe handle")
 
 
 def run_protocol_handler(uri: str) -> None:
