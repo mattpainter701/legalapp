@@ -217,3 +217,49 @@ def test_preflight_names_red_cluster_missing_index_and_threshold():
 
 def test_preflight_never_returns_an_empty_explanation():
     assert search_node_module.preflight_reasons(_health()) == ["engine reported degraded"]
+
+
+def test_per_document_limits_are_configurable_and_independent_of_the_batch(tmp_path):
+    """Raising the extraction output budget must be matchable at the index."""
+    config = AgentConfig(
+        search_node_enabled=True,
+        search_gateway_token="a" * 32,
+        opensearch_url="https://127.0.0.1:9200",
+        opensearch_username="lawhand",
+        opensearch_password="secret",
+        ledger_path=str(tmp_path / "ledger.db"),
+        search_max_bulk_documents=500,
+        search_max_bulk_mb=8,
+        search_max_document_chunks=9_000,
+        search_max_document_mb=64,
+    )
+    limits = SearchNode.from_config(config).engine.limits
+    assert limits.max_bulk_documents == 500
+    assert limits.max_bulk_bytes == 8 * 1024 * 1024
+    # A single document may legitimately exceed the batch transport budget.
+    assert limits.max_document_chunks == 9_000
+    assert limits.max_document_bytes == 64 * 1024 * 1024
+    assert limits.max_document_bytes > limits.max_bulk_bytes
+
+
+def test_per_document_limits_are_clamped_to_sane_bounds(tmp_path):
+    config = AgentConfig(
+        search_node_enabled=True,
+        search_gateway_token="a" * 32,
+        opensearch_url="https://127.0.0.1:9200",
+        opensearch_username="lawhand",
+        opensearch_password="secret",
+        ledger_path=str(tmp_path / "ledger.db"),
+        search_max_document_chunks=0,
+        search_max_document_mb=10_000,
+    )
+    limits = SearchNode.from_config(config).engine.limits
+    assert limits.max_document_chunks == 1
+    assert limits.max_document_bytes == 256 * 1024 * 1024
+
+
+def test_search_node_defaults_match_the_extraction_output_budget():
+    """A default install must not refuse what a default extractor emits."""
+    config = AgentConfig()
+    # search-node's Limits.output_bytes default is 20 MiB per document.
+    assert config.search_max_document_mb == 20

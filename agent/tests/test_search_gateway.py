@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import httpx
 import pytest
 
 from clarity_agent.opensearch_engine import SearchUnavailableError
@@ -100,6 +101,62 @@ async def test_gateway_reports_search_unavailable_when_engine_fails_closed():
         raise SearchUnavailableError("rebuild quarantine")
 
     engine.search = unavailable
+    gateway = LocalQueryGateway(engine, TOKEN, port=0)
+    await gateway.start()
+    try:
+        body = b'{"query":"x","acl_tokens":["a"]}'
+        raw = (
+            b"POST /v1/search HTTP/1.1\r\nHost: localhost\r\n"
+            + f"Authorization: Bearer {TOKEN}\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        status, response = await _request(gateway.port, raw)
+        assert status == 503
+        # Distinct from a plain outage: quarantine will not clear on retry, so
+        # the relay must be able to tell the two apart.
+        assert response == {"error": "search_quarantined"}
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_reports_a_rejected_query_as_a_client_error():
+    """A malformed query string is the caller's mistake, not an outage."""
+    engine = FakeEngine()
+
+    async def rejected(_request):
+        request = httpx.Request("POST", "http://127.0.0.1:9200/_search")
+        raise httpx.HTTPStatusError(
+            "parse failure",
+            request=request,
+            response=httpx.Response(400, request=request),
+        )
+
+    engine.search = rejected
+    gateway = LocalQueryGateway(engine, TOKEN, port=0)
+    await gateway.start()
+    try:
+        body = b'{"query":"unbalanced AND","acl_tokens":["a"]}'
+        raw = (
+            b"POST /v1/search HTTP/1.1\r\nHost: localhost\r\n"
+            + f"Authorization: Bearer {TOKEN}\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        status, response = await _request(gateway.port, raw)
+        assert status == 400
+        assert response == {"error": "invalid_query"}
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_still_reports_a_real_engine_outage_as_unavailable():
+    engine = FakeEngine()
+
+    async def down(_request):
+        raise httpx.ConnectError("connection refused")
+
+    engine.search = down
     gateway = LocalQueryGateway(engine, TOKEN, port=0)
     await gateway.start()
     try:

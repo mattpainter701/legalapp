@@ -14,5 +14,13 @@ opensearch_username = "lawhand_agent"
 search_gateway_host = "127.0.0.1"
 search_gateway_port = 8765
 search_max_results = 100
+# Batch transport bounds: how much travels in one bulk request. Oversized
+# batches are split, never rejected.
 search_max_bulk_documents = 500
 search_max_bulk_mb = 8
+# Per-document bounds. One document is one atomic envelope, so these are what
+# actually decide whether a large file can be indexed. Keep search_max_document_mb
+# at or above the extraction pool's SEARCH_NODE_MAX_OUTPUT_MIB (default 20) or
+# the index will refuse documents the extractor is allowed to produce.
+search_max_document_chunks = 5000
+search_max_document_mb = 20

@@ -1,6 +1,73 @@
 [
-  {"name":"phrase-page","query":"\"summary judgment\"","acl_tokens":["benchmark:legal"],"filters":{"matter_ids":["smith"]},"expected_document_id":"motion-001","expected_page_number":7},
-  {"name":"boolean-section","query":"termination AND breach","acl_tokens":["benchmark:legal"],"filters":{"extensions":[".docx"]},"expected_document_id":"contract-002","expected_page_number":12},
-  {"name":"acl-deny","query":"acquisition timetable","acl_tokens":["benchmark:legal"],"filters":{},"expected_hits":0},
-  {"name":"acl-allow","query":"acquisition timetable","acl_tokens":["benchmark:board"],"filters":{"share_ids":["restricted"]},"expected_document_id":"private-003","expected_page_number":1}
+  {
+    "name": "phrase-page",
+    "query": "\"summary judgment\"",
+    "acl_tokens": [
+      "benchmark:legal"
+    ],
+    "filters": {
+      "matter_ids": [
+        "smith"
+      ]
+    },
+    "expected_document_id": "motion-001",
+    "expected_page_number": 7
+  },
+  {
+    "name": "boolean-section",
+    "query": "termination AND breach",
+    "acl_tokens": [
+      "benchmark:legal"
+    ],
+    "filters": {
+      "extensions": [
+        ".docx"
+      ]
+    },
+    "expected_document_id": "contract-002",
+    "expected_page_number": 12
+  },
+  {
+    "name": "acl-no-allow",
+    "query": "acquisition timetable",
+    "acl_tokens": [
+      "benchmark:legal"
+    ],
+    "filters": {},
+    "expected_hits": 0
+  },
+  {
+    "name": "acl-allow",
+    "query": "acquisition timetable",
+    "acl_tokens": [
+      "benchmark:board"
+    ],
+    "filters": {
+      "share_ids": [
+        "restricted"
+      ]
+    },
+    "expected_document_id": "private-003",
+    "expected_page_number": 1
+  },
+  {
+    "name": "acl-explicit-deny",
+    "query": "retainer replenishment",
+    "acl_tokens": [
+      "benchmark:everyone",
+      "benchmark:contractor"
+    ],
+    "filters": {},
+    "expected_hits": 0
+  },
+  {
+    "name": "acl-explicit-deny-peer-still-allowed",
+    "query": "retainer replenishment",
+    "acl_tokens": [
+      "benchmark:everyone"
+    ],
+    "filters": {},
+    "expected_document_id": "shared-004",
+    "expected_page_number": 3
+  }
 ]

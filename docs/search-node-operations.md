@@ -81,8 +81,17 @@ must live outside the agent binary/install directory.
   and flood-stage 95%. Flood stage may make indexes read-only; add capacity and
   clear the block only after disk returns below the safe threshold.
 - Default request bounds are 100 results, 10,000 offset, 1,000 query
-  characters, 500 chunks or 8 MiB per bulk operation, and a 10-second engine
-  request timeout. The gateway body cap is 64 KiB.
+  characters, and a 10-second engine request timeout. The gateway body cap is
+  64 KiB.
+- Batch and per-document bounds are separate, because one document is one atomic
+  envelope and cannot be split across requests. `search_max_bulk_documents` (500)
+  and `search_max_bulk_mb` (8) bound one bulk request; a batch over either is
+  split into more requests, never rejected. `search_max_document_chunks` (5,000)
+  and `search_max_document_mb` (20) bound a single document, and a document over
+  either fails on its own without affecting the rest of its batch. Keep
+  `search_max_document_mb` at or above the extraction pool's
+  `SEARCH_NODE_MAX_OUTPUT_MIB`, or the index will refuse documents the extractor
+  is allowed to produce.
 - Run the acceptance queries with the packaged runner. The installers place it
   and its fixtures in the install tree's `search-node/benchmarks` directory:
 
@@ -103,7 +112,10 @@ must live outside the agent binary/install directory.
 ## Index versions, rebuilds, and upgrades
 
 Physical indexes include the schema version and a unique generation. Clients
-read and write through version-specific aliases. Startup validates the active
+read and write through version-specific aliases. The current schema version is
+2; it added `deny_acl_tokens`. An index created at version 1 fails the startup
+mapping check and must be rebuilt, which costs nothing today because no crawler
+populates the index yet. Startup validates the active
 mapping `_meta.lawhand_schema_version`; a newer incompatible schema fails
 closed. A rebuild creates a fresh generation, bulk loads and refreshes it, then
 atomically swaps read/write aliases. If the swap response is lost, the agent

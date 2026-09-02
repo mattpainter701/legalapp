@@ -80,12 +80,15 @@ def test_every_shipped_query_is_evaluable():
         request = benchmark._request(expectation)
         assert request.query
         assert request.acl_tokens
-    # The runbook singles this one out; losing it would silently weaken recovery.
-    assert any(item["name"] == "acl-deny" for item in expectations)
+    # The runbook singles these out; losing either would silently weaken
+    # recovery. acl-explicit-deny is the one an allow-only index would fail.
+    names = {item["name"] for item in expectations}
+    assert "acl-no-allow" in names
+    assert "acl-explicit-deny" in names
 
 
 def test_acl_deny_expectation_fails_when_a_document_leaks():
-    expectation = {"name": "acl-deny", "query": "x", "expected_hits": 0}
+    expectation = {"name": "acl-explicit-deny", "query": "x", "expected_hits": 0}
     assert benchmark.evaluate(expectation, response((), 0)).passed
     leaked = benchmark.evaluate(expectation, response((hit("private-003", 1),), 1))
     assert not leaked.passed
@@ -143,3 +146,14 @@ def test_authenticated_run_requires_the_password_variable(monkeypatch, capsys):
     # secret itself must never be a command-line argument.
     assert benchmark.main(["--url", "https://127.0.0.1:9200"]) == 2
     assert benchmark.PASSWORD_VARIABLE in capsys.readouterr().err
+
+
+def test_deny_tokens_are_loaded_from_the_corpus():
+    """An allow-only loader would silently turn the deny check into a no-op."""
+    chunks = benchmark.load_documents(benchmark.FIXTURES / "documents.jsonl")
+    denied = [chunk for chunk in chunks if chunk.deny_acl_tokens]
+    assert denied, "the corpus no longer exercises an explicit DENY ACE"
+    assert denied[0].deny_acl_tokens == ("benchmark:contractor",)
+    # The same document is allowed to the group the denied principal belongs to,
+    # which is what makes the deny meaningful rather than an absent allow.
+    assert "benchmark:everyone" in denied[0].acl_tokens

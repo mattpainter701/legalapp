@@ -77,6 +77,8 @@ _ENV_MAP = {
     "search_max_results": "LAWHAND_SEARCH_MAX_RESULTS",
     "search_max_bulk_documents": "LAWHAND_SEARCH_MAX_BULK_DOCUMENTS",
     "search_max_bulk_mb": "LAWHAND_SEARCH_MAX_BULK_MB",
+    "search_max_document_chunks": "LAWHAND_SEARCH_MAX_DOCUMENT_CHUNKS",
+    "search_max_document_mb": "LAWHAND_SEARCH_MAX_DOCUMENT_MB",
     "native_authz_enabled": "CLARITY_NATIVE_AUTHZ_ENABLED",
     "search_identity_public_key": "CLARITY_SEARCH_IDENTITY_PUBLIC_KEY",
     "acl_max_age_seconds": "CLARITY_ACL_MAX_AGE_SECONDS",
@@ -93,6 +95,8 @@ _INT_FIELDS = (
     "search_max_results",
     "search_max_bulk_documents",
     "search_max_bulk_mb",
+    "search_max_document_chunks",
+    "search_max_document_mb",
     "acl_max_age_seconds",
 )
 
@@ -244,6 +248,11 @@ class AgentConfig:
     search_max_results: int = 100
     search_max_bulk_documents: int = 500
     search_max_bulk_mb: int = 8
+    # A per-document ceiling, not a batch one. Keep search_max_document_mb
+    # at or above the extraction pool's SEARCH_NODE_MAX_OUTPUT_MIB or the
+    # index will refuse documents the extractor is allowed to produce.
+    search_max_document_chunks: int = 5_000
+    search_max_document_mb: int = 20
     native_authz_enabled: bool = False
     search_identity_public_key: str = ""
     acl_max_age_seconds: int = 3600
@@ -351,6 +360,8 @@ class AgentConfig:
                 "search_max_results": self.search_max_results,
                 "search_max_bulk_documents": self.search_max_bulk_documents,
                 "search_max_bulk_mb": self.search_max_bulk_mb,
+                "search_max_document_chunks": self.search_max_document_chunks,
+                "search_max_document_mb": self.search_max_document_mb,
                 "native_authz_enabled": self.native_authz_enabled,
                 "search_identity_public_key": self.search_identity_public_key,
                 "acl_max_age_seconds": self.acl_max_age_seconds,

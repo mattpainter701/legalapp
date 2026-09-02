@@ -53,10 +53,12 @@ pipeline, none of which serve a query yet:
 > the acceptance target for a customer PoC, not as a description of a running
 > system.
 
-Crawl-time Windows ACL indexing and query-time trimming remain unshipped in
-both paths: the OpenSearch mapping carries allow-only `acl_tokens` and cannot
-represent an explicit DENY ACE, which the Windows access model requires and
-which the SQLite path already honours.
+Query-time ACL trimming in the OpenSearch path now models the Windows access
+rule: a document carries both `acl_tokens` and `deny_acl_tokens`, and an
+explicit deny for any of the caller's principals removes the document even when
+another group allows it. What is still unshipped is the half that fills those
+fields — crawl-time Windows ACL capture — so no document reaches the index with
+either set populated yet.
 
 ## Decision in one paragraph
 

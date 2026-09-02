@@ -22,7 +22,9 @@ def preflight_reasons(health: EngineHealth) -> list[str]:
     details = health.details
     reasons: list[str] = []
     if health.status == "unavailable":
-        reasons.append(f"OpenSearch is unreachable ({details.get('error', 'unknown error')})")
+        reasons.append(
+            f"OpenSearch is unreachable ({details.get('error', 'unknown error')})"
+        )
         return reasons
     cluster_status = str(details.get("cluster_status", "unknown"))
     if cluster_status not in {"green", "yellow"}:
@@ -43,7 +45,9 @@ def preflight_reasons(health: EngineHealth) -> list[str]:
             f"disk watermarks do not match the packaged opensearch.yml: {drift}"
         )
     if details.get("disk_threshold_enabled") not in {True, "true"}:
-        reasons.append("cluster.routing.allocation.disk.threshold_enabled is not enabled")
+        reasons.append(
+            "cluster.routing.allocation.disk.threshold_enabled is not enabled"
+        )
     if details.get("active_index_write_blocked"):
         reasons.append("the active index is write-blocked")
     if details.get("rebuild_lease_active"):
@@ -100,6 +104,10 @@ class SearchNode:
             max_results=max(1, min(config.search_max_results, 500)),
             max_bulk_documents=max(1, min(config.search_max_bulk_documents, 2_000)),
             max_bulk_bytes=max(1, min(config.search_max_bulk_mb, 64)) * 1024 * 1024,
+            max_document_chunks=max(1, min(config.search_max_document_chunks, 100_000)),
+            max_document_bytes=max(1, min(config.search_max_document_mb, 256))
+            * 1024
+            * 1024,
         )
         control = SqliteControlState(control_path)
         engine = OpenSearchEngine(

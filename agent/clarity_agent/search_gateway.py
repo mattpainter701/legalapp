@@ -10,6 +10,9 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
+import httpx
+
+from clarity_agent.opensearch_engine import SearchUnavailableError
 from clarity_agent.search_engine import LocalSearchEngine, SearchFilters, SearchRequest
 
 MAX_GATEWAY_BODY_BYTES = 64 * 1024
@@ -71,6 +74,18 @@ class LocalQueryGateway:
             status, payload = 408, {"error": "request_timeout"}
         except (ValueError, json.JSONDecodeError):
             status, payload = 400, {"error": "invalid_request"}
+        except SearchUnavailableError:
+            # Rebuild quarantine is an operator state, not an outage and not a
+            # caller mistake. The relay has to be able to tell them apart to
+            # decide whether retrying could ever help.
+            status, payload = 503, {"error": "search_quarantined"}
+        except httpx.HTTPStatusError as exc:
+            # OpenSearch rejects a malformed query string with 400. Reporting
+            # that as an outage sent the caller retrying against a healthy node.
+            if exc.response.status_code == 400:
+                status, payload = 400, {"error": "invalid_query"}
+            else:
+                status, payload = 503, {"error": "search_unavailable"}
         except Exception:
             status, payload = 503, {"error": "search_unavailable"}
         body = json.dumps(payload, separators=(",", ":")).encode()

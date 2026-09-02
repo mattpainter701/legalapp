@@ -184,3 +184,61 @@ async def test_real_opensearch_health_gate_reads_live_cluster_settings():
                     }
                 },
             )
+
+
+@pytest.mark.asyncio
+async def test_real_opensearch_explicit_deny_overrides_an_allow():
+    """A denied principal must not read a document another group allows them."""
+    prefix = f"lawhand-test-{uuid.uuid4().hex[:10]}"
+    engine = OpenSearchEngine(
+        URL or "http://127.0.0.1:9200",
+        index_prefix=prefix,
+        username=USERNAME,
+        password=PASSWORD,
+        ca_path=CA_PATH,
+        allow_insecure=(URL or "").startswith("http://"),
+    )
+    try:
+        await engine.bulk_index(
+            [
+                DocumentChunk(
+                    document_id="doc",
+                    chunk_id="doc:1",
+                    share_id="share",
+                    relative_path="Matter/memo.pdf",
+                    filename="memo.pdf",
+                    extension=".pdf",
+                    content="The settlement terms are confidential.",
+                    content_hash="hash",
+                    modified_at=datetime.now(timezone.utc),
+                    mutation_generation=1,
+                    page_number=1,
+                    acl_tokens=("group:everyone", "group:legal"),
+                    deny_acl_tokens=("user:contractor",),
+                )
+            ]
+        )
+        await engine._request("POST", f"/{engine.write_alias}/_refresh")
+
+        allowed = await engine.search(
+            SearchRequest(query="settlement", acl_tokens=("group:legal",))
+        )
+        assert allowed.total == 1
+
+        # The contractor is in group:everyone, which allows the document, but
+        # carries an explicit deny. Windows resolves the deny first.
+        denied = await engine.search(
+            SearchRequest(
+                query="settlement", acl_tokens=("group:everyone", "user:contractor")
+            )
+        )
+        assert denied.total == 0, "an explicit DENY ACE did not override the allow"
+    finally:
+        await engine.close()
+        async with httpx.AsyncClient(
+            base_url=URL,
+            auth=(USERNAME, PASSWORD) if USERNAME and PASSWORD else None,
+            verify=CA_PATH or True,
+            trust_env=False,
+        ) as client:
+            await client.delete(f"/{prefix}-*")

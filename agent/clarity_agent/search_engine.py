@@ -12,7 +12,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import AsyncIterator, Sequence
 
-INDEX_SCHEMA_VERSION = 1
+# 2 adds deny_acl_tokens. Nothing indexes through this engine yet, so the
+# mapping change costs no customer rebuild today; it would once a crawler does.
+INDEX_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,14 @@ class DocumentChunk:
     start_offset: int | None = None
     end_offset: int | None = None
     matter_ids: tuple[str, ...] = ()
+    # Principals allowed to read this document. An empty set is unreachable:
+    # the query requires a match, so a document with no allow tokens is never
+    # returned to anyone.
     acl_tokens: tuple[str, ...] = ()
+    # Principals explicitly denied. Windows resolves an explicit DENY ACE ahead
+    # of any allow, including one inherited through a group, so an allow-only
+    # index cannot express the access model and would over-return.
+    deny_acl_tokens: tuple[str, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
 
 

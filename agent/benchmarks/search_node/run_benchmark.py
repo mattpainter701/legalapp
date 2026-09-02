@@ -73,6 +73,7 @@ def load_documents(path: Path) -> list[DocumentChunk]:
                 ordinal=ordinal,
                 matter_ids=tuple(record.get("matter_ids") or ()),
                 acl_tokens=tuple(record.get("acl_tokens") or ()),
+                deny_acl_tokens=tuple(record.get("deny_acl_tokens") or ()),
             )
         )
     if not chunks:

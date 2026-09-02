@@ -145,6 +145,35 @@
   native Windows ACL trimming, or semantic retrieval.
 
 ### Fixed
+- **Firm Memory search honours explicit Windows DENY:** the OpenSearch mapping
+  carried allow-only `acl_tokens`, so a principal denied by an explicit DENY ACE
+  still read any document one of their other groups allowed. Documents now carry
+  `deny_acl_tokens` in the same atomic envelope and the query excludes a deny
+  match for any of the caller's principals, which is the order Windows resolves
+  in and the order the SQLite path already used. Index schema version is 2; a
+  version 1 index fails the startup mapping check and must be rebuilt, which
+  costs nothing today because no crawler populates the index yet. The packaged
+  acceptance queries now include a real explicit-deny case alongside the
+  previous absent-allow one.
+- **A document is no longer limited by the batch it travels in:** the bulk batch
+  size doubled as the per-document chunk ceiling and the bulk byte cap doubled as
+  the per-document envelope cap, so a 2,000-page PDF was unindexable and any
+  document over 8 MiB of extracted text was rejected outright — against an
+  extraction pool whose own default output budget is 20 MiB. Batch and document
+  bounds are now separate and separately configurable: an oversized batch is
+  split into more requests rather than refused, and an oversized document fails
+  on its own without taking its neighbours down.
+- **Firm Memory ingest no longer refreshes once per document:** each replacement
+  forced an index refresh per document against a 5s refresh interval, which would
+  dominate cost at corpus scale. Tombstones for a whole batch now go in one
+  refreshed request. The visibility guarantee is unchanged — a revoked document
+  still stops being searchable before its replacement is written — but the
+  refresh count is per batch instead of per document.
+- **The query gateway distinguishes a bad query from an outage:** a malformed
+  query string came back as 503 `search_unavailable`, sending relays into retries
+  against a healthy node, and rebuild quarantine was reported identically. A
+  rejected query is now 400 `invalid_query` and quarantine is 503
+  `search_quarantined`.
 - **Search Node extraction is contained on both platforms and gated by CI:**
   the parser and OCR children now run inside a whole-tree container, so a Tika
   JVM or Poppler process can no longer outlive the parser that spawned it — on
