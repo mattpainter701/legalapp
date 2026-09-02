@@ -30,6 +30,9 @@ class _DB:
         self.statements.append(statement)
         return _Result(self.task)
 
+    async def scalar(self, statement):
+        return None
+
     async def commit(self) -> None:
         self.commits += 1
 
@@ -67,7 +70,7 @@ def _install_common(monkeypatch):
     async def tenant_context(db, tenant_id):
         tenant_calls.append((db, tenant_id))
 
-    async def response(db, task):
+    async def response(db, task, user):
         return {"task_id": str(task.id), "status": task.status, "version": task.version}
 
     monkeypatch.setattr(routes, "set_tenant_context", tenant_context)
