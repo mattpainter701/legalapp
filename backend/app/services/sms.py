@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -176,6 +177,8 @@ _KNOWN_PROVIDER_STATUSES = frozenset(
 )
 _TERMINAL_PROVIDER_STATUSES = frozenset({"delivered", "read", "undelivered", "failed"})
 _DISPATCH_LEASE = timedelta(minutes=2)
+_SMS_IDEMPOTENCY_POLL_TIMEOUT = 15.0
+_SMS_IDEMPOTENCY_POLL_INTERVAL = 0.1
 _PROVIDER_CREATED_BEFORE_DISPATCH = timedelta(minutes=2)
 _PROVIDER_CREATED_AFTER_DISPATCH = timedelta(minutes=5)
 _STOP_KEYWORDS = frozenset({"STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"})
@@ -1395,10 +1398,102 @@ def _terminal_replay(message: SmsMessage) -> SmsMessage:
     )
 
 
+async def _await_sms_dispatch_terminal(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    replay_id,
+    idempotency_key: str,
+) -> SmsMessage | None:
+    """Poll the in-flight winner's reservation without holding any row lock.
+
+    The caller must roll back (releasing its locks) before invoking this so the
+    winner's post-provider re-fence of the reservation row is never blocked
+    behind this duplicate. The reservation is re-read by immutable identity
+    only; authorization is re-established by the caller after a terminal row is
+    observed. Returns None only when the bounded window expires.
+    """
+    deadline = datetime.now(timezone.utc) + timedelta(
+        seconds=_SMS_IDEMPOTENCY_POLL_TIMEOUT
+    )
+    while True:
+        row = await db.scalar(
+            select(SmsMessage).where(
+                SmsMessage.id == replay_id,
+                SmsMessage.tenant_id == tenant_id,
+                SmsMessage.idempotency_key == idempotency_key,
+            )
+        )
+        if row is not None and row.status != "dispatching":
+            return row
+        if datetime.now(timezone.utc) >= deadline:
+            return None
+        await asyncio.sleep(_SMS_IDEMPOTENCY_POLL_INTERVAL)
+
+
+async def _reacquire_after_dispatching_poll(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    user_id,
+    matter_id,
+    contact_id,
+    idempotency_key: str,
+    required_capabilities: frozenset[str],
+    replay: SmsMessage,
+) -> SmsMessage:
+    """Wait out the in-flight winner, then re-fence and return the reservation.
+
+    The winner commits its reservation as ``dispatching`` before provider I/O and
+    re-fences that exact row after the provider call. Holding this duplicate's
+    SmsMessage row lock while it sleeps would block that re-fence, so the lock is
+    released and the row is polled by immutable identity instead. Authorization
+    is re-established only after a terminal row appears, matching the replay
+    path's fail-closed fence.
+    """
+    replay_id = replay.id
+    await db.rollback()
+    await set_tenant_context(db, str(tenant_id))
+    terminal = await _await_sms_dispatch_terminal(
+        db,
+        tenant_id=tenant_id,
+        replay_id=replay_id,
+        idempotency_key=idempotency_key,
+    )
+    if terminal is None:
+        raise SmsError(
+            "The original SMS is already being dispatched",
+            409,
+            delivery_certainty="outcome_unknown",
+            sms_message_id=replay_id,
+        )
+    replay = await _lock_sms_replay(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        matter_id=matter_id,
+        contact_id=contact_id,
+        idempotency_key=idempotency_key,
+        required_capabilities=required_capabilities,
+    )
+    if replay is None:
+        raise SmsError(
+            "SMS idempotency reservation is unavailable",
+            409,
+            code="sms_idempotency_reservation_unavailable",
+        )
+    return replay
+
+
 async def _resolve_replay(
     db: AsyncSession,
     *,
     tenant_id,
+    user_id,
+    matter_id,
+    contact_id,
+    idempotency_key: str,
+    required_capabilities: frozenset[str],
     replay: SmsMessage,
     request_digest: str,
     now: datetime,
@@ -1435,12 +1530,18 @@ async def _resolve_replay(
                 sms_message_id=replay.id,
                 reconciliation_required=True,
             )
-        raise SmsError(
-            "The original SMS is already being dispatched",
-            409,
-            delivery_certainty="outcome_unknown",
-            sms_message_id=replay.id,
+        replay = await _reacquire_after_dispatching_poll(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            matter_id=matter_id,
+            contact_id=contact_id,
+            idempotency_key=idempotency_key,
+            required_capabilities=required_capabilities,
+            replay=replay,
         )
+        if replay.request_digest != request_digest:
+            raise SmsError("Idempotency key was reused for a different SMS", 409)
     if replay.status == "provider_unknown" or (
         replay.reconciliation_required_at and not replay.reconciliation_resolved_at
     ):
@@ -1612,6 +1713,11 @@ async def send_sms(
         resolved = await _resolve_replay(
             db,
             tenant_id=tenant_id,
+            user_id=user_id,
+            matter_id=matter_id,
+            contact_id=contact_id,
+            idempotency_key=idempotency_key,
+            required_capabilities=required_capabilities,
             replay=replay,
             request_digest=replay_digest,
             now=now,
@@ -1705,7 +1811,18 @@ async def send_sms(
             required_capabilities=required_capabilities,
         )
         if replay and replay.request_digest == request_digest:
-            if replay.status == "dispatching" or (
+            if replay.status == "dispatching":
+                replay = await _reacquire_after_dispatching_poll(
+                    db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    matter_id=matter_id,
+                    contact_id=contact_id,
+                    idempotency_key=idempotency_key,
+                    required_capabilities=required_capabilities,
+                    replay=replay,
+                )
+            if (
                 replay.status == "provider_unknown"
                 and not replay.reconciliation_resolved_at
             ):
@@ -1714,7 +1831,7 @@ async def send_sms(
                     409,
                     delivery_certainty="outcome_unknown",
                     sms_message_id=replay.id,
-                    reconciliation_required=replay.status == "provider_unknown",
+                    reconciliation_required=True,
                 )
             replay = _terminal_replay(replay)
             if before_success_commit:
