@@ -34,6 +34,20 @@ For the evidence boundary and presentation go/no-go gates, use
 5. Open `/demo` in a private browser window and complete the smoke test below.
    Passcode changes require an API restart because settings are cached.
 
+### dev1
+
+Step 1 is automatic on dev1. Once `DEMO_MODE_ENABLED=true` is set in the
+deployment environment file, `scripts/deploy_dev1.sh` seeds the configured
+fixture domain after the health check and fails the deploy if seeding does not
+succeed. The seed never overwrites an existing fixture, so a redeploy leaves a
+working demo untouched; a rebuilt volume is reseeded without a manual step.
+
+Set the environment keys first: the deploy refuses to start when demo mode is
+on with a missing or placeholder access code or no fixture domain, because the
+API raises on that combination at import and would otherwise crash-loop behind
+the health check. dev1 has no working OAuth provider, so the demo session is
+the only way in and this configuration is not optional.
+
 ## Salesperson smoke test
 
 - Create a session with the shared code and a test contact identity.
