@@ -110,14 +110,14 @@ def rlimit_plan(settings: Settings, *, jvm_expected: bool) -> list[tuple[int, tu
         plan.append((resource.RLIMIT_AS, (memory, memory)))
     plan.append((resource.RLIMIT_CPU, (limits.wall_seconds, limits.wall_seconds + 1)))
     plan.append((resource.RLIMIT_FSIZE, (limits.temp_bytes, limits.temp_bytes)))
-    # A JVM opens far more descriptors and threads than the Python parser.
-    # RLIMIT_NPROC is counted per real UID rather than per descendant tree, so
-    # run the workers under their own dedicated account: any other process
-    # sharing the UID consumes this budget.
-    descriptors, processes = (512, 256) if jvm_expected else (64, 32)
-    plan.append((resource.RLIMIT_NOFILE, (descriptors, descriptors)))
-    if hasattr(resource, "RLIMIT_NPROC"):
-        plan.append((resource.RLIMIT_NPROC, (processes, processes)))
+    # A JVM opens far more descriptors than the Python parser.
+    plan.append((resource.RLIMIT_NOFILE, (512 if jvm_expected else 64,) * 2))
+    # Deliberately no RLIMIT_NPROC. The kernel counts it per real UID rather
+    # than per descendant tree, so it neither bounds our subtree nor fails
+    # safely: any other process owned by the service account consumes the same
+    # budget, and the parser then dies with EAGAIN on a fork it was entitled to
+    # make. Bound process count where it can actually be scoped to the tree —
+    # the job object on Windows, and the operator's cgroup (pids.max) on Linux.
     return plan
 
 
