@@ -22,6 +22,7 @@ SBOM_INPUTS = {
     "office-addin/package.json",
     "word-addin/package.json",
     "agent/pyproject.toml",
+    "search-node/pyproject.toml",
     "litellm_config.yaml",
     "docker-compose.yml",
     "docker-compose.courtlistener-mcp.yml",

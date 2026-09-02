@@ -19,6 +19,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |frontend/package.json|npm package|yes|frontend/package-lock.json|32|
 |office-addin/package.json|npm package|yes|office-addin/package-lock.json|6|
 |agent/pyproject.toml|python project|no|none|15|
+|search-node/pyproject.toml|python project|no|none|3|
 
 ## Dependency inputs to track
 
@@ -139,6 +140,9 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|tqdm|unbounded|runtime/dev|scripts/requirements.txt|
 |pypi|cryptography|==50.0.0|runtime/dev|scripts/tabs3_export/requirements.txt|
 |pypi|pyodbc|==5.2.0|runtime/dev|scripts/tabs3_export/requirements.txt|
+|pypi|pytest|>=8.0|optional:dev|search-node/pyproject.toml|
+|pypi|ruff|>=0.8|optional:dev|search-node/pyproject.toml|
+|pypi|pypdf|>=4.0|runtime|search-node/pyproject.toml|
 
 ## Container base images
 
