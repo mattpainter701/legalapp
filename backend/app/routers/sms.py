@@ -165,7 +165,18 @@ async def send_sms_message(
         is_admin=current_user.role == "admin",
         matter_id=body.matter_id,
     ):
-        raise HTTPException(404, "SMS target was not found")
+        # The service raises this same 404 for a target the caller may not see,
+        # and answers with SmsError.api_detail(). This gate covers the other
+        # half of the same condition -- the matter is gone, or the caller's
+        # access to it was revoked -- so it has to be indistinguishable from
+        # that one. A bare string detail here both breaks the documented error
+        # shape and tells a caller which of the two checks rejected them.
+        raise HTTPException(
+            404,
+            SmsError(
+                "SMS target was not found", 404, code="sms_target_not_found"
+            ).api_detail(),
+        )
 
     async def audit_success(row: SmsMessage) -> None:
         await record_operator_audit(

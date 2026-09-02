@@ -6244,7 +6244,15 @@ async def test_custom_role_capability_controls_staff_sms_send(
         },
         headers=allowed_headers,
     )
-    assert conversion_replay.status_code == 404
+    # This role is granted manage_matters only, which is the point of the test,
+    # and the lead follow-up route requires manage_intake as well. So this
+    # caller is refused at the capability gate before any lead, consent, or
+    # matter lookup runs. That is not the enumeration leak the 404s above guard
+    # against: it reports the caller's own missing capability and says nothing
+    # about whether the lead exists. The post-revocation behaviour of the
+    # conversion follow-up path is therefore not what this call exercises.
+    assert conversion_replay.status_code == 403
+    assert "manage_intake" in conversion_replay.json()["detail"]
     assert "provider" not in conversion_replay.text.lower()
     send_audit = await db_session.scalar(
         select(OperatorAuditLog).where(
