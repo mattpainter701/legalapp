@@ -145,6 +145,36 @@
   native Windows ACL trimming, or semantic retrieval.
 
 ### Fixed
+- **Search Node extraction is contained on both platforms and gated by CI:**
+  the parser and OCR children now run inside a whole-tree container, so a Tika
+  JVM or Poppler process can no longer outlive the parser that spawned it — on
+  Windows through a job object that also supplies the memory, process-count,
+  and CPU limits the platform previously had none of, and on POSIX through the
+  existing session plus rlimits. `RLIMIT_AS` is replaced by `RLIMIT_DATA` when
+  a Tika jar is configured, because a JVM reserves more address space than any
+  bound worth setting and would otherwise fail to start at all. The
+  `search-node` distribution had no CI job of any kind; it now lints and tests
+  on both Linux and Windows as a required merge gate.
+- **Search Node preflight says why it rejected a node:** an unhealthy engine
+  stops the whole agent, so the failure now names each cause — cluster status,
+  a missing active index, drifted disk watermarks, a write block, or a rebuild
+  quarantine lease — instead of a bare "not healthy". OpenSearch's stock 85%
+  low watermark against the packaged 80% is the common case, and it was
+  previously indistinguishable from an outage. The required real-node contract
+  job now exercises the health gate against live cluster settings.
+- **The Search Node acceptance queries can actually be run:** the operator
+  runbook directed operators to run the benchmark queries after an upgrade,
+  after a snapshot restore, and during rebuild quarantine recovery, but only
+  the fixtures existed and the installers shipped neither them nor a runner.
+  Both installers now place a runner and its fixtures in the install tree; it
+  loads into a disposable index generation, checks phrase, Boolean/field, ACL
+  deny and allow behaviour, cleans up, and never touches the aliases the agent
+  serves from.
+- **Firm Memory architecture doc no longer overstates what ships:** it still
+  claimed the repository ships no Tika, OCR, or OpenSearch three releases after
+  those components landed. It now records what exists, that none of it is
+  connected to a query path, and that allow-only `acl_tokens` cannot represent
+  a Windows explicit DENY ACE.
 - **Authority alerts and claims revalidate their evidence lineage:** queued
   citator alerts persist the exact history or citation fact they represent and
   re-resolve its current promoted public-source lineage before a delivery can be

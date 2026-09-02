@@ -1,6 +1,6 @@
 # Firm Memory file-share search: PoC architecture
 
-## Shipped bounded control surface (0.15.3)
+## Shipped bounded control surface (0.16.0)
 
 The current release adds a bounded, matter-scoped `local_search` relay. A
 configured agent polls the authenticated API over outbound HTTPS, runs the
@@ -32,17 +32,31 @@ LAWHAND_FILE_OPENER_ENABLED=true
 VITE_ENABLE_FILE_OPENER=true
 ```
 
-This is intentionally a control-index PoC, not a 4 TB service. It does not
-ship Tika, OCR, OpenSearch, crawl-time Windows ACL indexing/trimming, semantic
-embeddings, or a browser `file://`/`smb://` opener. The scale design below is
-the acceptance target for a representative-corpus customer PoC and remains
-separate from the small SQLite implementation.
+The serving path above is still the SQLite FTS5 control index. It is not a
+4 TB service, and it ships no semantic embeddings or browser
+`file://`/`smb://` opener.
 
-> **Status — scale design target, not shipped:** the Tika/OCR/OpenSearch/ACL
-> pipeline below is the system the customer PoC must build and test. This
-> repository ships a bounded, default-off local SQLite full-text control index
-> and its authenticated relay surfaces, but it does not contain an installable
-> 4 TB search service.
+Since 0.16.0 the repository also contains default-off *components* of the scale
+pipeline, none of which serve a query yet:
+
+| Component | State |
+| --- | --- |
+| `agent/clarity_agent/opensearch_engine.py` | Default-off OpenSearch serving engine. Started by the agent when `search_node_enabled=true`, but nothing writes to or reads from it. |
+| `search-node/` | Isolated Tika/OCR extraction workers. No queue or sink adapter, so no worker runs in any shipped process. |
+| `agent/clarity_agent/crawl_control.py` | Durable crawl freshness control plane. Not yet wired to a source adapter or an index sink. |
+
+> **Status — the scale pipeline is present but not connected:** these three
+> components were built against three different sets of contracts and no
+> adapter joins them. Until that adapter exists, `local_search` is served
+> entirely by the SQLite index and the OpenSearch path indexes nothing. Read
+> any claim below about Tika, OCR, OpenSearch, or crawl-time ACL trimming as
+> the acceptance target for a customer PoC, not as a description of a running
+> system.
+
+Crawl-time Windows ACL indexing and query-time trimming remain unshipped in
+both paths: the OpenSearch mapping carries allow-only `acl_tokens` and cannot
+represent an explicit DENY ACE, which the Windows access model requires and
+which the SQLite path already honours.
 
 ## Decision in one paragraph
 

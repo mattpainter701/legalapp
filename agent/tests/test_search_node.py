@@ -6,6 +6,7 @@ import pytest
 
 from clarity_agent import config as config_module
 from clarity_agent.config import AgentConfig
+from clarity_agent import search_node as search_node_module
 from clarity_agent.search_node import SearchNode
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -150,3 +151,69 @@ async def test_search_node_start_preserves_primary_error_when_cleanup_fails():
     with pytest.raises(ValueError, match="primary startup error"):
         await node.start()
     assert set(closed) == {"engine", "control", "gateway"}
+
+
+def _health(status="degraded", *, active="lawhand-firm-memory-v1-1-a", **details):
+    base = {
+        "cluster_status": "yellow",
+        "timed_out": False,
+        "disk_watermarks": {"low": "80%", "high": "90%", "flood_stage": "95%"},
+        "expected_disk_watermarks": {"low": "80%", "high": "90%", "flood_stage": "95%"},
+        "disk_threshold_enabled": True,
+        "active_index_write_blocked": False,
+        "rebuild_lease_active": False,
+    }
+    base.update(details)
+    return search_node_module.EngineHealth(
+        status=status,
+        engine="opensearch",
+        index_schema_version=1,
+        active_index=active,
+        details=base,
+    )
+
+
+def test_preflight_names_a_stock_low_watermark():
+    # A node that never received the packaged opensearch.yml keeps OpenSearch's
+    # own 85% default. Preflight fails the whole agent, so it has to say so.
+    reasons = search_node_module.preflight_reasons(
+        _health(disk_watermarks={"low": "85%", "high": "90%", "flood_stage": "95%"})
+    )
+    assert len(reasons) == 1
+    assert "opensearch.yml" in reasons[0]
+    assert "low='85%' (expected '80%')" in reasons[0]
+    assert "high" not in reasons[0]
+
+
+def test_preflight_names_quarantine_and_write_block():
+    reasons = search_node_module.preflight_reasons(
+        _health(rebuild_lease_active=True, active_index_write_blocked=True)
+    )
+    assert any("write-blocked" in item for item in reasons)
+    assert any("quarantine recovery runbook" in item for item in reasons)
+
+
+def test_preflight_names_an_unreachable_node_without_leaking_configuration():
+    reasons = search_node_module.preflight_reasons(
+        search_node_module.EngineHealth(
+            status="unavailable",
+            engine="opensearch",
+            index_schema_version=1,
+            active_index=None,
+            details={"error": "ConnectError"},
+        )
+    )
+    assert reasons == ["OpenSearch is unreachable (ConnectError)"]
+
+
+def test_preflight_names_red_cluster_missing_index_and_threshold():
+    reasons = search_node_module.preflight_reasons(
+        _health(cluster_status="red", active=None, disk_threshold_enabled=False)
+    )
+    assert any("cluster status is red" in item for item in reasons)
+    assert any("no active read/write index" in item for item in reasons)
+    assert any("threshold_enabled" in item for item in reasons)
+
+
+def test_preflight_never_returns_an_empty_explanation():
+    assert search_node_module.preflight_reasons(_health()) == ["engine reported degraded"]

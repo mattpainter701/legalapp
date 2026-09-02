@@ -21,7 +21,8 @@ from .contracts import (
     TerminalStatus,
     deterministic_chunk_id,
 )
-from .extraction import _inside, _posix_limits
+from .extraction import _inside
+from .sandbox import ProcessContainer
 
 
 class OcrRunner:
@@ -155,17 +156,29 @@ class OcrRunner:
             shutil.rmtree(workdir, ignore_errors=True)
 
     def _command(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        """Run one Poppler/Tesseract step under whole-tree containment.
+
+        ``subprocess.run`` would kill only the direct child on timeout, leaving
+        a wedged renderer holding the page image and the temp budget.
+        """
         env = {"PATH": os.environ.get("PATH", ""), "OMP_THREAD_LIMIT": "1"}
-        return subprocess.run(
-            argv,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=self.settings.limits.ocr_page_seconds,
-            check=False,
-            env=env,
-            preexec_fn=_posix_limits(self.settings),
-        )
+        with ProcessContainer(self.settings) as container:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                **container.popen_kwargs(),
+            )
+            container.adopt(proc)
+            try:
+                stdout, stderr = proc.communicate(timeout=self.settings.limits.ocr_page_seconds)
+            except subprocess.TimeoutExpired:
+                container.terminate(proc)
+                raise
+            return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
     @staticmethod
     def _parse_tsv(payload: str) -> tuple[str, float | None]:
