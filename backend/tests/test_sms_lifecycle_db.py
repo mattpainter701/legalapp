@@ -4309,6 +4309,7 @@ async def test_composite_fk_and_runtime_rls_reject_cross_tenant_sms_links(
     other_contact_id = other.contact.id
     primary_matter_id = primary.matter.id
     other_suppression_id = other_suppression.id
+    other_task_id = other_task.id
     other_phone = other.contact.phone
     other_lead_id = other.lead.id
     with pytest.raises(Exception, match="SMS evidence events are immutable"):
@@ -4378,7 +4379,7 @@ async def test_composite_fk_and_runtime_rls_reject_cross_tenant_sms_links(
     db_session.add(
         TaskAutomationRun(
             tenant_id=tenant_id,
-            task_id=other_task.id,
+            task_id=other_task_id,
             action_type="sms_client",
             idempotency_key="cross-tenant-task",
             status="queued",
@@ -5142,11 +5143,12 @@ async def test_task_cancellation_conflicts_while_sms_provider_dispatch_is_claime
     provider_release.set()
     await asyncio.wait_for(worker, timeout=5)
 
+    task_id = task.id
     await set_tenant_context(db_session, str(test_tenant.id))
     db_session.expire_all()
-    final_task = await db_session.get(Task, task.id)
+    final_task = await db_session.get(Task, task_id)
     final_run = await db_session.scalar(
-        select(TaskAutomationRun).where(TaskAutomationRun.task_id == task.id)
+        select(TaskAutomationRun).where(TaskAutomationRun.task_id == task_id)
     )
     assert final_task.status == "in_progress"
     assert final_run.status == "submitted"
