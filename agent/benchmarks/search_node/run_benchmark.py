@@ -131,7 +131,13 @@ async def run(
 async def main_async(args: argparse.Namespace) -> int:
     password = os.environ.get(PASSWORD_VARIABLE)
     if args.username and not password:
-        print(f"error: set {PASSWORD_VARIABLE} for user {args.username!r}", file=sys.stderr)
+        # Spelled out rather than interpolated: nothing derived from the secret's
+        # own binding should reach an output sink, even its name.
+        print(
+            "error: set LAWHAND_BENCHMARK_OPENSEARCH_PASSWORD for user "
+            f"{args.username!r}",
+            file=sys.stderr,
+        )
         return 2
     # A disposable generation: the agent's aliases are never touched, so this is
     # safe to run against the live node during an upgrade or recovery window.
@@ -154,7 +160,13 @@ async def main_async(args: argparse.Namespace) -> int:
         try:
             await engine._request("DELETE", f"/{prefix}-*")
         except Exception as exc:  # noqa: BLE001 - cleanup must not mask a result
-            print(f"warning: could not delete benchmark indexes {prefix}-*: {exc}", file=sys.stderr)
+            # Type only: an HTTP client's exception text can carry a response
+            # body or a request header.
+            print(
+                f"warning: could not delete benchmark indexes {prefix}-*: "
+                f"{type(exc).__name__}",
+                file=sys.stderr,
+            )
         await engine.close()
 
     width = max(len(item.name) for item in results)
