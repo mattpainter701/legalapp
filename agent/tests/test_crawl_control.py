@@ -378,7 +378,7 @@ async def test_duplicate_enqueue_preserves_leased_and_dead_state(tmp_path):
 async def test_pipeline_renews_lease_while_extractor_is_slow(tmp_path):
     class SlowExtractor(Extractor):
         async def extract(self, request):
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(1.5)
             return await super().extract(request)
 
     path = str(tmp_path / "private" / "crawl.db")
@@ -392,14 +392,14 @@ async def test_pipeline_renews_lease_while_extractor_is_slow(tmp_path):
         SlowExtractor(),
         Index(),
         enabled=True,
-        lease_seconds=0.15,
+        lease_seconds=0.5,
     )
     source = SourceRoot("share-a", r"\\server\share")
     await pipeline.add_source(source)
     await pipeline.reconcile(source.source_id)
 
     running = asyncio.create_task(pipeline.process_one(JobKind.EXTRACT))
-    await asyncio.sleep(0.25)
+    await asyncio.sleep(0.8)
     competing = CrawlManifest(path)
     await competing.initialize()
     assert await competing.claim(JobKind.EXTRACT) is None
