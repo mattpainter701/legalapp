@@ -1187,7 +1187,12 @@ async def test_approval_is_blocked_while_an_earlier_delivery_is_active(
         response = await client.patch(f"/api/tasks/{task.id}", json=payload)
 
     assert response.status_code == 409
-    assert "still queued or in progress" in response.json()["detail"]["message"].lower()
+    # The message gained "submitted" when the guard was widened to cover a run
+    # already handed to the provider; assert the part that identifies the
+    # conflict rather than the full phrasing.
+    message = response.json()["detail"]["message"].lower()
+    assert "an earlier delivery is still" in message
+    assert "before approving another draft" in message
     await db_session.refresh(task)
     assert task.status == "review"
     assert (
