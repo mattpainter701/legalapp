@@ -8,6 +8,7 @@ import hmac
 import json
 import re
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
@@ -18,7 +19,7 @@ import httpx
 from sqlalchemy import and_, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.database import async_session_maker, set_tenant_context
 from app.models.communication_log import CommunicationLog
@@ -94,6 +95,58 @@ async def lock_provider_config_admission(db: AsyncSession, *, tenant_id) -> None
             )
         },
     )
+
+
+def _sms_idempotency_lock_key(tenant_id, idempotency_key: str) -> str:
+    return f"lawhand:sms-idempotency:v1:{tenant_id}:{idempotency_key}"
+
+
+@asynccontextmanager
+async def _sms_idempotency_admission(
+    db: AsyncSession, *, tenant_id, idempotency_key: str
+):
+    """Serialize duplicate dispatch attempts for one idempotency key.
+
+    A session-level advisory lock is held on a dedicated connection across the
+    whole guarded region. A concurrent duplicate therefore blocks here and then
+    replays the first attempt's durable terminal outcome instead of observing
+    the transient ``dispatching`` reservation and failing. The fence holds no
+    authorization row lock across provider I/O: the lock key is the immutable
+    idempotency identity, not any users/roles/matter/contact row.
+    """
+    bind = db.bind
+    if bind is None:
+        raise RuntimeError("SMS session is not bound to an engine")
+    lock_engine = bind.engine if isinstance(bind, AsyncConnection) else bind
+    connection = await lock_engine.connect()
+    lock_key_text = _sms_idempotency_lock_key(tenant_id, idempotency_key)
+    acquired = False
+    try:
+        await connection.execute(
+            text(
+                "SELECT pg_catalog.pg_advisory_lock("
+                "pg_catalog.hashtextextended(:lock_key, 0))"
+            ),
+            {"lock_key": lock_key_text},
+        )
+        acquired = True
+        # Session-level advisory locks survive commit; end the implicit
+        # transaction while keeping the connection pinned for the guard.
+        await connection.commit()
+        yield
+    finally:
+        try:
+            if acquired:
+                await connection.execute(
+                    text(
+                        "SELECT pg_catalog.pg_advisory_unlock("
+                        "pg_catalog.hashtextextended(:lock_key, 0))"
+                    ),
+                    {"lock_key": lock_key_text},
+                )
+                await connection.commit()
+        finally:
+            await connection.close()
 
 
 def normalize_e164(value: str | None) -> str:
@@ -1575,369 +1628,166 @@ async def send_sms(
             404,
             code="sms_target_not_found",
         )
-    replay_id = await db.scalar(
-        select(SmsMessage.id).where(
-            SmsMessage.tenant_id == tenant_id,
-            SmsMessage.idempotency_key == idempotency_key,
-        )
-    )
-    if replay_id:
-        # The non-locking preflight protects secrecy but cannot authorize a
-        # replay across a concurrent deactivation, role revocation, assignment
-        # removal, or party unlink. Lock the outbound row first to match every
-        # recovery/reconciliation path, then Contact/consent before actor and
-        # Matter. No replay field is interpreted until that fence succeeds.
-        replay = await _lock_sms_replay(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            matter_id=matter_id,
-            contact_id=contact_id,
-            idempotency_key=idempotency_key,
-            required_capabilities=required_capabilities,
-        )
-        if replay is None:
-            raise SmsError(
-                "SMS idempotency reservation is unavailable",
-                409,
-                code="sms_idempotency_reservation_unavailable",
+    async with _sms_idempotency_admission(
+        db, tenant_id=tenant_id, idempotency_key=idempotency_key
+    ):
+        replay_id = await db.scalar(
+            select(SmsMessage.id).where(
+                SmsMessage.tenant_id == tenant_id,
+                SmsMessage.idempotency_key == idempotency_key,
             )
-        replay_digest = _request_digest(
-            contact_id=contact_id,
+        )
+        if replay_id:
+            # The non-locking preflight protects secrecy but cannot authorize a
+            # replay across a concurrent deactivation, role revocation, assignment
+            # removal, or party unlink. Lock the outbound row first to match every
+            # recovery/reconciliation path, then Contact/consent before actor and
+            # Matter. No replay field is interpreted until that fence succeeds.
+            replay = await _lock_sms_replay(
+                db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                matter_id=matter_id,
+                contact_id=contact_id,
+                idempotency_key=idempotency_key,
+                required_capabilities=required_capabilities,
+            )
+            if replay is None:
+                raise SmsError(
+                    "SMS idempotency reservation is unavailable",
+                    409,
+                    code="sms_idempotency_reservation_unavailable",
+                )
+            replay_digest = _request_digest(
+                contact_id=contact_id,
+                matter_id=matter_id,
+                to_number=replay.to_number,
+                body=body,
+                category=category,
+            )
+            resolved = await _resolve_replay(
+                db,
+                tenant_id=tenant_id,
+                replay=replay,
+                request_digest=replay_digest,
+                now=now,
+                actor_user_id=user_id,
+            )
+            if before_success_commit:
+                await before_success_commit(resolved)
+                await db.commit()
+            return resolved
+        contact = await db.scalar(
+            select(Contact).where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+        )
+        if not contact or not contact.is_active:
+            raise SmsError("SMS target was not found", 404, code="sms_target_not_found")
+        to_number = normalize_e164(contact.phone)
+        consent = await load_sms_consent(db, tenant_id, contact.id)
+        if not consent_authorizes_sms(
+            consent=consent, to_number=to_number, category=category, now=now
+        ):
+            raise SmsError("SMS follow-up is not currently consented", 403)
+        initial_config = await _config(db, tenant_id)
+        provider_auth_token(initial_config)
+        initial_credential = await ensure_provider_config_credential(
+            db, config=initial_config
+        )
+        initial_from_number = str(initial_config.from_number or "").strip() or None
+        if initial_from_number:
+            initial_from_number = normalize_e164(initial_from_number)
+        request_digest = _request_digest(
+            contact_id=contact.id,
             matter_id=matter_id,
-            to_number=replay.to_number,
+            to_number=to_number,
             body=body,
             category=category,
         )
-        resolved = await _resolve_replay(
-            db,
+        attempt_id = uuid.uuid4()
+        message = SmsMessage(
             tenant_id=tenant_id,
-            replay=replay,
-            request_digest=replay_digest,
-            now=now,
-            actor_user_id=user_id,
-        )
-        if before_success_commit:
-            await before_success_commit(resolved)
-            await db.commit()
-        return resolved
-    contact = await db.scalar(
-        select(Contact).where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
-    )
-    if not contact or not contact.is_active:
-        raise SmsError("SMS target was not found", 404, code="sms_target_not_found")
-    to_number = normalize_e164(contact.phone)
-    consent = await load_sms_consent(db, tenant_id, contact.id)
-    if not consent_authorizes_sms(
-        consent=consent, to_number=to_number, category=category, now=now
-    ):
-        raise SmsError("SMS follow-up is not currently consented", 403)
-    initial_config = await _config(db, tenant_id)
-    provider_auth_token(initial_config)
-    initial_credential = await ensure_provider_config_credential(
-        db, config=initial_config
-    )
-    initial_from_number = str(initial_config.from_number or "").strip() or None
-    if initial_from_number:
-        initial_from_number = normalize_e164(initial_from_number)
-    request_digest = _request_digest(
-        contact_id=contact.id,
-        matter_id=matter_id,
-        to_number=to_number,
-        body=body,
-        category=category,
-    )
-    attempt_id = uuid.uuid4()
-    message = SmsMessage(
-        tenant_id=tenant_id,
-        contact_id=contact.id,
-        matter_id=matter_id,
-        idempotency_key=idempotency_key,
-        request_digest=request_digest,
-        direction="outbound",
-        status="queued",
-        delivery_certainty="not_attempted",
-        dispatch_attempt_id=attempt_id,
-        dispatch_started_at=now,
-        to_number=to_number,
-        body=body,
-        category=category,
-        created_by_user_id=user_id,
-        provider_account_sid=str(initial_config.account_sid).strip(),
-        provider_messaging_service_sid=(
-            str(initial_config.messaging_service_sid or "").strip() or None
-        ),
-        provider_config_generation=initial_config.generation,
-        provider_credential_id=initial_credential.id,
-        from_number=initial_from_number,
-    )
-    db.add(message)
-    observed_provider_message_id = None
-    observed_provider_status = None
-    observed_provider_from_number = None
-    observed_provider_created_at = None
-    provider_submission_started_at = None
-    messaging_service_sid = None
-    provider_credential_id = initial_credential.id
-    dispatch_message_id = None
-    try:
-        await db.flush()
-        dispatch_message_id = message.id
-        # Reserve the idempotency key before any provider request. A concurrent
-        # caller waits on the tenant/key unique constraint and then replays or
-        # receives a reconciliation-required response, never a second dispatch.
-        message.status = "dispatching"
-        message.delivery_certainty = "outcome_unknown"
-        await db.commit()
-        await set_tenant_context(db, str(tenant_id))
-    except IntegrityError:
-        await db.rollback()
-        await set_tenant_context(db, str(tenant_id))
-        # The unique-key winner is replay truth too. Lock it first, then repeat
-        # the same authorization fence before inspecting digest, status, or id.
-        replay = await _lock_sms_replay(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            contact_id=contact.id,
             matter_id=matter_id,
-            contact_id=contact_id,
             idempotency_key=idempotency_key,
-            required_capabilities=required_capabilities,
-        )
-        if replay and replay.request_digest == request_digest:
-            if replay.status == "dispatching" or (
-                replay.status == "provider_unknown"
-                and not replay.reconciliation_resolved_at
-            ):
-                raise SmsError(
-                    "The original SMS is already being dispatched or requires reconciliation",
-                    409,
-                    delivery_certainty="outcome_unknown",
-                    sms_message_id=replay.id,
-                    reconciliation_required=replay.status == "provider_unknown",
-                )
-            replay = _terminal_replay(replay)
-            if before_success_commit:
-                await before_success_commit(replay)
-                await db.commit()
-            return replay
-        raise SmsError("SMS idempotency reservation failed", 409)
-    # The reservation is durable before dispatch. STOP and send first share the
-    # tenant/number fence, then take contact/consent locks in the same order, so
-    # exactly one ordering wins even when STOP cannot resolve an identity.
-    suppression = await lock_sms_number_suppression(
-        db,
-        tenant_id=tenant_id,
-        mobile_e164=to_number,
-        initial_suppressed=False,
-    )
-    message = await db.scalar(
-        select(SmsMessage)
-        .where(
-            SmsMessage.id == dispatch_message_id,
-            SmsMessage.tenant_id == tenant_id,
-            SmsMessage.dispatch_attempt_id == attempt_id,
-            SmsMessage.status == "dispatching",
-        )
-        .with_for_update()
-    )
-    if message is None:
-        raise SmsError(
-            "SMS dispatch ownership changed before provider submission",
-            409,
-            delivery_certainty="outcome_unknown",
-            sms_message_id=dispatch_message_id,
-            reconciliation_required=True,
-            code="sms_dispatch_ownership_changed",
-        )
-    if suppression.is_suppressed:
-        message.status = "blocked_number_suppression"
-        message.delivery_certainty = "not_attempted"
-        _record_communication(
-            db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
-        )
-        _append_sms_outcome_audit(
-            db,
-            message=message,
-            actor_user_id=user_id,
-            outcome="blocked",
-            metadata={"reason": "number_suppression"},
-        )
-        await db.commit()
-        raise SmsError(
-            "SMS destination has a durable provider opt-out",
-            409,
+            request_digest=request_digest,
+            direction="outbound",
+            status="queued",
             delivery_certainty="not_attempted",
-            sms_message_id=dispatch_message_id,
-        )
-    locked_contact = await db.scalar(
-        select(Contact)
-        .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
-        .execution_options(populate_existing=True)
-        .with_for_update()
-    )
-    locked_consent = (
-        await load_sms_consent(db, tenant_id, contact_id, lock=True)
-        if locked_contact
-        else None
-    )
-    locked_now = datetime.now(timezone.utc)
-    try:
-        locked_number = normalize_e164(locked_contact.phone if locked_contact else None)
-    except SmsError:
-        locked_number = ""
-    if (
-        not locked_contact
-        or not locked_contact.is_active
-        or locked_number != to_number
-        or not consent_authorizes_sms(
-            consent=locked_consent,
+            dispatch_attempt_id=attempt_id,
+            dispatch_started_at=now,
             to_number=to_number,
+            body=body,
             category=category,
-            now=locked_now,
+            created_by_user_id=user_id,
+            provider_account_sid=str(initial_config.account_sid).strip(),
+            provider_messaging_service_sid=(
+                str(initial_config.messaging_service_sid or "").strip() or None
+            ),
+            provider_config_generation=initial_config.generation,
+            provider_credential_id=initial_credential.id,
+            from_number=initial_from_number,
         )
-    ):
-        message.status = "blocked_consent_changed"
-        message.delivery_certainty = "not_attempted"
-        _record_communication(
-            db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
-        )
-        _append_sms_outcome_audit(
-            db,
-            message=message,
-            actor_user_id=user_id,
-            outcome="blocked",
-            metadata={"reason": "consent_changed"},
-        )
-        await db.commit()
-        raise SmsError(
-            "SMS consent changed before provider dispatch",
-            409,
-            delivery_certainty="not_attempted",
-            sms_message_id=dispatch_message_id,
-            code="sms_consent_changed",
-        )
-    if in_quiet_hours(consent=locked_consent, now=locked_now):
-        message.status = "blocked_quiet_hours"
-        message.delivery_certainty = "not_attempted"
-        _record_communication(
-            db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
-        )
-        _append_sms_outcome_audit(
-            db,
-            message=message,
-            actor_user_id=user_id,
-            outcome="blocked",
-            metadata={"reason": "quiet_hours"},
-        )
-        await db.commit()
-        raise SmsError(
-            "SMS is blocked during the recipient's quiet hours",
-            409,
-            delivery_certainty="not_attempted",
-            sms_message_id=dispatch_message_id,
-            code="sms_quiet_hours",
-        )
-    try:
-        # Re-read and share-lock the active generation immediately before
-        # submission. Concurrent sends remain compatible, while an admin
-        # rotation/deactivation waits until this exact outcome is durable.
-        config = await _config(db, tenant_id, lock_for_provider_io=True)
-        auth_token = provider_auth_token(config)
-        credential = await ensure_provider_config_credential(db, config=config)
-        provider_config_generation = config.generation
-        provider_credential_id = credential.id
-        account_sid = str(config.account_sid).strip()
-        messaging_service_sid = str(config.messaging_service_sid or "").strip() or None
-        from_number = str(config.from_number or "").strip() or None
-        if from_number:
-            from_number = normalize_e164(from_number)
-        message.provider_config_generation = provider_config_generation
-        message.provider_credential_id = provider_credential_id
-        message.provider_account_sid = account_sid
-        message.provider_messaging_service_sid = messaging_service_sid
-        message.from_number = from_number
-    except SmsError as exc:
-        message.status = "blocked_provider_config"
-        message.delivery_certainty = "not_attempted"
-        _record_communication(
-            db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
-        )
-        _append_sms_outcome_audit(
-            db,
-            message=message,
-            actor_user_id=user_id,
-            outcome="blocked",
-            metadata={"reason": "provider_config"},
-        )
-        await db.commit()
-        raise SmsError(
-            str(exc),
-            exc.status_code,
-            delivery_certainty="not_attempted",
-            sms_message_id=dispatch_message_id,
-        ) from exc
-    final_authorization = await _lock_sms_matter_authorization(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        matter_id=matter_id,
-        contact_id=contact_id,
-        required_capabilities=required_capabilities,
-    )
-    if final_authorization is None:
-        message.status = "blocked_matter_authorization_changed"
-        message.delivery_certainty = "not_attempted"
-        _record_communication(
-            db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
-        )
-        _append_sms_outcome_audit(
-            db,
-            message=message,
-            actor_user_id=user_id,
-            outcome="blocked",
-            metadata={"reason": "matter_authorization_changed"},
-        )
-        await db.commit()
-        raise SmsError(
-            "SMS matter authorization changed before provider dispatch",
-            409,
-            delivery_certainty="not_attempted",
-            sms_message_id=dispatch_message_id,
-            code="sms_matter_authorization_changed",
-        )
-    message.raw_provider_event = {
-        **(message.raw_provider_event or {}),
-        "authorization": final_authorization,
-    }
-    data = {"To": to_number, "Body": body}
-    if messaging_service_sid:
-        data["MessagingServiceSid"] = messaging_service_sid
-    else:
-        data["From"] = from_number or ""
-    provider_submission_started_at = datetime.now(timezone.utc)
-    message.provider_submission_started_at = provider_submission_started_at
-    # The actor/role/matter/party authorization fence, the recipient/consent
-    # fence, and the provider-generation share lock are all taken in this
-    # transaction. Commit them before the provider call so no row lock is held
-    # across the external HTTP request: a concurrent cancellation (auth, tenant
-    # binding, or the access-log user FK) keys the same users row and would
-    # otherwise block behind this transaction for the whole provider timeout.
-    # The fence decision is durable from here; only immutable reservation
-    # identity is re-verified before recording the outcome.
-    await db.commit()
-    await set_tenant_context(db, str(tenant_id))
-    try:
-        async with httpx.AsyncClient(timeout=15) as http:
-            response = await http.post(
-                f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
-                data=data,
-                auth=(account_sid, auth_token),
+        db.add(message)
+        observed_provider_message_id = None
+        observed_provider_status = None
+        observed_provider_from_number = None
+        observed_provider_created_at = None
+        provider_submission_started_at = None
+        messaging_service_sid = None
+        provider_credential_id = initial_credential.id
+        dispatch_message_id = None
+        try:
+            await db.flush()
+            dispatch_message_id = message.id
+            # Reserve the idempotency key before any provider request. A concurrent
+            # caller blocks on the idempotency advisory lock above and then replays
+            # the durable terminal outcome; the tenant/key unique constraint remains
+            # the backstop that maps an insert race onto that same replay truth.
+            message.status = "dispatching"
+            message.delivery_certainty = "outcome_unknown"
+            await db.commit()
+            await set_tenant_context(db, str(tenant_id))
+        except IntegrityError:
+            await db.rollback()
+            await set_tenant_context(db, str(tenant_id))
+            # The unique-key winner is replay truth too. Lock it first, then repeat
+            # the same authorization fence before inspecting digest, status, or id.
+            replay = await _lock_sms_replay(
+                db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                matter_id=matter_id,
+                contact_id=contact_id,
+                idempotency_key=idempotency_key,
+                required_capabilities=required_capabilities,
             )
-        payload = response.json() if response.content else {}
-        # Re-fence the exact reservation before recording the outcome. Only
-        # immutable dispatch identity is checked here; no actor/matter/contact
-        # row lock is reacquired across the already-completed provider call.
+            if replay and replay.request_digest == request_digest:
+                if replay.status == "dispatching" or (
+                    replay.status == "provider_unknown"
+                    and not replay.reconciliation_resolved_at
+                ):
+                    raise SmsError(
+                        "The original SMS is already being dispatched or requires reconciliation",
+                        409,
+                        delivery_certainty="outcome_unknown",
+                        sms_message_id=replay.id,
+                        reconciliation_required=replay.status == "provider_unknown",
+                    )
+                replay = _terminal_replay(replay)
+                if before_success_commit:
+                    await before_success_commit(replay)
+                    await db.commit()
+                return replay
+            raise SmsError("SMS idempotency reservation failed", 409)
+        # The reservation is durable before dispatch. STOP and send first share the
+        # tenant/number fence, then take contact/consent locks in the same order, so
+        # exactly one ordering wins even when STOP cannot resolve an identity.
+        suppression = await lock_sms_number_suppression(
+            db,
+            tenant_id=tenant_id,
+            mobile_e164=to_number,
+            initial_suppressed=False,
+        )
         message = await db.scalar(
             select(SmsMessage)
             .where(
@@ -1950,156 +1800,363 @@ async def send_sms(
         )
         if message is None:
             raise SmsError(
-                "SMS dispatch ownership changed during provider submission",
+                "SMS dispatch ownership changed before provider submission",
                 409,
                 delivery_certainty="outcome_unknown",
                 sms_message_id=dispatch_message_id,
                 reconciliation_required=True,
                 code="sms_dispatch_ownership_changed",
             )
-        provider_status = str(payload.get("status") or "").lower()
-        observed_provider_message_id = (
-            str(payload["sid"]) if payload.get("sid") else None
-        )
-        observed_provider_status = provider_status or None
-        observed_provider_from_number = (
-            normalize_e164(payload.get("from")) if payload.get("from") else from_number
-        )
-        observed_provider_created_at = _parse_provider_datetime(
-            payload.get("date_created")
-        )
-        if response.status_code >= 500 or response.status_code in (
-            _TRANSIENT_PROVIDER_HTTP_CODES
-        ):
-            raise RuntimeError("provider server response did not prove rejection")
-        if observed_provider_message_id and provider_status in {
-            "failed",
-            "undelivered",
-        }:
-            message.provider_message_id = observed_provider_message_id
-            message.provider_status = provider_status
-            message.provider_error_code = str(
-                payload.get("error_code") or payload.get("code") or "delivery_failed"
+        if suppression.is_suppressed:
+            message.status = "blocked_number_suppression"
+            message.delivery_certainty = "not_attempted"
+            _record_communication(
+                db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
             )
-            message.provider_created_at = observed_provider_created_at
+            _append_sms_outcome_audit(
+                db,
+                message=message,
+                actor_user_id=user_id,
+                outcome="blocked",
+                metadata={"reason": "number_suppression"},
+            )
+            await db.commit()
+            raise SmsError(
+                "SMS destination has a durable provider opt-out",
+                409,
+                delivery_certainty="not_attempted",
+                sms_message_id=dispatch_message_id,
+            )
+        locked_contact = await db.scalar(
+            select(Contact)
+            .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        locked_consent = (
+            await load_sms_consent(db, tenant_id, contact_id, lock=True)
+            if locked_contact
+            else None
+        )
+        locked_now = datetime.now(timezone.utc)
+        try:
+            locked_number = normalize_e164(locked_contact.phone if locked_contact else None)
+        except SmsError:
+            locked_number = ""
+        if (
+            not locked_contact
+            or not locked_contact.is_active
+            or locked_number != to_number
+            or not consent_authorizes_sms(
+                consent=locked_consent,
+                to_number=to_number,
+                category=category,
+                now=locked_now,
+            )
+        ):
+            message.status = "blocked_consent_changed"
+            message.delivery_certainty = "not_attempted"
+            _record_communication(
+                db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
+            )
+            _append_sms_outcome_audit(
+                db,
+                message=message,
+                actor_user_id=user_id,
+                outcome="blocked",
+                metadata={"reason": "consent_changed"},
+            )
+            await db.commit()
+            raise SmsError(
+                "SMS consent changed before provider dispatch",
+                409,
+                delivery_certainty="not_attempted",
+                sms_message_id=dispatch_message_id,
+                code="sms_consent_changed",
+            )
+        if in_quiet_hours(consent=locked_consent, now=locked_now):
+            message.status = "blocked_quiet_hours"
+            message.delivery_certainty = "not_attempted"
+            _record_communication(
+                db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
+            )
+            _append_sms_outcome_audit(
+                db,
+                message=message,
+                actor_user_id=user_id,
+                outcome="blocked",
+                metadata={"reason": "quiet_hours"},
+            )
+            await db.commit()
+            raise SmsError(
+                "SMS is blocked during the recipient's quiet hours",
+                409,
+                delivery_certainty="not_attempted",
+                sms_message_id=dispatch_message_id,
+                code="sms_quiet_hours",
+            )
+        try:
+            # Re-read and share-lock the active generation immediately before
+            # submission. Concurrent sends remain compatible, while an admin
+            # rotation/deactivation waits until this exact outcome is durable.
+            config = await _config(db, tenant_id, lock_for_provider_io=True)
+            auth_token = provider_auth_token(config)
+            credential = await ensure_provider_config_credential(db, config=config)
+            provider_config_generation = config.generation
+            provider_credential_id = credential.id
+            account_sid = str(config.account_sid).strip()
+            messaging_service_sid = str(config.messaging_service_sid or "").strip() or None
+            from_number = str(config.from_number or "").strip() or None
+            if from_number:
+                from_number = normalize_e164(from_number)
+            message.provider_config_generation = provider_config_generation
+            message.provider_credential_id = provider_credential_id
+            message.provider_account_sid = account_sid
+            message.provider_messaging_service_sid = messaging_service_sid
+            message.from_number = from_number
+        except SmsError as exc:
+            message.status = "blocked_provider_config"
+            message.delivery_certainty = "not_attempted"
+            _record_communication(
+                db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
+            )
+            _append_sms_outcome_audit(
+                db,
+                message=message,
+                actor_user_id=user_id,
+                outcome="blocked",
+                metadata={"reason": "provider_config"},
+            )
+            await db.commit()
+            raise SmsError(
+                str(exc),
+                exc.status_code,
+                delivery_certainty="not_attempted",
+                sms_message_id=dispatch_message_id,
+            ) from exc
+        final_authorization = await _lock_sms_matter_authorization(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            matter_id=matter_id,
+            contact_id=contact_id,
+            required_capabilities=required_capabilities,
+        )
+        if final_authorization is None:
+            message.status = "blocked_matter_authorization_changed"
+            message.delivery_certainty = "not_attempted"
+            _record_communication(
+                db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
+            )
+            _append_sms_outcome_audit(
+                db,
+                message=message,
+                actor_user_id=user_id,
+                outcome="blocked",
+                metadata={"reason": "matter_authorization_changed"},
+            )
+            await db.commit()
+            raise SmsError(
+                "SMS matter authorization changed before provider dispatch",
+                409,
+                delivery_certainty="not_attempted",
+                sms_message_id=dispatch_message_id,
+                code="sms_matter_authorization_changed",
+            )
+        message.raw_provider_event = {
+            **(message.raw_provider_event or {}),
+            "authorization": final_authorization,
+        }
+        data = {"To": to_number, "Body": body}
+        if messaging_service_sid:
+            data["MessagingServiceSid"] = messaging_service_sid
+        else:
+            data["From"] = from_number or ""
+        provider_submission_started_at = datetime.now(timezone.utc)
+        message.provider_submission_started_at = provider_submission_started_at
+        # The actor/role/matter/party authorization fence, the recipient/consent
+        # fence, and the provider-generation share lock are all taken in this
+        # transaction. Commit them before the provider call so no row lock is held
+        # across the external HTTP request: a concurrent cancellation (auth, tenant
+        # binding, or the access-log user FK) keys the same users row and would
+        # otherwise block behind this transaction for the whole provider timeout.
+        # The fence decision is durable from here; only immutable reservation
+        # identity is re-verified before recording the outcome.
+        await db.commit()
+        await set_tenant_context(db, str(tenant_id))
+        try:
+            async with httpx.AsyncClient(timeout=15) as http:
+                response = await http.post(
+                    f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+                    data=data,
+                    auth=(account_sid, auth_token),
+                )
+            payload = response.json() if response.content else {}
+            # Re-fence the exact reservation before recording the outcome. Only
+            # immutable dispatch identity is checked here; no actor/matter/contact
+            # row lock is reacquired across the already-completed provider call.
+            message = await db.scalar(
+                select(SmsMessage)
+                .where(
+                    SmsMessage.id == dispatch_message_id,
+                    SmsMessage.tenant_id == tenant_id,
+                    SmsMessage.dispatch_attempt_id == attempt_id,
+                    SmsMessage.status == "dispatching",
+                )
+                .with_for_update()
+            )
+            if message is None:
+                raise SmsError(
+                    "SMS dispatch ownership changed during provider submission",
+                    409,
+                    delivery_certainty="outcome_unknown",
+                    sms_message_id=dispatch_message_id,
+                    reconciliation_required=True,
+                    code="sms_dispatch_ownership_changed",
+                )
+            provider_status = str(payload.get("status") or "").lower()
+            observed_provider_message_id = (
+                str(payload["sid"]) if payload.get("sid") else None
+            )
+            observed_provider_status = provider_status or None
+            observed_provider_from_number = (
+                normalize_e164(payload.get("from")) if payload.get("from") else from_number
+            )
+            observed_provider_created_at = _parse_provider_datetime(
+                payload.get("date_created")
+            )
+            if response.status_code >= 500 or response.status_code in (
+                _TRANSIENT_PROVIDER_HTTP_CODES
+            ):
+                raise RuntimeError("provider server response did not prove rejection")
+            if observed_provider_message_id and provider_status in {
+                "failed",
+                "undelivered",
+            }:
+                message.provider_message_id = observed_provider_message_id
+                message.provider_status = provider_status
+                message.provider_error_code = str(
+                    payload.get("error_code") or payload.get("code") or "delivery_failed"
+                )
+                message.provider_created_at = observed_provider_created_at
+                message.from_number = observed_provider_from_number
+                message.status = "provider_failed_after_acceptance"
+                message.delivery_certainty = "provider_failed_after_acceptance"
+                message.raw_provider_event = {
+                    **(message.raw_provider_event or {}),
+                    "status": provider_status,
+                    "status_code": response.status_code,
+                }
+                _record_communication(
+                    db,
+                    tenant_id=tenant_id,
+                    message=message,
+                    user_id=user_id,
+                    status="failed",
+                )
+                _append_sms_outcome_audit(
+                    db,
+                    message=message,
+                    actor_user_id=user_id,
+                    outcome="failed_after_acceptance",
+                )
+                await db.commit()
+                raise SmsError(
+                    "SMS delivery failed after provider acceptance",
+                    503,
+                    delivery_certainty="provider_failed_after_acceptance",
+                    sms_message_id=message.id,
+                    code="sms_provider_failed_after_acceptance",
+                )
+            if observed_provider_message_id and (
+                response.status_code in _DETERMINISTIC_PROVIDER_REJECTION_CODES
+                or provider_status not in _KNOWN_PROVIDER_STATUSES
+            ):
+                raise RuntimeError("provider response with an accepted id was ambiguous")
+            if response.status_code in _DETERMINISTIC_PROVIDER_REJECTION_CODES:
+                message.status = "provider_failed"
+                message.delivery_certainty = "provider_rejected"
+                message.provider_status = provider_status or None
+                message.provider_error_code = str(
+                    payload.get("code") or "provider_rejected"
+                )
+                message.raw_provider_event = {"status_code": response.status_code}
+                _record_communication(
+                    db,
+                    tenant_id=tenant_id,
+                    message=message,
+                    user_id=user_id,
+                    status="failed",
+                )
+                _append_sms_outcome_audit(
+                    db,
+                    message=message,
+                    actor_user_id=user_id,
+                    outcome="rejected",
+                )
+                await db.commit()
+                raise SmsError(
+                    "SMS provider did not accept the message",
+                    503,
+                    delivery_certainty="provider_rejected",
+                    sms_message_id=message.id,
+                )
+            if not payload.get("sid"):
+                raise RuntimeError("provider response did not identify the submission")
+            message.provider_message_id = str(payload["sid"])
+            message.provider_status = provider_status or "queued"
+            message.status = "submitted"
+            message.delivery_certainty = "provider_accepted"
             message.from_number = observed_provider_from_number
-            message.status = "provider_failed_after_acceptance"
-            message.delivery_certainty = "provider_failed_after_acceptance"
+            message.provider_created_at = observed_provider_created_at
             message.raw_provider_event = {
                 **(message.raw_provider_event or {}),
-                "status": provider_status,
-                "status_code": response.status_code,
+                "status": message.provider_status,
             }
             _record_communication(
                 db,
                 tenant_id=tenant_id,
                 message=message,
                 user_id=user_id,
-                status="failed",
+                status="submitted",
             )
+            if before_success_commit:
+                await before_success_commit(message)
             _append_sms_outcome_audit(
                 db,
                 message=message,
                 actor_user_id=user_id,
-                outcome="failed_after_acceptance",
+                outcome="submitted",
             )
             await db.commit()
-            raise SmsError(
-                "SMS delivery failed after provider acceptance",
-                503,
-                delivery_certainty="provider_failed_after_acceptance",
-                sms_message_id=message.id,
-                code="sms_provider_failed_after_acceptance",
-            )
-        if observed_provider_message_id and (
-            response.status_code in _DETERMINISTIC_PROVIDER_REJECTION_CODES
-            or provider_status not in _KNOWN_PROVIDER_STATUSES
-        ):
-            raise RuntimeError("provider response with an accepted id was ambiguous")
-        if response.status_code in _DETERMINISTIC_PROVIDER_REJECTION_CODES:
-            message.status = "provider_failed"
-            message.delivery_certainty = "provider_rejected"
-            message.provider_status = provider_status or None
-            message.provider_error_code = str(
-                payload.get("code") or "provider_rejected"
-            )
-            message.raw_provider_event = {"status_code": response.status_code}
-            _record_communication(
+            return message
+        except SmsError:
+            raise
+        except Exception as exc:
+            await _persist_unknown_dispatch(
                 db,
                 tenant_id=tenant_id,
-                message=message,
+                message_id=dispatch_message_id,
+                attempt_id=attempt_id,
                 user_id=user_id,
-                status="failed",
+                provider_account_sid=account_sid,
+                provider_config_generation=provider_config_generation,
+                provider_credential_id=provider_credential_id,
+                provider_messaging_service_sid=messaging_service_sid,
+                provider_message_id=observed_provider_message_id,
+                provider_status=observed_provider_status,
+                provider_from_number=observed_provider_from_number,
+                provider_created_at=observed_provider_created_at,
+                provider_submission_started_at=provider_submission_started_at,
+                failure_type=type(exc).__name__,
             )
-            _append_sms_outcome_audit(
-                db,
-                message=message,
-                actor_user_id=user_id,
-                outcome="rejected",
-            )
-            await db.commit()
             raise SmsError(
-                "SMS provider did not accept the message",
+                "SMS provider outcome is uncertain and requires reconciliation",
                 503,
-                delivery_certainty="provider_rejected",
-                sms_message_id=message.id,
-            )
-        if not payload.get("sid"):
-            raise RuntimeError("provider response did not identify the submission")
-        message.provider_message_id = str(payload["sid"])
-        message.provider_status = provider_status or "queued"
-        message.status = "submitted"
-        message.delivery_certainty = "provider_accepted"
-        message.from_number = observed_provider_from_number
-        message.provider_created_at = observed_provider_created_at
-        message.raw_provider_event = {
-            **(message.raw_provider_event or {}),
-            "status": message.provider_status,
-        }
-        _record_communication(
-            db,
-            tenant_id=tenant_id,
-            message=message,
-            user_id=user_id,
-            status="submitted",
-        )
-        if before_success_commit:
-            await before_success_commit(message)
-        _append_sms_outcome_audit(
-            db,
-            message=message,
-            actor_user_id=user_id,
-            outcome="submitted",
-        )
-        await db.commit()
-        return message
-    except SmsError:
-        raise
-    except Exception as exc:
-        await _persist_unknown_dispatch(
-            db,
-            tenant_id=tenant_id,
-            message_id=dispatch_message_id,
-            attempt_id=attempt_id,
-            user_id=user_id,
-            provider_account_sid=account_sid,
-            provider_config_generation=provider_config_generation,
-            provider_credential_id=provider_credential_id,
-            provider_messaging_service_sid=messaging_service_sid,
-            provider_message_id=observed_provider_message_id,
-            provider_status=observed_provider_status,
-            provider_from_number=observed_provider_from_number,
-            provider_created_at=observed_provider_created_at,
-            provider_submission_started_at=provider_submission_started_at,
-            failure_type=type(exc).__name__,
-        )
-        raise SmsError(
-            "SMS provider outcome is uncertain and requires reconciliation",
-            503,
-            delivery_certainty="outcome_unknown",
-            sms_message_id=dispatch_message_id,
-            reconciliation_required=True,
-        ) from exc
+                delivery_certainty="outcome_unknown",
+                sms_message_id=dispatch_message_id,
+                reconciliation_required=True,
+            ) from exc
 
 
 async def apply_inbound(
