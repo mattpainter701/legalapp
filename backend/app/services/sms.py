@@ -1252,6 +1252,40 @@ def _record_communication(
     db.add(log)
 
 
+async def _lock_communication_log_parents(
+    db: AsyncSession, *, tenant_id, contact_id, matter_id, user_id
+) -> None:
+    """Take the communication_logs parent rows in one fixed order.
+
+    Inserting a communication_logs row takes FOR KEY SHARE on contacts, matters
+    and users through its three foreign keys, in whatever order the executor
+    happens to check them, and naming none of them. Review resolution locks the
+    same three rows deliberately, in the order contact, actor, matter. Two
+    paths reaching the same rows in different orders is a deadlock, and this is
+    the side that drifts, because an insert's lock order is not written
+    anywhere a reader can see it.
+
+    This runs after the provider call, in the transaction that records the
+    outcome -- deliberately not the fence transaction, which commits before the
+    HTTP request precisely so no row lock is held across it.
+
+    FOR KEY SHARE is what the foreign keys take anyway, so this adds no
+    contention the insert did not already imply; it only fixes the order.
+    """
+    for model, value in (
+        (Contact, contact_id),
+        (User, user_id),
+        (Matter, matter_id),
+    ):
+        if value is None:
+            continue
+        await db.execute(
+            select(model.id)
+            .where(model.id == value, model.tenant_id == tenant_id)
+            .with_for_update(read=True, key_share=True)
+        )
+
+
 async def _lock_sms_automation_run(
     db: AsyncSession, *, tenant_id, message: SmsMessage
 ) -> TaskAutomationRun | None:
@@ -2135,6 +2169,18 @@ async def send_sms(
                 reconciliation_required=True,
                 code="sms_dispatch_ownership_changed",
             )
+        # Every branch below records a communication_logs row, and its foreign
+        # keys take contact/actor/matter locks in executor order. Take them
+        # here instead, in the order review resolution uses, so the two paths
+        # cannot deadlock on the way out. The provider call is already done, so
+        # nothing external waits behind these.
+        await _lock_communication_log_parents(
+            db,
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
+            user_id=user_id,
+        )
         provider_status = str(payload.get("status") or "").lower()
         observed_provider_message_id = (
             str(payload["sid"]) if payload.get("sid") else None
