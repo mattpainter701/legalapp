@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.services.smb as smb_module
-from app.services.smb import _path_is_within_binding, smb_service
+from app.services.smb import _path_is_within_binding, path_is_within_root, smb_service
 
 
 def _bind(**overrides):
@@ -710,3 +710,38 @@ async def test_path_is_within_binding_rejects_path_outside_share(monkeypatch):
     assert not _path_is_within_binding(
         r"\\fs01\Legal\Client-10\brief.pdf", r"\\fs01\Legal", "Client-1"
     )
+
+
+def test_path_is_within_root_accepts_a_whole_share_binding():
+    """A matter bound to a whole share must reach the files on it.
+
+    ``folder_path`` is optional on ``MatterSmbShare``, so a bare share root is
+    the default binding shape. ``ntpath.commonpath`` cannot judge one -- it
+    puts the whole UNC into the drive and leaves an empty, therefore relative,
+    path -- and raised, which refused every file on such a binding from both
+    ``get_matter_file`` and the file-open intent path.
+    """
+    assert path_is_within_root(r"\\fs01\Legal\brief.pdf", r"\\fs01\Legal")
+    assert path_is_within_root(r"\\fs01\Legal\Client-1\brief.pdf", r"\\fs01\Legal")
+    # The two containment helpers must agree on the shape they both see.
+    assert _path_is_within_binding(r"\\fs01\Legal\brief.pdf", r"\\fs01\Legal", None)
+
+
+def test_path_is_within_root_keeps_its_segment_boundary():
+    """Widening the whole-share case must not widen sibling or escape cases."""
+    assert path_is_within_root(
+        r"\\fs01\Legal\Client-1\brief.pdf", r"\\fs01\Legal\Client-1"
+    )
+    # Sibling prefixes, shares and servers stay out.
+    assert not path_is_within_root(
+        r"\\fs01\Legal\Client-10\brief.pdf", r"\\fs01\Legal\Client-1"
+    )
+    assert not path_is_within_root(r"\\fs01\Other\brief.pdf", r"\\fs01\Legal")
+    assert not path_is_within_root(r"\\fs02\Legal\brief.pdf", r"\\fs01\Legal")
+    # ".." may not climb out of the bound folder.
+    assert not path_is_within_root(
+        r"\\fs01\Legal\Client-1\..\Client-2\brief.pdf", r"\\fs01\Legal\Client-1"
+    )
+    # A candidate above its root is not within it, and non-UNC input is refused.
+    assert not path_is_within_root(r"\\fs01\Legal", r"\\fs01\Legal\Client-1")
+    assert not path_is_within_root(r"C:\Legal\brief.pdf", r"\\fs01\Legal")
