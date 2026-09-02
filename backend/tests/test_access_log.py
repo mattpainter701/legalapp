@@ -18,6 +18,9 @@ class _FakeSession:
     def add(self, row):
         self.events.append(("add", row.tenant_id, row.request_id))
 
+    async def execute(self, *args, **kwargs):
+        return None
+
     async def commit(self):
         self.events.append("commit")
 
