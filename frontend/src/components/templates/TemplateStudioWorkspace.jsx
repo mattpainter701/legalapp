@@ -1,6 +1,8 @@
-import { AlertTriangle, ArrowLeft, Clock3, Eye, FileText, FlaskConical, History, Pencil, Sparkles } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Clock3, Eye, FileText, FlaskConical, History, Loader2, Pencil, Sparkles } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
+
+import TemplateStudioEditor from './TemplateStudioEditor'
 
 const tabs = [
   { key: 'workspace', label: 'Workspace', suffix: '', icon: FileText },
@@ -9,7 +11,17 @@ const tabs = [
   { key: 'activity', label: 'Activity', suffix: '/activity', icon: Clock3 },
 ]
 
-export default function TemplateStudioWorkspace({ template, section = 'workspace', statusMessage, onEdit, onGenerate }) {
+export default function TemplateStudioWorkspace({
+  template,
+  section = 'workspace',
+  statusMessage,
+  onEdit,
+  onGenerate,
+  source,
+  sourceLoading = false,
+  sourceError = '',
+  onSaveFields,
+}) {
   const base = `/templates/${encodeURIComponent(String(template.id).toLowerCase())}/studio`
   const statusRef = useRef(null)
   const sourceMissing = template.source_ready === false
@@ -66,8 +78,8 @@ export default function TemplateStudioWorkspace({ template, section = 'workspace
               </dl>
             </div>
             <aside className="rounded-xl border border-brand-line bg-brand-surface-2 p-5">
-              <h2 className="font-semibold text-brand-ink">Current limits</h2>
-              <p className="mt-2 text-sm leading-6 text-brand-muted">Draft, proposal, snapshot, version, test-run, and activity data will appear here when their server contracts ship. This Phase 1 shell does not create or simulate those records.</p>
+              <h2 className="font-semibold text-brand-ink">Field placement</h2>
+              <p className="mt-2 text-sm leading-6 text-brand-muted">Drag a field onto the page to set where its value is written. Positions are stored in the template and reused every time it generates.</p>
             </aside>
             {sourceMissing && (
               <div role="alert" className="flex gap-3 rounded-xl border border-brand-amber/40 bg-brand-amber/10 p-4 md:col-span-3">
@@ -75,6 +87,21 @@ export default function TemplateStudioWorkspace({ template, section = 'workspace
                 <p className="text-sm text-brand-ink">The retained source is unavailable. Return to Studio home and recreate the template from the original sample before generation.</p>
               </div>
             )}
+            <div className="md:col-span-3">
+              {sourceLoading ? (
+                <div className="flex items-center gap-2 rounded-xl border border-brand-line bg-brand-surface-2 px-5 py-10 text-sm text-brand-muted" role="status">
+                  <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                  Loading the document…
+                </div>
+              ) : (
+                <TemplateStudioEditor
+                  template={template}
+                  source={source}
+                  sourceError={sourceError}
+                  onSave={onSaveFields}
+                />
+              )}
+            </div>
           </section>
         ) : (
           <section className="mt-4 rounded-xl border border-dashed border-brand-line bg-brand-surface-2 px-6 py-12 text-center" aria-labelledby={`studio-${section}-title`}>

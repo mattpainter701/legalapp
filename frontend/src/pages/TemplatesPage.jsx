@@ -7,6 +7,7 @@ import TemplateStudioWorkspace from '../components/templates/TemplateStudioWorks
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
   getTemplate,
+  getTemplateSource,
   getTemplates,
   analyzeTemplateUpload,
   proposeTemplateFieldsWithAi,
@@ -1804,6 +1805,9 @@ export default function TemplatesPage() {
   const [workspaceTemplate, setWorkspaceTemplate] = useState(null)
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
   const [workspaceError, setWorkspaceError] = useState(null)
+  const [workspaceSource, setWorkspaceSource] = useState(null)
+  const [workspaceSourceLoading, setWorkspaceSourceLoading] = useState(false)
+  const [workspaceSourceError, setWorkspaceSourceError] = useState('')
   const [routeStatus, setRouteStatus] = useState('')
   const requestIdRef = useRef(0)
 
@@ -1963,6 +1967,44 @@ export default function TemplatesPage() {
     }
     setRouteStatus(location.state?.studioStatus || '')
   }, [canonicalWorkspaceTemplateId, location.search, location.state, navigate, workspaceTemplateId])
+
+  // Reopen the retained source in the Studio editor. Only source-backed formats
+  // have bytes to fetch; markdown templates fall through to the editor's own
+  // explanatory state without a pointless request.
+  useEffect(() => {
+    const sourceBacked = ['pdf', 'docx'].includes(workspaceTemplate?.format)
+    if (!canonicalWorkspaceTemplateId || !workspaceTemplate || !sourceBacked) {
+      setWorkspaceSource(null)
+      setWorkspaceSourceError('')
+      setWorkspaceSourceLoading(false)
+      return undefined
+    }
+    let cancelled = false
+    setWorkspaceSource(null)
+    setWorkspaceSourceError('')
+    setWorkspaceSourceLoading(true)
+    getTemplateSource(
+      canonicalWorkspaceTemplateId,
+      workspaceTemplate.source_filename || `template-source.${workspaceTemplate.format}`,
+    )
+      .then((file) => { if (!cancelled) setWorkspaceSource(file) })
+      .catch((err) => {
+        if (!cancelled) {
+          setWorkspaceSourceError(getErrorMessage(err, 'The retained source could not be loaded.'))
+        }
+      })
+      .finally(() => { if (!cancelled) setWorkspaceSourceLoading(false) })
+    return () => { cancelled = true }
+  }, [canonicalWorkspaceTemplateId, workspaceTemplate])
+
+  const handleSaveWorkspaceFields = useCallback(async (variableSchema) => {
+    const saved = await updateTemplate(canonicalWorkspaceTemplateId, {
+      variable_schema: variableSchema,
+    })
+    setWorkspaceTemplate(saved)
+    await load()
+    return saved
+  }, [canonicalWorkspaceTemplateId, load])
 
   useEffect(() => {
     const handleOpenStudio = (event) => {
@@ -2383,6 +2425,10 @@ export default function TemplatesPage() {
           statusMessage={routeStatus}
           onEdit={() => setEditTemplate(workspaceTemplate)}
           onGenerate={() => setRenderTarget(workspaceTemplate)}
+          source={workspaceSource}
+          sourceLoading={workspaceSourceLoading}
+          sourceError={workspaceSourceError}
+          onSaveFields={handleSaveWorkspaceFields}
         />
         {editTemplate && (
           <Modal title="Edit Template" onClose={() => setEditTemplate(null)}>
