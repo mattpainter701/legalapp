@@ -669,6 +669,23 @@ async def provider_credentials_for_generation(
     lock_for_provider_io: bool = False,
 ) -> SmsProviderConfig | SmsProviderCredential:
     """Load exactly the credential generation bound to a durable message."""
+    if lock_for_provider_io:
+        # Fence provider-config rotation for the whole of the provider call.
+        # The bound-credential branch below locks sms_provider_credentials,
+        # but rotation writes sms_provider_configs, so locking only the
+        # credential row left rotation free to race an in-flight lookup --
+        # the one thing "shared provider-config fences prevent rotation or
+        # deactivation from racing an in-flight dispatch or reconciliation
+        # lookup" promises it cannot do. FOR SHARE: concurrent readers and
+        # other in-flight provider calls still proceed; only a writer waits.
+        await db.execute(
+            select(SmsProviderConfig.id)
+            .where(
+                SmsProviderConfig.tenant_id == tenant_id,
+                SmsProviderConfig.provider == "twilio",
+            )
+            .with_for_update(read=True)
+        )
     if credential_id is not None:
         bound_stmt = select(SmsProviderCredential).where(
             SmsProviderCredential.id == credential_id,

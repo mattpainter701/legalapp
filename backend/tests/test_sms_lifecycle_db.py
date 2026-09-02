@@ -7075,44 +7075,59 @@ async def test_reconciliation_holds_live_actor_fence_through_provider_lookup(
             return result
 
     reconcile_task = asyncio.create_task(reconcile())
-    await asyncio.wait_for(lookup_entered.wait(), timeout=5)
+    tasks = [reconcile_task]
+    try:
+        await asyncio.wait_for(lookup_entered.wait(), timeout=5)
 
-    async def rotate_generation():
-        async with maker() as config_db:
-            await set_tenant_context(config_db, str(tenant_id))
-            config = await config_db.scalar(
-                select(SmsProviderConfig)
-                .where(
-                    SmsProviderConfig.tenant_id == tenant_id,
-                    SmsProviderConfig.provider == "twilio",
+        async def rotate_generation():
+            async with maker() as config_db:
+                await set_tenant_context(config_db, str(tenant_id))
+                config = await config_db.scalar(
+                    select(SmsProviderConfig)
+                    .where(
+                        SmsProviderConfig.tenant_id == tenant_id,
+                        SmsProviderConfig.provider == "twilio",
+                    )
+                    .with_for_update()
                 )
-                .with_for_update()
-            )
-            config.generation += 1
-            await config_db.commit()
-            return config.generation
+                config.generation += 1
+                await config_db.commit()
+                return config.generation
 
-    mutation_task = asyncio.create_task(
-        _mutate_sms_actor(
-            maker,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            role_id=role_id,
-            mutation=mutation,
+        mutation_task = asyncio.create_task(
+            _mutate_sms_actor(
+                maker,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                role_id=role_id,
+                mutation=mutation,
+            )
         )
-    )
-    rotation_task = asyncio.create_task(rotate_generation())
-    await asyncio.sleep(0.1)
-    assert not mutation_task.done()
-    assert not rotation_task.done()
-    release_lookup.set()
-    assert await asyncio.wait_for(reconcile_task, timeout=5) == (
-        "delivered",
-        original_generation,
-    )
-    await asyncio.wait_for(mutation_task, timeout=5)
-    assert await asyncio.wait_for(rotation_task, timeout=5) == 3
-    assert len(provider.lookup_calls) == 1
+        tasks.append(mutation_task)
+        rotation_task = asyncio.create_task(rotate_generation())
+        tasks.append(rotation_task)
+        await asyncio.sleep(0.1)
+        assert not mutation_task.done()
+        assert not rotation_task.done()
+        release_lookup.set()
+        assert await asyncio.wait_for(reconcile_task, timeout=5) == (
+            "delivered",
+            original_generation,
+        )
+        await asyncio.wait_for(mutation_task, timeout=5)
+        assert await asyncio.wait_for(rotation_task, timeout=5) == 3
+        assert len(provider.lookup_calls) == 1
+    finally:
+        # Each task owns its own session and holds an open transaction while
+        # it waits. If an assertion above fails, release_lookup is never set,
+        # those transactions are never closed, and the fixture's DROP SCHEMA
+        # blocks behind them -- so one failed assertion wedges the entire
+        # pytest session instead of reporting itself. That is what turned
+        # this into a twenty-minute CI timeout with no failure message.
+        release_lookup.set()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.mark.asyncio
