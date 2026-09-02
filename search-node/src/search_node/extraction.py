@@ -9,11 +9,9 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import asdict
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from .config import Settings
-from .sandbox import ProcessContainer
 from .contracts import (
     ExtractionMethod,
     ExtractionRecord,
@@ -22,6 +20,7 @@ from .contracts import (
     TerminalStatus,
     deterministic_chunk_id,
 )
+from .sandbox import ProcessContainer
 
 
 def _inside(path: Path, root: Path) -> bool:

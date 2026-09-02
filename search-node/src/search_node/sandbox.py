@@ -12,7 +12,8 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
-from typing import Callable
+from collections.abc import Callable
+from typing import Self
 
 from .config import Settings
 
@@ -153,7 +154,7 @@ class ProcessContainer:
         self._ctypes = None
         self._kernel32 = None
 
-    def __enter__(self) -> "ProcessContainer":
+    def __enter__(self) -> Self:
         if os.name == "nt":
             self._open_job()
         return self
