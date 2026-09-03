@@ -103,6 +103,11 @@ function SearchResult({ result, copied, copy }) {
   const localOpenHref = sameOriginHref(result.actions.openOnComputerUrl)
   const providerHref = cloudHref(result.actions.providerUrl)
   const sourceLabel = result.source.label || (kind === 'on_prem' ? 'On-prem file share' : 'Cloud source')
+  const pathValue = result.source.path || ''
+  // Only a UNC path is pasteable into Explorer; a relative location is not.
+  const pathIsAbsolute = pathValue.startsWith('\\\\')
+  const copyLabel = pathIsAbsolute ? 'Copy path' : 'Copy location'
+  const metadataOnly = result.source.indexKind === 'smb_metadata_fts'
 
   return (
     <article className="rounded-2xl border border-brand-line bg-brand-surface p-5 shadow-sm">
@@ -116,7 +121,8 @@ function SearchResult({ result, copied, copy }) {
             {result.fileType && <span className="rounded-full border border-brand-line px-2.5 py-1 font-semibold text-brand-muted">{result.fileType}</span>}
           </div>
           <h2 className="text-base font-semibold text-brand-ink">{result.title}</h2>
-          {kind === 'on_prem' && <p className="mt-1 break-all font-mono text-xs text-brand-muted">{result.source.relativeLocation || result.source.path || 'Relative location unavailable'}</p>}
+          {kind === 'on_prem' && <p className="mt-1 break-all font-mono text-xs text-brand-muted">{result.source.relativeLocation || pathValue || 'Relative location unavailable'}</p>}
+          {metadataOnly && <p className="mt-1 text-xs text-brand-muted">Matched on the file name and preview text, not the full document.</p>}
         </div>
         {kind === 'on_prem' && <span className="shrink-0 text-xs text-brand-muted">Local index {result.source.freshness ? formatDate(result.source.freshness) : 'freshness unavailable'}</span>}
       </div>
@@ -139,12 +145,12 @@ function SearchResult({ result, copied, copy }) {
         <div className="flex flex-wrap items-center gap-3 text-xs">
           {kind === 'on_prem' && (localOpenHref
             ? <a href={localOpenHref} className="inline-flex items-center gap-1.5 font-semibold text-brand-accent hover:underline"><ExternalLink size={14} /> Open on this computer</a>
-            : <button type="button" disabled title="Requires the LawHand File Opener on this computer" className="inline-flex items-center gap-1.5 font-semibold text-brand-muted opacity-60"><ExternalLink size={14} /> Open on this computer</button>)}
-          {kind === 'on_prem' && result.source.path && <button type="button" onClick={() => copy(result.source.path, `path-${result.id}`)} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">{copied === `path-${result.id}` ? <Check size={14} /> : <Clipboard size={14} />} {copied === `path-${result.id}` ? 'Copied path' : 'Copy path'}</button>}
+            : <button type="button" disabled title={result.actions.openOnComputerReason || 'Requires the LawHand File Opener on this computer'} className="inline-flex items-center gap-1.5 font-semibold text-brand-muted opacity-60"><ExternalLink size={14} /> Open on this computer</button>)}
+          {kind === 'on_prem' && pathValue && <button type="button" onClick={() => copy(pathValue, `path-${result.id}`)} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">{copied === `path-${result.id}` ? <Check size={14} /> : <Clipboard size={14} />} {copied === `path-${result.id}` ? `Copied ${pathIsAbsolute ? 'path' : 'location'}` : copyLabel}</button>}
           {kind !== 'on_prem' && providerHref && <a href={providerHref} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 font-semibold text-brand-accent hover:underline"><ExternalLink size={14} /> Open in {result.actions.providerLabel || result.source.provider || result.source.label}</a>}
           {stableHref
             ? <><a href={stableHref} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">Open LawHand result</a><button type="button" onClick={() => copy(stableUrl, `link-${result.id}`)} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">{copied === `link-${result.id}` ? <Check size={14} /> : <Clipboard size={14} />} {copied === `link-${result.id}` ? 'Copied link' : 'Copy result link'}</button></>
-            : <span className="font-medium text-brand-muted">LawHand result link unavailable</span>}
+            : <span className="font-medium text-brand-muted" title={result.actions.lawHandReason || undefined}>LawHand result link unavailable</span>}
         </div>
       </div>
     </article>
@@ -338,7 +344,7 @@ export default function UnifiedFirmMemoryPage() {
 
         {result && <section className="mt-7 space-y-4" aria-live="polite">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><strong>{results.length} result{results.length === 1 ? '' : 's'}</strong><span className="ml-2 text-xs text-brand-muted">{result.durationMs ? `${Math.round(result.durationMs)} ms` : 'latency unavailable'}</span></div><div className="min-w-0 sm:max-w-xl"><CoverageStatus coverage={result.coverage} /></div></div>
-          {!results.length ? <div className="rounded-2xl border border-dashed border-brand-line-2 bg-brand-surface px-6 py-14 text-center"><FileText className="mx-auto mb-3 text-brand-muted" size={30} /><h2 className="text-lg font-semibold">{coverageComplete ? 'No matching documents' : 'No matches in available sources'}</h2><p className="mt-1 text-sm text-brand-muted">{coverageComplete ? 'Try a broader phrase or remove a filter.' : 'Coverage is incomplete. Review unavailable, unauthorized, indexing, stale, or offline sources before treating this as a complete result.'}</p></div> : <div className="space-y-3">{results.map((item) => <SearchResult key={item.id} result={item} copied={copied} copy={copy} />)}</div>}
+          {!results.length ? <div className="rounded-2xl border border-dashed border-brand-line-2 bg-brand-surface px-6 py-14 text-center"><FileText className="mx-auto mb-3 text-brand-muted" size={30} /><h2 className="text-lg font-semibold">{coverageComplete ? 'No matching documents' : 'No matches in available sources'}</h2><p className="mt-1 text-sm text-brand-muted">{coverageComplete ? 'Try a broader phrase or remove a filter.' : 'Coverage is incomplete. Read the coverage panel above before treating this as a complete result.'}</p>{!coverageComplete && !matterId && <p className="mt-3 text-sm text-brand-muted">Choosing a matter searches the file shares bound to it.</p>}</div> : <div className="space-y-3">{results.map((item) => <SearchResult key={item.id} result={item} copied={copied} copy={copy} />)}</div>}
         </section>}
 
         {!result && !loading && <div className="mt-10 text-center text-sm text-brand-muted"><Search className="mx-auto mb-3 opacity-40" size={28} /><p>Search all authorized sources. A matter is optional.</p></div>}

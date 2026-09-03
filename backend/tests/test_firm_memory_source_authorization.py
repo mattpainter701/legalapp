@@ -777,3 +777,325 @@ def test_firm_memory_migration_has_tenant_rls_and_admin_entitlement():
     assert "native_authorizer_key IS NOT NULL" in migration
     assert "search_firm_memory" in migration
     assert "name = 'Administrator' AND is_system IS TRUE" in migration
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy_mode", "assigned", "granted", "expected"),
+    [
+        (None, False, False, AuthorizationState.UNKNOWN),
+        (None, True, False, AuthorizationState.ALLOW),
+        ("firm", False, False, AuthorizationState.ALLOW),
+        ("assigned", False, False, AuthorizationState.DENY),
+        ("assigned", True, False, AuthorizationState.ALLOW),
+        ("restricted", True, False, AuthorizationState.DENY),
+        ("restricted", False, True, AuthorizationState.ALLOW),
+    ],
+)
+async def test_bulk_matter_scope_matches_single_matter_policy(
+    policy_mode, assigned, granted, expected
+):
+    """The set-based scope decision must not be looser than the per-id one."""
+    user = _user()
+    matter_id = uuid.uuid4()
+    policies = (
+        [SimpleNamespace(matter_id=matter_id, access_mode=policy_mode)]
+        if policy_mode
+        else []
+    )
+    db = _SequenceExecuteDb(
+        _ScalarRows([matter_id]),
+        _ScalarRows(policies),
+        _ScalarRows([matter_id] if assigned else []),
+        _ScalarRows([matter_id] if granted else []),
+    )
+
+    decisions = await firm_memory_authorization.authorize_matter_scope(
+        db, user=user, tenant_id=user.tenant_id, matter_ids=(matter_id,)
+    )
+    assert decisions[matter_id].state is expected
+
+
+@pytest.mark.asyncio
+async def test_bulk_matter_scope_denies_a_matter_outside_the_tenant():
+    user = _user()
+    matter_id = uuid.uuid4()
+    db = _SequenceExecuteDb(
+        _ScalarRows([]),
+        _ScalarRows([]),
+        _ScalarRows([matter_id]),
+        _ScalarRows([matter_id]),
+    )
+
+    decisions = await firm_memory_authorization.authorize_matter_scope(
+        db, user=user, tenant_id=user.tenant_id, matter_ids=(matter_id,)
+    )
+    assert decisions[matter_id].state is AuthorizationState.DENY
+    assert decisions[matter_id].reason == "matter_not_available"
+
+
+def _matter_bound_source(tenant_id, *, share_id=None):
+    return FirmMemorySource(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        source_key="matter-files",
+        display_name="Matter files",
+        source_kind="smb",
+        authorization_mode="matter",
+        legacy_smb_share_id=share_id or uuid.uuid4(),
+        coverage_state="ready",
+        is_enabled=True,
+    )
+
+
+def _patch_search_service(monkeypatch, service, service_module, *, source):
+    async def no_tenant_context(*_args):
+        return None
+
+    async def capabilities(*_args):
+        return {"search_firm_memory"}
+
+    async def actor(*_args, **_kwargs):
+        return None
+
+    async def sources(*_args, **_kwargs):
+        return [source], set()
+
+    async def collections(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(service_module, "set_tenant_context", no_tenant_context)
+    monkeypatch.setattr(service_module, "get_user_capabilities", capabilities)
+    monkeypatch.setattr(firm_memory_authorization, "require_actor", actor)
+    monkeypatch.setattr(service, "_resolve_sources", sources)
+    monkeypatch.setattr(service, "_collection_map", collections)
+    monkeypatch.setattr(
+        service_module.settings, "FIRM_MEMORY_GENERAL_SEARCH_ENABLED", True
+    )
+
+
+@pytest.mark.asyncio
+async def test_matterless_search_uses_the_actors_own_authorized_matters(monkeypatch):
+    from app.services import firm_memory as service_module
+
+    user = _user()
+    source = _matter_bound_source(user.tenant_id)
+    authorized = uuid.uuid4()
+    walled_off = uuid.uuid4()
+    service = FirmMemorySearchService()
+    _patch_search_service(monkeypatch, service, service_module, source=source)
+
+    async def scope(_db, *, user, tenant_id, matter_ids):
+        assert set(matter_ids) == {authorized, walled_off}
+        return {
+            authorized: AuthorizationDecision(
+                AuthorizationState.ALLOW, "legacy_matter_assignment"
+            ),
+            walled_off: AuthorizationDecision(
+                AuthorizationState.DENY, "restricted_matter_explicit_grant"
+            ),
+        }
+
+    searched_with: dict = {}
+
+    async def adapter(_db, **kwargs):
+        searched_with.update(kwargs)
+        return _MatterBoundSmbSearchResult(hits=[])
+
+    monkeypatch.setattr(
+        firm_memory_authorization, "authorize_matter_scope", scope
+    )
+    monkeypatch.setattr(service, "_search_matter_bound_smb", adapter)
+
+    response = await service.search(
+        _ExecuteDb([authorized, walled_off]),
+        user=user,
+        request=FirmMemoryDocumentSearchRequest(query="indemnification"),
+    )
+
+    # The restricted matter never reaches the adapter.
+    assert searched_with["matter_ids"] == (authorized,)
+    assert response.coverage[0].searched is True
+    assert response.coverage[0].matter_scope_count == 1
+    # A filename-and-preview index is never reported as complete corpus coverage.
+    assert response.coverage[0].index_kind == "smb_metadata_fts"
+    assert response.complete is False
+    assert response.partial is True
+    assert "full document text" in (response.coverage_message or "")
+
+
+@pytest.mark.asyncio
+async def test_matterless_search_reports_an_unauthorized_share_instead_of_hiding_it(
+    monkeypatch,
+):
+    from app.services import firm_memory as service_module
+
+    user = _user()
+    source = _matter_bound_source(user.tenant_id)
+    bound_matter = uuid.uuid4()
+    service = FirmMemorySearchService()
+    _patch_search_service(monkeypatch, service, service_module, source=source)
+
+    async def scope(_db, *, user, tenant_id, matter_ids):
+        return {
+            bound_matter: AuthorizationDecision(
+                AuthorizationState.DENY, "matter_assignment_required"
+            )
+        }
+
+    async def adapter(*_args, **_kwargs):  # pragma: no cover - must not run
+        raise AssertionError("an unauthorized share must never be searched")
+
+    monkeypatch.setattr(
+        firm_memory_authorization, "authorize_matter_scope", scope
+    )
+    monkeypatch.setattr(service, "_search_matter_bound_smb", adapter)
+
+    response = await service.search(
+        _ExecuteDb([bound_matter]),
+        user=user,
+        request=FirmMemoryDocumentSearchRequest(query="indemnification"),
+    )
+
+    assert response.results == []
+    assert response.coverage[0].state == "unauthorized"
+    assert response.coverage[0].reason == "no_authorized_matter_scope"
+    assert response.partial is True
+    assert "not authorized on any matter" in (response.coverage_message or "")
+
+
+@pytest.mark.asyncio
+async def test_a_response_that_searched_nothing_is_partial_and_explained(monkeypatch):
+    from app.services import firm_memory as service_module
+
+    user = _user()
+    service = FirmMemorySearchService()
+
+    async def no_tenant_context(*_args):
+        return None
+
+    async def capabilities(*_args):
+        return {"search_firm_memory"}
+
+    async def actor(*_args, **_kwargs):
+        return None
+
+    async def sources(*_args, **_kwargs):
+        return [], set()
+
+    async def collections(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(service_module, "set_tenant_context", no_tenant_context)
+    monkeypatch.setattr(service_module, "get_user_capabilities", capabilities)
+    monkeypatch.setattr(firm_memory_authorization, "require_actor", actor)
+    monkeypatch.setattr(service, "_resolve_sources", sources)
+    monkeypatch.setattr(service, "_collection_map", collections)
+
+    response = await service.search(
+        object(), user=user, request=FirmMemoryDocumentSearchRequest(query="notice")
+    )
+
+    assert response.coverage == []
+    assert response.complete is False
+    assert response.partial is True
+    assert "No source could be searched" in (response.coverage_message or "")
+    assert response.duration_ms is not None
+
+
+def test_matter_bound_results_carry_a_resolvable_lawhand_link():
+    matter_id = uuid.uuid4()
+    file_id = uuid.uuid4()
+    actions = FirmMemorySearchService._matter_bound_actions(
+        matter_id=str(matter_id), native_file_id=file_id
+    )
+    link = next(action for action in actions if action.kind == "lawhand_result")
+    assert link.available is True
+    assert link.href == f"/firm-memory?matter={matter_id}&file={file_id}"
+    device = next(action for action in actions if action.kind == "open_on_device")
+    assert device.available is False
+    assert device.href is None
+    assert device.reason
+
+
+def test_a_result_outside_an_authorized_matter_gets_no_link():
+    actions = FirmMemorySearchService._matter_bound_actions(
+        matter_id=None, native_file_id=uuid.uuid4()
+    )
+    assert [action.kind for action in actions] == ["lawhand_result"]
+    assert actions[0].available is False
+    assert actions[0].href is None
+
+
+class _AdapterDb:
+    """Replay the adapter's share, binding, row and association queries."""
+
+    def __init__(self, share, results):
+        self.share = share
+        self.results = list(results)
+
+    async def scalar(self, _statement):
+        return self.share
+
+    async def execute(self, _statement):
+        return self.results.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_matter_bound_hits_are_openable_and_scoped_to_their_binding():
+    from app.models.matter_smb_share import MatterSmbShare
+    from app.models.smb_file_index import SmbFileIndex
+
+    tenant_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+    share = SmbShare(
+        id=uuid.uuid4(),
+        agent_id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        share_path=r"\\server\matters",
+        is_enabled=True,
+    )
+    source = _matter_bound_source(tenant_id, share_id=share.id)
+    binding = MatterSmbShare(
+        tenant_id=tenant_id,
+        share_id=share.id,
+        matter_id=matter_id,
+        folder_path="Acme",
+    )
+    inside = SmbFileIndex(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        share_id=share.id,
+        path=r"\\server\matters\Acme\Motion.pdf",
+        filename="Motion.pdf",
+        ext=".pdf",
+    )
+    db = _AdapterDb(
+        share,
+        [
+            _ScalarRows([binding]),
+            _Rows([(inside, 0.5)]),
+            _Rows([]),
+            _Rows([]),
+        ],
+    )
+
+    result = await FirmMemorySearchService()._search_matter_bound_smb(
+        db,
+        tenant_id=tenant_id,
+        requesting_user_id=uuid.uuid4(),
+        source=source,
+        matter_ids=(matter_id,),
+        request=FirmMemoryDocumentSearchRequest(query="motion"),
+        collection_ids=[],
+    )
+
+    assert result.searched is True
+    hit = result.hits[0]
+    assert hit.matter_ids == [str(matter_id)]
+    # The relative location is shown; the UNC path never leaves the server.
+    assert hit.provenance.relative_location == r"Acme\Motion.pdf"
+    assert r"\\server" not in hit.model_dump_json()
+    link = next(action for action in hit.actions if action.kind == "lawhand_result")
+    assert link.available is True
+    assert link.href == f"/firm-memory?matter={matter_id}&file={inside.id}"

@@ -181,4 +181,55 @@ describe('UnifiedFirmMemoryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy path' }))
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('\\\\server\\cases\\2019\\Order.pdf'))
   })
+
+  it('opens a server-issued LawHand result link and says why a device open is not offered', async () => {
+    searchAuthorizedDocuments.mockResolvedValue({
+      coverage: { state: 'partial', complete: false, sources: [] },
+      results: [
+        {
+          id: 'local-1', title: 'Motion.pdf', snippet: 'Prior notice analysis', fileType: 'PDF', modifiedAt: '', pageNumber: null, score: 0.5,
+          source: { kind: 'on_prem', label: 'Legacy archive', provider: '', share: 'Cases', relativeLocation: 'Acme/Motion.pdf', path: 'Acme/Motion.pdf', freshness: '', indexKind: 'smb_metadata_fts' },
+          linkedMatters: [{ id: 'matter-1', label: 'Acme v. Northstar' }],
+          actions: {
+            openOnComputerUrl: '',
+            openOnComputerReason: 'Open from the lawhand result page',
+            providerUrl: '',
+            lawHandUrl: '/firm-memory?matter=matter-1&file=file-1',
+          },
+        },
+      ],
+    })
+    render(<UnifiedFirmMemoryPage />)
+    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'notice' } })
+    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+
+    expect(await screen.findByRole('link', { name: 'Open LawHand result' }))
+      .toHaveAttribute('href', '/firm-memory?matter=matter-1&file=file-1')
+    expect(screen.getByRole('button', { name: 'Open on this computer' }))
+      .toHaveAttribute('title', 'Open from the lawhand result page')
+    // A relative location is not pasteable into Explorer, so it is not called a path.
+    expect(screen.getByRole('button', { name: 'Copy location' })).toBeInTheDocument()
+    expect(screen.getByText(/not the full document/i)).toBeInTheDocument()
+  })
+
+  it('explains a firm-wide search that reached nothing instead of showing a bare zero', async () => {
+    searchAuthorizedDocuments.mockResolvedValue({
+      results: [],
+      coverage: {
+        state: 'unauthorized',
+        complete: false,
+        message: 'You are not authorized on any matter bound to one or more of these sources, so they were not searched.',
+        checkedSources: 0,
+        totalSources: 1,
+        sources: [{ id: 'source-local', label: 'Legacy archive', state: 'unauthorized', searched: false, reason: 'no_authorized_matter_scope' }],
+      },
+    })
+    render(<UnifiedFirmMemoryPage />)
+    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'notice' } })
+    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+
+    expect(await screen.findByText(/not authorized on any matter/i)).toBeInTheDocument()
+    expect(screen.getByText(/choosing a matter searches the file shares bound to it/i)).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'No matching documents' })).not.toBeInTheDocument()
+  })
 })

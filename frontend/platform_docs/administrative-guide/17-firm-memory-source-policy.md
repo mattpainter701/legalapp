@@ -39,10 +39,26 @@ service account can read a file. The current source foundation does not perform
 per-user NTFS ACL trimming. Until the native ACL integration is installed and
 validated, keep generalized SMB sources off or matter-bound.
 
+## Know what a matterless search covers
+
+Leaving the matter filter empty does not search everything. A matter-bound
+source is searched across the matters that user is already authorized on, under
+the same policy a chosen matter would go through, and nothing else. A user with
+no authorized matter on a share sees that share reported as not covered rather
+than silently missing.
+
+On-premises results come from the file name and preview index kept in LawHand,
+not from document text. That index is never reported as complete coverage, and
+a user who needs to search inside documents should open the matter's Firm
+Memory page, which queries the local agent's full-text index.
+
+## Read coverage as part of the answer
+
 Search coverage is part of the result, not an internal diagnostic. When any
 selected authorized source is partial, stale, offline, indexing, or
 unsupported, users must be told that the response covers only available
-sources. “No matches” is appropriate only for a complete response.
+sources. “No matches” is appropriate only for a complete response. Every
+incomplete response states in one sentence why it is incomplete.
 
 ## Roll out the integration
 

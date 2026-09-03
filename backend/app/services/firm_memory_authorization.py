@@ -114,6 +114,112 @@ class FirmMemoryAuthorizationPolicy:
             )
         return decisions
 
+    async def authorize_matter_scope(
+        self,
+        db: AsyncSession,
+        *,
+        user: User,
+        tenant_id: uuid.UUID,
+        matter_ids: tuple[uuid.UUID, ...],
+    ) -> dict[uuid.UUID, AuthorizationDecision]:
+        """Decide a candidate matter set in set-based queries.
+
+        This applies exactly the rules in :meth:`_authorize_matter`; it exists
+        so that expanding an actor's own matter scope stays bounded instead of
+        issuing three round trips per candidate. Anything the rules do not
+        positively allow stays ``UNKNOWN`` or ``DENY``.
+        """
+        if not matter_ids:
+            return {}
+        existing = set(
+            (
+                await db.execute(
+                    select(Matter.id).where(
+                        Matter.tenant_id == tenant_id, Matter.id.in_(matter_ids)
+                    )
+                )
+            ).scalars()
+        )
+        policies = {
+            row.matter_id: row
+            for row in (
+                await db.execute(
+                    select(FirmMemoryMatterPolicy).where(
+                        FirmMemoryMatterPolicy.tenant_id == tenant_id,
+                        FirmMemoryMatterPolicy.matter_id.in_(matter_ids),
+                    )
+                )
+            ).scalars()
+        }
+        assigned = set(
+            (
+                await db.execute(
+                    select(MatterAssignment.matter_id).where(
+                        MatterAssignment.tenant_id == tenant_id,
+                        MatterAssignment.user_id == user.id,
+                        MatterAssignment.matter_id.in_(matter_ids),
+                    )
+                )
+            ).scalars()
+        )
+        granted = set(
+            (
+                await db.execute(
+                    select(FirmMemoryMatterGrant.matter_id).where(
+                        FirmMemoryMatterGrant.tenant_id == tenant_id,
+                        FirmMemoryMatterGrant.user_id == user.id,
+                        FirmMemoryMatterGrant.matter_id.in_(matter_ids),
+                    )
+                )
+            ).scalars()
+        )
+
+        decisions: dict[uuid.UUID, AuthorizationDecision] = {}
+        for matter_id in matter_ids:
+            if matter_id not in existing:
+                decisions[matter_id] = AuthorizationDecision(
+                    AuthorizationState.DENY, "matter_not_available"
+                )
+                continue
+            policy = policies.get(matter_id)
+            is_assigned = matter_id in assigned
+            if policy is not None and policy.access_mode == "firm":
+                decisions[matter_id] = AuthorizationDecision(
+                    AuthorizationState.ALLOW, "firm_matter_policy"
+                )
+            elif policy is None:
+                decisions[matter_id] = AuthorizationDecision(
+                    (
+                        AuthorizationState.ALLOW
+                        if is_assigned
+                        else AuthorizationState.UNKNOWN
+                    ),
+                    (
+                        "legacy_matter_assignment"
+                        if is_assigned
+                        else "matter_policy_unknown"
+                    ),
+                )
+            elif policy.access_mode == "assigned":
+                decisions[matter_id] = AuthorizationDecision(
+                    (
+                        AuthorizationState.ALLOW
+                        if is_assigned
+                        else AuthorizationState.DENY
+                    ),
+                    "matter_assignment_required",
+                )
+            else:
+                decisions[matter_id] = AuthorizationDecision(
+                    (
+                        AuthorizationState.ALLOW
+                        if matter_id in granted
+                        else AuthorizationState.DENY
+                    ),
+                    "restricted_matter_explicit_grant",
+                )
+        return decisions
+
     async def _authorize_matter(
         self,
         db: AsyncSession,

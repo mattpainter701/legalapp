@@ -78,27 +78,39 @@ export function MatterFirmMemoryPage() {
     return value && value.length <= 256 ? value : ''
   }, [])
 
+  const requestedMatter = useMemo(() => {
+    const value = new URLSearchParams(window.location.search).get('matter')
+    return value && value.length <= 256 ? value : ''
+  }, [])
+
+  // A result link must resolve on its own. The matters list is a convenience
+  // for the picker; a firm with more matters than one page would otherwise
+  // watch shared links fail silently. The server re-authorizes either way.
+  useEffect(() => {
+    if (!requestedFile || !requestedMatter) return
+    setMatterId(String(requestedMatter))
+    getFirmMemoryFile(requestedFile, requestedMatter)
+      .then((hit) => {
+        const id = String(hit?.id || hit?.file_id || '')
+        setResult({ hits: hit ? [hit] : [], deep_link: true })
+        setSelectedId(id)
+      })
+      .catch(() => setError('This matter file link is unavailable or no longer authorized.'))
+  }, [requestedFile, requestedMatter])
+
   useEffect(() => {
     getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
       .then((data) => {
         const items = data?.items || data || []
         setMatters(items)
-        const fromUrl = new URLSearchParams(window.location.search).get('matter')
-        const initial = items.find((item) => String(item.id) === String(fromUrl))?.id || (items.length === 1 ? items[0].id : '')
+        if (requestedMatter && requestedFile) return
+        const initial = items.find((item) => String(item.id) === String(requestedMatter))?.id
+          || (items.length === 1 ? items[0].id : '')
         if (initial) setMatterId(String(initial))
-        if (requestedFile && fromUrl && String(initial) === String(fromUrl)) {
-          getFirmMemoryFile(requestedFile, fromUrl)
-            .then((hit) => {
-              const id = String(hit?.id || hit?.file_id || '')
-              setResult({ hits: hit ? [hit] : [], deep_link: true })
-              setSelectedId(id)
-            })
-            .catch(() => setError('This matter file link is unavailable or no longer authorized.'))
-        }
       })
-      .catch(() => setError('Matters could not be loaded. Refresh and try again.'))
+      .catch(() => setError((current) => current || 'Matters could not be loaded. Refresh and try again.'))
       .finally(() => setLoadingMatters(false))
-  }, [requestedFile])
+  }, [requestedFile, requestedMatter])
 
   const runSearch = useCallback(async (event) => {
     event?.preventDefault()
