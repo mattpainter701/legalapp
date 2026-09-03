@@ -203,6 +203,13 @@ def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():
     purge_guard = job.index("rehearse_demo_purge_schema_guard.py --expected all")
     downgrade = job.index("alembic downgrade 148_configurable_workflows")
     reupgrade = job.index("alembic upgrade 153_sms_lifecycle", downgrade)
+    # The pinned 148<->153 rehearsal proves the SMS expand/contract contract,
+    # but the tests that follow drive live ORM models, which gain columns with
+    # every later migration. Without a final upgrade to head, the next
+    # migration to touch a table those tests write silently breaks this job.
+    # The head upgrade must also precede the runtime role so its
+    # GRANT ... ON ALL TABLES covers whatever head added.
+    head_upgrade = job.index("alembic upgrade head", reupgrade)
     runtime_role = job.index("Provision a production-shaped SMS runtime role")
     pytest_rehearsal = job.index("python -m pytest -vv")
     assert (
@@ -210,6 +217,7 @@ def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():
         < purge_guard
         < downgrade
         < reupgrade
+        < head_upgrade
         < runtime_role
         < pytest_rehearsal
     )

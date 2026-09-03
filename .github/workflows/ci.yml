@@ -474,6 +474,14 @@ jobs:
           END $$;
           SQL
           alembic upgrade 153_sms_lifecycle
+      - name: Bring the rehearsal schema up to the current head
+        working-directory: backend
+        # The steps above deliberately pin 148<->153 to rehearse the SMS
+        # expand/contract contract. The tests below then exercise live ORM
+        # models, which move on with every later migration, so the schema has
+        # to reach head before they run — and before the runtime role is
+        # granted, so the GRANT covers the tables head adds.
+        run: alembic upgrade head
       - name: Provision a production-shaped SMS runtime role
         env:
           PGPASSWORD: test
