@@ -74,6 +74,8 @@ from app.models.client_portal import ClientPortalInvite
 from app.models.conflict_check import ConflictCheckRecord, PortalInvoiceDownload
 from app.models.signature import SignatureRequest, SignatureSigner
 from app.models.matter_document import MatterDocument
+from app.models.matter_document_folder import MatterDocumentFolder
+from app.models.matter_document_tag import MatterDocumentTag, MatterDocumentTagLink
 from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.scheduled_event import ScheduledEvent
 from app.models.communication_log import CommunicationLog
@@ -285,6 +287,9 @@ __all__ = [
     "SignatureRequest",
     "SignatureSigner",
     "MatterDocument",
+    "MatterDocumentFolder",
+    "MatterDocumentTag",
+    "MatterDocumentTagLink",
     "Task",
     "TaskAutomationRun",
     "TaskEvent",

@@ -10,6 +10,22 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Matter document folders and tags:** case documents are no longer a single
+  flat list. Migration 154 adds a per-matter folder tree (materialized paths,
+  depth and cycle limits, case-insensitive sibling names, FORCE RLS) plus a
+  firm-wide tag vocabulary and its assignment rows. `matter_documents.folder_id`
+  is `ON DELETE RESTRICT`, so a folder can never delete or orphan the documents
+  filed in it; the delete endpoint re-files a subtree's documents into the
+  parent in the same transaction when the caller opts in. The document list
+  gains server-side folder scoping (with or without subfolders), filename and
+  description search with escaped LIKE wildcards, conjunctive tag filtering, and
+  name/date/size sorting. Uploads into a folder are written to the matching
+  folder under the matter in the firm's bound cloud share (OneDrive, SharePoint,
+  Google Drive) or under the mirrored local path, while uploads with no folder
+  keep the historical category layout untouched. Client portal uploads file
+  themselves into a protected `Client Uploads` system folder that still routes
+  to the canonical provisioned cloud subfolder. Moving an existing document
+  between folders does not relocate the copy already written to the cloud share.
 - **On-premises Search Node core:** added a default-off OpenSearch serving
   engine with generation-fenced atomic document envelopes and nested chunks,
   BM25 phrase/Boolean/field search, page provenance, ACL filtering, bounded

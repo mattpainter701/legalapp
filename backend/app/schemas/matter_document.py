@@ -3,7 +3,15 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class MatterDocumentTagResponse(BaseModel):
+    id: UUID
+    name: str
+    color: str
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MatterDocumentResponse(BaseModel):
@@ -15,6 +23,11 @@ class MatterDocumentResponse(BaseModel):
     generated_artifact_revision_id: UUID | None = None
     supersedes_document_id: UUID | None = None
     uploaded_by_user_id: UUID | None
+    folder_id: UUID | None = None
+    # Materialized "Discovery/Depositions" path so a client can render a row's
+    # location without walking the tree.
+    folder_path: str | None = None
+    tags: list[MatterDocumentTagResponse] = Field(default_factory=list)
     filename: str
     content_type: str | None
     file_size: int | None
@@ -52,3 +65,83 @@ class MatterDocumentUpdate(BaseModel):
     description: str | None = None
     document_category: str | None = None
     portal_visible: bool | None = None
+
+
+# ── Folders ──────────────────────────────────────────────────────────────────
+
+
+class MatterDocumentFolderResponse(BaseModel):
+    id: UUID
+    matter_id: UUID
+    parent_id: UUID | None
+    name: str
+    path: str
+    depth: int
+    kind: str
+    system_key: str | None
+    # Documents filed directly in this folder, not counting subfolders.
+    document_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MatterDocumentFolderListResponse(BaseModel):
+    items: list[MatterDocumentFolderResponse]
+    total: int
+    # Documents sitting at the matter root, i.e. in no folder at all.
+    root_document_count: int = 0
+
+
+class MatterDocumentFolderCreate(BaseModel):
+    name: str
+    parent_id: UUID | None = None
+
+
+class MatterDocumentFolderUpdate(BaseModel):
+    """Rename and/or reparent. Omitting ``parent_id`` leaves the parent alone;
+    sending it as ``null`` moves the folder to the matter root."""
+
+    name: str | None = None
+    parent_id: UUID | None = None
+
+
+class MatterDocumentMoveRequest(BaseModel):
+    document_ids: list[UUID] = Field(min_length=1, max_length=200)
+    # ``null`` files the documents at the matter root.
+    folder_id: UUID | None = None
+
+
+class MatterDocumentMoveResponse(BaseModel):
+    moved: int
+    folder_id: UUID | None
+    items: list[MatterDocumentResponse]
+
+
+class MatterDocumentFolderDeleteResponse(BaseModel):
+    deleted_folder_id: UUID
+    documents_moved: int
+    moved_to_folder_id: UUID | None
+
+
+# ── Tags ─────────────────────────────────────────────────────────────────────
+
+
+class MatterDocumentTagCreate(BaseModel):
+    name: str
+    color: str | None = None
+
+
+class MatterDocumentTagUpdate(BaseModel):
+    name: str | None = None
+    color: str | None = None
+
+
+class MatterDocumentTagListResponse(BaseModel):
+    items: list[MatterDocumentTagResponse]
+    total: int
+
+
+class MatterDocumentTagAssignRequest(BaseModel):
+    tag_ids: list[UUID] = Field(default_factory=list, max_length=25)

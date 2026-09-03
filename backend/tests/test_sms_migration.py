@@ -7,6 +7,26 @@ OLD_MIGRATION = ROOT / "backend/migrations/versions/148_sms_lifecycle.py"
 CI = ROOT / ".github/workflows/ci.yml"
 
 
+def _revisions_up_to_repository_head() -> set[str]:
+    """Every revision reachable from the head that test_migrations.py pins."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    backend = ROOT / "backend"
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("script_location", str(backend / "migrations"))
+    script = ScriptDirectory.from_config(config)
+
+    pinned = script.get_heads()
+    assert len(pinned) == 1, f"expected one head, found {pinned}"
+    head_expectation = (ROOT / "backend/tests/test_migrations.py").read_text(
+        encoding="utf-8"
+    )
+    assert pinned[0] in head_expectation
+
+    return {revision.revision for revision in script.iterate_revisions(pinned[0], "base")}
+
+
 def test_sms_is_the_single_migration_after_configurable_workflows():
     source = MIGRATION.read_text(encoding="utf-8")
 
@@ -168,9 +188,10 @@ def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():
     assert "alembic upgrade 148_configurable_workflows" in source
     assert "alembic upgrade 153_sms_lifecycle" in source
     assert "rehearse_demo_purge_schema_guard.py --expected all" in source
-    assert "153_sms_lifecycle" in (ROOT / "backend/tests/test_migrations.py").read_text(
-        encoding="utf-8"
-    )
+    # The SMS rehearsal pins its own segment of the chain. The repository head
+    # expectation moves on as later migrations land, so assert that 153 is an
+    # ancestor of the pinned head rather than that it *is* the head.
+    assert "153_sms_lifecycle" in _revisions_up_to_repository_head()
     assert "test_sms_lifecycle_db.py" in source
     assert "python -m pytest -vv --maxfail=1" in job
     assert "Rehearse SMS expand-contract downgrade compatibility" in source
