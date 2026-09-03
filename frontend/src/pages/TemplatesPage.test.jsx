@@ -21,6 +21,7 @@ const originalRevokeObjectURL = URL.revokeObjectURL
 
 vi.mock('../api', () => ({
   getTemplate: vi.fn(),
+  getTemplateSource: vi.fn().mockRejectedValue(new Error('source unavailable in tests')),
   getTemplates: vi.fn().mockResolvedValue({ items: [{ id: 'template-1', title: 'Engagement Letter', body: 'Dear {{client_name}}', category: 'engagement_letter', is_active: true }] }),
   getMattersV2: vi.fn().mockResolvedValue({ items: [{ id: 'matter-1', matter_name: 'Smith Matter', client_name: 'Smith' }] }),
   analyzeTemplateUpload: vi.fn(),
