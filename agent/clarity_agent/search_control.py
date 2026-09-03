@@ -1,4 +1,16 @@
-"""SQLite manifest/job control state with a hard no-full-text schema."""
+"""SQLite manifest/job control state with a hard no-full-text schema.
+
+DEPRECATED — do not build on this module.
+
+It is the second of two SQLite job/lease stores solving the same problem. FM-04's
+``crawl_control.CrawlManifest`` is the survivor: it already carries the stable
+(source_id, file_id, content_version) identity, lease generation, reconciliation
+and change-hint handling that the queue contract needs, and this store carries
+none of them. ``SearchNode`` still opens this database so the default-off
+lifecycle keeps working, but nothing reads or writes it, and the queue adapter
+must be written against ``crawl_control``. Removing this module is a separate,
+deliberate change once nothing references it.
+"""
 
 from __future__ import annotations
 

@@ -45,9 +45,11 @@ pipeline, none of which serve a query yet:
 | `search-node/` | Isolated Tika/OCR extraction workers. No queue or sink adapter, so no worker runs in any shipped process. |
 | `agent/clarity_agent/crawl_control.py` | Durable crawl freshness control plane. Not yet wired to a source adapter or an index sink. |
 
-> **Status — the scale pipeline is present but not connected:** these three
-> components were built against three different sets of contracts and no
-> adapter joins them. Until that adapter exists, `local_search` is served
+> **Status — the scale pipeline is present but not yet carrying traffic:**
+> these three components were built against three different sets of
+> contracts. `clarity_agent.search_ingest` now supplies the translation
+> between the extraction record and the index envelope, but no queue
+> adapter or transport yet moves a record from a worker to the engine. Until that adapter exists, `local_search` is served
 > entirely by the SQLite index and the OpenSearch path indexes nothing. Read
 > any claim below about Tika, OCR, OpenSearch, or crawl-time ACL trimming as
 > the acceptance target for a customer PoC, not as a description of a running

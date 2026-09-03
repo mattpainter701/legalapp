@@ -145,6 +145,18 @@
   native Windows ACL trimming, or semantic retrieval.
 
 ### Fixed
+- **The Firm Memory extraction and serving halves now have one adapter:** FM-03,
+  FM-04 and FM-05 each landed with their own record vocabulary and nothing joined
+  them, so the OpenSearch path indexed nothing. `clarity_agent.search_ingest`
+  translates an extraction record into the engine's atomic document envelope. It
+  consumes the record structurally rather than importing `search_node`, keeping
+  the worker out of the agent process, and it fails closed on an uncaptured ACL
+  so a document with no proven allow set never becomes searchable. It also makes
+  explicit the two fields FM-05 does not carry but the engine requires —
+  `modified_at` and `mutation_generation` — which must come from the crawl
+  manifest rather than be invented at the boundary. `search_control` is marked
+  deprecated in favour of FM-04's `crawl_control`, which is the surviving control
+  plane.
 - **Firm Memory search honours explicit Windows DENY:** the OpenSearch mapping
   carried allow-only `acl_tokens`, so a principal denied by an explicit DENY ACE
   still read any document one of their other groups allowed. Documents now carry
