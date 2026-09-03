@@ -5,14 +5,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 from dataclasses import asdict
-from pathlib import Path
-from pathlib import PurePosixPath
-from typing import Callable
+from pathlib import Path, PurePosixPath
 
 from .config import Settings
 from .contracts import (
@@ -23,6 +20,7 @@ from .contracts import (
     TerminalStatus,
     deterministic_chunk_id,
 )
+from .sandbox import ProcessContainer
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -31,28 +29,6 @@ def _inside(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
-
-
-def _posix_limits(settings: Settings) -> Callable[[], None] | None:
-    if os.name != "posix":
-        return None
-
-    def apply() -> None:
-        import ctypes
-        import resource
-
-        limits = settings.limits
-        resource.setrlimit(resource.RLIMIT_AS, (limits.memory_bytes, limits.memory_bytes))
-        resource.setrlimit(resource.RLIMIT_CPU, (limits.wall_seconds, limits.wall_seconds + 1))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (limits.temp_bytes, limits.temp_bytes))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        if hasattr(resource, "RLIMIT_NPROC"):
-            resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
-        os.setsid()
-        # PR_SET_NO_NEW_PRIVS. Container policy separately drops all capabilities.
-        ctypes.CDLL(None).prctl(38, 1, 0, 0, 0)
-
-    return apply
 
 
 class IsolatedExtractor:
@@ -99,50 +75,44 @@ class IsolatedExtractor:
             if tika_jar:
                 jar_path = Path(tika_jar).resolve(strict=True)
                 env["SEARCH_NODE_TIKA_APP_JAR"] = str(jar_path)
-            creationflags = 0
-            if os.name == "nt":
-                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
-            proc = subprocess.Popen(
-                # cwd is a private empty directory and PYTHONPATH is rebuilt
-                # from the reviewed supervisor process, never from the job.
-                [sys.executable, "-m", "search_node.parser_child"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                cwd=workdir,
-                env=env,
-                start_new_session=False,
-                creationflags=creationflags,
-                preexec_fn=_posix_limits(self.settings),
-            )
-            try:
-                stdout, _ = proc.communicate(payload, timeout=self.settings.limits.wall_seconds)
-            except subprocess.TimeoutExpired:
-                self._kill(proc)
-                return self._terminal(job, TerminalStatus.TIMED_OUT, "parser-wall-time")
-            if len(stdout) > self.settings.limits.output_bytes + 256 * 1024:
-                return self._terminal(job, TerminalStatus.TOO_LARGE, "parser-envelope-too-large")
-            if proc.returncode != 0:
-                code = (
-                    "parser-memory-or-process-limit"
-                    if proc.returncode < 0
-                    else "parser-process-failed"
+            # Tika forks a JVM, so the child is not always the whole tree. The
+            # container owns killing every descendant and, on Windows, the only
+            # memory and process-count limits the parser gets.
+            with ProcessContainer(self.settings, jvm_expected=bool(tika_jar)) as container:
+                proc = subprocess.Popen(
+                    # cwd is a private empty directory and PYTHONPATH is rebuilt
+                    # from the reviewed supervisor process, never from the job.
+                    [sys.executable, "-m", "search_node.parser_child"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    cwd=workdir,
+                    env=env,
+                    start_new_session=False,
+                    **container.popen_kwargs(),
                 )
-                return self._terminal(job, TerminalStatus.CORRUPT, code)
-            return self._decode(job, stdout)
+                # The child blocks reading stdin until communicate() writes it,
+                # so nothing can escape the job between spawn and assignment.
+                container.adopt(proc)
+                try:
+                    stdout, _ = proc.communicate(payload, timeout=self.settings.limits.wall_seconds)
+                except subprocess.TimeoutExpired:
+                    container.terminate(proc)
+                    return self._terminal(job, TerminalStatus.TIMED_OUT, "parser-wall-time")
+                if len(stdout) > self.settings.limits.output_bytes + 256 * 1024:
+                    return self._terminal(
+                        job, TerminalStatus.TOO_LARGE, "parser-envelope-too-large"
+                    )
+                if proc.returncode != 0:
+                    code = (
+                        "parser-memory-or-process-limit"
+                        if proc.returncode < 0
+                        else "parser-process-failed"
+                    )
+                    return self._terminal(job, TerminalStatus.CORRUPT, code)
+                return self._decode(job, stdout)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
-
-    @staticmethod
-    def _kill(proc: subprocess.Popen[bytes]) -> None:
-        if os.name == "posix":
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        else:
-            proc.kill()
-        proc.communicate()
 
     def _decode(self, job: ManifestJob, payload: bytes) -> ExtractionRecord:
         try:

@@ -1,0 +1,7 @@
+interface:
+  display_name: "LawHand Deployment and Promotion"
+  short_description: "Deploy to dev1 and IONOS production, and manage the promotion gate"
+  default_prompt: "Use $lawhand-deploy to deploy, promote, or verify a LawHand release safely."
+
+policy:
+  allow_implicit_invocation: true

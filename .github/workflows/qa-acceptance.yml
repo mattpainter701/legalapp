@@ -82,8 +82,6 @@ jobs:
     environment:
       name: skynet-development
       url: https://${{ vars.LAWHAND_QA_HOSTNAME }}
-    env:
-      QA_DEMO_ACCESS_CODE: ${{ secrets.LAWHAND_QA_DEMO_ACCESS_CODE }}
     timeout-minutes: 60
     steps:
       - name: Deploy pinned main commit through the fixed root entrypoint
@@ -114,6 +112,8 @@ jobs:
     environment:
       name: skynet-development
       url: https://${{ vars.LAWHAND_QA_HOSTNAME }}
+    env:
+      QA_DEMO_ACCESS_CODE: ${{ secrets.LAWHAND_QA_DEMO_ACCESS_CODE }}
     timeout-minutes: 10
     steps:
       - name: Require authenticated readiness and exact version evidence

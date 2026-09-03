@@ -117,9 +117,14 @@ controls:
 - mount staging and the reviewed Tika JAR read-only; mount no SMB credentials;
 - use a private `tmpfs` or quota-limited volume at `SEARCH_NODE_TEMP_ROOT` with
   `noexec,nosuid,nodev` and the configured temp-byte ceiling;
-- apply the configured memory limit plus CPU/wall limits, a small PID and file
-  descriptor limit, `no-new-privileges`, a read-only root filesystem, and no
-  Linux capabilities;
+- apply the configured memory limit plus CPU/wall limits, `no-new-privileges`,
+  a read-only root filesystem, and no Linux capabilities;
+- bound process count with the cgroup's `pids.max`, which is scoped to the
+  worker's own tree. The supervisor deliberately does not set `RLIMIT_NPROC`:
+  the kernel counts it per real UID rather than per descendant tree, so it does
+  not bound the subtree and does fail unsafely — any other process owned by the
+  service account consumes the same budget and the parser then dies with EAGAIN
+  on a fork it was entitled to make;
 - use the included Tika config, do not enable external parsers, and do not add
   LibreOffice/Office automation or macro execution;
 - install language packs during image construction or host provisioning. Never
@@ -127,11 +132,18 @@ controls:
 - send stdout/stderr only to bounded operational logging. Document text belongs
   in the sink boundary, not logs.
 
-On POSIX, the supervisor additionally sets address-space, CPU, file-size, file
-descriptor, process-count, and `no_new_privs` limits before exec. On Windows,
-deploy in a container/VM or service wrapper that provides the missing job-object,
-network, and temp-volume controls; a plain Windows subprocess is not a verified
-production sandbox.
+On POSIX, the supervisor additionally sets address-space (or, when a Tika JAR is
+configured, data-segment), CPU, file-size, and file-descriptor limits plus
+`no_new_privs` before exec, and puts the child in its own session so the whole
+tree can be signalled. A JVM reserves far more address space than it commits, so
+`RLIMIT_AS` is replaced by `RLIMIT_DATA` whenever `SEARCH_NODE_TIKA_APP_JAR` is
+set; without that substitution `java` cannot start under any bound worth setting.
+
+On Windows the supervisor now assigns the child to a job object carrying memory,
+active-process, and CPU-time limits that terminates the whole tree, so a Tika JVM
+cannot outlive the parser that spawned it. Still deploy in a container/VM or
+service wrapper for the network and temp-volume controls the job object does not
+provide; a plain Windows subprocess is not a verified production sandbox.
 
 ## Configuration
 

@@ -67,7 +67,9 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="COMPANYFOLDER" Name="LawHand">
         <Directory Id="INSTALLFOLDER" Name="Agent">
-          <Directory Id="SearchNodeSamplesFolder" Name="search-node" />
+          <Directory Id="SearchNodeSamplesFolder" Name="search-node">
+            <Directory Id="SearchNodeBenchmarksFolder" Name="benchmarks" />
+          </Directory>
         </Directory>
       </Directory>
     </StandardDirectory>
@@ -204,6 +206,28 @@
         <File Id="SearchNodeOperationsRunbook"
               Name="search-node-operations.md"
               Source="$(sys.SOURCEFILEDIR)..\..\..\docs\search-node-operations.md"
+              KeyPath="yes" />
+      </Component>
+
+      <!-- The runbook directs the operator to run these acceptance queries after
+           an upgrade, after a snapshot restore, and during rebuild quarantine
+           recovery. Shipping the runbook without them left that step impossible. -->
+      <Component Id="SearchNodeBenchmarkCorpusComponent" Directory="SearchNodeBenchmarksFolder">
+        <File Id="SearchNodeBenchmarkCorpus"
+              Name="documents.jsonl"
+              Source="$(sys.SOURCEFILEDIR)..\..\benchmarks\search_node\documents.jsonl"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="SearchNodeBenchmarkQueriesComponent" Directory="SearchNodeBenchmarksFolder">
+        <File Id="SearchNodeBenchmarkQueries"
+              Name="queries.json"
+              Source="$(sys.SOURCEFILEDIR)..\..\benchmarks\search_node\queries.json"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="SearchNodeBenchmarkRunnerComponent" Directory="SearchNodeBenchmarksFolder">
+        <File Id="SearchNodeBenchmarkRunner"
+              Name="run_benchmark.py"
+              Source="$(sys.SOURCEFILEDIR)..\..\benchmarks\search_node\run_benchmark.py"
               KeyPath="yes" />
       </Component>
     </ComponentGroup>
