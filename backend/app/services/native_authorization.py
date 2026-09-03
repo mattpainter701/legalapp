@@ -146,3 +146,78 @@ async def require_matter_authorization(
         # Deliberately indistinguishable from a missing matter.
         raise NativeAuthorizationError("matter is unavailable")
     return matter
+
+
+async def authorized_matter_ids(
+    db: AsyncSession, tenant_id: str, user_id: str, matter_ids: list[str]
+) -> set[uuid.UUID]:
+    """Return the subset of matters this user may search, in two queries.
+
+    This applies exactly the rules in :func:`require_matter_authorization`: an
+    unrestricted matter stays tenant-wide, and a restricted or ethical-wall
+    matter needs ownership, an assignment, or an explicit allow. It exists so a
+    firm-wide search does not issue two round trips per candidate matter. A
+    matter this function cannot positively authorize is simply not returned.
+    """
+    tenant_uuid, user_uuid = uuid.UUID(tenant_id), uuid.UUID(user_id)
+    candidates: list[uuid.UUID] = []
+    for value in matter_ids:
+        try:
+            parsed = uuid.UUID(str(value))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if parsed not in candidates:
+            candidates.append(parsed)
+    if not candidates:
+        return set()
+
+    matters = (
+        (
+            await db.execute(
+                select(Matter).where(
+                    Matter.tenant_id == tenant_uuid, Matter.id.in_(candidates)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    related = {
+        row
+        for row in (
+            await db.execute(
+                select(Matter.id)
+                .outerjoin(
+                    MatterAssignment,
+                    and_(
+                        MatterAssignment.matter_id == Matter.id,
+                        MatterAssignment.tenant_id == tenant_uuid,
+                        MatterAssignment.user_id == user_uuid,
+                    ),
+                )
+                .where(
+                    Matter.tenant_id == tenant_uuid,
+                    Matter.id.in_(candidates),
+                    or_(
+                        Matter.user_id == user_uuid,
+                        Matter.attorney_of_record_id == user_uuid,
+                        Matter.partner_attorney_id == user_uuid,
+                        MatterAssignment.id.is_not(None),
+                    ),
+                )
+            )
+        ).scalars()
+    }
+
+    allowed: set[uuid.UUID] = set()
+    for matter in matters:
+        policy = (matter.plugin_workflow_state or {}).get("security_policy") or {}
+        if not bool(policy.get("restricted") or policy.get("ethical_wall")):
+            allowed.add(matter.id)
+            continue
+        explicitly_allowed = {
+            str(value) for value in (policy.get("allowed_user_ids") or [])
+        }
+        if matter.id in related or user_id in explicitly_allowed:
+            allowed.add(matter.id)
+    return allowed

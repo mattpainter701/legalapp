@@ -2,6 +2,31 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.03.1",
+      "version": "2026.09.03.1",
+      "title": "Firm-wide Firm Memory research that opens the document",
+      "published_at": "2026-09-03",
+      "summary": "Firm Memory research now searches document text across every matter you are authorized on, says what it could not cover, and every on-premise result opens to its matter file.",
+      "highlights": [
+        {
+          "title": "Ask without picking a matter first",
+          "description": "A query with no matter filter searches the matters on each file share you are already authorized on, decided by the same matter policy a chosen matter goes through."
+        },
+        {
+          "title": "Search inside documents, not just file names",
+          "description": "Results come from the firm's own search node with real page numbers and passages; if that node cannot be reached, the response says so."
+        },
+        {
+          "title": "Open every result you find",
+          "description": "An on-premise result links to its matter file, which rechecks the matter binding, the live index entry, and the bound folder before showing it."
+        },
+        {
+          "title": "Know what a search did not cover",
+          "description": "Every incomplete response states in one sentence why, so “no matches” is only ever said about a search that actually covered its sources."
+        }
+      ]
+    },
+    {
       "id": "2026.09.01.1",
       "version": "2026.09.01.1",
       "title": "Consent-aware SMS with review and opt-out controls",

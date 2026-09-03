@@ -58,6 +58,7 @@ from app.services.smb_credentials import (
 )
 from app.services.native_authorization import (
     NativeAuthorizationError,
+    authorized_matter_ids,
     require_matter_authorization,
     resolve_native_identity,
 )
@@ -69,12 +70,37 @@ from app.services.search_identity_ticket import (
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+
 SMB_PAIRING_CODE_TTL_MIN = settings.SMB_PAIRING_CODE_TTL_MIN
 SMB_SNIPPET_MAX_CHARS = settings.SMB_SNIPPET_MAX_CHARS
 SMB_MAX_FILE_INDEX_PER_SHARE = settings.SMB_MAX_FILE_INDEX_PER_SHARE
 REDIS_TASK_TTL = 300  # 5 minutes
 LOCAL_SEARCH_TIMEOUT_SECONDS = 12.0
 LOCAL_SEARCH_POLL_SECONDS = 0.15
+# An agent older than this does not bind ``matter_ids`` in the identity ticket,
+# so a multi-matter relay to it would lose that tamper check. Such an agent is
+# reported as not covered rather than searched with a weaker binding.
+MULTI_MATTER_SEARCH_MIN_AGENT_VERSION = (0, 17, 0)
+# ``ContentFetchTask.scopes`` is capped at 100 entries by the wire contract.
+LOCAL_SEARCH_MAX_SCOPES = 100
+
+
+def _agent_binds_matter_set(agent_version: str | None) -> bool:
+    """Whether this agent verifies a ticket's matter set against its task.
+
+    An unreadable or missing version is treated as too old. A firm-wide search
+    then reports the agent as uncovered instead of relaxing the binding.
+    """
+    parts = str(agent_version or "").strip().split(".")
+    if len(parts) != 3:
+        return False
+    try:
+        parsed = tuple(int(part) for part in parts)
+    except ValueError:
+        return False
+    return parsed >= MULTI_MATTER_SEARCH_MIN_AGENT_VERSION
+
+
 # Pairing codes are read off a screen and typed into an installer command line,
 # so they use an alphabet without look-alike characters and are grouped in
 # fours. Sixteen symbols from thirty is ~78 bits, and the code both expires and
@@ -1702,7 +1728,40 @@ class SmbService:
         redis=None,
         timeout_seconds: float = LOCAL_SEARCH_TIMEOUT_SECONDS,
     ) -> FirmMemorySearchResponse:
-        """Run one local search while holding a short per-user Redis lease."""
+        """Run one matter-scoped local search under a per-user Redis lease."""
+        return await self.search_local_files_for_matters(
+            db,
+            tenant_id,
+            user_id,
+            [matter_id],
+            query,
+            file_extensions,
+            limit,
+            correlation_id,
+            redis=redis,
+            timeout_seconds=timeout_seconds,
+        )
+
+    async def search_local_files_for_matters(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        user_id: str,
+        matter_ids: list[str],
+        query: str,
+        file_extensions: list[str] | None = None,
+        limit: int = 20,
+        correlation_id: str | None = None,
+        redis=None,
+        timeout_seconds: float = LOCAL_SEARCH_TIMEOUT_SECONDS,
+        share_ids: list[str] | None = None,
+    ) -> FirmMemorySearchResponse:
+        """Run one local search over a matter set while holding a Redis lease.
+
+        The lease is per user, not per matter: a firm-wide search is one search,
+        and the fan-out below costs one relay round trip per agent rather than
+        one per matter.
+        """
         if redis is None:
             raise RuntimeError("SMB relay is temporarily unavailable")
         correlation_id = correlation_id or secrets.token_hex(12)
@@ -1730,13 +1789,14 @@ class SmbService:
                 db,
                 tenant_id,
                 user_id,
-                matter_id,
+                matter_ids,
                 query,
                 file_extensions,
                 limit,
                 correlation_id,
                 redis,
                 timeout_seconds,
+                share_ids=share_ids,
             )
         finally:
             try:
@@ -1763,13 +1823,14 @@ class SmbService:
         db: AsyncSession,
         tenant_id: str,
         user_id: str,
-        matter_id: str,
+        matter_ids: list[str],
         query: str,
         file_extensions: list[str] | None = None,
         limit: int = 20,
         correlation_id: str | None = None,
         redis=None,
         timeout_seconds: float = LOCAL_SEARCH_TIMEOUT_SECONDS,
+        share_ids: list[str] | None = None,
     ) -> FirmMemorySearchResponse:
         """Fan out a bounded, matter-scoped full-text query to local agents.
 
@@ -1778,6 +1839,11 @@ class SmbService:
         non-deleted SaaS index before it can leave this method. The query is
         placed only in the short-lived relay task; it is never logged or
         written to a database audit row.
+
+        More than one matter may be searched at once. Every matter still passes
+        the same native matter authorization, and the per-scope folder check on
+        the way back is unchanged, so a wider matter set never widens what any
+        one scope may return.
         """
         if redis is None:
             raise RuntimeError("SMB relay is temporarily unavailable")
@@ -1785,9 +1851,23 @@ class SmbService:
         if not query:
             raise ValueError("query must not be blank")
         tenant_uuid = _uuid(tenant_id)
-        matter_uuid = _uuid(matter_id)
-        if not tenant_uuid or not matter_uuid:
+        matter_uuids: list[uuid.UUID] = []
+        for value in matter_ids:
+            parsed = _uuid(value)
+            if parsed is None:
+                raise ValueError("Invalid tenant or matter")
+            if parsed not in matter_uuids:
+                matter_uuids.append(parsed)
+        if not tenant_uuid or not matter_uuids:
             raise ValueError("Invalid tenant or matter")
+        single_matter_id = str(matter_uuids[0]) if len(matter_uuids) == 1 else None
+        share_uuids: list[uuid.UUID] | None = None
+        if share_ids is not None:
+            share_uuids = [
+                parsed for parsed in (_uuid(value) for value in share_ids) if parsed
+            ]
+            if not share_uuids:
+                raise ValueError("Invalid share filter")
         correlation_id = correlation_id or secrets.token_hex(12)
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", correlation_id):
             raise ValueError("Invalid correlation id")
@@ -1798,10 +1878,23 @@ class SmbService:
 
         started = time.monotonic()
         await set_tenant_context(db, tenant_id)
-        try:
-            await require_matter_authorization(db, tenant_id, user_id, matter_id)
-        except NativeAuthorizationError as exc:
-            raise ValueError(str(exc)) from exc
+        if single_matter_id is not None:
+            # One named matter is an explicit request: a denial is an error the
+            # caller must see, not a matter quietly dropped from a wider sweep.
+            try:
+                await require_matter_authorization(
+                    db, tenant_id, user_id, single_matter_id
+                )
+            except NativeAuthorizationError as exc:
+                raise ValueError(str(exc)) from exc
+        else:
+            allowed = await authorized_matter_ids(
+                db, tenant_id, user_id, [str(item) for item in matter_uuids]
+            )
+            matter_uuids = [item for item in matter_uuids if item in allowed]
+            if not matter_uuids:
+                raise ValueError("Matter not found or has no assigned SMB shares")
+        searched_matter_ids = sorted(str(item) for item in matter_uuids)
         native_identity = None
         if settings.FIRM_MEMORY_NATIVE_AUTHZ_ENABLED:
             if not settings.FIRM_MEMORY_ACL_COVERAGE_HEALTHY:
@@ -1815,35 +1908,63 @@ class SmbService:
 
         # The paired binding/share predicates are deliberately kept together;
         # a folder from one share must never widen another share's scope.
-        rows = (
-            await db.execute(
-                select(MatterSmbShare, SmbShare, SmbAgent)
-                .join(SmbShare, SmbShare.id == MatterSmbShare.share_id)
-                .join(SmbAgent, SmbAgent.id == SmbShare.agent_id)
-                .where(
-                    MatterSmbShare.matter_id == matter_uuid,
-                    MatterSmbShare.tenant_id == tenant_uuid,
-                    SmbShare.tenant_id == tenant_uuid,
-                    SmbAgent.tenant_id == tenant_uuid,
-                    SmbShare.is_enabled.is_(True),
-                )
+        binding_query = (
+            select(MatterSmbShare, SmbShare, SmbAgent)
+            .join(SmbShare, SmbShare.id == MatterSmbShare.share_id)
+            .join(SmbAgent, SmbAgent.id == SmbShare.agent_id)
+            .where(
+                MatterSmbShare.matter_id.in_(matter_uuids),
+                MatterSmbShare.tenant_id == tenant_uuid,
+                SmbShare.tenant_id == tenant_uuid,
+                SmbAgent.tenant_id == tenant_uuid,
+                SmbShare.is_enabled.is_(True),
             )
-        ).all()
+        )
+        if share_uuids is not None:
+            binding_query = binding_query.where(SmbShare.id.in_(share_uuids))
+        rows = (await db.execute(binding_query)).all()
         if not rows:
             raise ValueError("Matter not found or has no assigned SMB shares")
 
+        # Distinct matters routinely bind the same share and folder. Dedupe the
+        # scope list so a wide matter set does not overflow the task's scope cap
+        # with repeats of one folder.
         grouped: dict[str, dict] = {}
+        skipped_agents: list[str] = []
+        truncated_scopes = False
+        multi_matter = len(matter_uuids) > 1
         for binding, share, agent in rows:
             if agent.status != "active":
                 continue
             key = str(agent.id)
-            grouped.setdefault(key, {"agent": agent, "scopes": []})["scopes"].append(
-                {
-                    "share_id": str(share.id),
-                    "folder_path": _normalize_folder_path(binding.folder_path),
-                }
-            )
+            if key in skipped_agents:
+                continue
+            if (
+                multi_matter
+                and native_identity is not None
+                and not _agent_binds_matter_set(agent.agent_version)
+            ):
+                # Searching this agent across a matter set would drop the
+                # ticket's matter binding, so it is reported, not searched.
+                skipped_agents.append(key)
+                grouped.pop(key, None)
+                continue
+            scope = {
+                "share_id": str(share.id),
+                "folder_path": _normalize_folder_path(binding.folder_path),
+            }
+            scopes = grouped.setdefault(key, {"agent": agent, "scopes": []})["scopes"]
+            if scope in scopes:
+                continue
+            if len(scopes) >= LOCAL_SEARCH_MAX_SCOPES:
+                truncated_scopes = True
+                continue
+            scopes.append(scope)
         if not grouped:
+            if skipped_agents:
+                raise RuntimeError(
+                    "No SMB agent supports a firm-wide search on this share"
+                )
             raise ValueError("No active SMB agent is available for this matter")
 
         tasks: dict[str, str] = {}
@@ -1851,6 +1972,17 @@ class SmbService:
             FirmMemoryAgentStatus(agent_id=agent_id, status="queued")
             for agent_id in grouped
         ]
+        # The task payload and the ticket must agree exactly: the agent rejects
+        # a ticket whose matter scope differs from the task it arrived with.
+        # ``matter_id`` is still sent for a single matter so an older agent sees
+        # the request it has always seen.
+        matter_scope: dict[str, object] = {"matter_ids": searched_matter_ids}
+        if single_matter_id is not None:
+            matter_scope["matter_id"] = single_matter_id
+        ticket_filters = {
+            **matter_scope,
+            "file_extensions": file_extensions or [],
+        }
         for agent_id, group in grouped.items():
             task_id = secrets.token_urlsafe(16)
             identity_ticket = None
@@ -1867,10 +1999,7 @@ class SmbService:
                     ),
                     private_key=settings.FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY,
                     audience=agent_id,
-                    filters={
-                        "matter_id": matter_id,
-                        "file_extensions": file_extensions or [],
-                    },
+                    filters=ticket_filters,
                     ttl_seconds=settings.FIRM_MEMORY_IDENTITY_TICKET_TTL_SECONDS,
                 )
             task = ContentFetchTask(
@@ -1891,7 +2020,7 @@ class SmbService:
                         **task.model_dump(),
                         "tenant_id": tenant_id,
                         "agent_id": agent_id,
-                        "matter_id": matter_id,
+                        **matter_scope,
                     }
                 ),
                 ex=REDIS_TASK_TTL,
@@ -2075,6 +2204,14 @@ class SmbService:
                 if previous is None or (hit.score or 0) > (previous.score or 0):
                     hits_by_id[str(file_entry.id)] = hit
 
+        for agent_id in skipped_agents:
+            statuses.append(
+                FirmMemoryAgentStatus(agent_id=agent_id, status="unsupported")
+            )
+            errors.append("agent_version_lacks_matter_set_binding")
+        if truncated_scopes:
+            errors.append("search_scope_truncated")
+
         ranked = sorted(
             hits_by_id.values(),
             key=lambda hit: (
@@ -2090,7 +2227,7 @@ class SmbService:
             extra={
                 "firm_memory_correlation_id": correlation_id,
                 "firm_memory_tenant_id": tenant_id,
-                "firm_memory_matter_id": matter_id,
+                "firm_memory_matter_count": len(searched_matter_ids),
                 "firm_memory_user_id": user_id,
                 "firm_memory_result_count": len(ranked),
                 "firm_memory_agent_count": len(statuses),

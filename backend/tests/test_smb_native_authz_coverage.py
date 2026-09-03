@@ -8,6 +8,7 @@ the narrow set of helpers that genuinely need ORM state (e.g. ``_uuid``)
 are imported from the production module.
 """
 
+import json
 import uuid as uuid_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -552,7 +553,7 @@ async def test_search_local_files_fails_closed_on_matter_authorization(monkeypat
             SimpleNamespace(),
             tenant_id="00000000-0000-0000-0000-000000000001",
             user_id="00000000-0000-0000-0000-000000000002",
-            matter_id="00000000-0000-0000-0000-000000000099",
+            matter_ids=["00000000-0000-0000-0000-000000000099"],
             query="brief",
             redis=redis,
         )
@@ -571,7 +572,7 @@ async def test_search_local_files_requires_acl_coverage_when_native_authz_enable
             SimpleNamespace(),
             tenant_id="00000000-0000-0000-0000-000000000001",
             user_id="00000000-0000-0000-0000-000000000002",
-            matter_id="00000000-0000-0000-0000-000000000099",
+            matter_ids=["00000000-0000-0000-0000-000000000099"],
             query="brief",
             redis=SimpleNamespace(),
         )
@@ -595,7 +596,7 @@ async def test_search_local_files_fails_when_resolve_native_identity_errors(
             SimpleNamespace(),
             tenant_id="00000000-0000-0000-0000-000000000001",
             user_id="00000000-0000-0000-0000-000000000002",
-            matter_id="00000000-0000-0000-0000-000000000099",
+            matter_ids=["00000000-0000-0000-0000-000000000099"],
             query="brief",
             redis=SimpleNamespace(),
         )
@@ -618,7 +619,7 @@ async def test_search_local_files_fails_when_signing_key_unavailable(monkeypatch
             SimpleNamespace(),
             tenant_id="00000000-0000-0000-0000-000000000001",
             user_id="00000000-0000-0000-0000-000000000002",
-            matter_id="00000000-0000-0000-0000-000000000099",
+            matter_ids=["00000000-0000-0000-0000-000000000099"],
             query="brief",
             redis=SimpleNamespace(),
         )
@@ -689,7 +690,7 @@ async def test_search_local_files_mints_per_agent_ticket(monkeypatch):
         _Db(),
         tenant_id="00000000-0000-0000-0000-000000000001",
         user_id="00000000-0000-0000-0000-000000000002",
-        matter_id="00000000-0000-0000-0000-000000000099",
+        matter_ids=["00000000-0000-0000-0000-000000000099"],
         query="brief",
         redis=redis,
         timeout_seconds=0.05,
@@ -745,3 +746,225 @@ def test_path_is_within_root_keeps_its_segment_boundary():
     # A candidate above its root is not within it, and non-UNC input is refused.
     assert not path_is_within_root(r"\\fs01\Legal", r"\\fs01\Legal\Client-1")
     assert not path_is_within_root(r"C:\Legal\brief.pdf", r"\\fs01\Legal")
+
+
+def _relay_fixture(*, agent_version, folder="Client-1", agent_id=None):
+    agent_id = agent_id or "44444444-4444-4444-4444-444444444444"
+    share = SimpleNamespace(
+        id=uuid_module.UUID("66666666-6666-6666-6666-666666666666"),
+        agent_id=uuid_module.UUID(agent_id),
+        share_path=r"\\fs\legal",
+    )
+    agent = SimpleNamespace(
+        id=uuid_module.UUID(agent_id),
+        tenant_id=uuid_module.UUID("00000000-0000-0000-0000-000000000001"),
+        status="active",
+        agent_version=agent_version,
+    )
+
+    def binding(matter_id, folder_path=folder):
+        return SimpleNamespace(
+            id=uuid_module.uuid4(),
+            matter_id=uuid_module.UUID(matter_id),
+            share_id=share.id,
+            folder_path=folder_path,
+        )
+
+    return share, agent, binding
+
+
+def _patch_native_authz(monkeypatch, *, allowed):
+    monkeypatch.setattr(smb_module.settings, "FIRM_MEMORY_NATIVE_AUTHZ_ENABLED", True)
+    monkeypatch.setattr(smb_module.settings, "FIRM_MEMORY_ACL_COVERAGE_HEALTHY", True)
+    monkeypatch.setattr(
+        smb_module.settings, "FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY", "k"
+    )
+    monkeypatch.setattr(smb_module, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        smb_module,
+        "resolve_native_identity",
+        AsyncMock(
+            return_value=SimpleNamespace(principal_sids=("S-1-5-21-100",), version=4)
+        ),
+    )
+    monkeypatch.setattr(
+        smb_module,
+        "authorized_matter_ids",
+        AsyncMock(return_value={uuid_module.UUID(item) for item in allowed}),
+    )
+    monkeypatch.setattr(smb_module.asyncio, "sleep", AsyncMock())
+
+
+class _CollectingRedis:
+    def __init__(self):
+        self.sets = []
+
+    async def set(self, key, value, ex=None):
+        self.sets.append((key, json.loads(value), ex))
+
+
+MATTER_A = "00000000-0000-0000-0000-0000000000aa"
+MATTER_B = "00000000-0000-0000-0000-0000000000bb"
+
+
+@pytest.mark.asyncio
+async def test_firm_wide_relay_sends_one_task_per_agent_with_a_bound_matter_set(
+    monkeypatch,
+):
+    """Many matters on one agent cost one round trip, and stay bound."""
+    share, agent, binding = _relay_fixture(agent_version="0.17.0")
+    _patch_native_authz(monkeypatch, allowed=[MATTER_A, MATTER_B])
+    minted_filters = []
+
+    def fake_mint(_identity, **kwargs):
+        minted_filters.append(kwargs["filters"])
+        return "x" * 64
+
+    monkeypatch.setattr(smb_module, "mint_search_identity_ticket", fake_mint)
+
+    class _Db:
+        async def execute(self, _stmt):
+            return _AllRows(
+                [
+                    (binding(MATTER_A, "Client-1"), share, agent),
+                    (binding(MATTER_B, "Client-2"), share, agent),
+                    # A repeat of a folder already in scope must not duplicate.
+                    (binding(MATTER_B, "Client-2"), share, agent),
+                ]
+            )
+
+    redis = _CollectingRedis()
+    await smb_service._search_local_files_once(
+        _Db(),
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        matter_ids=[MATTER_A, MATTER_B],
+        query="indemnification",
+        redis=redis,
+        timeout_seconds=0.05,
+    )
+
+    assert len(redis.sets) == 1, "one agent must receive exactly one task"
+    payload = redis.sets[0][1]
+    assert payload["matter_ids"] == sorted([MATTER_A, MATTER_B])
+    # A firm-wide task carries no single matter to mistake for its whole scope.
+    assert "matter_id" not in payload
+    assert len(payload["scopes"]) == 2
+    # The task and the ticket must agree, or the agent rejects the pair.
+    assert minted_filters[0]["matter_ids"] == payload["matter_ids"]
+
+
+@pytest.mark.asyncio
+async def test_firm_wide_relay_drops_a_matter_native_policy_denies(monkeypatch):
+    share, agent, binding = _relay_fixture(agent_version="0.17.0")
+    _patch_native_authz(monkeypatch, allowed=[MATTER_A])
+    monkeypatch.setattr(
+        smb_module, "mint_search_identity_ticket", lambda *_a, **_k: "x" * 64
+    )
+
+    seen = {}
+
+    class _Db:
+        async def execute(self, stmt):
+            seen["stmt"] = stmt
+            return _AllRows([(binding(MATTER_A), share, agent)])
+
+    redis = _CollectingRedis()
+    await smb_service._search_local_files_once(
+        _Db(),
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        matter_ids=[MATTER_A, MATTER_B],
+        query="brief",
+        redis=redis,
+        timeout_seconds=0.05,
+    )
+    assert redis.sets[0][1]["matter_ids"] == [MATTER_A]
+
+
+@pytest.mark.asyncio
+async def test_firm_wide_relay_refuses_an_agent_that_cannot_bind_a_matter_set(
+    monkeypatch,
+):
+    """An old agent is reported as uncovered, never searched unbound."""
+    share, agent, binding = _relay_fixture(agent_version="0.16.0")
+    _patch_native_authz(monkeypatch, allowed=[MATTER_A, MATTER_B])
+    monkeypatch.setattr(
+        smb_module, "mint_search_identity_ticket", lambda *_a, **_k: "x" * 64
+    )
+
+    class _Db:
+        async def execute(self, _stmt):
+            return _AllRows(
+                [
+                    (binding(MATTER_A), share, agent),
+                    (binding(MATTER_B), share, agent),
+                ]
+            )
+
+    redis = _CollectingRedis()
+    with pytest.raises(RuntimeError, match="firm-wide search"):
+        await smb_service._search_local_files_once(
+            _Db(),
+            tenant_id="00000000-0000-0000-0000-000000000001",
+            user_id="00000000-0000-0000-0000-000000000002",
+            matter_ids=[MATTER_A, MATTER_B],
+            query="brief",
+            redis=redis,
+            timeout_seconds=0.05,
+        )
+    assert redis.sets == []
+
+
+@pytest.mark.asyncio
+async def test_single_matter_relay_still_sends_the_task_an_old_agent_expects(
+    monkeypatch,
+):
+    """The legacy path must not change shape for an un-upgraded agent."""
+    share, agent, binding = _relay_fixture(agent_version="0.16.0")
+    _patch_native_authz(monkeypatch, allowed=[MATTER_A])
+    monkeypatch.setattr(smb_module, "require_matter_authorization", AsyncMock())
+    minted_filters = []
+
+    def fake_mint(_identity, **kwargs):
+        minted_filters.append(kwargs["filters"])
+        return "x" * 64
+
+    monkeypatch.setattr(smb_module, "mint_search_identity_ticket", fake_mint)
+
+    class _Db:
+        async def execute(self, _stmt):
+            return _AllRows([(binding(MATTER_A), share, agent)])
+
+    redis = _CollectingRedis()
+    await smb_service._search_local_files_once(
+        _Db(),
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        matter_ids=[MATTER_A],
+        query="brief",
+        redis=redis,
+        timeout_seconds=0.05,
+    )
+    payload = redis.sets[0][1]
+    assert payload["matter_id"] == MATTER_A
+    assert minted_filters[0]["matter_id"] == MATTER_A
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("0.17.0", True),
+        ("0.18.2", True),
+        ("1.0.0", True),
+        ("0.16.9", False),
+        ("0.16", False),
+        ("", False),
+        (None, False),
+        ("nightly", False),
+    ],
+)
+def test_agent_matter_set_support_fails_closed_on_an_unreadable_version(
+    version, expected
+):
+    assert smb_module._agent_binds_matter_set(version) is expected

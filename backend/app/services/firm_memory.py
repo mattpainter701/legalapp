@@ -56,6 +56,8 @@ MATTER_SCOPE_EXPANSION_CAP = 100
 # The SaaS-side SMB index holds filenames and a capped preview, not document
 # text. Coverage must never let that read as a full-text corpus search.
 SMB_METADATA_INDEX_KIND = "smb_metadata_fts"
+# What the customer's own search node answered from: real document text.
+SMB_FULL_TEXT_INDEX_KIND = "smb_local_fulltext"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,10 +65,16 @@ class _MatterBoundSmbSearchResult:
     hits: list[FirmMemoryDocumentSearchHit]
     state: Literal["offline", "unsupported"] | None = None
     reason: str | None = None
+    index_kind: str = SMB_METADATA_INDEX_KIND
+    agent_partial: bool = False
 
     @property
     def searched(self) -> bool:
         return self.state is None and self.reason is None
+
+    @property
+    def full_text(self) -> bool:
+        return self.index_kind == SMB_FULL_TEXT_INDEX_KIND
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +113,7 @@ class FirmMemorySearchService:
         *,
         user: User,
         request: FirmMemoryDocumentSearchRequest,
+        redis=None,
     ) -> FirmMemoryDocumentSearchResponse:
         tenant_id = uuid.UUID(str(user.tenant_id))
         await set_tenant_context(db, str(tenant_id))
@@ -216,6 +225,7 @@ class FirmMemorySearchService:
                     matter_ids=scope.matter_ids,
                     request=request,
                     collection_ids=collection_map.get(source.id, []),
+                    redis=redis,
                 )
                 if adapter_result.state is not None:
                     source_coverage.state = adapter_result.state
@@ -226,25 +236,33 @@ class FirmMemorySearchService:
                 source_coverage.reason = adapter_result.reason
                 source_coverage.result_count = len(adapter_result.hits)
                 if adapter_result.searched:
-                    # Filenames and a capped preview are not document text, so
-                    # this can never be reported as complete corpus coverage.
-                    source_coverage.index_kind = SMB_METADATA_INDEX_KIND
-                    source_coverage.partial = True
+                    source_coverage.index_kind = adapter_result.index_kind
+                    if not adapter_result.full_text:
+                        # Filenames and a capped preview are not document text,
+                        # so this is never complete corpus coverage.
+                        source_coverage.partial = True
+                        source_coverage.reason = "metadata_index_fallback"
+                    elif adapter_result.agent_partial:
+                        source_coverage.partial = True
+                        source_coverage.reason = "agent_index_partial"
                     if scope.truncated:
+                        source_coverage.partial = True
                         source_coverage.reason = "matter_scope_truncated"
                 results.extend(adapter_result.hits)
             else:
-                # A source-level allow is not document-level ACL trimming.
-                # Until a connector contributes an authorized result adapter,
-                # returning current SaaS metadata here would be unsafe.
+                # A source-level allow is not document-level authorization.
+                # The file share is read by one service account, so nothing
+                # about a file itself distinguishes who may see it: only the
+                # matter binding does. An unbound share therefore has no
+                # boundary to search within and stays unsupported.
                 source_coverage.state = "unsupported"
                 source_coverage.partial = True
-                source_coverage.reason = (
-                    "native_document_authorization_required"
-                    if source.authorization_mode == "native"
-                    or source.source_kind == "smb"
-                    else "source_search_adapter_unavailable"
-                )
+                if source.source_kind == "smb":
+                    source_coverage.reason = "matter_binding_required"
+                elif source.authorization_mode == "native":
+                    source_coverage.reason = "native_document_authorization_required"
+                else:
+                    source_coverage.reason = "source_search_adapter_unavailable"
             coverage.append(source_coverage)
 
         results.sort(key=lambda hit: hit.score or 0.0, reverse=True)
@@ -321,11 +339,22 @@ class FirmMemorySearchService:
                 "authorized matters were searched. Choose a matter to narrow "
                 "this search."
             )
+        if "agent_index_partial" in reasons:
+            return (
+                "A file-share search node reported an incomplete index, so "
+                "these results do not cover its whole corpus yet."
+            )
         if any(item.index_kind == SMB_METADATA_INDEX_KIND for item in coverage):
             return (
-                "On-premises results come from the filename and preview index, "
-                "not full document text. Open a matter's Firm Memory search to "
-                "search inside documents."
+                "A file-share search node could not be reached, so on-premises "
+                "results come from the filename and preview index rather than "
+                "full document text."
+            )
+        if "matter_binding_required" in reasons:
+            return (
+                "A file share can only be searched through the matters it is "
+                "bound to. Ask an administrator to bind this share to the "
+                "matters it holds."
             )
         if "native_document_authorization_required" in reasons:
             return (
@@ -568,6 +597,7 @@ class FirmMemorySearchService:
         matter_ids: tuple[uuid.UUID, ...],
         request: FirmMemoryDocumentSearchRequest,
         collection_ids: list[str],
+        redis=None,
     ) -> _MatterBoundSmbSearchResult:
         share = await db.scalar(
             select(SmbShare).where(
@@ -600,8 +630,8 @@ class FirmMemorySearchService:
                 reason="matter_smb_binding_unavailable",
             )
 
-        scope_filters = []
         binding_roots: list[tuple[uuid.UUID, str]] = []
+        scope_filters = []
         for binding in bindings:
             root = share.share_path.rstrip("\\/")
             if binding.folder_path:
@@ -615,30 +645,62 @@ class FirmMemorySearchService:
                 )
             )
 
-        ts_query = func.plainto_tsquery("english", request.query)
-        stmt = select(
-            SmbFileIndex,
-            func.ts_rank(SmbFileIndex.search_vector, ts_query).label("score"),
-        ).where(
-            SmbFileIndex.tenant_id == tenant_id,
-            SmbFileIndex.share_id == share.id,
-            SmbFileIndex.is_deleted.is_(False),
-            SmbFileIndex.search_vector.op("@@")(ts_query),
-            or_(*scope_filters),
+        index_kind = SMB_METADATA_INDEX_KIND
+        agent_partial = False
+        rows: list[tuple] = []
+        full_text = await self._full_text_records(
+            db,
+            tenant_id=tenant_id,
+            requesting_user_id=requesting_user_id,
+            share=share,
+            matter_ids=matter_ids,
+            request=request,
+            redis=redis,
         )
-        filters = request.filters
-        if filters.file_extensions:
-            stmt = stmt.where(SmbFileIndex.ext.in_(filters.file_extensions))
-        if filters.mime_types:
-            stmt = stmt.where(SmbFileIndex.mime_type.in_(filters.mime_types))
-        if filters.modified_from:
-            stmt = stmt.where(SmbFileIndex.modified_time >= filters.modified_from)
-        if filters.modified_to:
-            stmt = stmt.where(SmbFileIndex.modified_time <= filters.modified_to)
-        stmt = stmt.order_by(
-            func.ts_rank(SmbFileIndex.search_vector, ts_query).desc()
-        ).limit(request.limit)
-        rows = (await db.execute(stmt)).all()
+        if full_text is not None:
+            rows, agent_partial = full_text
+            index_kind = SMB_FULL_TEXT_INDEX_KIND
+
+        if full_text is None:
+            ts_query = func.plainto_tsquery("english", request.query)
+            stmt = select(
+                SmbFileIndex,
+                func.ts_rank(SmbFileIndex.search_vector, ts_query).label("score"),
+            ).where(
+                SmbFileIndex.tenant_id == tenant_id,
+                SmbFileIndex.share_id == share.id,
+                SmbFileIndex.is_deleted.is_(False),
+                SmbFileIndex.search_vector.op("@@")(ts_query),
+                or_(*scope_filters),
+            )
+            filters = request.filters
+            if filters.file_extensions:
+                stmt = stmt.where(SmbFileIndex.ext.in_(filters.file_extensions))
+            if filters.mime_types:
+                stmt = stmt.where(SmbFileIndex.mime_type.in_(filters.mime_types))
+            if filters.modified_from:
+                stmt = stmt.where(SmbFileIndex.modified_time >= filters.modified_from)
+            if filters.modified_to:
+                stmt = stmt.where(SmbFileIndex.modified_time <= filters.modified_to)
+            stmt = stmt.order_by(
+                func.ts_rank(SmbFileIndex.search_vector, ts_query).desc()
+            ).limit(request.limit)
+            rows = [
+                (item, score, item.snippet, None)
+                for item, score in (await db.execute(stmt)).all()
+            ]
+        else:
+            # This is the authorization boundary, not a tidy-up. The agent reads
+            # the share through one service account, so file permissions cannot
+            # distinguish who may see a document: only the matter binding does.
+            # The relay applies the same folder scoping before it answers; this
+            # re-check means the boundary holds on evidence this service can
+            # see, rather than on the relay having got it right.
+            rows = [
+                row
+                for row in rows
+                if any(_path_is_within(row[0].path, root) for _, root in binding_roots)
+            ]
 
         document_keys = [str(row[0].id) for row in rows]
         generic_matters, workspaces = await self._document_associations(
@@ -650,7 +712,7 @@ class FirmMemorySearchService:
             allowed_matter_ids=matter_ids,
         )
         hits: list[FirmMemoryDocumentSearchHit] = []
-        for item, score in rows:
+        for item, score, snippet, page_number in rows:
             matched_matters = [
                 str(matter_id)
                 for matter_id, root in binding_roots
@@ -670,7 +732,7 @@ class FirmMemorySearchService:
                 FirmMemoryDocumentSearchHit(
                     document_id=self._opaque_document_id(source.id, item.id),
                     title=item.filename,
-                    snippet=item.snippet,
+                    snippet=snippet,
                     score=float(score) if score is not None else None,
                     mime_type=item.mime_type,
                     file_extension=item.ext,
@@ -683,9 +745,10 @@ class FirmMemorySearchService:
                         source_name=source.display_name,
                         source_kind=source.source_kind,
                         collection_ids=collection_ids,
-                        index_kind=SMB_METADATA_INDEX_KIND,
+                        index_kind=index_kind,
                         indexed_at=item.last_seen_at,
                         relative_location=relative,
+                        page_number=page_number,
                     ),
                     actions=self._matter_bound_actions(
                         matter_id=matched_matters[0] if matched_matters else None,
@@ -693,7 +756,97 @@ class FirmMemorySearchService:
                     ),
                 )
             )
-        return _MatterBoundSmbSearchResult(hits=hits)
+        return _MatterBoundSmbSearchResult(
+            hits=hits, index_kind=index_kind, agent_partial=agent_partial
+        )
+
+    async def _full_text_records(
+        self,
+        db: AsyncSession,
+        *,
+        tenant_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        share: SmbShare,
+        matter_ids: tuple[uuid.UUID, ...],
+        request: FirmMemoryDocumentSearchRequest,
+        redis,
+    ) -> tuple[list[tuple], bool] | None:
+        """Search document text on the customer's own node, or return None.
+
+        Returning None means the node could not answer and the caller should
+        fall back to the metadata index. It never means "no matches": an
+        answered search with zero hits returns an empty row list, so a real
+        absence is not confused with an unreachable agent.
+
+        The relay hands back identifiers it has already matched against the
+        live index inside the requested share, and every value used to build a
+        result below is read from this database, not from the agent. The caller
+        re-checks each returned path against the authorized matter bindings,
+        because a service-account read cannot be trimmed by file permissions.
+        """
+        if redis is None:
+            return None
+        from app.services.smb import smb_service
+
+        extensions = [
+            value.lstrip(".") for value in (request.filters.file_extensions or [])
+        ]
+        try:
+            response = await smb_service.search_local_files_for_matters(
+                db,
+                str(tenant_id),
+                str(requesting_user_id),
+                [str(matter_id) for matter_id in matter_ids],
+                request.query,
+                extensions or None,
+                request.limit,
+                None,
+                redis=redis,
+                share_ids=[str(share.id)],
+            )
+        except (ValueError, RuntimeError) as exc:
+            logger.info(
+                "Firm Memory full-text search unavailable; using the metadata index",
+                extra={
+                    "firm_memory_tenant_id": str(tenant_id),
+                    "firm_memory_share_id": str(share.id),
+                    "firm_memory_fallback_reason": type(exc).__name__,
+                },
+            )
+            return None
+        if not any(status.status == "ready" for status in response.agent_statuses):
+            # No node actually ran the query. That is not an empty corpus.
+            return None
+
+        by_id: dict[uuid.UUID, object] = {}
+        for hit in response.hits:
+            parsed = _uuid(hit.id)
+            if parsed is not None:
+                by_id[parsed] = hit
+        if not by_id:
+            return [], bool(response.partial)
+
+        filters = request.filters
+        stmt = select(SmbFileIndex).where(
+            SmbFileIndex.tenant_id == tenant_id,
+            SmbFileIndex.share_id == share.id,
+            SmbFileIndex.is_deleted.is_(False),
+            SmbFileIndex.id.in_(list(by_id)),
+        )
+        # The node applies the extension filter; the rest stay server-side so a
+        # full-text result honours exactly the filters the caller asked for.
+        if filters.mime_types:
+            stmt = stmt.where(SmbFileIndex.mime_type.in_(filters.mime_types))
+        if filters.modified_from:
+            stmt = stmt.where(SmbFileIndex.modified_time >= filters.modified_from)
+        if filters.modified_to:
+            stmt = stmt.where(SmbFileIndex.modified_time <= filters.modified_to)
+        rows = []
+        for item in (await db.execute(stmt)).scalars():
+            hit = by_id[item.id]
+            rows.append((item, hit.score, hit.snippet, hit.page_number))
+        rows.sort(key=lambda row: row[1] or 0.0, reverse=True)
+        return rows[: request.limit], bool(response.partial)
 
     @staticmethod
     def _matter_bound_actions(

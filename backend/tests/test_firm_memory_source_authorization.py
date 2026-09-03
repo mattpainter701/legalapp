@@ -575,9 +575,10 @@ async def test_matter_bound_smb_reports_preflight_failures(
             "offline",
             False,
         ),
-        ("partial", None, None, "partial", True),
-        ("indexing", None, None, "indexing", True),
-        ("stale", None, None, "stale", True),
+        # A searched metadata answer is a fallback, and must say so.
+        ("partial", None, "metadata_index_fallback", "partial", True),
+        ("indexing", None, "metadata_index_fallback", "indexing", True),
+        ("stale", None, "metadata_index_fallback", "stale", True),
     ],
 )
 async def test_smb_adapter_keeps_search_coverage_truthful(
@@ -630,8 +631,12 @@ async def test_smb_adapter_keeps_search_coverage_truthful(
         return {}
 
     async def adapter_search(*_args, **_kwargs):
+        # The adapter reports no reason of its own; a metadata-depth answer is
+        # named by the service, an aborted one by the adapter.
         return _MatterBoundSmbSearchResult(
-            hits=[], state=adapter_state, reason=adapter_reason
+            hits=[],
+            state=adapter_state,
+            reason=adapter_reason if adapter_state is not None else None,
         )
 
     service = FirmMemorySearchService()
@@ -684,9 +689,10 @@ def test_result_actions_are_server_issued_and_optional():
 async def test_search_api_handler_exercises_versioned_contract(monkeypatch):
     from app.routers import firm_memory as router_module
 
-    async def search(_db, *, user, request):
+    async def search(_db, *, user, request, redis=None):
         assert request.matter_ids == []
         assert user.tenant_id is not None
+        assert redis is None
         return FirmMemoryDocumentSearchResponse(
             audit_correlation_id="audit-api-1",
             coverage=[
@@ -1099,3 +1105,370 @@ async def test_matter_bound_hits_are_openable_and_scoped_to_their_binding():
     link = next(action for action in hit.actions if action.kind == "lawhand_result")
     assert link.available is True
     assert link.href == f"/firm-memory?matter={matter_id}&file={inside.id}"
+
+
+class _FullTextDb:
+    """Share lookup, bindings, the full-text row fetch, then associations."""
+
+    def __init__(self, share, results):
+        self.share = share
+        self.results = list(results)
+
+    async def scalar(self, _statement):
+        return self.share
+
+    async def execute(self, _statement):
+        return self.results.pop(0)
+
+
+def _relay_response(hits, *, agent_status="ready", partial=False):
+    return SimpleNamespace(
+        hits=hits,
+        partial=partial,
+        agent_statuses=[SimpleNamespace(status=agent_status)],
+    )
+
+
+def _full_text_case(monkeypatch, relay, *, index_rows):
+    """Wire one matter-bound share whose agent answers with document text."""
+    from app.models.matter_smb_share import MatterSmbShare
+    from app.services import smb as smb_module
+
+    tenant_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+    share = SmbShare(
+        id=uuid.uuid4(),
+        agent_id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        share_path=r"\\server\matters",
+        is_enabled=True,
+    )
+    source = _matter_bound_source(tenant_id, share_id=share.id)
+    binding = MatterSmbShare(
+        tenant_id=tenant_id,
+        share_id=share.id,
+        matter_id=matter_id,
+        folder_path="Acme",
+    )
+    monkeypatch.setattr(
+        smb_module.smb_service, "search_local_files_for_matters", relay
+    )
+    db = _FullTextDb(
+        share,
+        [_ScalarRows([binding]), _ScalarRows(index_rows), _Rows([]), _Rows([])],
+    )
+    return db, tenant_id, matter_id, source
+
+
+def _index_row(tenant_id, share_id, *, path=r"\\server\matters\Acme\Motion.pdf"):
+    from app.models.smb_file_index import SmbFileIndex
+
+    return SmbFileIndex(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        share_id=share_id,
+        path=path,
+        filename="Motion.pdf",
+        ext=".pdf",
+        snippet="stale preview text",
+    )
+
+
+@pytest.mark.asyncio
+async def test_full_text_results_come_from_the_node_but_are_built_from_our_index(
+    monkeypatch,
+):
+    row_holder: dict = {}
+
+    async def relay(*_args, **kwargs):
+        assert kwargs["share_ids"] == [str(row_holder["share_id"])]
+        return _relay_response(
+            [
+                SimpleNamespace(
+                    id=str(row_holder["row"].id),
+                    score=4.5,
+                    snippet="…prior indemnification analysis…",
+                    page_number=7,
+                )
+            ]
+        )
+
+    from app.models.smb_file_index import SmbFileIndex  # noqa: F401
+
+    tenant_id = uuid.uuid4()
+    share_id = uuid.uuid4()
+    row = _index_row(tenant_id, share_id)
+    row_holder.update({"row": row, "share_id": share_id})
+
+    db, tenant_id, matter_id, source = _full_text_case(
+        monkeypatch, relay, index_rows=[row]
+    )
+    row.tenant_id, row.share_id = tenant_id, source.legacy_smb_share_id
+    row_holder["share_id"] = source.legacy_smb_share_id
+
+    result = await FirmMemorySearchService()._search_matter_bound_smb(
+        db,
+        tenant_id=tenant_id,
+        requesting_user_id=uuid.uuid4(),
+        source=source,
+        matter_ids=(matter_id,),
+        request=FirmMemoryDocumentSearchRequest(query="indemnification"),
+        collection_ids=[],
+        redis=object(),
+    )
+
+    assert result.full_text is True
+    hit = result.hits[0]
+    # Snippet, score and page come from the node's document text; every other
+    # field, and the link, are built from our own index row.
+    assert hit.snippet == "…prior indemnification analysis…"
+    assert hit.provenance.page_number == 7
+    assert hit.provenance.index_kind == "smb_local_fulltext"
+    assert hit.title == "Motion.pdf"
+    assert hit.matter_ids == [str(matter_id)]
+    assert hit.actions[0].available is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "relay_outcome",
+    ["value_error", "runtime_error", "no_ready_agent"],
+)
+async def test_an_unreachable_node_falls_back_to_the_metadata_index(
+    monkeypatch, relay_outcome
+):
+    """A node that did not run the query must never read as an empty corpus."""
+
+    async def relay(*_args, **_kwargs):
+        if relay_outcome == "value_error":
+            raise ValueError("Matter not found or has no assigned SMB shares")
+        if relay_outcome == "runtime_error":
+            raise RuntimeError("A Firm Memory search is already in progress")
+        return _relay_response([], agent_status="timeout")
+
+    db, tenant_id, matter_id, source = _full_text_case(
+        monkeypatch, relay, index_rows=[]
+    )
+    # The metadata query replaces the full-text row fetch in the replay order.
+    db.results = [_ScalarRows([db.results[0].values[0]]), _Rows([]), _Rows([]), _Rows([])]
+
+    result = await FirmMemorySearchService()._search_matter_bound_smb(
+        db,
+        tenant_id=tenant_id,
+        requesting_user_id=uuid.uuid4(),
+        source=source,
+        matter_ids=(matter_id,),
+        request=FirmMemoryDocumentSearchRequest(query="indemnification"),
+        collection_ids=[],
+        redis=object(),
+    )
+
+    assert result.full_text is False
+    assert result.index_kind == "smb_metadata_fts"
+    assert result.searched is True
+
+
+@pytest.mark.asyncio
+async def test_a_node_that_answered_with_no_hits_is_not_a_fallback(monkeypatch):
+    """An answered search with zero hits is a real absence, not a failure."""
+
+    async def relay(*_args, **_kwargs):
+        return _relay_response([])
+
+    db, tenant_id, matter_id, source = _full_text_case(
+        monkeypatch, relay, index_rows=[]
+    )
+
+    result = await FirmMemorySearchService()._search_matter_bound_smb(
+        db,
+        tenant_id=tenant_id,
+        requesting_user_id=uuid.uuid4(),
+        source=source,
+        matter_ids=(matter_id,),
+        request=FirmMemoryDocumentSearchRequest(query="indemnification"),
+        collection_ids=[],
+        redis=object(),
+    )
+    assert result.hits == []
+    assert result.full_text is True
+
+
+@pytest.mark.asyncio
+async def test_full_text_search_is_not_attempted_without_a_relay(monkeypatch):
+    from app.services import smb as smb_module
+
+    async def relay(*_args, **_kwargs):  # pragma: no cover - must not run
+        raise AssertionError("no relay is available without redis")
+
+    monkeypatch.setattr(
+        smb_module.smb_service, "search_local_files_for_matters", relay
+    )
+    assert (
+        await FirmMemorySearchService()._full_text_records(
+            object(),
+            tenant_id=uuid.uuid4(),
+            requesting_user_id=uuid.uuid4(),
+            share=SmbShare(id=uuid.uuid4()),
+            matter_ids=(uuid.uuid4(),),
+            request=FirmMemoryDocumentSearchRequest(query="notice"),
+            redis=None,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("index_kind", "agent_partial", "expect_complete", "expect_reason"),
+    [
+        ("smb_local_fulltext", False, True, None),
+        ("smb_local_fulltext", True, False, "agent_index_partial"),
+        ("smb_metadata_fts", False, False, "metadata_index_fallback"),
+    ],
+)
+async def test_coverage_states_which_index_actually_answered(
+    monkeypatch, index_kind, agent_partial, expect_complete, expect_reason
+):
+    """Only a full-text answer may be reported as complete corpus coverage."""
+    from app.services import firm_memory as service_module
+
+    user = _user()
+    source = _matter_bound_source(user.tenant_id)
+    matter_id = uuid.uuid4()
+    service = FirmMemorySearchService()
+    _patch_search_service(monkeypatch, service, service_module, source=source)
+
+    async def matters(*_args, **_kwargs):
+        return {
+            matter_id: AuthorizationDecision(
+                AuthorizationState.ALLOW, "matter_allowed"
+            )
+        }
+
+    async def allow(*_args, **_kwargs):
+        return AuthorizationDecision(AuthorizationState.ALLOW, "matter_allowed")
+
+    async def adapter(*_args, **_kwargs):
+        return _MatterBoundSmbSearchResult(
+            hits=[], index_kind=index_kind, agent_partial=agent_partial
+        )
+
+    monkeypatch.setattr(firm_memory_authorization, "authorize_matters", matters)
+    monkeypatch.setattr(firm_memory_authorization, "authorize_source", allow)
+    monkeypatch.setattr(service, "_search_matter_bound_smb", adapter)
+
+    response = await service.search(
+        object(),
+        user=user,
+        request=FirmMemoryDocumentSearchRequest(
+            query="privilege", matter_ids=[str(matter_id)]
+        ),
+    )
+
+    assert response.coverage[0].index_kind == index_kind
+    assert response.coverage[0].reason == expect_reason
+    assert response.complete is expect_complete
+    assert response.partial is not expect_complete
+    # A complete response has nothing to explain; an incomplete one must.
+    assert (response.coverage_message is None) is expect_complete
+
+
+@pytest.mark.asyncio
+async def test_a_full_text_hit_outside_the_binding_is_dropped_locally(monkeypatch):
+    """The matter binding holds on evidence this service can see itself."""
+    holder: dict = {}
+
+    async def relay(*_args, **_kwargs):
+        return _relay_response(
+            [
+                SimpleNamespace(
+                    id=str(row.id), score=9.0, snippet="hit", page_number=1
+                )
+                for row in holder["rows"]
+            ]
+        )
+
+    tenant_id = uuid.uuid4()
+    share_id = uuid.uuid4()
+    inside = _index_row(
+        tenant_id, share_id, path=r"\\server\matters\Acme\Motion.pdf"
+    )
+    outside = _index_row(
+        tenant_id, share_id, path=r"\\server\matters\Other\Secret.pdf"
+    )
+    holder["rows"] = [inside, outside]
+
+    db, tenant_id, matter_id, source = _full_text_case(
+        monkeypatch, relay, index_rows=[inside, outside]
+    )
+    for row in holder["rows"]:
+        row.tenant_id, row.share_id = tenant_id, source.legacy_smb_share_id
+
+    result = await FirmMemorySearchService()._search_matter_bound_smb(
+        db,
+        tenant_id=tenant_id,
+        requesting_user_id=uuid.uuid4(),
+        source=source,
+        matter_ids=(matter_id,),
+        request=FirmMemoryDocumentSearchRequest(query="secret"),
+        collection_ids=[],
+        redis=object(),
+    )
+
+    assert [hit.title for hit in result.hits] == ["Motion.pdf"]
+    assert result.hits[0].provenance.relative_location == r"Acme\Motion.pdf"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("authorization_mode", "source_kind", "expected_reason"),
+    [
+        # The share is read by one service account, so an unbound share has no
+        # boundary to search within, whatever the source-level policy says.
+        ("firm", "smb", "matter_binding_required"),
+        ("explicit", "smb", "matter_binding_required"),
+        ("native", "smb", "matter_binding_required"),
+        ("native", "cloud", "native_document_authorization_required"),
+        ("firm", "cloud", "source_search_adapter_unavailable"),
+    ],
+)
+async def test_a_share_without_a_matter_binding_is_never_searched(
+    monkeypatch, authorization_mode, source_kind, expected_reason
+):
+    from app.services import firm_memory as service_module
+
+    user = _user()
+    source = FirmMemorySource(
+        id=uuid.uuid4(),
+        tenant_id=user.tenant_id,
+        source_key="whole-share",
+        display_name="Whole share",
+        source_kind=source_kind,
+        authorization_mode=authorization_mode,
+        coverage_state="ready",
+        is_enabled=True,
+    )
+    service = FirmMemorySearchService()
+    _patch_search_service(monkeypatch, service, service_module, source=source)
+
+    async def matters(*_args, **_kwargs):
+        return {}
+
+    async def allow(*_args, **_kwargs):
+        return AuthorizationDecision(AuthorizationState.ALLOW, "firm_entitlement")
+
+    async def adapter(*_args, **_kwargs):  # pragma: no cover - must not run
+        raise AssertionError("an unbound share must never be searched")
+
+    monkeypatch.setattr(firm_memory_authorization, "authorize_matters", matters)
+    monkeypatch.setattr(firm_memory_authorization, "authorize_source", allow)
+    monkeypatch.setattr(service, "_search_matter_bound_smb", adapter)
+
+    response = await service.search(
+        object(), user=user, request=FirmMemoryDocumentSearchRequest(query="payroll")
+    )
+
+    assert response.results == []
+    assert response.coverage[0].state == "unsupported"
+    assert response.coverage[0].reason == expected_reason
+    assert response.complete is False
