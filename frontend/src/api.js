@@ -2067,6 +2067,15 @@ export const getTemplate = (id) =>
 export const updateTemplate = (id, data) =>
   api.patch(`/templates/${id}`, data).then(r => r.data)
 
+// The retained source bytes for a saved template, so Template Studio can reopen
+// the original document in the visual editor. Returned as a File because pdf.js
+// and the shared field editor both branch on filename/content type.
+export const getTemplateSource = (id, filename = 'template-source.pdf') =>
+  api.get(`/templates/${id}/source`, { responseType: 'blob' }).then((r) => {
+    const type = r.data?.type || r.headers?.['content-type'] || 'application/octet-stream'
+    return new File([r.data], filename, { type: String(type).split(';')[0].trim() })
+  })
+
 export const deleteTemplate = (id) =>
   api.delete(`/templates/${id}`).then(r => r.data)
 

@@ -15,6 +15,7 @@ from search_node.contracts import (
     TerminalStatus,
 )
 from search_node.extraction import IsolatedExtractor
+from search_node.sandbox import ProcessContainer
 from search_node.ocr import OcrRunner, in_off_hours
 from search_node.workers import ExtractionWorker, OcrWorker
 
@@ -283,11 +284,22 @@ def test_supervisor_classifies_wall_timeout(monkeypatch, tmp_path: Path):
         def kill(self):
             self.returncode = -9
 
+    killed: list[object] = []
+
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: TimedOutProcess())
-    monkeypatch.setattr(IsolatedExtractor, "_kill", lambda self, proc: proc.kill())
+    # This fake is not a real handle/pid; containment itself is covered in
+    # test_sandbox.py, so keep both OS calls away from it here.
+    monkeypatch.setattr(ProcessContainer, "adopt", lambda self, proc: None)
+    monkeypatch.setattr(
+        ProcessContainer,
+        "terminate",
+        lambda self, proc: (killed.append(proc), proc.kill()),
+    )
     result = IsolatedExtractor(config).extract(job)
     assert result.status is TerminalStatus.TIMED_OUT
     assert result.error_code == "parser-wall-time"
+    # The supervisor must reach for whole-tree containment, not proc.kill().
+    assert len(killed) == 1
 
 
 def test_config_is_default_off(tmp_path: Path):

@@ -8,8 +8,49 @@ from urllib.parse import urlparse
 
 from clarity_agent.config import AgentConfig
 from clarity_agent.opensearch_engine import OpenSearchEngine, OpenSearchLimits
+from clarity_agent.search_engine import EngineHealth
 from clarity_agent.search_control import SqliteControlState
 from clarity_agent.search_gateway import LocalQueryGateway
+
+
+def preflight_reasons(health: EngineHealth) -> list[str]:
+    """Name every reason a health report is not servable.
+
+    Only operational signals: never a path, query, snippet, ACL token, or
+    credential.
+    """
+    details = health.details
+    reasons: list[str] = []
+    if health.status == "unavailable":
+        reasons.append(f"OpenSearch is unreachable ({details.get('error', 'unknown error')})")
+        return reasons
+    cluster_status = str(details.get("cluster_status", "unknown"))
+    if cluster_status not in {"green", "yellow"}:
+        reasons.append(f"cluster status is {cluster_status}")
+    if details.get("timed_out"):
+        reasons.append("the cluster health request timed out")
+    if not health.active_index:
+        reasons.append("no active read/write index")
+    expected = details.get("expected_disk_watermarks") or {}
+    actual = details.get("disk_watermarks") or {}
+    if isinstance(expected, dict) and isinstance(actual, dict) and actual != expected:
+        drift = ", ".join(
+            f"{name}={actual.get(name)!r} (expected {value!r})"
+            for name, value in expected.items()
+            if actual.get(name) != value
+        )
+        reasons.append(
+            f"disk watermarks do not match the packaged opensearch.yml: {drift}"
+        )
+    if details.get("disk_threshold_enabled") not in {True, "true"}:
+        reasons.append("cluster.routing.allocation.disk.threshold_enabled is not enabled")
+    if details.get("active_index_write_blocked"):
+        reasons.append("the active index is write-blocked")
+    if details.get("rebuild_lease_active"):
+        reasons.append(
+            "a rebuild lease is present; follow the rebuild quarantine recovery runbook"
+        )
+    return reasons or [f"engine reported {health.status}"]
 
 
 class SearchNode:
@@ -83,7 +124,14 @@ class SearchNode:
             await self.engine.ensure_index()
             health = await self.engine.health()
             if health.status != "healthy":
-                raise RuntimeError("Search Node OpenSearch preflight is not healthy")
+                # A failed preflight stops the whole agent, so the operator has
+                # to be able to read the cause off the service log. The most
+                # common one by far is a node that never received the packaged
+                # opensearch.yml and still has the stock 85% low watermark.
+                raise RuntimeError(
+                    "Search Node OpenSearch preflight is not healthy: "
+                    + "; ".join(preflight_reasons(health))
+                )
             await self.gateway.start()
         except Exception:
             await self.close()

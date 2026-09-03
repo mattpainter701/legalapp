@@ -23,225 +23,26 @@ import {
 } from 'lucide-react'
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
-const MIN_FIELD_SIZE = 12
-const VARIABLE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]*$/
+import { PdfPageCanvas, PdfThumbnail } from './PdfDocumentCanvas'
+import {
+  MIN_FIELD_SIZE,
+  VARIABLE_NAME_PATTERN,
+  canvasToOverlayRect,
+  clamp,
+  createManualField,
+  fieldIdentity,
+  firstPageFor,
+  geometryToOverlays,
+  isImageFile,
+  isPdfFile,
+  overlayToCanvasRect,
+  placementsFor,
+  sourceKind,
+} from './pdfFieldGeometry'
 
-const roundCoordinate = (value) => Math.round(Number(value) * 1000) / 1000
-const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value))
-
-export const overlayToCanvasRect = (overlay, page, viewport = null, scale = 1) => {
-  const [left, bottom, right, top] = overlay?.rect || [0, 0, 120, 24]
-  if (viewport?.convertToViewportRectangle) {
-    const converted = viewport.convertToViewportRectangle([left, bottom, right, top])
-    const xs = [converted[0], converted[2]]
-    const ys = [converted[1], converted[3]]
-    return {
-      x: Math.min(...xs),
-      y: Math.min(...ys),
-      width: Math.max(MIN_FIELD_SIZE, Math.abs(xs[1] - xs[0])),
-      height: Math.max(MIN_FIELD_SIZE, Math.abs(ys[1] - ys[0])),
-    }
-  }
-  const height = Number(page?.height) || 792
-  return {
-    x: left * scale,
-    y: (height - top) * scale,
-    width: Math.max(MIN_FIELD_SIZE, (right - left) * scale),
-    height: Math.max(MIN_FIELD_SIZE, (top - bottom) * scale),
-  }
-}
-
-export const canvasToOverlayRect = (geometry, page, viewport = null, scale = 1) => {
-  const { x, y, width, height } = geometry
-  if (viewport?.convertToPdfPoint) {
-    const corners = [
-      viewport.convertToPdfPoint(x, y),
-      viewport.convertToPdfPoint(x + width, y),
-      viewport.convertToPdfPoint(x, y + height),
-      viewport.convertToPdfPoint(x + width, y + height),
-    ]
-    const xs = corners.map((point) => point[0])
-    const ys = corners.map((point) => point[1])
-    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map(roundCoordinate)
-  }
-  const safeScale = scale || 1
-  const pageHeight = Number(page?.height) || 792
-  const unscaled = {
-    x: x / safeScale,
-    y: y / safeScale,
-    width: width / safeScale,
-    height: height / safeScale,
-  }
-  return [
-    unscaled.x,
-    pageHeight - unscaled.y - unscaled.height,
-    unscaled.x + unscaled.width,
-    pageHeight - unscaled.y,
-  ].map(roundCoordinate)
-}
-
-const isImageFile = (file) => Boolean(
-  file && (String(file.type || '').startsWith('image/') || /\.(png|jpe?g|tiff?|webp)$/i.test(file.name || ''))
-)
-
-const isPdfFile = (file) => Boolean(
-  file && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name || ''))
-)
-
-const fieldIdentity = (field, index = 0) => (
-  field?.pdf_source_key
-  || field?.pdf_field_name
-  || field?._bodyName
-  || `${field?.name || 'field'}:${index}`
-)
-
-const placementsFor = (field) => {
-  if (Array.isArray(field?.pdf_overlays) && field.pdf_overlays.length) {
-    return field.pdf_overlays.map((overlay, index) => ({ overlay, index }))
-  }
-  if (field?.pdf_overlay) return [{ overlay: field.pdf_overlay, index: 0 }]
-  if (Array.isArray(field?.rect) && field.rect.length === 4) {
-    return [{
-      overlay: {
-        page: Number(field.page) || 1,
-        rect: field.rect,
-        source_kind: 'acroform',
-        erase_source: false,
-      },
-      index: 0,
-    }]
-  }
-  return []
-}
-
-const sourceKind = (field) => (
-  field?.pdf_field_name
-    ? 'acroform'
-    : placementsFor(field)[0]?.overlay?.source_kind || field?.source_kind || 'text'
-)
-
-const firstPageFor = (field) => Number(
-  field?.page || placementsFor(field)[0]?.overlay?.page || 1
-) || 1
-
-const makeUuid = () => {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
-  const bytes = new Uint8Array(16)
-  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes)
-  else bytes.forEach((_, index) => { bytes[index] = Math.floor(Math.random() * 256) })
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-  const hex = [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
-function PdfPageCanvas({ document, pageNumber, zoom, onViewport, onError }) {
-  const canvasRef = useRef(null)
-
-  useEffect(() => {
-    if (!document) return undefined
-    let cancelled = false
-    let renderTask = null
-    onViewport(null)
-
-    const render = async () => {
-      try {
-        const pdfPage = await document.getPage(pageNumber)
-        if (cancelled) return
-        const viewport = pdfPage.getViewport({ scale: zoom })
-        const canvas = canvasRef.current
-        if (!canvas) return
-        const outputScale = clamp(globalThis.devicePixelRatio || 1, 1, 2)
-        canvas.width = Math.floor(viewport.width * outputScale)
-        canvas.height = Math.floor(viewport.height * outputScale)
-        canvas.style.width = `${viewport.width}px`
-        canvas.style.height = `${viewport.height}px`
-        const context = canvas.getContext('2d')
-        renderTask = pdfPage.render({
-          canvasContext: context,
-          viewport,
-          transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0],
-        })
-        await renderTask.promise
-        if (!cancelled) onViewport(viewport)
-      } catch (error) {
-        if (!cancelled && error?.name !== 'RenderingCancelledException') onError(error)
-      }
-    }
-
-    void render()
-    return () => {
-      cancelled = true
-      renderTask?.cancel()
-    }
-  }, [document, onError, onViewport, pageNumber, zoom])
-
-  return <canvas ref={canvasRef} className="absolute inset-0 bg-white shadow-sm" aria-label={`PDF page ${pageNumber}`} />
-}
-
-function PdfThumbnail({ document, pageNumber, active, onSelect }) {
-  const wrapperRef = useRef(null)
-  const canvasRef = useRef(null)
-  const [visible, setVisible] = useState(active)
-
-  useEffect(() => {
-    if (active || typeof IntersectionObserver === 'undefined') {
-      setVisible(true)
-      return undefined
-    }
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) setVisible(true)
-    }, { rootMargin: '160px' })
-    if (wrapperRef.current) observer.observe(wrapperRef.current)
-    return () => observer.disconnect()
-  }, [active])
-
-  useEffect(() => {
-    if (!document || !visible) return undefined
-    let cancelled = false
-    let renderTask = null
-    const render = async () => {
-      try {
-        const page = await document.getPage(pageNumber)
-        if (cancelled) return
-        const base = page.getViewport({ scale: 1 })
-        const viewport = page.getViewport({ scale: Math.min(0.24, 124 / base.width) })
-        const canvas = canvasRef.current
-        if (!canvas) return
-        canvas.width = Math.ceil(viewport.width)
-        canvas.height = Math.ceil(viewport.height)
-        renderTask = page.render({ canvasContext: canvas.getContext('2d'), viewport })
-        await renderTask.promise
-      } catch (error) {
-        if (!cancelled && error?.name !== 'RenderingCancelledException') {
-          // The main canvas shows the actionable preview error. A thumbnail can
-          // quietly remain a page placeholder.
-        }
-      }
-    }
-    void render()
-    return () => {
-      cancelled = true
-      renderTask?.cancel()
-    }
-  }, [document, pageNumber, visible])
-
-  return (
-    <button
-      ref={wrapperRef}
-      type="button"
-      onClick={onSelect}
-      aria-label={`Show page ${pageNumber}`}
-      aria-current={active ? 'page' : undefined}
-      className={`w-full rounded-md border p-2 text-left transition ${active ? 'border-brand-accent bg-brand-accent/10 ring-1 ring-brand-accent/30' : 'border-brand-line bg-brand-surface-2 hover:border-brand-accent/60'}`}
-    >
-      <div className="flex min-h-24 items-center justify-center overflow-hidden rounded bg-white shadow-sm">
-        <canvas ref={canvasRef} className="max-w-full" aria-hidden="true" />
-      </div>
-      <span className="mt-1 block text-center text-[11px] font-medium text-brand-muted">Page {pageNumber}</span>
-    </button>
-  )
-}
+// Re-exported for the existing intake tests, which assert this module's
+// coordinate contract directly.
+export { canvasToOverlayRect, overlayToCanvasRect }
 
 const FIELD_TOOLS = [
   { kind: 'text', label: 'Text', icon: Type },
@@ -436,29 +237,14 @@ export default function PrepareFormWorkspace({
 
   const updateGeometry = (entry, placementIndex, geometry) => {
     if (entry.field.pdf_field_name) return
-    const boundedX = clamp(geometry.x, 0, Math.max(0, canvasWidth - MIN_FIELD_SIZE))
-    const boundedY = clamp(geometry.y, 0, Math.max(0, canvasHeight - MIN_FIELD_SIZE))
-    const bounded = {
-      x: boundedX,
-      y: boundedY,
-      width: clamp(geometry.width, MIN_FIELD_SIZE, Math.max(MIN_FIELD_SIZE, canvasWidth - boundedX)),
-      height: clamp(geometry.height, MIN_FIELD_SIZE, Math.max(MIN_FIELD_SIZE, canvasHeight - boundedY)),
-    }
-    const placements = placementsFor(entry.field)
-    const existing = placements[placementIndex]?.overlay || {
-      page: pageNumber,
-      source_kind: 'manual',
-      erase_source: false,
-    }
-    const nextOverlay = {
-      ...existing,
-      page: Number(existing.page) || pageNumber,
-      rect: canvasToOverlayRect(bounded, page, pdfSample ? viewport : null, pdfSample ? 1 : zoom),
-    }
-    const overlays = placements.length
-      ? placements.map((placement) => ({ ...placement.overlay }))
-      : [nextOverlay]
-    overlays[placementIndex] = nextOverlay
+    const overlays = geometryToOverlays(entry.field, placementIndex, geometry, {
+      page,
+      pageNumber,
+      viewport: pdfSample ? viewport : null,
+      scale: pdfSample ? 1 : zoom,
+      canvasWidth,
+      canvasHeight,
+    })
     updateField(entry.identity, {
       page: Number(overlays[0]?.page) || pageNumber,
       rect: overlays[0]?.rect,
@@ -467,54 +253,8 @@ export default function PrepareFormWorkspace({
     })
   }
 
-  const nextFieldName = () => {
-    const existing = new Set(fields.map((field) => field.name))
-    let suffix = fields.length + 1
-    while (existing.has(`field_${suffix}`)) suffix += 1
-    return `field_${suffix}`
-  }
-
   const addField = (kind) => {
-    const id = makeUuid()
-    const name = nextFieldName()
-    const pageWidth = Number(page.width || 612)
-    const pageHeight = Number(page.height || 792)
-    const preferredDimensions = kind === 'checkbox'
-      ? { width: 20, height: 20 }
-      : kind === 'signature'
-        ? { width: 180, height: 36 }
-        : kind === 'multiline'
-          ? { width: 200, height: 64 }
-          : { width: 160, height: 26 }
-    const dimensions = {
-      width: Math.min(preferredDimensions.width, Math.max(MIN_FIELD_SIZE, pageWidth - 8)),
-      height: Math.min(preferredDimensions.height, Math.max(MIN_FIELD_SIZE, pageHeight - 8)),
-    }
-    const left = clamp(pageWidth * 0.12, 4, Math.max(4, pageWidth - dimensions.width - 4))
-    const top = clamp(pageHeight * 0.84, dimensions.height + 4, Math.max(dimensions.height + 4, pageHeight - 4))
-    const overlay = {
-      page: pageNumber,
-      rect: [left, top - dimensions.height, left + dimensions.width, top].map(roundCoordinate),
-      source_kind: 'manual',
-      erase_source: false,
-    }
-    const field = {
-      name,
-      label: `New ${kind === 'multiline' ? 'paragraph' : kind} field`,
-      field_type: kind === 'multiline' ? 'text' : kind,
-      required: false,
-      multiline: kind === 'multiline',
-      page: pageNumber,
-      source_kind: 'manual',
-      pdf_source_key: `manual:${id}`,
-      erase_source: false,
-      included: true,
-      pdf_overlay: overlay,
-      pdf_overlays: [overlay],
-      confidence: 1,
-      review_required: false,
-      _bodyName: name,
-    }
+    const field = createManualField(kind, { page, pageNumber, fields })
     commitFields([...fields, field])
     setSelectedIdentity(field.pdf_source_key)
     setMode('edit')

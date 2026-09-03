@@ -26,7 +26,10 @@ package-lock.json
 
 # Claude Code session memory (local only)
 memory/
-.claude/
+# Exclude .claude contents rather than the directory itself: git will not descend
+# into an excluded directory, so a negation cannot re-include a tracked subtree.
+.claude/*
+!.claude/skills/
 .claude/worktrees/
 
 # OS
