@@ -1890,8 +1890,50 @@ export const removeMatterParty = (matterId, partyId) =>
 
 // ── Matter Documents ────────────────────────────────────────────────────────
 
-export const getMatterDocuments = (matterId) =>
-  api.get(`/matters/${matterId}/documents`).then(r => r.data)
+export const getMatterDocuments = (matterId, params = {}) =>
+  api.get(`/matters/${matterId}/documents`, {
+    params,
+    // tag_ids repeats rather than serializing as tag_ids[]; FastAPI reads
+    // repeated keys as a list.
+    paramsSerializer: { indexes: null },
+  }).then(r => r.data)
+
+// ── Document explorer: folders and tags ─────────────────────────────────────
+
+export const getMatterDocumentFolders = (matterId) =>
+  api.get(`/matters/${matterId}/document-folders`).then(r => r.data)
+
+export const createMatterDocumentFolder = (matterId, data) =>
+  api.post(`/matters/${matterId}/document-folders`, data).then(r => r.data)
+
+export const updateMatterDocumentFolder = (matterId, folderId, data) =>
+  api.patch(`/matters/${matterId}/document-folders/${folderId}`, data).then(r => r.data)
+
+export const deleteMatterDocumentFolder = (matterId, folderId, { moveDocumentsToParent = false } = {}) =>
+  api.delete(`/matters/${matterId}/document-folders/${folderId}`, {
+    params: { move_documents_to_parent: moveDocumentsToParent },
+  }).then(r => r.data)
+
+export const moveMatterDocuments = (matterId, documentIds, folderId) =>
+  api.post(`/matters/${matterId}/documents/move`, {
+    document_ids: documentIds,
+    folder_id: folderId ?? null,
+  }).then(r => r.data)
+
+export const getDocumentTags = () =>
+  api.get('/document-tags').then(r => r.data)
+
+export const createDocumentTag = (data) =>
+  api.post('/document-tags', data).then(r => r.data)
+
+export const updateDocumentTag = (tagId, data) =>
+  api.patch(`/document-tags/${tagId}`, data).then(r => r.data)
+
+export const deleteDocumentTag = (tagId) =>
+  api.delete(`/document-tags/${tagId}`).then(r => r.data)
+
+export const setMatterDocumentTags = (matterId, docId, tagIds) =>
+  api.put(`/matters/${matterId}/documents/${docId}/tags`, { tag_ids: tagIds }).then(r => r.data)
 
 export const uploadMatterDocument = (matterId, formData) =>
   api.post(`/matters/${matterId}/documents/upload`, formData, {

@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["153_sms_lifecycle"]
+    assert heads == ["154_matter_document_folders"]
 
 
 def test_configurable_workflow_migration_is_tenant_safe_and_immutable():

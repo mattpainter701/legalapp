@@ -552,16 +552,23 @@ class MatterFileStore:
         matter_cloud_folder: dict | None = None,
         preferred_provider: str | None = None,
         require_cloud: bool = False,
+        folder_path: list[str] | None = None,
     ) -> StorageResult:
         """Upload a file and return structured provider metadata.
 
         This is the integration point for durable provider IDs once model columns
         are available. `store_matter_file()` remains as the legacy string wrapper.
+
+        ``folder_path`` is the matter's document-explorer folder for this file,
+        as names from the matter root down. When present it replaces the
+        category folder so the firm's cloud share mirrors the tree the firm
+        actually sees; without it the historical category layout is unchanged.
         """
+        segments = normalize_folder_path(folder_path)
         logger.info(
             "Storing %s/%s/%s (%d bytes) for tenant %s via preferred=%s",
             matter_slug,
-            category,
+            "/".join(segments) or category,
             filename,
             len(content),
             tenant_id,
@@ -581,6 +588,18 @@ class MatterFileStore:
         )
         sharepoint_drive_id = _extract_provider_field(
             matter_cloud_folder, "sharepoint", "drive_id"
+        )
+        # Explorer folders hang off the matter folder itself, not off a
+        # category subfolder, so a folder is one place in the share rather than
+        # a name repeated under every category.
+        onedrive_matter_folder_id = _extract_provider_field(
+            matter_cloud_folder, "onedrive", "matter_folder_id"
+        )
+        gdrive_matter_folder_id = _extract_provider_field(
+            matter_cloud_folder, "google_drive", "matter_folder_id"
+        )
+        sharepoint_matter_folder_id = _extract_provider_field(
+            matter_cloud_folder, "sharepoint", "matter_folder_id"
         )
 
         configured_provider, policy_bound = await self._resolve_provider_policy(
@@ -605,6 +624,8 @@ class MatterFileStore:
                     content,
                     content_type,
                     folder_id=onedrive_folder_id,
+                    folder_path=segments,
+                    matter_folder_id=onedrive_matter_folder_id,
                 )
                 if result and result.succeeded:
                     return result
@@ -618,6 +639,8 @@ class MatterFileStore:
                     content,
                     content_type,
                     folder_id=gdrive_folder_id,
+                    folder_path=segments,
+                    matter_folder_id=gdrive_matter_folder_id,
                 )
                 if result and result.succeeded:
                     return result
@@ -630,6 +653,8 @@ class MatterFileStore:
                     content_type,
                     folder_id=sharepoint_folder_id,
                     drive_id=sharepoint_drive_id,
+                    folder_path=segments,
+                    matter_folder_id=sharepoint_matter_folder_id,
                 )
                 if result and result.succeeded:
                     return result
@@ -651,7 +676,12 @@ class MatterFileStore:
         # Legacy development/demo tenants without any cloud binding retain the
         # historical local path until onboarding makes a provider authoritative.
         local_result = await self._store_local(
-            tenant_id, matter_slug, canonical_folder, filename, content
+            tenant_id,
+            matter_slug,
+            canonical_folder,
+            filename,
+            content,
+            folder_path=segments,
         )
         return local_result
 
@@ -671,6 +701,8 @@ class MatterFileStore:
         content: bytes,
         content_type: str,
         folder_id: str | None = None,
+        folder_path: list[str] | None = None,
+        matter_folder_id: str | None = None,
     ) -> StorageResult | None:
         """Try to store in customer's OneDrive. Uses upload session for files > 4 MiB."""
         try:
@@ -682,7 +714,16 @@ class MatterFileStore:
                     error="Microsoft token unavailable",
                 )
 
-            if folder_id:
+            segments = normalize_folder_path(folder_path)
+            if segments:
+                parent_id = (
+                    await _ensure_onedrive_path(token, segments, matter_folder_id)
+                    if matter_folder_id
+                    else await _ensure_onedrive_path(
+                        token, ["claritylegal-records", matter_slug, *segments]
+                    )
+                )
+            elif folder_id:
                 parent_id = folder_id
             else:
                 parent_id = await _ensure_onedrive_path(
@@ -852,6 +893,8 @@ class MatterFileStore:
         content: bytes,
         content_type: str,
         folder_id: str | None = None,
+        folder_path: list[str] | None = None,
+        matter_folder_id: str | None = None,
     ) -> StorageResult | None:
         """Try to store in customer's Google Drive. Uses resumable upload for files > 5 MiB."""
         try:
@@ -863,7 +906,16 @@ class MatterFileStore:
                     error="Google token unavailable",
                 )
 
-            if folder_id:
+            segments = normalize_folder_path(folder_path)
+            if segments:
+                parent_id = (
+                    await _ensure_gdrive_path(token, segments, matter_folder_id)
+                    if matter_folder_id
+                    else await _ensure_gdrive_path(
+                        token, ["claritylegal-records", matter_slug, *segments]
+                    )
+                )
+            elif folder_id:
                 parent_id = folder_id
             else:
                 parent_id = await _ensure_gdrive_path(
@@ -1140,9 +1192,15 @@ class MatterFileStore:
         *,
         folder_id: str | None,
         drive_id: str | None,
+        folder_path: list[str] | None = None,
+        matter_folder_id: str | None = None,
     ) -> StorageResult | None:
         """Try to store in a configured SharePoint document library."""
-        if not folder_id or not drive_id:
+        segments = normalize_folder_path(folder_path)
+        # An explorer folder is only reachable when the matter folder itself is
+        # known; without it there is no anchor to create the path under.
+        target_folder_id = folder_id if not segments else matter_folder_id
+        if not target_folder_id or not drive_id:
             return StorageResult(
                 provider="microsoft",
                 backend="sharepoint",
@@ -1150,6 +1208,7 @@ class MatterFileStore:
                 parent_id=folder_id,
                 error="SharePoint drive_id or folder_id unavailable",
             )
+        folder_id = target_folder_id
         try:
             token = await get_fresh_token(db, tenant_id, "microsoft")
             if not token:
@@ -1159,6 +1218,10 @@ class MatterFileStore:
                     drive_id=drive_id,
                     parent_id=folder_id,
                     error="Microsoft token unavailable",
+                )
+            if segments:
+                folder_id = await _ensure_sharepoint_path(
+                    token, drive_id, segments, folder_id
                 )
             upload_url = (
                 f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/"
@@ -1215,13 +1278,15 @@ class MatterFileStore:
         category: str,
         filename: str,
         content: bytes,
+        folder_path: list[str] | None = None,
     ) -> StorageResult:
         """Store file on local disk. Returns the absolute storage path."""
+        segments = normalize_folder_path(folder_path) or [category]
         full_path = _safe_new_local_path(
             tenant_id,
             "matters",
             matter_slug,
-            category,
+            *segments,
             filename,
         )
         await asyncio.to_thread(_write_local_file, full_path, content)
@@ -1501,25 +1566,60 @@ def _gdrive_web_url(file_id: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view"
 
 
-async def _ensure_onedrive_path(token: str, folders: list[str]) -> str:
+async def _ensure_onedrive_path(
+    token: str, folders: list[str], parent_id: str = "root"
+) -> str:
     """Ensure a folder path exists in OneDrive, creating folders as needed.
     Returns the folder ID of the deepest folder.
     """
     from app.services.cloud_init import _ensure_onedrive_folder
 
-    parent_id = "root"
     for folder_name in folders:
         parent_id = await _ensure_onedrive_folder(token, folder_name, parent_id)
     return parent_id
 
 
-async def _ensure_gdrive_path(token: str, folders: list[str]) -> str:
+async def _ensure_gdrive_path(
+    token: str, folders: list[str], parent_id: str = "root"
+) -> str:
     """Ensure a folder path exists in Google Drive, creating folders as needed.
     Returns the folder ID of the deepest folder.
     """
     from app.services.cloud_init import _ensure_gdrive_folder
 
-    parent_id = "root"
     for folder_name in folders:
         parent_id = await _ensure_gdrive_folder(token, folder_name, parent_id)
     return parent_id
+
+
+async def _ensure_sharepoint_path(
+    token: str, drive_id: str, folders: list[str], parent_id: str
+) -> str:
+    """Ensure a folder path exists under a SharePoint library folder."""
+    from app.services.cloud_init import _ensure_sharepoint_folder
+
+    for folder_name in folders:
+        parent_id = await _ensure_sharepoint_folder(
+            token, drive_id, folder_name, parent_id
+        )
+    return parent_id
+
+
+def normalize_folder_path(folder_path: list[str] | None) -> list[str]:
+    """Drop empties and reject anything that could escape the matter folder.
+
+    Folder names are already constrained at the model and service layer; this
+    is the storage layer refusing to build a provider path out of a segment it
+    was not meant to see.
+    """
+    segments: list[str] = []
+    for raw in folder_path or []:
+        segment = str(raw or "").strip()
+        if not segment:
+            continue
+        if segment in {".", ".."} or "/" in segment or "\\" in segment:
+            raise MatterFileAccessError(
+                "Document folder path escapes the matter storage folder"
+            )
+        segments.append(segment)
+    return segments

@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
-  getMatterDocuments,
   uploadMatterDocument,
   updateMatterDocument,
   deleteMatterDocument,
@@ -10,10 +9,24 @@ import {
   provisionMatterCloudFolder,
   syncMatterCloudFolder,
   getMatterCloudFiles,
+  createDocumentTag,
+  setMatterDocumentTags,
 } from '../api'
-import { FileText, Upload, Trash2, Download, X, Check, Cloud, ExternalLink, RefreshCw, Eye, EyeOff, Sparkles, Pencil, ShieldCheck } from 'lucide-react'
+import { FileText, Upload, Trash2, Download, X, Check, Cloud, ExternalLink, RefreshCw, Eye, EyeOff, Sparkles, Pencil, ShieldCheck, Folder, Search, Tag as TagIcon } from 'lucide-react'
 import { useConfirm } from './dialog/ConfirmProvider'
 import { useToast } from './toast/useToast'
+import useMatterDocumentExplorer, {
+  ALL_DOCUMENTS,
+  ROOT_FOLDER,
+} from '../hooks/useMatterDocumentExplorer'
+import DocumentFolderTree, {
+  writeDraggedDocumentIds,
+} from './documents/DocumentFolderTree'
+import {
+  DocumentTagEditor,
+  DocumentTagFilter,
+  TagChip,
+} from './documents/DocumentTags'
 
 const CATEGORIES = ['pleading', 'contract', 'evidence', 'correspondence', 'other']
 
@@ -216,16 +229,49 @@ function CloudFolderCard({ matterId, onFolderChange, onSynced }) {
 export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onReviseDocument }) {
   const confirmAction = useConfirm()
   const toast = useToast()
-  const [docs, setDocs] = useState([])
+  const explorer = useMatterDocumentExplorer(matterId)
+  const {
+    documents: docs,
+    setDocuments: setDocs,
+    folders,
+    foldersByParent,
+    tags,
+    rootDocumentCount,
+    currentFolder,
+    breadcrumb,
+    loading,
+    listing,
+    error,
+    setError,
+    folderId,
+    setFolderId,
+    includeSubfolders,
+    setIncludeSubfolders,
+    search,
+    setSearch,
+    selectedTagIds,
+    setSelectedTagIds,
+    toggleTagFilter,
+    sort,
+    setSort,
+    order,
+    setOrder,
+    createFolder,
+    renameFolder,
+    removeFolder,
+    fileDocuments,
+    refreshFolders,
+    refreshTags,
+    refreshDocuments,
+  } = explorer
   const [cloudFiles, setCloudFiles] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
 
   // Upload form state
   const [showUpload, setShowUpload] = useState(false)
   const [uploadFile, setUploadFile] = useState(null)
   const [uploadDescription, setUploadDescription] = useState('')
   const [uploadCategory, setUploadCategory] = useState('')
+  const [uploadFolderId, setUploadFolderId] = useState('')
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const [uploadNotice, setUploadNotice] = useState(null)
@@ -237,22 +283,42 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
   const [editCategory, setEditCategory] = useState('')
   const [saving, setSaving] = useState(false)
 
+  // Folder name entry (create / rename) and tag popover
+  const [folderDraft, setFolderDraft] = useState(null)
+  const [folderDraftError, setFolderDraftError] = useState(null)
+  const [tagEditorDocId, setTagEditorDocId] = useState(null)
+
+  // New uploads default into the folder the user is looking at, which is
+  // almost always where they mean to put the file.
+  useEffect(() => {
+    if (showUpload) {
+      setUploadFolderId(
+        folderId === ALL_DOCUMENTS || folderId === ROOT_FOLDER ? '' : folderId,
+      )
+    }
+  }, [showUpload, folderId])
+
+  const totalDocumentCount = useMemo(
+    () => folders.reduce((sum, f) => sum + (f.document_count || 0), rootDocumentCount),
+    [folders, rootDocumentCount],
+  )
+
+  const folderOptions = useMemo(
+    () => [...folders].sort((a, b) => a.path.localeCompare(b.path)),
+    [folders],
+  )
+
   const inputClasses =
     'w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface transition-all'
   const labelClasses =
     'block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5'
 
   useEffect(() => {
-    Promise.all([
-      getMatterDocuments(matterId),
-      getMatterCloudFiles(matterId).catch(() => null),
-    ])
-      .then(([data, cloudData]) => {
-        setDocs(data.items || [])
+    getMatterCloudFiles(matterId)
+      .then((cloudData) => {
         if (cloudData) setCloudFiles(cloudData.files || [])
       })
-      .catch(() => setError('Failed to load documents.'))
-      .finally(() => setLoading(false))
+      .catch(() => {})
   }, [matterId])
 
   const handleUpload = async () => {
@@ -265,8 +331,14 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
       formData.append('file', uploadFile)
       if (uploadDescription) formData.append('description', uploadDescription)
       if (uploadCategory) formData.append('document_category', uploadCategory)
+      if (uploadFolderId) formData.append('folder_id', uploadFolderId)
       const newDoc = await uploadMatterDocument(matterId, formData)
       setDocs((prev) => [newDoc, ...prev])
+      // The optimistic row is only correct when the upload landed in the view
+      // the user is looking at; re-listing settles the case where they filed it
+      // into a different folder, and refreshes the rail's counts either way.
+      await refreshFolders()
+      await refreshDocuments()
       setShowUpload(false)
       setUploadFile(null)
       setUploadDescription('')
@@ -295,10 +367,103 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
     try {
       await deleteMatterDocument(matterId, docId)
       setDocs((prev) => prev.filter((d) => d.id !== docId))
+      await refreshFolders()
     } catch (error) {
       toast.error('Document was not deleted', { message: apiErrorMessage(error, 'Please try again.') })
     }
   }
+
+  // ── Folders ───────────────────────────────────────────────────────────────
+
+  const startCreateFolder = useCallback((parentId) => {
+    setFolderDraftError(null)
+    setFolderDraft({ mode: 'create', parentId: parentId || null, name: '' })
+  }, [])
+
+  const startRenameFolder = useCallback((folder) => {
+    setFolderDraftError(null)
+    setFolderDraft({ mode: 'rename', folderId: folder.id, name: folder.name })
+  }, [])
+
+  const submitFolderDraft = useCallback(async () => {
+    if (!folderDraft?.name.trim()) return
+    setFolderDraftError(null)
+    try {
+      if (folderDraft.mode === 'create') {
+        const folder = await createFolder(folderDraft.name.trim(), folderDraft.parentId)
+        setFolderId(folder.id)
+      } else {
+        await renameFolder(folderDraft.folderId, folderDraft.name.trim())
+      }
+      setFolderDraft(null)
+    } catch (err) {
+      setFolderDraftError(apiErrorMessage(err, 'That folder could not be saved.'))
+    }
+  }, [folderDraft, createFolder, renameFolder, setFolderId])
+
+  const handleDeleteFolder = useCallback(
+    async (folder) => {
+      const holdsDocuments = (folder.document_count || 0) > 0
+      const confirmed = await confirmAction({
+        title: `Delete "${folder.name}"?`,
+        message: holdsDocuments
+          ? `This folder and its subfolders will be removed. Its ${folder.document_count} document(s) are kept and moved up one level.`
+          : 'This folder and its subfolders will be removed. Documents are never deleted with a folder.',
+        confirmLabel: 'Delete folder',
+        destructive: true,
+      })
+      if (!confirmed) return
+      try {
+        const result = await removeFolder(folder.id, { moveDocumentsToParent: true })
+        if (result.documents_moved) {
+          toast.success(
+            `Moved ${result.documents_moved} document${result.documents_moved === 1 ? '' : 's'} up one level.`,
+          )
+        }
+      } catch (err) {
+        toast.error('Folder was not deleted', {
+          message: apiErrorMessage(err, 'Please try again.'),
+        })
+      }
+    },
+    [confirmAction, removeFolder, toast],
+  )
+
+  const handleDropDocuments = useCallback(
+    async (documentIds, targetFolderId) => {
+      try {
+        await fileDocuments(documentIds, targetFolderId)
+      } catch (err) {
+        toast.error('Documents were not moved', {
+          message: apiErrorMessage(err, 'Please try again.'),
+        })
+      }
+    },
+    [fileDocuments, toast],
+  )
+
+  // ── Tags ──────────────────────────────────────────────────────────────────
+
+  const handleCreateTag = useCallback(
+    async (name) => {
+      const tag = await createDocumentTag({ name })
+      await refreshTags()
+      return tag
+    },
+    [refreshTags],
+  )
+
+  const handleApplyTags = useCallback(
+    async (docId, tagIds) => {
+      const result = await setMatterDocumentTags(matterId, docId, tagIds)
+      setDocs((prev) =>
+        prev.map((d) => (d.id === docId ? { ...d, tags: result.items || [] } : d)),
+      )
+      // A document may drop out of an active tag filter once its tags change.
+      if (selectedTagIds.length) await refreshDocuments()
+    },
+    [matterId, setDocs, selectedTagIds, refreshDocuments],
+  )
 
   const startEdit = (doc) => {
     setEditingId(doc.id)
@@ -424,13 +589,62 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
             ({docs.length})
           </span>
         </h2>
-        <button
-          onClick={() => setShowUpload((v) => !v)}
-          className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink hover:bg-brand-bg-soft transition-colors shadow-sm"
-        >
-          <Upload size={16} /> Upload Document
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => startCreateFolder(folderId === ALL_DOCUMENTS || folderId === ROOT_FOLDER ? null : folderId)}
+            className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink hover:bg-brand-bg-soft transition-colors shadow-sm"
+          >
+            <Folder size={16} /> New Folder
+          </button>
+          <button
+            onClick={() => setShowUpload((v) => !v)}
+            className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink hover:bg-brand-bg-soft transition-colors shadow-sm"
+          >
+            <Upload size={16} /> Upload Document
+          </button>
+        </div>
       </div>
+
+      {/* Folder name entry — create or rename */}
+      {folderDraft && (
+        <div className="bg-brand-bg border border-brand-line rounded-xl p-4 space-y-3">
+          <label htmlFor="matterdocumentstab-folder-name" className={labelClasses}>
+            {folderDraft.mode === 'create' ? 'New folder name' : 'Rename folder'}
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              id="matterdocumentstab-folder-name"
+              autoFocus
+              value={folderDraft.name}
+              onChange={(e) => setFolderDraft({ ...folderDraft, name: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); submitFolderDraft() }
+                if (e.key === 'Escape') setFolderDraft(null)
+              }}
+              placeholder="e.g. Discovery"
+              className={`${inputClasses} max-w-xs`}
+            />
+            <button
+              type="button"
+              onClick={submitFolderDraft}
+              disabled={!folderDraft.name.trim()}
+              className="px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 disabled:opacity-50"
+            >
+              {folderDraft.mode === 'create' ? 'Create folder' : 'Save name'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setFolderDraft(null)}
+              className="px-4 py-2.5 text-brand-ink-2 text-sm font-sans hover:text-brand-ink"
+            >
+              Cancel
+            </button>
+          </div>
+          {folderDraftError && (
+            <p className="text-brand-rose text-sm font-sans">{folderDraftError}</p>
+          )}
+        </div>
+      )}
 
       {/* Upload form */}
       {showUpload && (
@@ -473,6 +687,23 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
                 className={inputClasses}
               />
             </div>
+            <div className="md:col-span-2">
+              <label htmlFor="matterdocumentstab-folder" className={labelClasses}>Folder</label>
+              <select id="matterdocumentstab-folder"
+                value={uploadFolderId}
+                onChange={(e) => setUploadFolderId(e.target.value)}
+                className={inputClasses}
+              >
+                <option value="">Unfiled (matter root)</option>
+                {folderOptions.map((f) => (
+                  <option key={f.id} value={f.id}>{f.path}</option>
+                ))}
+              </select>
+              <p className="mt-1.5 text-[11px] font-sans text-brand-muted">
+                The file is written to the matching folder in the firm's cloud
+                share, so the share mirrors what you see here.
+              </p>
+            </div>
           </div>
           {uploadError && (
             <p className="text-brand-rose text-sm font-sans bg-brand-rose/10 px-3 py-2 rounded border border-brand-rose/20">
@@ -510,8 +741,114 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
         </div>
       )}
 
+      {/* Explorer: folder rail + filtered document list */}
+      <div className="grid gap-5 md:grid-cols-[15rem_minmax(0,1fr)]">
+        <aside className="rounded-2xl border border-brand-line bg-brand-surface p-3 shadow-sm md:sticky md:top-4 md:self-start">
+          <DocumentFolderTree
+            folders={folders}
+            foldersByParent={foldersByParent}
+            rootDocumentCount={rootDocumentCount}
+            totalDocumentCount={totalDocumentCount}
+            selectedFolderId={folderId}
+            onSelectFolder={setFolderId}
+            onCreateFolder={startCreateFolder}
+            onRenameFolder={startRenameFolder}
+            onDeleteFolder={handleDeleteFolder}
+            onDropDocuments={handleDropDocuments}
+          />
+        </aside>
+
+        <div className="min-w-0 space-y-4">
+          {/* Toolbar: location, search, tags, sort */}
+          <div className="space-y-3 rounded-2xl border border-brand-line bg-brand-surface p-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <nav aria-label="Folder path" className="flex min-w-0 flex-wrap items-center gap-1 text-[13px] font-sans">
+                <button
+                  type="button"
+                  onClick={() => setFolderId(ALL_DOCUMENTS)}
+                  className={`rounded px-1.5 py-0.5 ${folderId === ALL_DOCUMENTS ? 'font-bold text-brand-ink' : 'text-brand-accent hover:underline'}`}
+                >
+                  All documents
+                </button>
+                {folderId === ROOT_FOLDER && (
+                  <>
+                    <span className="text-brand-muted" aria-hidden="true">/</span>
+                    <span className="font-bold text-brand-ink">Unfiled</span>
+                  </>
+                )}
+                {breadcrumb.map((node, index) => (
+                  <span key={node.id} className="flex items-center gap-1">
+                    <span className="text-brand-muted" aria-hidden="true">/</span>
+                    <button
+                      type="button"
+                      onClick={() => setFolderId(node.id)}
+                      className={`rounded px-1.5 py-0.5 ${index === breadcrumb.length - 1 ? 'font-bold text-brand-ink' : 'text-brand-accent hover:underline'}`}
+                    >
+                      {node.name}
+                    </button>
+                  </span>
+                ))}
+              </nav>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {currentFolder && (
+                  <label className="flex items-center gap-1.5 text-[12px] font-sans text-brand-ink-2">
+                    <input
+                      type="checkbox"
+                      checked={includeSubfolders}
+                      onChange={(e) => setIncludeSubfolders(e.target.checked)}
+                      className="h-3.5 w-3.5"
+                    />
+                    Include subfolders
+                  </label>
+                )}
+                <label className="sr-only" htmlFor="matterdocumentstab-sort">Sort documents by</label>
+                <select
+                  id="matterdocumentstab-sort"
+                  value={`${sort}:${order}`}
+                  onChange={(e) => {
+                    const [nextSort, nextOrder] = e.target.value.split(':')
+                    setSort(nextSort)
+                    setOrder(nextOrder)
+                  }}
+                  className="rounded-lg border border-brand-line bg-brand-surface px-2.5 py-1.5 text-[13px] font-sans text-brand-ink"
+                >
+                  <option value="created_at:desc">Newest first</option>
+                  <option value="created_at:asc">Oldest first</option>
+                  <option value="filename:asc">Name A–Z</option>
+                  <option value="filename:desc">Name Z–A</option>
+                  <option value="file_size:desc">Largest first</option>
+                  <option value="file_size:asc">Smallest first</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative min-w-[12rem] flex-1">
+                <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted" aria-hidden="true" />
+                <label className="sr-only" htmlFor="matterdocumentstab-search">Search documents</label>
+                <input
+                  id="matterdocumentstab-search"
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search filename or description"
+                  className="w-full rounded-lg border border-brand-line bg-brand-surface py-1.5 pl-8 pr-3 text-[13px] font-sans text-brand-ink focus:border-brand-accent focus:outline-none"
+                />
+              </div>
+              <DocumentTagFilter
+                tags={tags}
+                selectedTagIds={selectedTagIds}
+                onToggle={toggleTagFilter}
+                onClear={() => setSelectedTagIds([])}
+              />
+            </div>
+          </div>
+
       {/* Documents table */}
-      {docs.length === 0 ? (
+      {listing && docs.length === 0 ? (
+        <div className="py-10 text-center text-[13px] font-sans text-brand-muted">Loading documents…</div>
+      ) : docs.length === 0 ? (
         <div className="text-center py-16 bg-brand-surface border border-brand-line rounded-2xl">
           <FileText
             size={32}
@@ -519,10 +856,14 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
             strokeWidth={1.5}
           />
           <p className="text-brand-ink font-serif text-lg font-bold mb-1">
-            No documents attached
+            {search || selectedTagIds.length ? 'No matching documents' : 'No documents here'}
           </p>
           <p className="text-brand-muted text-sm font-sans">
-            Upload pleadings, contracts, evidence, and correspondence here.
+            {search || selectedTagIds.length
+              ? 'Try a different search or clear the tag filter.'
+              : currentFolder
+                ? `Upload into "${currentFolder.name}", or drag documents onto it from another folder.`
+                : 'Upload pleadings, contracts, evidence, and correspondence here.'}
           </p>
         </div>
       ) : (
@@ -545,6 +886,14 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
                       {doc.document_category ? <CategoryBadge category={doc.document_category} /> : <span className="text-xs text-brand-muted">Uncategorized</span>}
                       <span className="text-xs text-brand-muted">{formatBytes(doc.file_size)}</span>
                       <span className="text-xs text-brand-muted">{storageLabel(doc.storage_backend)}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 text-xs text-brand-muted">
+                        <Folder size={11} aria-hidden="true" /> {doc.folder_path || 'Unfiled'}
+                      </span>
+                      {(doc.tags || []).map((tag) => (
+                        <TagChip key={tag.id} tag={tag} />
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -663,6 +1012,9 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
                   Description
                 </th>
                 <th className="text-left px-5 py-3.5 text-[11px] font-bold text-brand-muted uppercase tracking-widest">
+                  Folder &amp; Tags
+                </th>
+                <th className="text-left px-5 py-3.5 text-[11px] font-bold text-brand-muted uppercase tracking-widest">
                   Uploaded
                 </th>
                 <th className="text-left px-5 py-3.5 text-[11px] font-bold text-brand-muted uppercase tracking-widest">
@@ -675,6 +1027,9 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
               {docs.map((doc) => (
                 <tr
                   key={doc.id}
+                  draggable={editingId !== doc.id}
+                  onDragStart={(event) => writeDraggedDocumentIds(event.dataTransfer, [doc.id])}
+                  title="Drag onto a folder to file this document"
                   className="border-b border-brand-line/50 last:border-0 hover:bg-brand-bg-soft/40 transition-colors"
                 >
                   {editingId === doc.id ? (
@@ -701,7 +1056,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
                       <td className="px-5 py-3 text-brand-muted">
                         {formatBytes(doc.file_size)}
                       </td>
-                      <td className="px-5 py-3" colSpan={2}>
+                      <td className="px-5 py-3" colSpan={3}>
                         <input
                           type="text"
                           value={editDescription}
@@ -786,6 +1141,39 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
                           <span className="text-brand-muted">—</span>
                         )}
                       </td>
+                      <td className="relative px-5 py-3 align-top">
+                        <div className="flex items-center gap-1.5 text-[12px] text-brand-muted">
+                          <Folder size={12} aria-hidden="true" />
+                          <span className="max-w-[140px] truncate" title={doc.folder_path || 'Unfiled'}>
+                            {doc.folder_path || 'Unfiled'}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                          {(doc.tags || []).map((tag) => (
+                            <TagChip key={tag.id} tag={tag} />
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => setTagEditorDocId((current) => (current === doc.id ? null : doc.id))}
+                            aria-label={`Edit tags for ${doc.filename}`}
+                            aria-expanded={tagEditorDocId === doc.id}
+                            className="inline-flex items-center gap-1 rounded-full border border-dashed border-brand-line px-2 py-0.5 text-[11px] font-sans text-brand-muted hover:border-brand-accent hover:text-brand-accent"
+                          >
+                            <TagIcon size={10} aria-hidden="true" />
+                            {(doc.tags || []).length ? 'Edit' : 'Tag'}
+                          </button>
+                        </div>
+                        {tagEditorDocId === doc.id && (
+                          <DocumentTagEditor
+                            documentId={doc.id}
+                            documentTags={doc.tags || []}
+                            tags={tags}
+                            onApply={handleApplyTags}
+                            onCreateTag={handleCreateTag}
+                            onClose={() => setTagEditorDocId(null)}
+                          />
+                        )}
+                      </td>
                       <td className="px-5 py-3 text-brand-muted whitespace-nowrap">
                         {doc.created_at
                           ? (() => {
@@ -859,6 +1247,8 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
         </div>
         </>
       )}
+        </div>
+      </div>
     </div>
   )
 }

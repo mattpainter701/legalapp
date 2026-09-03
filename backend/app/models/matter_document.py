@@ -54,6 +54,15 @@ class MatterDocument(Base):
             name="fk_matter_documents_tenant_supersedes",
             ondelete="RESTRICT",
         ),
+        # RESTRICT, not SET NULL: a folder must never take its documents with
+        # it. Callers re-file or detach the documents first, in the same
+        # transaction as the folder delete.
+        ForeignKeyConstraint(
+            ["tenant_id", "folder_id"],
+            ["matter_document_folders.tenant_id", "matter_document_folders.id"],
+            name="fk_matter_documents_tenant_folder",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             "document_role IS NULL OR document_role IN "
             "('source', 'working_copy', 'review_snapshot', 'filed_copy', 'export')",
@@ -83,6 +92,12 @@ class MatterDocument(Base):
             "idx_matter_documents_tenant_storage_state",
             "tenant_id",
             "storage_state",
+        ),
+        Index(
+            "idx_matter_documents_tenant_matter_folder",
+            "tenant_id",
+            "matter_id",
+            "folder_id",
         ),
     )
 
@@ -119,6 +134,10 @@ class MatterDocument(Base):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    # NULL means the document sits at the matter root of the document explorer.
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
     )
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)

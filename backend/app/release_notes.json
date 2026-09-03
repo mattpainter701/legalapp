@@ -2,6 +2,31 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.02.1",
+      "version": "2026.09.02.1",
+      "title": "Organize matter documents with folders and tags",
+      "published_at": "2026-09-02",
+      "summary": "Case documents get a file-explorer view: a per-matter folder tree, firm-wide tags, search and sort, and uploads that write into the matching folder of the firm's bound cloud share.",
+      "highlights": [
+        {
+          "title": "Group case files into folders",
+          "description": "Each matter has its own folder tree with drag-and-drop filing, breadcrumbs, and per-folder counts. Deleting a folder never deletes the documents inside it."
+        },
+        {
+          "title": "Label documents across matters",
+          "description": "Firm-wide tags apply to any case document and filter the list conjunctively, so “Signed” plus “Filed” narrows to documents carrying both."
+        },
+        {
+          "title": "Find a document without scrolling",
+          "description": "Filename and description search, folder scoping with or without subfolders, and name, date, or size sorting all run on the server rather than in the browser."
+        },
+        {
+          "title": "The cloud share mirrors the same tree",
+          "description": "A document uploaded into a folder is written to the matching folder under the matter in the firm's cloud share, and portal uploads file themselves into Client Uploads."
+        }
+      ]
+    },
+    {
       "id": "2026.09.01.1",
       "version": "2026.09.01.1",
       "title": "Consent-aware SMS with review and opt-out controls",

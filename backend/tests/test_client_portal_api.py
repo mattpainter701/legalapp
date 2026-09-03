@@ -23,6 +23,7 @@ from app.models.client_portal import ClientPortalInvite
 from app.models.conflict_check import PortalInvoiceDownload
 from app.models.communication_log import CommunicationLog
 from app.models.matter_assignment import MatterAssignment
+from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
 from app.routers.client_portal import CLIENT_PORTAL_COOKIE_NAME
 from app.services.portal_token import create_matter_portal_token
@@ -390,6 +391,64 @@ async def test_upload_strips_path_traversal_from_the_filename(client, portal_coo
         f"{PORTAL}/documents", headers=_portal_headers(portal_cookie)
     )
     assert [d["filename"] for d in listing.json()] == ["passwd.pdf"]
+
+
+@pytest.mark.asyncio
+async def test_client_uploads_are_filed_into_the_matters_client_uploads_folder(
+    client, portal_cookie, portal_matter, db_session
+):
+    """Portal uploads must land somewhere the firm can find them.
+
+    Before folders existed every client upload joined one flat list; the portal
+    now files them into the matter's protected "Client Uploads" folder, created
+    on first use, so the firm's document explorer groups them on its own.
+    """
+    from app.models.matter_document_folder import MatterDocumentFolder
+    from app.services.matter_document_organization import (
+        SYSTEM_FOLDER_CLIENT_UPLOADS,
+    )
+
+    matter_id = portal_matter.id
+    headers = _portal_headers(portal_cookie)
+    for name in ("first.pdf", "second.pdf"):
+        resp = await client.post(
+            f"{PORTAL}/documents/upload",
+            headers=headers,
+            files={"file": (name, io.BytesIO(b"%PDF-1.4 body"), "application/pdf")},
+        )
+        assert resp.status_code == 201, resp.text
+
+    folders = (
+        (
+            await db_session.execute(
+                select(MatterDocumentFolder).where(
+                    MatterDocumentFolder.matter_id == matter_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Created once, not once per upload.
+    assert len(folders) == 1
+    folder = folders[0]
+    assert folder.kind == "system"
+    assert folder.system_key == SYSTEM_FOLDER_CLIENT_UPLOADS
+
+    documents = (
+        (
+            await db_session.execute(
+                select(MatterDocument).where(MatterDocument.matter_id == matter_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(documents) == 2
+    assert {d.folder_id for d in documents} == {folder.id}
+    # The canonical cloud subfolder still routes client uploads, so a matter
+    # already provisioned in the firm's share does not grow a second folder.
+    assert {d.document_category for d in documents} == {"client_uploads"}
 
 
 # ── Invoices ────────────────────────────────────────────────────────────────
