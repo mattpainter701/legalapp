@@ -56,6 +56,7 @@ from app.services.studio_object_storage import (
     StudioObjectRef,
     StudioObjectStore,
     StudioStagedObject,
+    StudioStorageError,
     run_storage_mutation_to_completion,
     run_storage_operation_to_completion,
 )
@@ -513,6 +514,22 @@ class _AuthoritativeInputState:
             raise ValueError("invalid authoritative input disposition")
         if (self.disposition == "corrupt") != (self.failure_code is not None):
             raise ValueError("invalid authoritative input failure state")
+
+
+#: Storage failures that prove the stored object is lost or no longer matches
+#: its recorded identity. Only these may drive destructive quarantine; every
+#: other failure (bare OSError, an unsafe path, an invalid reference) is either
+#: transient or a tamper signal whose evidence must be preserved, not deleted.
+_STORAGE_CORRUPTION_CODES = frozenset(
+    {"object_missing", "object_too_large", "hash_mismatch"}
+)
+
+
+def _proves_storage_corruption(error: BaseException) -> bool:
+    return (
+        isinstance(error, StudioStorageError)
+        and error.code in _STORAGE_CORRUPTION_CODES
+    )
 
 
 def sanitized_failure(code: str) -> tuple[str, str]:
@@ -1515,7 +1532,7 @@ class _StudioRenderJobStore:
         """Verify immutable evidence and classify only legitimate expiry."""
 
         if result.artifact_id is None:
-            return False
+            return None
         artifact = await self.db.scalar(
             select(StudioRenderArtifact)
             .where(
@@ -2097,12 +2114,24 @@ class _StudioRenderJobStore:
                 STUDIO_PUBLIC_FAILURES["processor_timeout"],
             ) from exc
         except Exception as exc:
-            await self._quarantine_storage_failure(artifact_id)
+            # Quarantine is destructive: it revokes preferred evidence and
+            # schedules the only copy of the bytes for physical deletion. Only
+            # a proof of loss or corruption may reach it. Transient I/O
+            # (EMFILE, a sharing violation, a network-filesystem blip) escapes
+            # the store as a bare OSError and must stay retryable instead.
+            if _proves_storage_corruption(exc):
+                await self._quarantine_storage_failure(artifact_id)
+                raise StudioRenderServiceError(
+                    409,
+                    "storage_integrity_failed",
+                    STUDIO_PUBLIC_FAILURES["storage_integrity_failed"],
+                    durable_state_changed=True,
+                ) from exc
+            await self.artifact_result(artifact_id)
             raise StudioRenderServiceError(
-                409,
-                "storage_integrity_failed",
-                STUDIO_PUBLIC_FAILURES["storage_integrity_failed"],
-                durable_state_changed=True,
+                503,
+                "processor_unavailable",
+                STUDIO_PUBLIC_FAILURES["processor_unavailable"],
             ) from exc
         fresh_status = await self.artifact_result(artifact_id)
         if fresh_status.artifact_availability == "expired":

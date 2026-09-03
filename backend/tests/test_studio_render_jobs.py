@@ -154,6 +154,20 @@ class _BlockingReadStore:
         return getattr(self.delegate, name)
 
 
+class _FailingReadStore:
+    """Fail only the consumer read; every other operation stays real."""
+
+    def __init__(self, delegate, error):
+        self.delegate = delegate
+        self.error = error
+
+    def read(self, ref, *, max_bytes=None):
+        raise self.error
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
+
 class _BlockingDeleteStore:
     def __init__(self, delegate, started, release):
         self.delegate = delegate
@@ -3382,3 +3396,135 @@ async def test_consumer_transaction_persists_sanitized_poison_terminalization(
     assert admission_row.status == "failed"
     assert admission_row.result == {"error_code": "job_data_unavailable"}
     assert admission_row.payload == {}
+
+
+async def _adopted_evidence(db, tenant, user, tmp_path, key):
+    """Adopt one preferred-evidence artifact and return its download inputs."""
+
+    foundation = await _foundation(db, tenant, user)
+    services, accepted = await _enqueue(db, tenant, user, foundation, key)
+    lease = await services.worker.claim(accepted.job_id, owner=f"{key}-worker")
+    store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
+    output = store.put(tenant.id, key.encode("ascii"), media_type="application/pdf")
+    artifact_id, outcome = await services.worker.adopt_output(
+        lease,
+        output,
+        object_store=store,
+        artifact_kind="test_render",
+        runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
+        artifact_ttl_seconds=3600,
+        **_geometry_kwargs(),
+    )
+    assert outcome == "current_evidence"
+    return foundation, services, store, artifact_id
+
+
+@pytest.mark.parametrize(
+    "transient",
+    [
+        OSError(24, "Too many open files"),
+        PermissionError(13, "The process cannot access the file"),
+        StudioStorageError("unsafe_object_path", "Studio object path is not safe"),
+    ],
+    ids=["emfile", "sharing_violation", "unsafe_path"],
+)
+async def test_transient_download_failure_never_quarantines_evidence(
+    db_session, test_tenant, test_user, tmp_path, transient
+):
+    """A read failure that does not prove loss must not destroy the artifact.
+
+    Quarantine schedules the only copy of the bytes for physical deletion and
+    revokes the draft's evidence. A bare OSError from the object store, or an
+    unsafe-path tamper signal whose evidence must be preserved, is not proof.
+    """
+
+    foundation, services, store, artifact_id = await _adopted_evidence(
+        db_session, test_tenant, test_user, tmp_path, "transient-download"
+    )
+    with pytest.raises(StudioRenderServiceError) as caught:
+        await run_studio_consumer_transaction(
+            db_session,
+            lambda: services.consumer.artifact_content(
+                artifact_id,
+                object_store=_FailingReadStore(store, transient),
+                max_bytes=4096,
+            ),
+        )
+    assert caught.value.status_code == 503
+    assert caught.value.code == "processor_unavailable"
+    assert caught.value.retryable is True
+    assert caught.value.durable_state_changed is False
+
+    artifact = await db_session.get(StudioRenderArtifact, artifact_id)
+    await db_session.refresh(artifact)
+    assert artifact.storage_state == "active"
+    assert artifact.delete_requested_at is None
+    assert artifact.retention_class == "evidence"
+    assert artifact.content_expires_at is None
+    preferred = await db_session.scalar(
+        select(StudioPreferredRenderEvidence).where(
+            StudioPreferredRenderEvidence.tenant_id == test_tenant.id,
+            StudioPreferredRenderEvidence.draft_id == foundation["draft_id"],
+        )
+    )
+    assert preferred is not None
+    assert preferred.artifact_id == artifact_id
+    draft = await db_session.get(StudioDraft, foundation["draft_id"])
+    await db_session.refresh(draft)
+    assert draft.evidence_revision == 1
+
+    # The bytes were never touched, so the retry succeeds against the real store.
+    recovered = await run_studio_consumer_transaction(
+        db_session,
+        lambda: services.consumer.artifact_content(
+            artifact_id,
+            object_store=store,
+            max_bytes=4096,
+        ),
+    )
+    assert recovered.artifact_id == artifact_id
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["object_missing", "hash_mismatch", "object_too_large"],
+)
+async def test_proven_storage_corruption_still_quarantines_evidence(
+    db_session, test_tenant, test_user, tmp_path, code
+):
+    """Loss or an identity mismatch is proof, and must still revoke evidence."""
+
+    foundation, services, store, artifact_id = await _adopted_evidence(
+        db_session, test_tenant, test_user, tmp_path, f"corrupt-{code}"
+    )
+    corruption = StudioStorageError(code, "Studio output failed its integrity check")
+    with pytest.raises(StudioRenderServiceError) as caught:
+        await run_studio_consumer_transaction(
+            db_session,
+            lambda: services.consumer.artifact_content(
+                artifact_id,
+                object_store=_FailingReadStore(store, corruption),
+                max_bytes=4096,
+            ),
+        )
+    assert caught.value.status_code == 409
+    assert caught.value.code == "storage_integrity_failed"
+    assert caught.value.durable_state_changed is True
+
+    artifact = await db_session.get(StudioRenderArtifact, artifact_id)
+    await db_session.refresh(artifact)
+    assert artifact.storage_state == "delete_pending"
+    assert artifact.delete_requested_at is not None
+    assert artifact.retention_class == "review"
+    assert artifact.content_expires_at is not None
+    preferred = await db_session.scalar(
+        select(StudioPreferredRenderEvidence).where(
+            StudioPreferredRenderEvidence.tenant_id == test_tenant.id,
+            StudioPreferredRenderEvidence.draft_id == foundation["draft_id"],
+        )
+    )
+    assert preferred is None
+    draft = await db_session.get(StudioDraft, foundation["draft_id"])
+    await db_session.refresh(draft)
+    assert draft.evidence_revision is None
+    assert draft.evidence_invalidation_reason == "render_storage_integrity_failed"
