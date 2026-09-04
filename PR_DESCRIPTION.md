@@ -1,92 +1,140 @@
 ## Summary
 
-Adds the provider-backed, tenant-bound SMS lifecycle for the COMP-02/03 closure
-program without closing either milestone. Twilio dispatch now requires durable
-provenance-bearing consent, category and quiet-hours approval, race-safe
-idempotency, and review-first staff approval. Signed inbound/status webhooks
-handle STOP/START/HELP, replay and out-of-order delivery callbacks, ambiguous
-routing, and provider-unknown reconciliation without reporting fake delivery.
-Inbound webhooks require an active sender and bind the exact provider account
-and configured destination; active provider destinations are unique within
-each provider account, and shared provider-config fences prevent rotation or
-deactivation from racing an in-flight dispatch or reconciliation lookup. Send
-admission and credential rotation also share one transaction fence, so bounded
-credential retirement cannot race a newly durable dispatch reservation.
-When durable recovery succeeds, unknown outcomes converge on one authorized
-customer-timeline marker plus sanitized audit evidence, and matching in-flight
-task runs are rebound for reconciliation instead of being reported as sent.
+Matter documents rendered as one flat, ever-growing list. This adds a
+file-explorer view over them — a per-matter folder tree, a firm-wide tag
+vocabulary, server-side search/scoping/sorting — and makes the firm's bound
+cloud share mirror the same tree.
 
-Migration 149 follows the merged configurable-workflow migration 148 and adds
-tenant-composite constraints, immutable consent evidence, RLS, reconciliation
-state, and rolling-upgrade-safe demo-purge coverage. Its task-audit certainty
-width uses a synchronized expand column instead of rewriting the deployed
-column, while the original task FK remains alongside the validated tenant-bound
-FK for rolling deploy and rollback compatibility. The intake and task
-interfaces expose restricted review and informed SMS approval workflows;
-provider credentials and unresolved message content remain out of unauthorized
-responses and audit metadata; unauthorized SMS tasks are omitted from generic
-task, report, calendar, and Workspace MCP reads. Provider-generated SMS
-timeline rows cannot be fabricated through generic communication creation and
-remain API-immutable, while delivery state changes remain confined to the signed
-callback/reconciliation service. SMS proposals stay inside LawHand instead of
-assignment email or third-party calendars; assignment revocation synchronously
-removes legacy calendar copies through the exact revoked-user principal or fails
-closed, while ordinary SMS approvals never return a false provider-cleanup error
-after committing a run. SMS task/event evidence cannot be hard-deleted. This PR does not
-close COMP-02 or COMP-03 and does not deploy or configure a production provider.
+**Backend**
+
+- Migration `154_matter_document_folders` adds `matter_document_folders`
+  (hierarchical, materialized `path`, depth ≤ 8, case-insensitive sibling
+  uniqueness folded over a NULL-parent sentinel), `matter_document_tags`
+  (tenant-unique on `lower(name)`, fixed colour palette),
+  `matter_document_tag_links`, and `matter_documents.folder_id`. All three new
+  tables enable and **force** RLS on `app.current_tenant_id`.
+- `matter_documents.folder_id` is **`ON DELETE RESTRICT`**, not `SET NULL`: a
+  folder can never delete or orphan the documents filed in it. The delete
+  endpoint refuses a non-empty folder unless the caller passes
+  `?move_documents_to_parent=true`, which re-files the whole subtree's documents
+  into the parent in the same transaction before the delete.
+- Tree rules live in `app/services/matter_document_organization.py` so the firm
+  UI, the client portal, and any later importer enforce the same shape: sibling
+  name collisions, depth, path re-materialization on rename and move, cycle
+  rejection via path containment, and protected `kind='system'` folders.
+- `GET /api/matters/{id}/documents` gains `folder_id` (a UUID or `root`),
+  `include_subfolders`, `q`, repeated `tag_ids`, `sort`, and `order`. Tag
+  filtering is conjunctive (one `EXISTS` per tag). `q` escapes LIKE wildcards so
+  a literal `%` in a filename is searchable. **Omitting `folder_id` returns
+  every document in the matter, exactly as before — existing callers are
+  unaffected.**
+- New endpoints: folder CRUD, bulk document filing, firm-wide tag CRUD, and
+  per-document tag assignment.
+
+**Cloud share parity**
+
+- `store_matter_file_result` takes an optional `folder_path`. When present the
+  file is written to `<matter folder>/<folder path…>` — hanging off the matter
+  folder rather than a category subfolder, so one explorer folder is one place
+  in the share — creating missing segments on demand for OneDrive, SharePoint,
+  and Google Drive, and mirroring the same tree locally for unbound tenants.
+  Uploads with no folder keep the historical category layout untouched.
+- System folders route to the canonical subfolder their `system_key` names, so a
+  matter already provisioned in the share does not grow a second,
+  differently-cased `Client Uploads` beside `client_uploads`.
+
+**Client portal**
+
+- Portal uploads already worked; they now also file themselves into the matter's
+  protected **Client Uploads** folder, created once on first use (and adopting a
+  hand-made root folder of the same name rather than colliding with it), so the
+  firm's explorer groups them without any manual step.
+
+**Frontend**
+
+- `MatterDocumentsTab` becomes an explorer: a folder rail with counts, inline
+  create/rename/delete, breadcrumbs, drag-and-drop filing of document rows onto
+  folders, search, tag chips and a conjunctive tag filter, sort controls, and a
+  folder picker on upload that defaults to the folder currently open. Filtering
+  is server-side, so a matter with thousands of files never ships every row to
+  the browser to render one folder.
+
+### Double-check: is matter→cloud-share binding automated after the wizard?
+
+Yes on the intended path, with one silent-failure route worth knowing about.
+`POST /api/onboarding/complete` refuses to finish without a connected Microsoft
+or Google integration, then stores `tenants.cloud_root_folder`; `POST
+/api/matters` fires background folder provisioning whenever that is set; and
+re-authorizing from Admin repairs a missing root. **The gap:** if
+`initialize_cloud_root_folder` raises during `/complete` the exception is logged
+and swallowed and onboarding still completes with the root unset, and
+`POST /api/onboarding/skip` never sets it at all. Every matter created afterwards
+then skips provisioning with nothing retrying on its own — recovery is manual
+via **Set Up Cloud Folder** or `POST /api/integrations/cloud-init/retry`. That
+is pre-existing behaviour; this PR documents it in
+`docs/matter-document-organization.md` rather than changing onboarding.
+
+### Stated boundary
+
+Moving an existing document between folders changes where it appears in the
+explorer; the copy already written to the cloud share stays at the path it was
+uploaded to. Relocating provider objects is a write against the customer's
+tenant with its own throttling, auth, and partial-failure modes and deserves its
+own reconciliation story rather than riding along here. Called out in the docs
+and in the endpoint's docstring.
 
 ## Validation
 
-- Ruff lint/format and Python compilation passed; 120 database-independent
-  backend, migration, demo-purge, Workspace MCP, CI-contract, and release-note
-  tests passed.
-- The complete SMS CI target collects 87 tests, including 69 PostgreSQL/provider-
-  shaped rehearsals covering
-  concurrent idempotency, tenant constraints/RLS, consent provenance and
-  conflicts, quiet hours/categories, signed webhook replay/order, STOP/START/HELP,
-  durable unmatched-number suppression, exact account/destination ownership,
-  non-enumerating exact-candidate review routing and lock order,
-  exact-user verified calendar cleanup, exact-provider reconciliation,
-  actor, assignment, and config revocation ordering, credential-rotation admission,
-  callback-before-worker-finalization truth, unknown-outcome
-  timeline/audit evidence, crash recovery for unbound task runs,
-  retired-credential/full demo purge, generic/Workspace-MCP task omission,
-  calendar/email non-disclosure, SMS task/event preservation, custom-role
-  gating, export-copy classification, and credential non-leakage.
-- The full frontend suite passed (92 files, 514 tests), along with frontend lint
-  and the production build; the focused SMS queue subset passed 6 tests.
-  Alembic reports migration 149 as the sole head and renders both upgrade and
-  downgrade offline SQL successfully; hosted CI additionally rehearses the
-  expand-contract rollback and re-upgrade. The release catalog is sequenced at
-  `2026.08.31.6`, generated notes are current, and CI YAML parses successfully.
-- This Windows host has no usable PostgreSQL listener, and its Docker Desktop
-  engine fails before startup on an inaccessible local runtime socket. The
-  mandatory hosted PostgreSQL rehearsal, full CI, CodeQL, Merge Gate, and fresh
-  independent security review remain required before this draft may be readied.
+- `backend`: full `pytest tests/` suite green, including 42 new tests in
+  `tests/test_matter_document_folders.py` (tree rules, depth and cycle limits,
+  system-folder protection, folder-scoped/recursive/search/tag/sort listing,
+  bulk filing, tag lifecycle, cross-tenant fences) and a new client-portal test
+  proving uploads file into `Client Uploads` and create it exactly once.
+- Migration exercised against a real PostgreSQL 
+  (`alembic upgrade head` → `downgrade 153_sms_lifecycle` → `upgrade head`),
+  with `relrowsecurity`/`relforcerowsecurity` and the RESTRICT delete rule
+  verified on the resulting schema.
+- Head expectations updated per `AGENTS.md` §1: `tests/test_migrations.py`,
+  `tests/test_studio_render_migration.py`, `scripts/rehearse_configurable_workflows.py`.
+  `tests/test_sms_migration.py` now asserts 153 is an *ancestor* of the pinned
+  head instead of hard-coding it as the head, so it stops needing an edit per
+  migration.
+- `test_demo_registry.py` caught the new tables missing a purge policy; all three
+  are registered as clone tables.
+- `frontend`: `vitest run` — 550 tests across 96 files green, including 9 new
+  explorer tests; `eslint src` clean; jest-axe accessibility assertions still
+  pass on the reworked layout.
+- `ruff check` / `ruff format --check` on `backend/app/` clean.
+- `python scripts/generate_release_notes.py --check` passes.
 
 ## Merge policy attestations
 
 - [x] Documentation updated
 - [ ] No documentation impact
-- [ ] Customer release notes updated
-- [x] No customer-facing release note
+- [x] Customer release notes updated
+- [ ] No customer-facing release note
 - [x] Security and privacy impact reviewed
 
-The lifecycle ships without a configured production provider, so no enabled
-customer surface changes and no customer release entry is added here. Admin and
-developer documentation describe the consent, category, quiet-hours, approval,
-and webhook contracts, and state that this PR closes neither COMP-02 nor
-COMP-03.
+Security and privacy: three new tenant-scoped tables, all with FORCE RLS and
+composite `(tenant_id, id)` foreign keys so a link row cannot span tenants. No
+data access was widened — folders and tags are additive, the document list
+without `folder_id` returns exactly what it returned before, and client-portal
+visibility is still governed solely by `portal_visible`. The folder reference is
+RESTRICT specifically so document deletion can never become a side effect of
+folder deletion. Folder names are validated at the service layer and the storage
+layer independently refuses any path segment that could escape the matter
+folder.
 
 ## MCP documentation handoff
 
-- [x] MCP documentation updated
-- [ ] MCP documentation not needed
-- MCP area: review-first `propose_client_sms` action schema and approval contract.
-- Wiki handoff note: SMS proposals are limited to one recipient and must carry
-  source bindings/hashes plus an explicit stable `X-Idempotency-Key`; approval
-  revalidates sources, consent, category, quiet-hours eligibility, live actor
-  authority, and matter access before a tenant-bound provider dispatch is
-  attempted. Creation and replay also require the actor's current matter
-  ownership or assignment, and proposal content stays inside LawHand rather
-  than assignment email or third-party calendars.
+- [ ] MCP documentation updated
+- [x] MCP documentation not needed
+- MCP area: backend app composition root (`backend/app/main.py`) only — one
+  `include_router` line for the new document-explorer router.
+- Wiki handoff note: no MCP endpoint, tool, protocol, authorization boundary,
+  artifact/review workflow, or client contract changed. The new routes are
+  firm-session REST endpoints under `/api`, authenticated by the existing
+  `get_current_user` dependency and fenced by the same tenant RLS as the rest of
+  the matter surface; no MCP tool exposes them and no MCP client contract
+  references them. Feature documentation lives in
+  `docs/matter-document-organization.md`.

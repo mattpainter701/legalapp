@@ -16,6 +16,17 @@ Firm Memory research now searches document text across every matter you are auth
 - **Open every result you find.** An on-premise result links to its matter file, which rechecks the matter binding, the live index entry, and the bound folder before showing it.
 - **Know what a search did not cover.** Every incomplete response states in one sentence why, so “no matches” is only ever said about a search that actually covered its sources.
 
+## 2026.09.02.1 — Organize matter documents with folders and tags
+
+Released September 2, 2026.
+
+Case documents get a file-explorer view: a per-matter folder tree, firm-wide tags, search and sort, and uploads that write into the matching folder of the firm's bound cloud share.
+
+- **Group case files into folders.** Each matter has its own folder tree with drag-and-drop filing, breadcrumbs, and per-folder counts. Deleting a folder never deletes the documents inside it.
+- **Label documents across matters.** Firm-wide tags apply to any case document and filter the list conjunctively, so “Signed” plus “Filed” narrows to documents carrying both.
+- **Find a document without scrolling.** Filename and description search, folder scoping with or without subfolders, and name, date, or size sorting all run on the server rather than in the browser.
+- **The cloud share mirrors the same tree.** A document uploaded into a folder is written to the matching folder under the matter in the firm's cloud share, and portal uploads file themselves into Client Uploads.
+
 ## 2026.09.01.1 — Consent-aware SMS with review and opt-out controls
 
 Released September 1, 2026.

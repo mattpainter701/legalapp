@@ -109,6 +109,10 @@ from app.services.matter_file_store import (
     MatterFileStore,
     MatterFileTooLarge,
 )
+from app.services.matter_document_organization import (
+    SYSTEM_FOLDER_CLIENT_UPLOADS,
+    ensure_system_folder,
+)
 from app.services.email import (
     EmailDeliveryResult,
     email_delivery_http_error,
@@ -1412,6 +1416,16 @@ async def portal_upload_document(
             detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB}MB",
         )
 
+    # File the upload into the matter's "Client Uploads" folder so it lands
+    # somewhere predictable in the firm's document explorer instead of at the
+    # root of a long flat list. The folder is created on first use.
+    client_upload_folder = await ensure_system_folder(
+        db,
+        tenant_id=uuid.UUID(ctx.tenant_id),
+        matter_id=uuid.UUID(ctx.matter_id),
+        system_key=SYSTEM_FOLDER_CLIENT_UPLOADS,
+    )
+
     storage_result = await matter_file_store.store_matter_file_result(
         db=db,
         tenant_id=str(ctx.tenant_id),
@@ -1428,6 +1442,7 @@ async def portal_upload_document(
         tenant_id=uuid.UUID(ctx.tenant_id),
         matter_id=uuid.UUID(ctx.matter_id),
         uploaded_by_user_id=None,
+        folder_id=client_upload_folder.id,
         filename=safe_filename,
         content_type=file.content_type,
         file_size=len(file_bytes),

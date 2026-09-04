@@ -10,12 +10,13 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
 )
 from fastapi.responses import FileResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -23,14 +24,23 @@ from app.services.upload_guard import reject_oversized_request
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.matter_document import MatterDocument
+from app.models.matter_document_folder import MatterDocumentFolder
+from app.models.matter_document_tag import MatterDocumentTagLink
 from app.models.plugin import Matter
 from app.models.tenant import TenantSettings
 from app.schemas.matter_document import (
     MatterDocumentListResponse,
     MatterDocumentResponse,
+    MatterDocumentTagResponse,
     MatterDocumentUpdate,
 )
 from app.services.document_accountability import append_document_integrity_event
+from app.services.matter_document_organization import (
+    DocumentOrganizationError,
+    get_folder_or_404,
+    storage_routing_for_folder,
+    tags_for_documents,
+)
 from app.services.matter_file_store import (
     MatterFileIntegrityError,
     MatterFileNotFound,
@@ -158,6 +168,59 @@ def _storage_result_document_fields(storage_result) -> dict:
         "provider_parent_id": storage_result.parent_id,
         "storage_error": storage_result.error,
     }
+
+
+def organization_http_error(exc: DocumentOrganizationError) -> HTTPException:
+    """Translate a folder/tag service error into the router's error shape."""
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": exc.message},
+    )
+
+
+async def serialize_documents(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    documents: list[MatterDocument],
+) -> list[MatterDocumentResponse]:
+    """Attach folder paths and tags without an N+1 query per document."""
+    if not documents:
+        return []
+
+    folder_ids = {doc.folder_id for doc in documents if doc.folder_id}
+    folder_paths: dict[uuid.UUID, str] = {}
+    if folder_ids:
+        result = await db.execute(
+            select(MatterDocumentFolder.id, MatterDocumentFolder.path).where(
+                MatterDocumentFolder.tenant_id == tenant_id,
+                MatterDocumentFolder.id.in_(folder_ids),
+            )
+        )
+        folder_paths = {row[0]: row[1] for row in result.all()}
+
+    tags_by_document = await tags_for_documents(
+        db, tenant_id=tenant_id, document_ids=[doc.id for doc in documents]
+    )
+
+    responses = []
+    for doc in documents:
+        response = MatterDocumentResponse.model_validate(doc)
+        response.folder_path = (
+            folder_paths.get(doc.folder_id) if doc.folder_id else None
+        )
+        response.tags = [
+            MatterDocumentTagResponse.model_validate(tag)
+            for tag in tags_by_document.get(doc.id, [])
+        ]
+        responses.append(response)
+    return responses
+
+
+async def serialize_document(
+    db: AsyncSession, *, tenant_id: uuid.UUID, document: MatterDocument
+) -> MatterDocumentResponse:
+    return (await serialize_documents(db, tenant_id=tenant_id, documents=[document]))[0]
 
 
 def _cloud_token_provider(storage_provider: str) -> str:
@@ -289,24 +352,103 @@ async def _delete_cloud_backing_if_needed(
 async def list_matter_documents(
     matter_id: str,
     request: Request,
+    folder_id: str | None = Query(
+        None,
+        description=(
+            "Filter to one folder. Omit for every document in the matter; pass "
+            "'root' for documents that are not filed in any folder."
+        ),
+    ),
+    include_subfolders: bool = Query(False),
+    q: str | None = Query(None, max_length=200),
+    tag_ids: list[uuid.UUID] = Query(default_factory=list),
+    sort: str = Query("created_at", pattern="^(created_at|filename|file_size)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all documents attached to a matter."""
+    """List documents attached to a matter, optionally scoped to a folder."""
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     await _get_matter_or_404(matter_id, user.tenant_id, db)
 
-    result = await db.execute(
-        select(MatterDocument)
-        .where(
-            MatterDocument.matter_id == matter_id,
-            MatterDocument.tenant_id == user.tenant_id,
-        )
-        .order_by(MatterDocument.created_at.desc())
+    stmt = select(MatterDocument).where(
+        MatterDocument.matter_id == matter_id,
+        MatterDocument.tenant_id == user.tenant_id,
     )
-    docs = result.scalars().all()
+
+    requested_folder = (folder_id or "").strip()
+    if requested_folder.lower() == "root":
+        stmt = stmt.where(MatterDocument.folder_id.is_(None))
+    elif requested_folder:
+        try:
+            folder_uuid = uuid.UUID(requested_folder)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="folder_id must be a UUID or 'root'"
+            ) from exc
+        try:
+            folder = await get_folder_or_404(
+                db,
+                tenant_id=user.tenant_id,
+                matter_id=uuid.UUID(matter_id),
+                folder_id=folder_uuid,
+            )
+        except DocumentOrganizationError as exc:
+            raise organization_http_error(exc) from exc
+        if include_subfolders:
+            subtree = select(MatterDocumentFolder.id).where(
+                MatterDocumentFolder.tenant_id == user.tenant_id,
+                MatterDocumentFolder.matter_id == folder.matter_id,
+                or_(
+                    MatterDocumentFolder.id == folder.id,
+                    MatterDocumentFolder.path.startswith(f"{folder.path}/"),
+                ),
+            )
+            stmt = stmt.where(MatterDocument.folder_id.in_(subtree))
+        else:
+            stmt = stmt.where(MatterDocument.folder_id == folder.id)
+
+    search = (q or "").strip()
+    if search:
+        # ``\`` is the default LIKE escape in Postgres, so neutralize it first.
+        pattern = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(
+            or_(
+                MatterDocument.filename.ilike(f"%{pattern}%"),
+                MatterDocument.description.ilike(f"%{pattern}%"),
+            )
+        )
+
+    for tag_id in dict.fromkeys(tag_ids):
+        # One EXISTS per tag makes the filter conjunctive: a document must
+        # carry every requested tag, not merely one of them.
+        stmt = stmt.where(
+            select(MatterDocumentTagLink.tag_id)
+            .where(
+                MatterDocumentTagLink.tenant_id == user.tenant_id,
+                MatterDocumentTagLink.document_id == MatterDocument.id,
+                MatterDocumentTagLink.tag_id == tag_id,
+            )
+            .exists()
+        )
+
+    sort_columns = {
+        "created_at": MatterDocument.created_at,
+        "filename": func.lower(MatterDocument.filename),
+        "file_size": MatterDocument.file_size,
+    }
+    sort_column = sort_columns[sort]
+    stmt = stmt.order_by(
+        sort_column.asc() if order == "asc" else sort_column.desc(),
+        # A stable tiebreaker keeps paging and test assertions deterministic
+        # when several documents share a name, size, or timestamp.
+        MatterDocument.id.asc(),
+    )
+
+    result = await db.execute(stmt)
+    docs = list(result.scalars().all())
     return MatterDocumentListResponse(
-        items=[MatterDocumentResponse.model_validate(d) for d in docs],
+        items=await serialize_documents(db, tenant_id=user.tenant_id, documents=docs),
         total=len(docs),
     )
 
@@ -322,12 +464,29 @@ async def upload_matter_document(
     file: UploadFile = File(...),
     description: str | None = Form(None),
     document_category: str | None = Form(None),
+    folder_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a file attachment to a matter."""
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     matter = await _get_matter_or_404(matter_id, user.tenant_id, db)
+
+    folder: MatterDocumentFolder | None = None
+    if (folder_id or "").strip():
+        try:
+            folder = await get_folder_or_404(
+                db,
+                tenant_id=user.tenant_id,
+                matter_id=uuid.UUID(matter_id),
+                folder_id=uuid.UUID(folder_id.strip()),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="folder_id must be a UUID"
+            ) from exc
+        except DocumentOrganizationError as exc:
+            raise organization_http_error(exc) from exc
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
@@ -350,16 +509,18 @@ async def upload_matter_document(
 
     doc_id = uuid.uuid4()
     safe_filename = os.path.basename(file.filename)
+    category_override, folder_segments = storage_routing_for_folder(folder)
     storage_result = await matter_file_store.store_matter_file_result(
         db=db,
         tenant_id=str(user.tenant_id),
         matter_slug=matter.slug,
-        category=document_category or "general",
+        category=category_override or document_category or "general",
         filename=safe_filename,
         content=file_bytes,
         content_type=file.content_type or "application/octet-stream",
         matter_cloud_folder=matter.cloud_folder,
         preferred_provider=preferred_provider,
+        folder_path=folder_segments,
     )
 
     doc = MatterDocument(
@@ -367,6 +528,7 @@ async def upload_matter_document(
         tenant_id=user.tenant_id,
         matter_id=uuid.UUID(matter_id),
         uploaded_by_user_id=user.id,
+        folder_id=folder.id if folder else None,
         filename=safe_filename,
         content_type=file.content_type,
         file_size=len(file_bytes),
@@ -377,7 +539,7 @@ async def upload_matter_document(
     db.add(doc)
     await db.commit()
     await db.refresh(doc)
-    return MatterDocumentResponse.model_validate(doc)
+    return await serialize_document(db, tenant_id=user.tenant_id, document=doc)
 
 
 @router.patch(
@@ -431,7 +593,7 @@ async def update_matter_document(
 
     await db.commit()
     await db.refresh(doc)
-    return MatterDocumentResponse.model_validate(doc)
+    return await serialize_document(db, tenant_id=user.tenant_id, document=doc)
 
 
 @router.delete("/matters/{matter_id}/documents/{doc_id}", status_code=204)
