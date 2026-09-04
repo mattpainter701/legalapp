@@ -8,10 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.models.configurable_workflow import (
-    MatterWorkflowRun,
-    MatterWorkflowTemplateVersion,
-)
+from app.models.configurable_workflow import MatterWorkflowRun
 from app.models.plugin import Matter
 from app.models.workflow_automation import MatterWorkflowAutomationEvent
 from app.routers import workflow_automations as router_module
@@ -66,23 +63,25 @@ def test_activation_request_normalizes_and_rejects_a_non_digest():
 
 @pytest.mark.asyncio
 async def test_a_rejected_preview_is_recorded_as_blocked_not_planned(
-    client, db_session, test_tenant, test_user
+    client, db_session, test_tenant, test_user, monkeypatch
 ):
     role = await both_capabilities(db_session, test_tenant, test_user)
     template = await approved_template(client, role, db_session)
     await restore(role, db_session)
     await active_rule(client, db_session, role, template, name="Opening rule")
 
-    # A definition hash that no longer matches its approval is exactly what
-    # build_preview refuses. The rule must record why, not fail the matter.
-    version = await db_session.scalar(
-        select(MatterWorkflowTemplateVersion).where(
-            MatterWorkflowTemplateVersion.tenant_id == test_tenant.id
+    # build_preview rejects a template whose stored definition no longer matches
+    # its approval, among other 409s. Those states cannot be staged from a test:
+    # migration 148's triggers make approved definitions immutable, which is the
+    # point of them. Stand in for the rejection at the seam instead — what is
+    # under test is that dispatch records why rather than failing the matter.
+    async def rejected(*args, **kwargs):
+        raise HTTPException(
+            status_code=409,
+            detail="Workflow template definition no longer matches its approval",
         )
-    )
-    version.definition_sha256 = "d" * 64
-    await db_session.commit()
 
+    monkeypatch.setattr(workflow_automations, "build_preview", rejected)
     created = await client.post("/api/matters", json={"matter_name": "Stale template"})
     assert created.status_code == 201
 
@@ -90,6 +89,7 @@ async def test_a_rejected_preview_is_recorded_as_blocked_not_planned(
     assert event.outcome == "blocked"
     assert event.detail_json["failure_code"] == "preview_rejected"
     assert event.detail_json["status_code"] == 409
+    assert "no longer matches its approval" in event.detail_json["message"]
     assert await db_session.scalar(select(func.count(MatterWorkflowRun.id))) == 0
 
 
