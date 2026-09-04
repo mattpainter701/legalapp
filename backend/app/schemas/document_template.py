@@ -175,3 +175,27 @@ class DocumentTemplateUploadAnalysisResponse(BaseModel):
     suggested_variable_schema: dict[str, Any] = Field(default_factory=dict)
     detected_branding_profile: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+
+
+class DocumentTemplateBindingOption(BaseModel):
+    path: str
+    label: str
+    group: str
+
+
+class DocumentTemplateCollectionOption(BaseModel):
+    name: str
+    label: str
+    item_fields: list[str]
+
+
+class DocumentTemplateBindingCatalogue(BaseModel):
+    """The closed vocabulary a template author may draw on.
+
+    Served to the editor so a customer picks a data source from a list instead
+    of guessing the field name that happens to make Smart Fill fire.
+    """
+
+    bindings: list[DocumentTemplateBindingOption]
+    collections: list[DocumentTemplateCollectionOption]
+    operators: list[str]

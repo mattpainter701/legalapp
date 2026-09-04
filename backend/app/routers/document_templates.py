@@ -43,6 +43,9 @@ from app.models.matter_party import MatterParty
 from app.models.plugin import Matter, MatterEvent
 from app.models.tenant import TenantSettings
 from app.schemas.document_template import (
+    DocumentTemplateBindingCatalogue,
+    DocumentTemplateBindingOption,
+    DocumentTemplateCollectionOption,
     CATEGORIES,
     DocumentTemplateCreate,
     DocumentTemplateListResponse,
@@ -77,6 +80,27 @@ from app.services.pdf_templates import (
     validate_representative_pdf_variables,
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
+from app.services.template_logic import (
+    OPERATORS as LOGIC_OPERATORS,
+    TemplateLogicError,
+    validate_condition,
+    expand_markdown_logic,
+    suppressed_fields,
+)
+from app.services.template_semantics import (
+    TemplateSemanticsError,
+    is_semantic_only_change,
+    validate_semantic_metadata,
+)
+from app.services.template_bindings import (
+    MANUAL_BINDING,
+    alias_for_binding,
+    binding_label,
+    catalogue as binding_catalogue,
+    collections as binding_collections,
+    declared_bindings,
+    is_valid_binding,
+)
 from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
 from app.services.access_control import require_capability
@@ -1233,6 +1257,18 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
             )
         seen_names.add(name)
         field["name"] = name
+        binding = field.get("binding")
+        if binding is not None:
+            binding = str(binding).strip()
+            if not binding:
+                field.pop("binding", None)
+            elif not is_valid_binding(binding):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unknown data binding for {name!r}: {binding}",
+                )
+            else:
+                field["binding"] = binding
         docx_key = field.get("docx_source_key")
         if docx_key is not None:
             docx_key = str(docx_key)
@@ -1421,6 +1457,19 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
             status_code=422,
             detail="Reviewed Word schema must preserve every detected source mapping",
         )
+    # Conditions are checked once the full name set is known, so logic that
+    # references a field the template does not define is rejected at save time
+    # rather than silently dropping a clause at generation time.
+    for field in schema["fields"]:
+        if isinstance(field, dict) and field.get("logic") is not None:
+            try:
+                validate_condition(
+                    field["logic"],
+                    known_fields=seen_names,
+                    label=str(field.get("name") or ""),
+                )
+            except TemplateLogicError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         schema["version"] = max(1, int(schema.get("version") or 1))
     except (TypeError, ValueError) as exc:
@@ -1506,21 +1555,45 @@ async def _read_template_sample(file: UploadFile) -> TemplateUploadSample:
     )
 
 
-def render_template(template_body: str, variables: dict[str, str]) -> str:
-    """Replace {{variable}} placeholders with values."""
+def render_template(
+    template_body: str,
+    variables: dict[str, str],
+    *,
+    collections: dict[str, list[dict[str, str]]] | None = None,
+) -> str:
+    """Resolve template logic, then replace {{variable}} placeholders.
+
+    Logic runs first and never writes a value into the body, so a customer's
+    value can never be reinterpreted as a block marker. Substitution then runs
+    once over the expanded body.
+    """
+
+    expanded, scoped = expand_markdown_logic(
+        template_body, variables, collections=collections
+    )
+    resolved = {**variables, **scoped}
 
     def replacer(match):
         key = match.group(1).strip()
-        return variables.get(key, match.group(0))
+        return resolved.get(key, match.group(0))
 
-    return VARIABLE_PATTERN.sub(replacer, template_body)
+    return VARIABLE_PATTERN.sub(replacer, expanded)
 
 
 def extract_template_variables(template_body: str) -> list[str]:
+    """Return the substitutable variables in a body, in first-seen order.
+
+    Logic markers (``{{#if x}}``, ``{{/each}}``) share the placeholder syntax
+    but are not variables: they are never filled, never smart-filled, and must
+    not be reported to callers that validate a field map against the body.
+    """
+
     variables: list[str] = []
     seen: set[str] = set()
     for match in VARIABLE_PATTERN.finditer(template_body):
         variable = match.group(1).strip()
+        if variable.startswith(("#", "/")):
+            continue
         if variable and variable not in seen:
             variables.append(variable)
             seen.add(variable)
@@ -1950,6 +2023,114 @@ async def _load_matter_parties(
     return list(result.scalars().all())
 
 
+def _schema_for_values(
+    variable_schema: Any, variables: dict[str, str]
+) -> Any:
+    """Relax required-ness for fields their own logic switches off.
+
+    A field carrying a condition that is false for this set of values does not
+    apply to the document being generated, so demanding a value for it would
+    block generation on a clause the template deliberately omitted.  Geometry,
+    anchors, and every other authoritative key are copied through untouched.
+    """
+
+    suppressed = suppressed_fields(variable_schema, variables)
+    if not suppressed or not isinstance(variable_schema, dict):
+        return variable_schema
+    fields = variable_schema.get("fields")
+    if not isinstance(fields, list):
+        return variable_schema
+    adjusted = []
+    for field in fields:
+        if (
+            isinstance(field, dict)
+            and str(field.get("name") or "").strip() in suppressed
+        ):
+            field = {**field, "required": False}
+        adjusted.append(field)
+    return {**variable_schema, "fields": adjusted}
+
+
+def _party_item(party: MatterParty) -> dict[str, str]:
+    contact = getattr(party, "contact", None)
+    return {
+        "party_name": _stringify_suggestion(
+            getattr(contact, "display_name", None)
+        ) or "",
+        "party_role": _stringify_suggestion(getattr(party, "role", None)) or "",
+        "party_email": _stringify_suggestion(getattr(contact, "email", None)) or "",
+        "party_phone": _stringify_suggestion(getattr(contact, "phone", None)) or "",
+    }
+
+
+def _repeat_collections(
+    parties: Sequence[MatterParty],
+) -> dict[str, list[dict[str, str]]]:
+    """Build the record sets a repeating section may iterate.
+
+    Only parties carrying a resolvable display name are emitted, matching the
+    caption-candidate rule: a nameless row would render an empty bullet or
+    signature block in a filed document.
+    """
+
+    named = [
+        party
+        for party in parties
+        if _stringify_suggestion(
+            getattr(getattr(party, "contact", None), "display_name", None)
+        )
+    ]
+    return {
+        "parties": [_party_item(party) for party in named],
+        "plaintiffs": [
+            _party_item(party) for party in _caption_parties(named, "plaintiff")
+        ],
+        "defendants": [
+            _party_item(party) for party in _caption_parties(named, "defendant")
+        ],
+    }
+
+
+def _bound_suggestion(
+    variable: str,
+    binding: str,
+    candidates: dict[str, DocumentTemplateVariableSuggestion],
+) -> DocumentTemplateVariableSuggestion:
+    """Resolve one field through its declared binding.
+
+    An unresolved binding is reported with the path that failed, so the user
+    can see the field is bound to a record the current matter does not carry
+    rather than a blank box with no explanation.
+    """
+
+    if binding == MANUAL_BINDING:
+        return DocumentTemplateVariableSuggestion(
+            variable=variable,
+            provenance={"status": "manual_entry", "binding": binding},
+            review_required=True,
+        )
+    alias = alias_for_binding(binding)
+    candidate = candidates.get(alias) if alias else None
+    if candidate is not None:
+        provenance = {
+            **candidate.provenance,
+            "binding": binding,
+            "binding_label": binding_label(binding),
+        }
+        return candidate.model_copy(
+            update={"variable": variable, "provenance": provenance}
+        )
+    return DocumentTemplateVariableSuggestion(
+        variable=variable,
+        provenance={
+            "status": "binding_unresolved",
+            "binding": binding,
+            "binding_label": binding_label(binding),
+        },
+        review_required=True,
+    )
+
+
 async def build_variable_suggestions(
     *,
     template: DocumentTemplate,
@@ -1980,9 +2161,20 @@ async def build_variable_suggestions(
         parties=parties,
         current_user=current_user,
     )
+    bindings = declared_bindings(getattr(template, "variable_schema", None))
 
     suggestions: list[DocumentTemplateVariableSuggestion] = []
     for variable in variables:
+        binding = bindings.get(variable)
+        if binding:
+            # A declared binding is authoritative. Falling back to name
+            # matching here would reintroduce exactly the surprise bindings
+            # exist to remove: a field the customer bound to one record
+            # silently filling from another because of its name.
+            suggestions.append(
+                _bound_suggestion(variable, binding, candidates)
+            )
+            continue
         candidate = candidates.get(_normalize_variable_name(variable))
         if candidate:
             suggestions.append(candidate.model_copy(update={"variable": variable}))
@@ -1996,6 +2188,36 @@ async def build_variable_suggestions(
         )
 
     return str(matter.id) if matter else None, suggestions
+
+
+@router.get("/bindings", response_model=DocumentTemplateBindingCatalogue)
+async def list_template_bindings(
+    current_user=Depends(require_capability("manage_documents")),
+):
+    """Return the data sources a template field may bind to.
+
+    The catalogue is static, server-owned vocabulary rather than tenant data,
+    so it needs no tenant context — but it stays behind the same capability as
+    the editor that consumes it.
+    """
+
+    return DocumentTemplateBindingCatalogue(
+        bindings=[
+            DocumentTemplateBindingOption(
+                path=entry.path, label=entry.label, group=entry.group
+            )
+            for entry in binding_catalogue()
+        ],
+        collections=[
+            DocumentTemplateCollectionOption(
+                name=entry.name,
+                label=entry.label,
+                item_fields=list(entry.item_fields),
+            )
+            for entry in binding_collections()
+        ],
+        operators=sorted(LOGIC_OPERATORS),
+    )
 
 
 @router.get("", response_model=DocumentTemplateListResponse)
@@ -2766,6 +2988,11 @@ async def update_template(
         raise HTTPException(status_code=404, detail="Template not found")
 
     updates = payload.model_dump(exclude_none=True)
+    if "variable_schema" in updates:
+        try:
+            validate_semantic_metadata(updates["variable_schema"])
+        except (TemplateSemanticsError, TemplateLogicError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if "category" in updates and updates["category"] not in CATEGORIES:
         raise HTTPException(
             status_code=422,
@@ -2789,7 +3016,20 @@ async def update_template(
             status_code=422,
             detail="A source-backed DOCX template cannot be converted to another format in place.",
         )
-    if current_format == "docx" and ("body" in updates or "variable_schema" in updates):
+    if current_format == "docx" and (
+        "body" in updates
+        or (
+            "variable_schema" in updates
+            # A field map is only trustworthy relative to the retained Word
+            # bytes, so anchors and geometry still require a re-upload. What a
+            # customer *authors* about a field — its label, its data binding,
+            # the condition that governs it — touches no anchor, so refusing it
+            # would leave Word templates permanently unbindable.
+            and not is_semantic_only_change(
+                template.variable_schema, updates["variable_schema"]
+            )
+        )
+    ):
         raise HTTPException(
             status_code=422,
             detail="Upload a new Word source to change a DOCX template body or field map.",
@@ -3058,7 +3298,20 @@ async def render_template_endpoint(
             detail="Only active templates can be saved to a matter. Preview and activate this template first.",
         )
 
-    rendered = render_template(template.body, payload.variables)
+    # Repeating sections iterate the matter's own party records, so a
+    # rendered document reflects however many parties this matter actually
+    # has rather than however many the template author happened to type.
+    render_parties = await _load_matter_parties(
+        db=db, tenant_id=parsed_tenant_id, matter=matter
+    )
+    try:
+        rendered = render_template(
+            template.body,
+            payload.variables,
+            collections=_repeat_collections(render_parties),
+        )
+    except TemplateLogicError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     template_format = str(template.format or "").lower()
     output_format = (
         template_format
@@ -3098,7 +3351,9 @@ async def render_template_endpoint(
             output_bytes = await asyncio.to_thread(
                 fill_pdf_template,
                 source,
-                variable_schema=template.variable_schema,
+                variable_schema=_schema_for_values(
+                    template.variable_schema, payload.variables
+                ),
                 variables=payload.variables,
                 flatten=payload.flatten_pdf,
                 enforce_required=bool(payload.matter_id),
@@ -3115,9 +3370,12 @@ async def render_template_endpoint(
             output_bytes = await asyncio.to_thread(
                 fill_docx_template,
                 source,
-                variable_schema=template.variable_schema,
+                variable_schema=_schema_for_values(
+                    template.variable_schema, payload.variables
+                ),
                 variables=payload.variables,
                 enforce_required=bool(payload.matter_id),
+                collections=_repeat_collections(render_parties),
             )
         except TemplateDocxError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
