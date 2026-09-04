@@ -18,6 +18,29 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Bounded matter workflow automations (COMP-09 trigger/action slice):**
+  approved workflow templates no longer wait for someone to remember them.
+  Migration 155 adds `matter_workflow_automation_rules` and append-only
+  `matter_workflow_automation_events`, both FORCE RLS with composite
+  `(tenant_id, id)` parents. A rule pairs one bounded trigger — a matter is
+  opened, or a matter enters a named stage — with optional matter-type and
+  practice-area equality conditions and one approved template. It plans the
+  same reviewable `planned` run the manual preview endpoint plans and never
+  applies it: tasks and matter stages still change only through the existing
+  `approve_legal_work` + `manage_matters` apply path. Rules are authored with
+  `manage_workflows`, activated with `approve_legal_work` against the exact
+  reviewed `definition_sha256`, and an edit that changes what a rule does
+  returns it to draft — enforced by a database trigger, not just the API, while
+  a rename costs no approval because the name is not part of the definition. Dispatch runs after the matter
+  change commits, in its own transaction, and never raises into the caller, so
+  a broken automation cannot cost a firm a saved matter; each rule is planned
+  in its own savepoint. A dedupe key unique per rule makes one plan per rule,
+  matter, and triggering condition, so retries, concurrent requests, and a
+  matter re-entering an automated stage do not produce a second run. A rule
+  that cannot plan records a `blocked` outcome with a failure code instead of
+  going silent, and both the rule and the matter surface that history.
+  Automation evidence reuses migration 148's append-only trigger, so the
+  verified expired-demo purge remains its only delete path.
 - **Firm-wide Firm Memory research over document text:** the unified Firm Memory
   search now routes matter-bound SMB sources through the customer search-node
   relay, so results carry document text, passages and page numbers instead of

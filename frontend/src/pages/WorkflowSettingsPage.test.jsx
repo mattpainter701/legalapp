@@ -47,6 +47,12 @@ const api = vi.hoisted(() => ({
   createWorkflowTemplateVersion: vi.fn(),
   approveWorkflowTemplateVersion: vi.fn(() => Promise.resolve({})),
   archiveWorkflowTemplate: vi.fn(() => Promise.resolve({})),
+  listWorkflowAutomations: vi.fn(() => Promise.resolve({ items: [] })),
+  createWorkflowAutomation: vi.fn(() => Promise.resolve({})),
+  updateWorkflowAutomation: vi.fn(() => Promise.resolve({})),
+  activateWorkflowAutomation: vi.fn(() => Promise.resolve({})),
+  archiveWorkflowAutomation: vi.fn(() => Promise.resolve({})),
+  getWorkflowAutomationEvents: vi.fn(() => Promise.resolve({ items: [] })),
 }));
 vi.mock("../api", () => api);
 
@@ -343,5 +349,22 @@ describe("WorkflowSettingsPage", () => {
         }),
       ),
     );
+  });
+
+  it("mounts the automation rules section for reviewers", async () => {
+    render(
+      <WorkflowSettingsPage user={{ capabilities: ["manage_workflows"] }} />,
+    );
+    expect(await screen.findByText("Automation rules")).toBeTruthy();
+    await waitFor(() =>
+      expect(api.listWorkflowAutomations).toHaveBeenCalledTimes(1),
+    );
+    // Only approved template versions can be planned automatically.
+    const options = [
+      ...screen
+        .getByLabelText("Plan this approved template")
+        .querySelectorAll("option"),
+    ].map((option) => option.value);
+    expect(options).toEqual([""]);
   });
 });

@@ -134,6 +134,14 @@ matrix and claim boundaries. Feature PRs do not self-certify these checkboxes.
       native DOCX generation, approved smart fill, and reviewed email-to-matter
       filing. Start from five interviewed workflows; ship run history, preview,
       idempotency, rollback, and permission tests before a general no-code builder.
+      Progress (2026-09-04, not self-certification): migration 155 adds the
+      bounded trigger/action half — approval-gated rules that plan (never apply)
+      an approved template when a matter is opened or enters a named stage, with
+      per-rule dedupe, immutable dispatch evidence, blocked-outcome reporting,
+      and rehearsed RLS/immutability. See `docs/workflow-automations.md`. The
+      remaining `COMP-09` scope — native DOCX generation, approved smart fill,
+      reviewed email-to-matter filing, and contact-relationship UX — is
+      untouched, so this checkbox stays open.
 - [ ] `COMP-10` Make an explicit finance product decision before adding scattered
       features: either (A) keep QBO as operating-accounting system of record and
       deepen reconciliation/error recovery, or (B) fund a native GL/AP/AR/bank-feed/

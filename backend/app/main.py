@@ -116,6 +116,7 @@ from app.routers.research_workspaces import router as research_workspaces_router
 from app.routers.studio_drafts import router as studio_drafts_router
 from app.routers.studio_render import router as studio_render_router
 from app.routers.configurable_workflows import router as configurable_workflows_router
+from app.routers.workflow_automations import router as workflow_automations_router
 from app.routers.demo import router as demo_router
 from app.services.studio_render_runtime import (
     StudioRenderRuntimeError,
@@ -502,6 +503,7 @@ app.include_router(research_workspaces_router)
 app.include_router(studio_drafts_router)
 app.include_router(studio_render_router)
 app.include_router(configurable_workflows_router)
+app.include_router(workflow_automations_router)
 
 
 # ─────────────────────────────────────────────────────

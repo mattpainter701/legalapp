@@ -134,6 +134,8 @@ _PURGE_ONLY_TABLES = {
     "contact_custom_field_values",
     "custom_field_definitions",
     "matter_custom_field_values",
+    "matter_workflow_automation_events",
+    "matter_workflow_automation_rules",
     "matter_workflow_checklist_definitions",
     "matter_workflow_field_requirements",
     "matter_workflow_run_events",

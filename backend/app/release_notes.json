@@ -2,6 +2,31 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.04.1",
+      "version": "2026.09.04.1",
+      "title": "Plan matter workflows automatically, approve them the same way",
+      "published_at": "2026-09-04",
+      "summary": "Firms can have an approved workflow template prepared the moment a matter opens or reaches a stage. The automation only prepares the work; a reviewer still approves and applies it.",
+      "highlights": [
+        {
+          "title": "Two bounded triggers, one action",
+          "description": "A rule fires when a matter is opened or enters a named stage, optionally narrowed by matter type or practice area, and plans one approved workflow template. Nothing else."
+        },
+        {
+          "title": "Automation is approved like legal work",
+          "description": "A rule is created as a draft and does nothing until an approver activates the exact definition they reviewed. Editing a rule returns it to draft for a fresh approval."
+        },
+        {
+          "title": "Nothing is applied without a person",
+          "description": "A matching rule creates the same reviewable preview the Workflow tab creates by hand. Tasks and matter stages change only when someone applies the planned run."
+        },
+        {
+          "title": "A rule that does nothing says why",
+          "description": "Every match is recorded as immutable evidence naming the rule, the matter, and the planned run, or the reason it was blocked. The matter's Workflow tab shows it too."
+        }
+      ]
+    },
+    {
       "id": "2026.09.03.1",
       "version": "2026.09.03.1",
       "title": "Firm-wide Firm Memory research that opens the document",
