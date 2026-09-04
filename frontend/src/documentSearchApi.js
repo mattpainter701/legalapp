@@ -29,6 +29,8 @@ function normalizeCoverage(raw = [], response = {}) {
       state: COVERAGE_STATES.includes(requested) ? requested : 'partial',
       searched: source.searched === true,
       reason: first(source.reason, ''),
+      indexKind: first(source.index_kind, ''),
+      matterScopeCount: Number(first(source.matter_scope_count, 0)) || 0,
     }
   })
   const states = sources.map((source) => source.state)
@@ -56,6 +58,14 @@ function normalizeMatter(matter) {
   }
 }
 
+// Server reasons are machine tokens. A disabled control has to say why in
+// words, otherwise the user is left guessing at their own permissions.
+function reasonText(value) {
+  const token = String(value || '').trim()
+  if (!token) return ''
+  return token.replace(/[_-]+/g, ' ').replace(/^./, (letter) => letter.toUpperCase())
+}
+
 function normalizeResult(item = {}) {
   const source = item.source || item.provenance || {}
   const actionList = list(item.actions)
@@ -80,15 +90,18 @@ function normalizeResult(item = {}) {
       relativeLocation: first(source.relative_location, item.relative_location, item.relative_path, ''),
       path: first(source.path, item.path, item.unc_path, source.relative_location, item.relative_location, ''),
       freshness: first(source.freshness, source.indexed_at, item.index_freshness, item.indexed_at, ''),
+      indexKind: first(source.index_kind, item.index_kind, ''),
     },
     linkedMatters: list(first(item.linked_matters, item.matters, item.matter_ids, [])).map((matter) => (
       typeof matter === 'string' ? { id: matter, label: matter } : normalizeMatter(matter)
     )),
     actions: {
       openOnComputerUrl: first(action('open_on_device').href, action('open_on_device').url, legacyActions.open_on_computer_url, item.open_on_computer_url, ''),
+      openOnComputerReason: reasonText(action('open_on_device').reason),
       providerUrl: first(action('provider_open').href, action('provider_open').url, legacyActions.provider_url, legacyActions.open_url, item.provider_url, item.web_url, ''),
       providerLabel: first(action('provider_open').label, source.provider, item.provider, ''),
       lawHandUrl: first(action('lawhand_result').href, action('lawhand_result').url, legacyActions.lawhand_url, item.lawhand_url, ''),
+      lawHandReason: reasonText(action('lawhand_result').reason),
     },
   }
 }

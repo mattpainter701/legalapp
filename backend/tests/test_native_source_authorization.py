@@ -23,6 +23,7 @@ import app.services.smb as smb_service_module
 from app.schemas.smb import NativeIdentityUpdate
 from app.services.native_authorization import (
     NativeAuthorizationError,
+    authorized_matter_ids,
     expand_effective_group_sids,
     require_matter_authorization,
     resolve_native_identity,
@@ -845,3 +846,120 @@ async def test_native_identity_update_rejects_healthy_without_complete_group(mon
             str(user_id), body_bad, SimpleNamespace(), db2, admin
         )
     assert exc.value.status_code == 422
+
+
+async def _matter(db, tenant, *, owner, policy=None):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        user_id=owner.id,
+        slug=f"m-{uuid.uuid4().hex[:8]}",
+        matter_name="Matter",
+        status="open",
+        plugin_workflow_state={"security_policy": policy} if policy else None,
+    )
+    db.add(matter)
+    await db.commit()
+    return matter
+
+
+async def _user(db, tenant, label):
+    user = User(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        email=f"{label}-{uuid.uuid4().hex[:8]}@example.com",
+        full_name=label.title(),
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    return user
+
+
+async def _decided_one_by_one(db, tenant, user, matters):
+    """What the per-matter gate would allow, for comparison."""
+    allowed = set()
+    for matter in matters:
+        try:
+            await require_matter_authorization(
+                db, str(tenant.id), str(user.id), str(matter.id)
+            )
+        except NativeAuthorizationError:
+            continue
+        allowed.add(matter.id)
+    return allowed
+
+
+@pytest.mark.asyncio
+async def test_bulk_matter_authorization_agrees_with_the_per_matter_gate(
+    db_session, test_tenant, test_user
+):
+    """The set-based filter must never allow a matter the single gate denies."""
+    other = await _user(db_session, test_tenant, "owner")
+    stranger = await _user(db_session, test_tenant, "stranger")
+
+    unrestricted = await _matter(db_session, test_tenant, owner=other)
+    owned = await _matter(
+        db_session, test_tenant, owner=test_user, policy={"restricted": True}
+    )
+    walled = await _matter(
+        db_session, test_tenant, owner=other, policy={"ethical_wall": True}
+    )
+    explicit = await _matter(
+        db_session,
+        test_tenant,
+        owner=other,
+        policy={"restricted": True, "allowed_user_ids": [str(test_user.id)]},
+    )
+    assigned = await _matter(
+        db_session, test_tenant, owner=other, policy={"restricted": True}
+    )
+    db_session.add(
+        MatterAssignment(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            matter_id=assigned.id,
+            user_id=test_user.id,
+        )
+    )
+    await db_session.commit()
+
+    matters = [unrestricted, owned, walled, explicit, assigned]
+    ids = [str(matter.id) for matter in matters]
+
+    bulk = await authorized_matter_ids(
+        db_session, str(test_tenant.id), str(test_user.id), ids
+    )
+    assert bulk == await _decided_one_by_one(
+        db_session, test_tenant, test_user, matters
+    )
+    assert walled.id not in bulk
+    assert {unrestricted.id, owned.id, explicit.id, assigned.id} <= bulk
+
+    # Someone with no relationship to any of them keeps only the open matter.
+    bulk_stranger = await authorized_matter_ids(
+        db_session, str(test_tenant.id), str(stranger.id), ids
+    )
+    assert bulk_stranger == await _decided_one_by_one(
+        db_session, test_tenant, stranger, matters
+    )
+    assert bulk_stranger == {unrestricted.id}
+
+
+@pytest.mark.asyncio
+async def test_bulk_matter_authorization_ignores_junk_and_other_tenants(
+    db_session, test_tenant, test_user
+):
+    mine = await _matter(db_session, test_tenant, owner=test_user)
+    assert await authorized_matter_ids(
+        db_session,
+        str(test_tenant.id),
+        str(test_user.id),
+        [str(mine.id), str(uuid.uuid4()), "not-a-uuid", "", str(mine.id)],
+    ) == {mine.id}
+    assert (
+        await authorized_matter_ids(
+            db_session, str(test_tenant.id), str(test_user.id), []
+        )
+        == set()
+    )

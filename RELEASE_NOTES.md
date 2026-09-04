@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.03.1 — Firm-wide Firm Memory research that opens the document
+
+Released September 3, 2026.
+
+Firm Memory research now searches document text across every matter you are authorized on, says what it could not cover, and every on-premise result opens to its matter file.
+
+- **Ask without picking a matter first.** A query with no matter filter searches the matters on each file share you are already authorized on, decided by the same matter policy a chosen matter goes through.
+- **Search inside documents, not just file names.** Results come from the firm's own search node with real page numbers and passages; if that node cannot be reached, the response says so.
+- **Open every result you find.** An on-premise result links to its matter file, which rechecks the matter binding, the live index entry, and the bound folder before showing it.
+- **Know what a search did not cover.** Every incomplete response states in one sentence why, so “no matches” is only ever said about a search that actually covered its sources.
+
 ## 2026.09.02.1 — Organize matter documents with folders and tags
 
 Released September 2, 2026.

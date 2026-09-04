@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Firm Memory result links no longer fail silently:** a shared
+  `/firm-memory?matter=…&file=…` link resolved only when its matter appeared in
+  the picker's first page of matters, so links into large firms rendered an
+  empty page. The deep link now resolves on its own; the server authorizes it
+  either way. A response that searched no source at all is now reported as
+  partial rather than as a quiet non-partial zero.
+
 ### Documentation
 - **COMP-02/03 closure audit:** reconciled the merged switching and conversion
   slices against current `origin/main`, recorded focused validation evidence,
@@ -10,6 +18,31 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Firm-wide Firm Memory research over document text:** the unified Firm Memory
+  search now routes matter-bound SMB sources through the customer search-node
+  relay, so results carry document text, passages and page numbers instead of
+  file names and a capped preview. A query with no matter filter expands into
+  the matters on each share the actor is already authorized on, decided by the
+  same matter policy a typed filter goes through, capped at 100 matters and
+  reported when truncated. The relay now accepts a matter set and sends one task
+  per agent rather than per matter; agent 0.17.0 binds that set in the signed
+  identity ticket, and an older agent is reported as uncovered rather than
+  searched with a weaker binding. Coverage names the index that answered
+  (`smb_local_fulltext` or the `smb_metadata_fts` fallback), a node that did not
+  answer is never reported as an empty corpus, and every response that is not
+  complete states in one sentence why.
+- **Service-account authorization model made explicit:** LawHand reads a file
+  share through one service account and firm logins do not map one-to-one onto
+  Windows accounts, so the matter binding — not file permissions — is the
+  authorization boundary. An SMB source with no matter binding is now reported
+  `matter_binding_required` and is never searched, and every returned path is
+  re-checked against the bound folders of the actor's authorized matters before
+  it leaves the service, on the full-text path as well as the metadata one.
+- **Firm Memory result actions:** matter-bound on-premises results now carry a
+  server-issued `lawhand_result` action addressing the existing fail-closed
+  matter-file resolver, so a found document can be opened. The opaque
+  `document_id` remains a non-reversible HMAC, and `open_on_device` is reported
+  unavailable with a reason rather than as a dead control.
 - **Matter document folders and tags:** case documents are no longer a single
   flat list. Migration 154 adds a per-matter folder tree (materialized paths,
   depth and cycle limits, case-insensitive sibling names, FORCE RLS) plus a

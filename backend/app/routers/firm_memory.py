@@ -63,8 +63,14 @@ async def search_firm_memory(
     user=Depends(get_current_user),
 ):
     """Search only sources this active tenant member is authorized to query."""
+    app_state = getattr(getattr(request, "app", None), "state", None)
     try:
-        return await firm_memory_search_service.search(db, user=user, request=body)
+        return await firm_memory_search_service.search(
+            db,
+            user=user,
+            request=body,
+            redis=getattr(app_state, "redis", None),
+        )
     except FirmMemoryAuthorizationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:

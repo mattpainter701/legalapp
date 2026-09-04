@@ -71,4 +71,29 @@ describe('FirmMemoryPage', () => {
     expect(document.querySelector('a[href^="file:"]')).toBeNull()
     expect(document.querySelector('a[href^="smb:"]')).toBeNull()
   })
+
+  it('resolves a shared result link for a matter outside the loaded matters page', async () => {
+    // The picker loads one page of matters; a link must not depend on it.
+    getMattersV2.mockResolvedValue({ items: [{ id: 'matter-2', name: 'Rivera Estate' }] })
+    getFirmMemoryFile.mockResolvedValue({
+      id: 'opaque-9',
+      filename: 'Deep Order.pdf',
+      path: '\\\\server\\cases\\Deep Order.pdf',
+    })
+    window.history.replaceState({}, '', '/firm-memory?matter=matter-99&file=opaque-9')
+
+    render(<FirmMemoryPage />)
+
+    expect(await screen.findByText('Deep Order.pdf')).toBeInTheDocument()
+    expect(getFirmMemoryFile).toHaveBeenCalledWith('opaque-9', 'matter-99')
+  })
+
+  it('reports a link the server will not resolve instead of rendering an empty page', async () => {
+    getFirmMemoryFile.mockRejectedValue({ response: { data: { detail: 'not found' } } })
+    window.history.replaceState({}, '', '/firm-memory?matter=matter-1&file=opaque-9')
+
+    render(<FirmMemoryPage />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/unavailable or no longer authorized/i)
+  })
 })
