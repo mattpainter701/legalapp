@@ -225,6 +225,11 @@ class TestRestore:
             await client.post(f"/api/templates/{template.id}/versions/4/restore")
         ).status_code == 404
 
+    async def test_restoring_against_a_missing_template_is_not_found(self, client):
+        assert (
+            await client.post(f"/api/templates/{uuid.uuid4()}/versions/1/restore")
+        ).status_code == 404
+
 
 class TestImmutability:
     async def test_deleting_a_template_takes_its_history_with_it(

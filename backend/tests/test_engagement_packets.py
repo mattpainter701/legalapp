@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.services.engagement_packets import unresolved_fields
@@ -403,3 +404,36 @@ async def test_engagement_packet_router_returns_not_found_for_missing_packet():
     ):
         with pytest.raises(Exception, match="not found"):
             await packet_router.get_engagement_packet(lead, user, db)
+
+
+@pytest.mark.asyncio
+async def test_packet_preview_reports_broken_template_logic_as_a_customer_error():
+    """An unbalanced block in a packet template is a template authoring
+    problem, not a server fault, so it must not surface as a 500."""
+
+    tenant, lead, actor = uuid4(), uuid4(), uuid4()
+    template_id = uuid4()
+    packet = SimpleNamespace(
+        status="draft",
+        inputs={"template_id": str(template_id)},
+        template_id=template_id,
+        version=1,
+        prepared_content={},
+    )
+    db = MagicMock()
+    db.flush = AsyncMock()
+    with (
+        patch.object(packet_service, "_get_prospect", AsyncMock(return_value=None)),
+        patch.object(packet_service, "_require_enabled", MagicMock()),
+        patch.object(packet_service, "get_packet", AsyncMock(return_value=packet)),
+        patch.object(
+            packet_service,
+            "_get_template",
+            AsyncMock(return_value=SimpleNamespace(body="{{#if x}}never closed")),
+        ),
+    ):
+        with pytest.raises(HTTPException) as caught:
+            await packet_service.render_packet_preview(db, tenant, lead, actor)
+
+    assert caught.value.status_code == 422
+    assert "never closed" in caught.value.detail
