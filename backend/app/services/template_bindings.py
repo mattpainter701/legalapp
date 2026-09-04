@@ -117,11 +117,18 @@ def binding_label(path: str) -> str | None:
 
 
 def declared_bindings(variable_schema: dict | None) -> dict[str, str]:
-    """Return ``{field name: binding path}`` for every validly bound field.
+    """Return ``{field name: binding path}`` for every field that declares one.
+
+    A path this catalogue no longer recognises is still returned, and still
+    counts as declared. Save-time validation rejects unknown paths, so a stale
+    one can only mean the catalogue itself changed under an existing template —
+    and there the honest outcome is a blank field that names the source it can
+    no longer reach. Quietly falling back to name matching would re-source a
+    clause in a legal document without telling anyone.
 
     Tolerates malformed stored schemas: this runs on the read path for
-    templates saved before bindings existed, so anything unrecognised is
-    skipped rather than raising.
+    templates saved before bindings existed, so anything that is not a
+    non-empty string on a named field is skipped rather than raising.
     """
 
     if not isinstance(variable_schema, dict):
@@ -135,10 +142,9 @@ def declared_bindings(variable_schema: dict | None) -> dict[str, str]:
             continue
         name = str(field.get("name") or "").strip()
         binding = field.get("binding")
-        if not name or not isinstance(binding, str):
+        if not name or not isinstance(binding, str) or not binding.strip():
             continue
-        if is_valid_binding(binding):
-            bindings[name] = binding
+        bindings[name] = binding.strip()
     return bindings
 
 

@@ -78,15 +78,23 @@ class TestDeclaredBindings:
             "not-a-dict",
             {"fields": "not-a-list"},
             {"fields": [None, 7]},
-            {"fields": [{"name": "x", "binding": "unknown.path"}]},
             {"fields": [{"name": "", "binding": "matter.court"}]},
             {"fields": [{"name": "x", "binding": 42}]},
+            {"fields": [{"name": "x", "binding": "   "}]},
         ],
     )
     def test_malformed_schemas_yield_nothing_rather_than_raising(self, schema):
         # This runs on the read path for templates saved before bindings
         # existed, so it must never block generation.
         assert declared_bindings(schema) == {}
+
+    def test_a_path_the_catalogue_no_longer_knows_still_counts_as_declared(self):
+        # Save-time validation rejects unknown paths, so this can only mean the
+        # catalogue changed under an existing template. Dropping the binding
+        # here would silently hand the field back to name matching.
+        assert declared_bindings(
+            {"fields": [{"name": "x", "binding": "matter.retired_path"}]}
+        ) == {"x": "matter.retired_path"}
 
 
 class TestSemanticMetadata:

@@ -5,6 +5,18 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.04.1 — Templates that fill themselves and keep their history
+
+Released September 4, 2026.
+
+Template fields can say where their value comes from, clauses can appear only when they apply, repeating sections scale with the matter's parties, and every published version is kept so you can restore an earlier wording.
+
+- **Tell a field where its value comes from.** Pick a data source for each field — case number, client address, plaintiff, attorney — and it fills from the matter every time, whatever you named it.
+- **One template instead of near-identical copies.** Mark a clause to appear only when a field applies, with {{#if}} in the document itself. Two near-identical templates become one.
+- **Repeating sections that follow the matter.** Wrap a block in {{#each parties}} and it renders once per party on the matter — a signature block each — with no editing afterwards.
+- **Version history with restore.** Every edit records the wording it replaced. The Versions tab shows what changed and restores an earlier version without retyping it.
+- **Word templates are editable again.** The editor no longer stops at 'PDF only' for Word and Markdown: rename fields, set their data source, and set their conditions for every format.
+
 ## 2026.09.02.1 — Organize matter documents with folders and tags
 
 Released September 2, 2026.

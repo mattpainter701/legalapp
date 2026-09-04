@@ -2133,9 +2133,11 @@ def _bound_suggestion(
     return DocumentTemplateVariableSuggestion(
         variable=variable,
         provenance={
+            # A path the catalogue no longer describes has no label; saying so
+            # is more useful than omitting the key.
             "status": "binding_unresolved",
             "binding": binding,
-            "binding_label": binding_label(binding),
+            "binding_label": binding_label(binding) or "Unknown data source",
         },
         review_required=True,
     )

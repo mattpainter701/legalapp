@@ -112,6 +112,42 @@ the CAS backup/restore release gate closed. Delete instead if that case does not
 |-|-|-|-|
 | 1 — Data bindings | Smart Fill that works on customer templates | none | **done** |
 | 2 — Template logic | One conditional template instead of N | none | **done** |
-| 3 — Template versions | Real Versions/Activity tabs, rollback | yes | **done** |
-| 4 — DOCX authoring parity | Word editing at PDF parity | none | not started |
+| 3 — Template versions | Real Versions/Activity tabs, rollback | `155` | **done** |
+| 4 — DOCX authoring parity | Word editing at PDF parity | none | **partial** |
 | 5 — Retire parallel system | Less code, one mental model | none | not started |
+
+### What Step 4 still needs
+
+Field editing now works for every format — the editor no longer dead-ends on
+"PDF only", so a Word template's fields can be renamed, bound, and conditioned,
+and the panel documents the markers a Word author writes in the document itself.
+Two pieces remain:
+
+- **Page rendering for DOCX.** Placing a field by clicking the page still needs
+  a PDF. Rendering DOCX pages to images would close this; a converter already
+  exists in the (disabled) Studio render runtime.
+- **Anchor reconciliation.** A drifted DOCX anchor still fails with "re-upload
+  and review the template" rather than offering to re-point the field.
+
+### Decisions made while building
+
+- **A declared binding never falls back to name matching**, including when the
+  catalogue no longer knows the path. Save-time validation rejects unknown
+  paths, so a stale one can only mean the catalogue changed under an existing
+  template; there a blank field naming the source it cannot reach is safer than
+  quietly re-sourcing a clause in a legal document.
+- **Logic markers are authored in the document**, not stored as paragraph
+  ranges. This works today with no new UI and matches where the customer
+  already is. Word regions resolve *after* field replacement, because anchors
+  address paragraphs by ordinal in the original document.
+- **Repeat items are never inlined during expansion.** Each item value gets its
+  own placeholder resolved by the ordinary substitution pass, so a party named
+  `{{#if x}}` renders as text rather than restructuring the document.
+- **Versions use a raising trigger, not a rule.** A `DO INSTEAD NOTHING` rule
+  would also have swallowed the `ON DELETE CASCADE` from `document_templates`,
+  silently stranding rows. The trigger permits exactly that cascade by
+  recognising that the parent row is already gone.
+- **DOCX accepts a semantic-only schema patch.** The existing guard rejected
+  every field-map change on a source-backed Word template; that reasoning holds
+  for anchors and not for a label or a binding, and keeping it would have left
+  Word permanently unbindable.
