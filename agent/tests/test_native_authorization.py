@@ -129,6 +129,73 @@ def test_task_filters_must_match_signed_ticket(keys):
         )
 
 
+def _search_worker(public):
+    worker = TaskWorker.__new__(TaskWorker)
+    worker.config = SimpleNamespace(
+        native_authz_enabled=False,
+        search_identity_public_key=public,
+        agent_id="agent-1",
+    )
+    worker._ticket_replays = ReplayCache()
+    return worker
+
+
+def test_firm_wide_task_matter_set_must_match_the_signed_ticket(keys):
+    """A ticket for one matter set must not authorize a task for another."""
+    private, public = keys
+    now = int(time.time())
+    task = {
+        "kind": "local_search",
+        "tenant_id": "tenant-1",
+        "matter_ids": ["matter-1", "matter-9"],
+        "file_extensions": [],
+        "identity_ticket": _ticket(
+            private,
+            now=now,
+            filters={"matter_ids": ["matter-1", "matter-2"], "file_extensions": []},
+        ),
+    }
+    with pytest.raises(IdentityTicketError, match="filter scope"):
+        _search_worker(public)._authorization_for_task(task, {"share-1"})
+
+
+def test_firm_wide_task_accepts_its_own_matter_set_in_any_order(keys):
+    private, public = keys
+    now = int(time.time())
+    task = {
+        "kind": "local_search",
+        "tenant_id": "tenant-1",
+        "matter_ids": ["matter-9", "matter-1", "matter-9"],
+        "file_extensions": [".PDF"],
+        "identity_ticket": _ticket(
+            private,
+            now=now,
+            filters={
+                "matter_ids": ["matter-1", "matter-9"],
+                "file_extensions": ["pdf"],
+            },
+        ),
+    }
+    authorization = _search_worker(public)._authorization_for_task(task, {"share-1"})
+    assert authorization.filters["matter_ids"] == ["matter-1", "matter-9"]
+
+
+def test_a_task_without_a_matter_set_keeps_the_single_matter_binding(keys):
+    """An older single-matter task must behave exactly as it always has."""
+    private, public = keys
+    now = int(time.time())
+    worker = _search_worker(public)
+    task = {
+        "kind": "authorize_file",
+        "tenant_id": "tenant-1",
+        "matter_id": "matter-1",
+        "identity_ticket": _ticket(private, now=now),
+    }
+    assert worker._authorization_for_task(task, {"share-1"}).filters == {
+        "matter_id": "matter-1"
+    }
+
+
 def test_explicit_deny_wins_over_allow_and_inheritance():
     record = normalize_sddl(
         "O:S-1-5-18G:S-1-5-18D:(A;ID;FR;;;S-1-5-21-200)(D;;FR;;;S-1-5-21-100)",

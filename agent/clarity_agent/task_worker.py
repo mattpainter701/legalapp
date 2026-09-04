@@ -35,6 +35,13 @@ from clarity_agent.utils import normalize_unc_path, parse_smb_path
 
 logger = logging.getLogger("clarity_agent.tasks")
 
+
+def _sorted_ids(value) -> list[str]:
+    """Normalize an id list so task and ticket compare independent of order."""
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return []
+    return sorted({str(item) for item in value if str(item)})
+
 # How many entries a connection test lists before reporting success. Enough to
 # prove the mount and read permission without walking a large share.
 VERIFY_SAMPLE_LIMIT = 25
@@ -91,6 +98,11 @@ class TaskWorker:
             for key in ("matter_id", "file_id")
             if task.get(key) is not None
         }
+        # A firm-wide search carries the whole authorized matter set instead of
+        # one matter. Bind it the same way, so a ticket can never be replayed
+        # against a task scoped to different matters.
+        if task.get("matter_ids") is not None:
+            expected_filters["matter_ids"] = _sorted_ids(task.get("matter_ids"))
         if task.get("kind") == "local_search":
             expected_filters["file_extensions"] = sorted(
                 {
@@ -104,6 +116,8 @@ class TaskWorker:
                 actual = sorted(
                     {str(value).lower().lstrip(".") for value in actual or []}
                 )
+            elif key == "matter_ids":
+                actual = _sorted_ids(actual)
             if actual != expected:
                 raise IdentityTicketError("identity ticket filter scope mismatch")
         return authorization
