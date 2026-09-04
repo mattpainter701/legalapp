@@ -44,6 +44,36 @@ class DocumentTemplateUpdate(BaseModel):
     signer_roles: Optional[list[dict[str, Any]]] = None
     branding_profile: Optional[dict[str, Any]] = None
     is_active: Optional[bool] = None
+    #: Version metadata, not a template attribute: it labels the history row
+    #: this edit creates rather than anything stored on the template itself.
+    change_summary: Optional[str] = Field(None, max_length=500)
+
+
+class DocumentTemplateVersionSummary(BaseModel):
+    version_no: int
+    title: str
+    format: Optional[str] = None
+    category: Optional[str] = None
+    body_sha256: str
+    source_sha256: Optional[str] = None
+    source_filename: Optional[str] = None
+    is_active: bool
+    field_count: int
+    change_summary: Optional[str] = None
+    created_by_user_id: Optional[str] = None
+    created_at: str
+
+
+class DocumentTemplateVersionDetail(DocumentTemplateVersionSummary):
+    body: str
+    variable_schema: Optional[dict[str, Any]] = None
+
+
+class DocumentTemplateVersionListResponse(BaseModel):
+    template_id: str
+    current_version_no: int
+    total: int
+    versions: list[DocumentTemplateVersionSummary]
 
 
 class DocumentTemplateResponse(BaseModel):
@@ -72,6 +102,7 @@ class DocumentTemplateResponse(BaseModel):
     approved_at: Optional[datetime] = None
     approved_by_user_id: Optional[str] = None
     is_active: bool
+    current_version_no: int = 0
     created_at: datetime
     updated_at: datetime
 

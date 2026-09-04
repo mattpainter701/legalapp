@@ -49,20 +49,14 @@ MAX_CONDITION_VALUES = 50
 MAX_LITERAL_LENGTH = 500
 MAX_REPEAT_ITEMS = 200
 
-#: ``{{#if field}} … {{/if}}`` / ``{{#unless field}} … {{/unless}}``.
-#: Deliberately not a general template language: the opening tag accepts a bare
-#: field name and nothing else.
-_MARKDOWN_BLOCK = re.compile(
-    r"\{\{#(if|unless)\s+([A-Za-z][A-Za-z0-9_.-]*)\s*\}\}"
-    r"(.*?)"
-    r"\{\{/\1\s*\}\}",
-    re.DOTALL,
-)
-
-#: ``{{#each collection}} … {{/each}}``.
-_MARKDOWN_EACH = re.compile(
-    r"\{\{#each\s+([A-Za-z][A-Za-z0-9_.-]*)\s*\}\}(.*?)\{\{/each\s*\}\}",
-    re.DOTALL,
+#: One block marker: ``{{#if x}}``, ``{{#unless x}}``, ``{{#each x}}``, or a
+#: matching close. Blocks nest, and nesting is not a regular language, so this
+#: only tokenizes markers — pairing them is the scanner's job below.
+_MARKDOWN_MARKER = re.compile(
+    r"\{\{\s*(?:"
+    r"\#(?P<open>if|unless|each)\s+(?P<name>[A-Za-z][A-Za-z0-9_.-]*)"
+    r"|/(?P<close>if|unless|each)"
+    r")\s*\}\}"
 )
 
 #: Maximum nesting of conditional/repeat blocks. Bounded so a pathological
@@ -261,6 +255,58 @@ def _scoped_name(key: str, index: int, taken: set[str]) -> str:
     return candidate
 
 
+@dataclass(frozen=True)
+class _Block:
+    """One parsed region: its keyword, subject, and the nodes it contains."""
+
+    keyword: str
+    name: str
+    children: tuple[Any, ...]
+
+
+def _parse_blocks(body: str) -> tuple[Any, ...]:
+    """Parse a body into a tree of literal strings and nested blocks.
+
+    Written as a scanner rather than a regular expression because blocks nest:
+    a pattern that matches an opener against the nearest closer pairs an outer
+    ``{{#if}}`` with an inner ``{{/if}}`` and leaves a stray marker behind.
+    """
+
+    stack: list[tuple[str, str, list[Any]]] = [("", "", [])]
+    position = 0
+    for match in _MARKDOWN_MARKER.finditer(body):
+        literal = body[position : match.start()]
+        if literal:
+            stack[-1][2].append(literal)
+        position = match.end()
+        if match.group("open"):
+            if len(stack) > MAX_BLOCK_DEPTH:
+                raise TemplateLogicError(
+                    f"Template logic is nested deeper than {MAX_BLOCK_DEPTH} levels."
+                )
+            stack.append((match.group("open"), match.group("name"), []))
+            continue
+        closing = match.group("close")
+        if len(stack) == 1:
+            raise TemplateLogicError(
+                f"The template closes a {closing!r} block that was never opened."
+            )
+        keyword, name, children = stack.pop()
+        if keyword != closing:
+            raise TemplateLogicError(
+                f"The template closes {closing!r} where {keyword!r} was expected."
+            )
+        stack[-1][2].append(_Block(keyword, name, tuple(children)))
+    trailing = body[position:]
+    if trailing:
+        stack[-1][2].append(trailing)
+    if len(stack) != 1:
+        raise TemplateLogicError(
+            f"The template opens a {stack[-1][0]!r} block that is never closed."
+        )
+    return tuple(stack[0][2])
+
+
 def expand_markdown_logic(
     body: str,
     variables: dict[str, str],
@@ -277,53 +323,57 @@ def expand_markdown_logic(
 
     collections = collections or {}
     extras: dict[str, str] = {}
-    taken = set(variables) | set(extras)
+    taken = set(variables)
 
-    def expand(text: str, scope: dict[str, str], depth: int) -> str:
-        if depth > MAX_BLOCK_DEPTH:
-            raise TemplateLogicError(
-                f"Template logic is nested deeper than {MAX_BLOCK_DEPTH} levels."
+    def render(nodes: Sequence[Any], scope: dict[str, str]) -> str:
+        parts: list[str] = []
+        for node in nodes:
+            if isinstance(node, str):
+                parts.append(node)
+                continue
+            if node.keyword == "each":
+                for index, item in enumerate(_collection_items(node.name, collections)):
+                    item_scope = dict(scope)
+                    renamed: list[Any] = list(node.children)
+                    for key, value in item.items():
+                        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", str(key)):
+                            continue
+                        placeholder = _scoped_name(str(key), index, taken)
+                        taken.add(placeholder)
+                        extras[placeholder] = "" if value is None else str(value)
+                        item_scope[str(key)] = extras[placeholder]
+                        renamed = _rename_placeholder(renamed, str(key), placeholder)
+                    parts.append(render(renamed, item_scope))
+                continue
+            present = bool(str(scope.get(node.name) or "").strip())
+            keep = present if node.keyword == "if" else not present
+            if keep:
+                parts.append(render(node.children, scope))
+        return "".join(parts)
+
+    return render(_parse_blocks(body), dict(variables)), extras
+
+
+def _rename_placeholder(nodes: Sequence[Any], key: str, placeholder: str) -> list[Any]:
+    """Point one repeat item's placeholders at its scoped substitution name."""
+
+    pattern = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}")
+    renamed: list[Any] = []
+    for node in nodes:
+        if isinstance(node, str):
+            renamed.append(pattern.sub("{{" + placeholder + "}}", node))
+        else:
+            renamed.append(
+                _Block(
+                    node.keyword,
+                    node.name,
+                    tuple(_rename_placeholder(node.children, key, placeholder)),
+                )
             )
-
-        def each_replacer(match: re.Match[str]) -> str:
-            name, inner = match.group(1), match.group(2)
-            rendered: list[str] = []
-            for index, item in enumerate(_collection_items(name, collections)):
-                item_scope = dict(scope)
-                renamed = inner
-                for key, value in item.items():
-                    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", str(key)):
-                        continue
-                    placeholder = _scoped_name(str(key), index, taken)
-                    taken.add(placeholder)
-                    extras[placeholder] = "" if value is None else str(value)
-                    item_scope[str(key)] = extras[placeholder]
-                    renamed = re.sub(
-                        r"\{\{\s*" + re.escape(str(key)) + r"\s*\}\}",
-                        "{{" + placeholder + "}}",
-                        renamed,
-                    )
-                rendered.append(expand(renamed, item_scope, depth + 1))
-            return "".join(rendered)
-
-        def block_replacer(match: re.Match[str]) -> str:
-            keyword, name, inner = match.group(1), match.group(2), match.group(3)
-            present = bool(str(scope.get(name) or "").strip())
-            keep = present if keyword == "if" else not present
-            return expand(inner, scope, depth + 1) if keep else ""
-
-        expanded = _MARKDOWN_EACH.sub(each_replacer, text)
-        expanded = _MARKDOWN_BLOCK.sub(block_replacer, expanded)
-        if expanded != text and (
-            _MARKDOWN_EACH.search(expanded) or _MARKDOWN_BLOCK.search(expanded)
-        ):
-            return expand(expanded, scope, depth + 1)
-        return expanded
-
-    return expand(body, dict(variables), 0), extras
+    return renamed
 
 
 def has_markdown_logic(body: str) -> bool:
     """Return whether a body contains any logic block."""
 
-    return bool(_MARKDOWN_EACH.search(body) or _MARKDOWN_BLOCK.search(body))
+    return bool(_MARKDOWN_MARKER.search(body))

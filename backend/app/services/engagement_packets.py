@@ -20,6 +20,7 @@ from app.models.document_template import DocumentTemplate
 from app.models.prospect_follow_through import EngagementPacket, ProspectFollowThrough
 from app.config import get_settings
 from app.routers.document_templates import render_template
+from app.services.template_logic import TemplateLogicError
 from app.schemas.engagement_packet import PacketCreate, PacketUpdate
 
 
@@ -293,7 +294,12 @@ async def render_packet_preview(
         "client_email": str((fields.get("client") or {}).get("email") or ""),
         "attorney_name": str((fields.get("attorney") or {}).get("name") or ""),
     }
-    rendered = render_template(template.body, variables)
+    try:
+        rendered = render_template(template.body, variables)
+    except TemplateLogicError as exc:
+        # Unbalanced or malformed logic in the packet template is a template
+        # authoring problem, not a server fault.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     packet.status = "previewed"
     packet.version += 1
     packet.inputs = {

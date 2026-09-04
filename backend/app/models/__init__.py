@@ -88,6 +88,7 @@ from app.models.sms import (  # noqa: F401
     SmsReviewItem,
 )
 from app.models.document_template import DocumentTemplate
+from app.models.document_template_version import DocumentTemplateVersion
 from app.models.studio_render import (
     StudioPreferredRenderEvidence,
     StudioRenderArtifact,
@@ -302,6 +303,7 @@ __all__ = [
     "LeadAppointment",
     "LeadFunnelEvent",
     "DocumentTemplate",
+    "DocumentTemplateVersion",
     "DocumentTemplatePreview",
     "StudioDraft",
     "StudioDraftField",

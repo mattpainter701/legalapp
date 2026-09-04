@@ -37,6 +37,7 @@ from app.config import get_settings
 from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.document_template import DocumentTemplate
+from app.models.document_template_version import DocumentTemplateVersion
 from app.models.document_template_preview import DocumentTemplatePreview
 from app.models.matter_document import MatterDocument
 from app.models.matter_party import MatterParty
@@ -44,6 +45,9 @@ from app.models.plugin import Matter, MatterEvent
 from app.models.tenant import TenantSettings
 from app.schemas.document_template import (
     DocumentTemplateBindingCatalogue,
+    DocumentTemplateVersionDetail,
+    DocumentTemplateVersionListResponse,
+    DocumentTemplateVersionSummary,
     DocumentTemplateBindingOption,
     DocumentTemplateCollectionOption,
     CATEGORIES,
@@ -80,6 +84,12 @@ from app.services.pdf_templates import (
     validate_representative_pdf_variables,
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
+from app.services.document_template_versions import (
+    get_version,
+    list_versions,
+    record_version,
+    snapshot_differs,
+)
 from app.services.template_logic import (
     OPERATORS as LOGIC_OPERATORS,
     TemplateLogicError,
@@ -2988,6 +2998,8 @@ async def update_template(
         raise HTTPException(status_code=404, detail="Template not found")
 
     updates = payload.model_dump(exclude_none=True)
+    # Version metadata labels the history row, it is not a template column.
+    updates.pop("change_summary", None)
     if "variable_schema" in updates:
         try:
             validate_semantic_metadata(updates["variable_schema"])
@@ -3163,8 +3175,191 @@ async def update_template(
         updates["approved_at"] = None
         updates["approved_by_user_id"] = None
 
+    # Capture what the template said before this edit. The row is written
+    # first so a failure applying the update cannot leave a version claiming a
+    # state that was never published.
+    if snapshot_differs(template, updates):
+        await record_version(
+            db,
+            template=template,
+            tenant_id=uuid.UUID(tenant_id),
+            user_id=current_user.id,
+            change_summary=payload.change_summary,
+        )
+
     for field, value in updates.items():
         setattr(template, field, value)
+
+    await db.commit()
+    await db.refresh(template)
+    return _template_response(template)
+
+
+def _version_summary(version: DocumentTemplateVersion) -> DocumentTemplateVersionSummary:
+    schema = version.variable_schema if isinstance(version.variable_schema, dict) else {}
+    fields = schema.get("fields")
+    return DocumentTemplateVersionSummary(
+        version_no=version.version_no,
+        title=version.title,
+        format=version.format,
+        category=version.category,
+        body_sha256=version.body_sha256,
+        source_sha256=version.source_sha256,
+        source_filename=version.source_filename,
+        is_active=version.is_active,
+        field_count=len(fields) if isinstance(fields, list) else 0,
+        change_summary=version.change_summary,
+        created_by_user_id=(
+            str(version.created_by_user_id) if version.created_by_user_id else None
+        ),
+        created_at=version.created_at.isoformat(),
+    )
+
+
+@router.get(
+    "/{template_id}/versions",
+    response_model=DocumentTemplateVersionListResponse,
+)
+async def list_template_versions(
+    template_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return this template's published history, newest first."""
+
+    tenant_id = str(current_user.tenant_id)
+    parsed_tenant_id = uuid.UUID(tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    template = await db.scalar(
+        select(DocumentTemplate).where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == parsed_tenant_id,
+        )
+    )
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    versions, total = await list_versions(
+        db,
+        tenant_id=parsed_tenant_id,
+        template_id=template_id,
+        limit=limit,
+        offset=offset,
+    )
+    return DocumentTemplateVersionListResponse(
+        template_id=str(template.id),
+        current_version_no=int(template.current_version_no or 0),
+        total=total,
+        versions=[_version_summary(version) for version in versions],
+    )
+
+
+@router.get(
+    "/{template_id}/versions/{version_no}",
+    response_model=DocumentTemplateVersionDetail,
+)
+async def get_template_version(
+    template_id: uuid.UUID,
+    version_no: int,
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return one recorded version, including its body and field map."""
+
+    tenant_id = str(current_user.tenant_id)
+    parsed_tenant_id = uuid.UUID(tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    version = await get_version(
+        db,
+        tenant_id=parsed_tenant_id,
+        template_id=template_id,
+        version_no=version_no,
+    )
+    if not version:
+        raise HTTPException(status_code=404, detail="Template version not found")
+    return DocumentTemplateVersionDetail(
+        **_version_summary(version).model_dump(),
+        body=version.body,
+        variable_schema=version.variable_schema,
+    )
+
+
+@router.post(
+    "/{template_id}/versions/{version_no}/restore",
+    response_model=DocumentTemplateResponse,
+)
+async def restore_template_version(
+    template_id: uuid.UUID,
+    version_no: int,
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Put an earlier wording back, as a new version rather than a rewrite.
+
+    Restoring records the current state first, so the history keeps every
+    published state including the one being replaced. The restored template
+    is always left inactive: an earlier field map has not been previewed
+    against the current source, and activation stays a deliberate human step.
+    """
+
+    tenant_id = str(current_user.tenant_id)
+    parsed_tenant_id = uuid.UUID(tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    template = await db.scalar(
+        select(DocumentTemplate)
+        .where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == parsed_tenant_id,
+        )
+        .with_for_update()
+    )
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    version = await get_version(
+        db,
+        tenant_id=parsed_tenant_id,
+        template_id=template_id,
+        version_no=version_no,
+    )
+    if not version:
+        raise HTTPException(status_code=404, detail="Template version not found")
+
+    # A source-backed template's field map is only meaningful against the exact
+    # retained bytes. Restoring a version recorded against different bytes
+    # would reinstate anchors that no longer point anywhere.
+    if str(template.format or "").lower() in {"pdf", "docx"} and (
+        version.source_sha256 != template.source_sha256
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "That version was recorded against a different source file. "
+                "Re-upload the original source before restoring it."
+            ),
+        )
+
+    await record_version(
+        db,
+        template=template,
+        tenant_id=parsed_tenant_id,
+        user_id=current_user.id,
+        change_summary=f"Replaced by restore of version {version_no}",
+    )
+
+    template.title = version.title
+    template.body = version.body
+    template.variable_schema = version.variable_schema
+    template.category = version.category or template.category
+    template.is_active = False
+    template.last_test_rendered_at = None
+    template.approved_at = None
+    template.approved_by_user_id = None
 
     await db.commit()
     await db.refresh(template)
