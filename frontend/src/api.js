@@ -2188,6 +2188,18 @@ export const listResearchWorkspaceHistory = (matterId, workspaceId) => api.get(`
 export const discoverTemplateVariables = (id, data = {}) =>
   api.post(`/templates/${id}/smart-fill-preview`, data).then(r => r.data)
 
+// The closed vocabulary a template field may bind to, plus the collections a
+// repeating section may iterate. Static server-owned data, so callers cache it.
+export const getTemplateBindings = () =>
+  api.get('/templates/bindings').then(r => r.data)
+
+export const listTemplateVersions = (id, params = {}) =>
+  api.get(`/templates/${id}/versions`, { params }).then(r => r.data)
+export const getTemplateVersion = (id, versionNo) =>
+  api.get(`/templates/${id}/versions/${versionNo}`).then(r => r.data)
+export const restoreTemplateVersion = (id, versionNo) =>
+  api.post(`/templates/${id}/versions/${versionNo}/restore`).then(r => r.data)
+
 // ── Reports / Budget ──────────────────────────────────────────────────────────
 
 export const getMatterBudget = (matterId) =>

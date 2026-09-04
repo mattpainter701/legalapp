@@ -21,6 +21,19 @@ vi.mock('./PdfDocumentCanvas', () => ({
   }),
 }))
 
+// The binding catalogue is static server-owned vocabulary; the editor only
+// needs it to populate the picker.
+vi.mock('../../api', () => ({
+  getTemplateBindings: () => Promise.resolve({
+    bindings: [
+      { path: 'client.name', label: 'Client name', group: 'Client' },
+      { path: 'matter.case_number', label: 'Case number', group: 'Matter' },
+    ],
+    collections: [],
+    operators: ['present', 'absent'],
+  }),
+}))
+
 const pdfSource = () => new File(['%PDF-1.4'], 'engagement.pdf', { type: 'application/pdf' })
 
 const templateWith = (fields, extra = {}) => ({
@@ -50,15 +63,61 @@ describe('TemplateStudioEditor', () => {
     expect(schemaFields({ variable_schema: { fields: 'not-a-list' } })).toEqual([])
   })
 
-  it('explains itself instead of rendering a canvas for a non-PDF template', () => {
+  it('keeps fields editable for a non-PDF template instead of dead-ending', () => {
+    // Word is the format firms author in. Refusing to show its fields would
+    // leave the binding and condition controls unreachable for exactly the
+    // templates that most need them.
     render(
       <TemplateStudioEditor
-        template={{ id: 'x', format: 'markdown', variable_schema: { fields: [] } }}
+        template={{
+          id: 'x',
+          format: 'docx',
+          variable_schema: { fields: [{ name: 'client_name', label: 'Client' }] },
+        }}
         source={null}
         onSave={vi.fn()}
       />,
     )
-    expect(screen.getByText(/Visual editing is available for PDF templates/i)).toBeInTheDocument()
+    expect(screen.getByRole('complementary', { name: /field properties/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Client' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save fields/i })).toBeInTheDocument()
+    // Page placement genuinely needs a PDF, and the panel says so.
+    expect(screen.queryByLabelText(/PDF page/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/needs a PDF source/i)).toBeInTheDocument()
+  })
+
+  it('documents the logic markers a Word author writes in the document itself', () => {
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [] } }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('{{#if field}} … {{/if}}')).toBeInTheDocument()
+    expect(screen.getByText('{{#each parties}} … {{/each}}')).toBeInTheDocument()
+  })
+
+  it('offers a data binding and a condition for the selected field', async () => {
+    render(
+      <TemplateStudioEditor
+        template={templateWith([{ name: 'client_name' }, { name: 'is_entity' }])}
+        source={pdfSource()}
+        onSave={vi.fn()}
+      />,
+    )
+    const binding = await screen.findByLabelText(/fills from/i)
+    // Falls back to name matching until the customer says otherwise.
+    expect(binding).toHaveValue('')
+    fireEvent.change(binding, { target: { value: 'client.name' } })
+    expect(binding).toHaveValue('client.name')
+    expect(screen.getByText(/fills from the matter every time/i)).toBeInTheDocument()
+
+    const condition = screen.getByLabelText(/only include when/i)
+    // A field cannot be conditioned on itself.
+    expect(screen.getByRole('option', { name: 'is_entity' })).toBeInTheDocument()
+    fireEvent.change(condition, { target: { value: 'is_entity' } })
+    expect(screen.getByLabelText('Condition')).toHaveValue('present')
   })
 
   it('surfaces a source load failure instead of a blank editor', () => {
