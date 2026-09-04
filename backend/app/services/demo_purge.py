@@ -46,9 +46,13 @@ _STUDIO_PURGE_ORDER = (
 )
 _STUDIO_TABLES = frozenset(_STUDIO_PURGE_ORDER)
 _CONFIG_WORKFLOW_PURGE_ORDER = (
+    # Automation dispatch evidence points at runs and rules, so it leaves
+    # first; rules point at templates, so they leave before the definitions.
+    "matter_workflow_automation_events",
     "matter_workflow_run_steps",
     "matter_workflow_run_events",
     "matter_workflow_runs",
+    "matter_workflow_automation_rules",
     "matter_workflow_field_requirements",
     "matter_workflow_checklist_definitions",
     "matter_workflow_stage_definitions",

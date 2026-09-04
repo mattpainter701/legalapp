@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.04.1 — Plan matter workflows automatically, approve them the same way
+
+Released September 4, 2026.
+
+Firms can have an approved workflow template prepared the moment a matter opens or reaches a stage. The automation only prepares the work; a reviewer still approves and applies it.
+
+- **Two bounded triggers, one action.** A rule fires when a matter is opened or enters a named stage, optionally narrowed by matter type or practice area, and plans one approved workflow template. Nothing else.
+- **Automation is approved like legal work.** A rule is created as a draft and does nothing until an approver activates the exact definition they reviewed. Editing a rule returns it to draft for a fresh approval.
+- **Nothing is applied without a person.** A matching rule creates the same reviewable preview the Workflow tab creates by hand. Tasks and matter stages change only when someone applies the planned run.
+- **A rule that does nothing says why.** Every match is recorded as immutable evidence naming the rule, the matter, and the planned run, or the reason it was blocked. The matter's Workflow tab shows it too.
+
 ## 2026.09.02.1 — Organize matter documents with folders and tags
 
 Released September 2, 2026.

@@ -7,6 +7,7 @@ import {
   applyMatterWorkflow,
   getMatterWorkflowRuns,
   rollbackMatterWorkflow,
+  getMatterAutomationEvents,
 } from "../api";
 import WorkflowSettingsPage from "../pages/WorkflowSettingsPage";
 
@@ -136,6 +137,7 @@ export default function MatterWorkflowPanel({
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState(null);
   const [rollbackReason, setRollbackReason] = useState({});
+  const [automationEvents, setAutomationEvents] = useState([]);
   const load = useCallback(async () => {
     setLoading(true);
     setMessage(null);
@@ -144,15 +146,18 @@ export default function MatterWorkflowPanel({
       setValues({});
       setTemplates([]);
       setRuns([]);
+      setAutomationEvents([]);
       setLoading(false);
       return;
     }
     try {
-      const [fieldData, templateData, runData] = await Promise.all([
-        getMatterCustomFields(matterId),
-        getMatterWorkflowTemplates(matterId),
-        getMatterWorkflowRuns(matterId),
-      ]);
+      const [fieldData, templateData, runData, automationData] =
+        await Promise.all([
+          getMatterCustomFields(matterId),
+          getMatterWorkflowTemplates(matterId),
+          getMatterWorkflowRuns(matterId),
+          getMatterAutomationEvents(matterId).catch(() => ({ items: [] })),
+        ]);
       const fs = items(fieldData);
       setFields(fs);
       setValues(
@@ -170,6 +175,7 @@ export default function MatterWorkflowPanel({
         ),
       );
       setRuns(items(runData));
+      setAutomationEvents(items(automationData));
     } catch (e) {
       setMessage({
         type: "error",
@@ -448,6 +454,21 @@ export default function MatterWorkflowPanel({
           ) : (
             <p>Approval capability required to apply legal work.</p>
           )}
+        </div>
+      )}
+      {automationEvents.length > 0 && (
+        <div aria-label="Automation activity">
+          <h3 className="font-semibold">Automation activity</h3>
+          <ul className="text-sm">
+            {automationEvents.map((event) => (
+              <li key={event.id}>
+                {event.rule_name || "Automation rule"} ·{" "}
+                {event.outcome === "planned"
+                  ? "planned a run for review"
+                  : `blocked: ${event.detail?.message || event.detail?.failure_code || "see evidence"}`}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       <div>

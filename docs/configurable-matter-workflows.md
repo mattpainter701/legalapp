@@ -10,6 +10,12 @@ declared stage, checklist, relative due-date, priority, and assignee-role
 vocabulary described below. They cannot run expressions, call arbitrary
 services, send email, or generate documents.
 
+A firm can have an approved template *planned* automatically when a matter is
+opened or enters a named stage. That is a separate, equally bounded layer
+documented in [`workflow-automations.md`](workflow-automations.md); it produces
+the same reviewable planned run described here, and the apply step below stays
+the only way a task or stage ever changes.
+
 ## Permissions
 
 | Operation | Required capability | Boundary |
@@ -144,7 +150,11 @@ The following remain outside this slice and must not be inferred from the
 COMP-09 APIs or UI:
 
 - a general no-code builder, arbitrary triggers/actions, executable
-  expressions, schedules, webhooks, or automatic outbound email;
+  expressions, schedules, webhooks, or automatic outbound email. Two bounded
+  triggers now plan (never apply) a run from a matter-created or
+  matter-stage-changed event; see
+  [`workflow-automations.md`](workflow-automations.md) for exactly what they
+  can and cannot do;
 - native DOCX generation, approved smart fill, and generalized Template Studio
   workflow UX;
 - new email-to-matter filing behavior beyond the existing authenticated,

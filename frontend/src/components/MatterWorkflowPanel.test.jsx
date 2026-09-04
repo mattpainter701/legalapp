@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   getMatterCustomFields: vi.fn(),
   getMatterWorkflowTemplates: vi.fn(),
   getMatterWorkflowRuns: vi.fn(),
+  getMatterAutomationEvents: vi.fn(),
   updateMatterCustomFields: vi.fn(),
   previewMatterWorkflow: vi.fn(),
   applyMatterWorkflow: vi.fn(),
@@ -45,6 +46,7 @@ describe("MatterWorkflowPanel", () => {
       ],
     });
     api.getMatterWorkflowRuns.mockResolvedValue({ items: [] });
+    api.getMatterAutomationEvents.mockResolvedValue({ items: [] });
     api.updateMatterCustomFields.mockResolvedValue({ items: [] });
     api.listWorkflowFields.mockResolvedValue({ items: [] });
     api.listWorkflowTemplates.mockResolvedValue({ items: [] });
@@ -350,5 +352,48 @@ describe("MatterWorkflowPanel", () => {
     expect(screen.getByText(/compensation_required/)).toBeInTheDocument();
     expect(screen.getByText("task changed after apply")).toBeInTheDocument();
     expect(api.getMatterWorkflowRuns).toHaveBeenCalledTimes(2);
+  });
+
+  it("names the rule behind an automatically planned run", async () => {
+    api.getMatterAutomationEvents.mockResolvedValue({
+      items: [
+        {
+          id: "a1",
+          rule_name: "Open litigation matters",
+          outcome: "planned",
+          run_id: "r1",
+        },
+        {
+          id: "a2",
+          rule_name: "Closeout rule",
+          outcome: "blocked",
+          detail: { message: "Template has no approved version" },
+        },
+      ],
+    });
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters"] }}
+      />,
+    );
+    const activity = await screen.findByLabelText("Automation activity");
+    expect(activity.textContent).toContain("Open litigation matters");
+    expect(activity.textContent).toContain("planned a run for review");
+    expect(activity.textContent).toContain(
+      "blocked: Template has no approved version",
+    );
+  });
+
+  it("still loads the workflow tab when automation history is unavailable", async () => {
+    api.getMatterAutomationEvents.mockRejectedValue(new Error("boom"));
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters"] }}
+      />,
+    );
+    expect(await screen.findByLabelText("Approved workflow template")).toBeTruthy();
+    expect(screen.queryByLabelText("Automation activity")).toBeNull();
   });
 });
