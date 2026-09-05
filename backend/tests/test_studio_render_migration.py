@@ -22,7 +22,7 @@ def test_studio_render_revision_is_the_single_next_head():
     script = ScriptDirectory.from_config(config)
     revision = script.get_revision("150_studio_render_jobs")
 
-    assert script.get_heads() == ["155_matter_workflow_automations"]
+    assert script.get_heads() == ["156_document_template_versions"]
     assert revision.down_revision == "149_firm_memory_source_auth"
     assert script.get_revision("151_fm_native_authz").down_revision == "150_studio_render_jobs"
     assert script.get_revision("152_file_open_intents").down_revision == "151_fm_native_authz"
@@ -34,6 +34,10 @@ def test_studio_render_revision_is_the_single_next_head():
     assert (
         script.get_revision("155_matter_workflow_automations").down_revision
         == "154_matter_document_folders"
+    )
+    assert (
+        script.get_revision("156_document_template_versions").down_revision
+        == "155_matter_workflow_automations"
     )
 
 

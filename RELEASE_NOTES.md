@@ -5,6 +5,18 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.04.2 — Templates that fill themselves and keep their history
+
+Released September 4, 2026.
+
+Template fields can say where their value comes from, clauses can appear only when they apply, repeating sections scale with the matter's parties, and every published version is kept so you can restore an earlier wording.
+
+- **Tell a field where its value comes from.** Pick a data source for each field — case number, client address, plaintiff, attorney — and it fills from the matter every time, whatever you named it.
+- **One template instead of near-identical copies.** Mark a clause to appear only when a field applies, with {{#if}} in the document itself. Two near-identical templates become one.
+- **Repeating sections that follow the matter.** Wrap a block in {{#each parties}} and it renders once per party on the matter — a signature block each — with no editing afterwards.
+- **Version history with restore.** Every edit records the wording it replaced. The Versions tab shows what changed and restores an earlier version without retyping it.
+- **Mark up Word templates by hand.** See the document itself: highlight text to make it a field, and select paragraphs to make them conditional or repeat once per party.
+
 ## 2026.09.04.1 — Plan matter workflows automatically, approve them the same way
 
 Released September 4, 2026.

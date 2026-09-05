@@ -92,6 +92,11 @@ _PURGE_ONLY_TABLES = {
     "client_portal_invites",
     "cloud_metadata_index",
     "conflict_checks",
+    # A version records who edited a firm's template and what it said before.
+    # That is audit evidence about the real tenant, so it is purged with an
+    # expired demo but never cloned into one: a demo tenant starts its
+    # templates with no history rather than inheriting somebody else's.
+    "document_template_versions",
     "demo_sessions",
     "demo_usage_reservations",
     "document_integrity_events",

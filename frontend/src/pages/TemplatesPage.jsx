@@ -2006,6 +2006,13 @@ export default function TemplatesPage() {
     return saved
   }, [canonicalWorkspaceTemplateId, load])
 
+  // A restore replaces the template in place, so the workspace and the library
+  // must both pick up the restored wording without a page reload.
+  const handleRestoredVersion = useCallback(async (restored) => {
+    if (restored) setWorkspaceTemplate(restored)
+    await load()
+  }, [load])
+
   useEffect(() => {
     const handleOpenStudio = (event) => {
       const target = buildOpenStudioTarget(event?.detail)
@@ -2429,6 +2436,7 @@ export default function TemplatesPage() {
           sourceLoading={workspaceSourceLoading}
           sourceError={workspaceSourceError}
           onSaveFields={handleSaveWorkspaceFields}
+          onRestored={handleRestoredVersion}
         />
         {editTemplate && (
           <Modal title="Edit Template" onClose={() => setEditTemplate(null)}>

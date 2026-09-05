@@ -11,6 +11,7 @@ import {
   discoverTemplateVariables,
   getTemplate,
   getTemplates,
+  listTemplateVersions,
   renderTemplate,
   renderTemplateFile,
   updateTemplate,
@@ -33,6 +34,13 @@ vi.mock('../api', () => ({
   renderTemplate: vi.fn(),
   renderTemplateFile: vi.fn(),
   discoverTemplateVariables: vi.fn(),
+  getTemplateBindings: vi.fn().mockResolvedValue({ bindings: [], collections: [], operators: [] }),
+  getTemplateOutline: vi.fn().mockResolvedValue({ paragraphs: [], paragraph_count: 0, truncated: false }),
+  listTemplateVersions: vi.fn().mockResolvedValue({
+    template_id: 'template-1', current_version_no: 0, total: 0, versions: [],
+  }),
+  getTemplateVersion: vi.fn(),
+  restoreTemplateVersion: vi.fn(),
   getMatterDocumentDownloadUrl: (matterId, documentId) => `/api/matters/${matterId}/documents/${documentId}/download`,
   triggerBlobDownload: vi.fn(),
 }))
@@ -148,7 +156,7 @@ describe('document template workflow', () => {
 
     expect(await screen.findByRole('heading', { name: 'Engagement workspace' })).toBeInTheDocument()
     expect(getTemplate).toHaveBeenCalledWith(templateId)
-    expect(screen.getByRole('status')).toHaveTextContent(`Draft ${draftId} is not available in Phase 1`)
+    expect(screen.getByRole('status', { name: 'Workspace status' })).toHaveTextContent(`Draft ${draftId} is not available in Phase 1`)
     expect(screen.getByRole('link', { name: 'Workspace' })).toHaveAttribute('aria-current', 'page')
   })
 
@@ -216,8 +224,8 @@ describe('document template workflow', () => {
     renderStudioRoute(`/templates/${templateId}/studio?focus=draft&draft_id=javascript:alert(1)&redirect_url=https://example.test`)
 
     expect(await screen.findByRole('heading', { name: 'Canonical workspace' })).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent(/unsupported data/i)
-    expect(screen.getByRole('status')).toHaveFocus()
+    expect(screen.getByRole('status', { name: 'Workspace status' })).toHaveTextContent(/unsupported data/i)
+    expect(screen.getByRole('status', { name: 'Workspace status' })).toHaveFocus()
     expect(screen.getByTestId('studio-location')).toHaveTextContent(`/templates/${templateId}/studio`)
     expect(screen.getByTestId('studio-location')).not.toHaveTextContent('example.test')
   })
@@ -251,14 +259,44 @@ describe('document template workflow', () => {
     expect(screen.getByRole('dialog', { name: 'Generate Document: Saved workspace' })).toBeInTheDocument()
   })
 
-  it('exposes version, test, and activity routes as unavailable shells without fake controls', async () => {
+  it('renders real version history on the versions route', async () => {
     const templateId = '11111111-1111-4111-8111-111111111111'
     getTemplate.mockResolvedValue({ id: templateId, title: 'Court form', format: 'pdf', source_filename: 'court.pdf', source_sha256: 'abc', is_active: true })
+    listTemplateVersions.mockResolvedValue({
+      template_id: templateId,
+      current_version_no: 2,
+      total: 2,
+      versions: [
+        { version_no: 2, title: 'Court form', body_sha256: 'b2', source_sha256: 'abc', is_active: true, field_count: 3, created_at: '2026-09-01T10:00:00Z' },
+        { version_no: 1, title: 'Court form', body_sha256: 'b1', source_sha256: 'abc', is_active: false, field_count: 2, created_at: '2026-08-01T10:00:00Z' },
+      ],
+    })
     renderStudioRoute(`/templates/${templateId}/studio/versions`)
 
     expect(await screen.findByRole('heading', { name: /versions/i })).toBeInTheDocument()
-    expect(screen.getByText(/No versions records or controls are available in Phase 1/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /create version/i })).not.toBeInTheDocument()
+    expect(await screen.findByText(/Version 2 · Court form/)).toBeInTheDocument()
+    expect(screen.getByText(/Version 1 · Court form/)).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /restore/i })).toHaveLength(2)
+  })
+
+  it('says so plainly when a template has no recorded history yet', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    getTemplate.mockResolvedValue({ id: templateId, title: 'Court form', format: 'pdf', source_filename: 'court.pdf', source_sha256: 'abc', is_active: true })
+    listTemplateVersions.mockResolvedValue({ template_id: templateId, current_version_no: 0, total: 0, versions: [] })
+    renderStudioRoute(`/templates/${templateId}/studio/versions`)
+
+    expect(await screen.findByRole('heading', { name: /no history yet/i })).toBeInTheDocument()
+    // An empty history offers nothing to restore rather than a disabled control.
+    expect(screen.queryByRole('button', { name: /restore/i })).not.toBeInTheDocument()
+  })
+
+  it('keeps the test route an honest shell until it has something to run', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    getTemplate.mockResolvedValue({ id: templateId, title: 'Court form', format: 'pdf', source_filename: 'court.pdf', source_sha256: 'abc', is_active: true })
+    renderStudioRoute(`/templates/${templateId}/studio/test`)
+
+    expect(await screen.findByRole('heading', { name: /^test$/i })).toBeInTheDocument()
+    expect(screen.getByText(/No test records or controls are available in Phase 1/)).toBeInTheDocument()
   })
 
   it('adapts a validated lawhand.open_studio UI event to an internal route', async () => {
@@ -281,7 +319,7 @@ describe('document template workflow', () => {
       detail: { template_id: templateId, focus: 'draft', draft_id: 'javascript:alert(1)' },
     })))
     expect(await screen.findByRole('heading', { name: 'Fallback workspace' })).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent(/focus was invalid or unavailable/i)
+    expect(screen.getByRole('status', { name: 'Workspace status' })).toHaveTextContent(/focus was invalid or unavailable/i)
   })
 
   it('opens the persistent new route in the existing source preparation flow', async () => {

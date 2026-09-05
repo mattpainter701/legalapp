@@ -21,6 +21,47 @@ vi.mock('./PdfDocumentCanvas', () => ({
   }),
 }))
 
+// The binding catalogue is static server-owned vocabulary; the editor only
+// needs it to populate the picker.
+vi.mock('./DocxDocumentView', () => ({
+  default: ({ fields, regions, onCreateField, onCreateRegion, onRemoveRegion }) => (
+    <div data-testid="docx-view">
+      <span>{fields.length} mapped</span>
+      <span>{(regions || []).length} regions</span>
+      <button
+        type="button"
+        onClick={() => onCreateField({ ordinal: 2, start: 6, end: 18, text: 'Ada Lovelace' })}
+      >
+        Select text
+      </button>
+      <button
+        type="button"
+        onClick={() => onCreateRegion({ kind: 'each', name: 'parties', from_ordinal: 4, to_ordinal: 6 })}
+      >
+        Mark repeating
+      </button>
+      <button
+        type="button"
+        onClick={() => onRemoveRegion({ keyword: 'each', name: 'parties', from: 4, to: 6 })}
+      >
+        Unmark
+      </button>
+    </div>
+  ),
+}))
+
+vi.mock('../../api', () => ({
+  getTemplateOutline: () => Promise.resolve({ paragraphs: [], paragraph_count: 0 }),
+  getTemplateBindings: () => Promise.resolve({
+    bindings: [
+      { path: 'client.name', label: 'Client name', group: 'Client' },
+      { path: 'matter.case_number', label: 'Case number', group: 'Matter' },
+    ],
+    collections: [],
+    operators: ['present', 'absent'],
+  }),
+}))
+
 const pdfSource = () => new File(['%PDF-1.4'], 'engagement.pdf', { type: 'application/pdf' })
 
 const templateWith = (fields, extra = {}) => ({
@@ -50,7 +91,135 @@ describe('TemplateStudioEditor', () => {
     expect(schemaFields({ variable_schema: { fields: 'not-a-list' } })).toEqual([])
   })
 
-  it('explains itself instead of rendering a canvas for a non-PDF template', () => {
+  it('creates a Word field from a text selection, anchored to that span', async () => {
+    // A Word field is a character span, not a rectangle, so the selection the
+    // user made *is* the anchor — there is no page to place anything on.
+    const onSave = vi.fn().mockResolvedValue({})
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [] } }}
+        source={null}
+        onSave={onSave}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Select text' }))
+    await waitFor(() => expect(screen.getByText('1 mapped')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    const [field] = onSave.mock.calls[0][0].fields
+    expect(field.docx_anchor).toEqual({ paragraph_ordinal: 2, start: 6, end: 18 })
+    // The renderer re-checks this exact text before replacing it.
+    expect(field.source_text).toBe('Ada Lovelace')
+    expect(field.name).toBe('ada_lovelace')
+  })
+
+  it('saves a region marked in the document view alongside the fields', async () => {
+    const onSave = vi.fn().mockResolvedValue({})
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [{ name: 'a' }] } }}
+        source={null}
+        onSave={onSave}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Mark repeating' }))
+    await waitFor(() => expect(screen.getByText('1 regions')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(onSave.mock.calls[0][0].regions).toEqual([
+      { kind: 'each', name: 'parties', from_ordinal: 4, to_ordinal: 6 },
+    ])
+  })
+
+  it('does not add the same region twice', async () => {
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [{ name: 'a' }] } }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Mark repeating' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mark repeating' }))
+    await waitFor(() => expect(screen.getByText('1 regions')).toBeInTheDocument())
+  })
+
+  it('removes a region marked in the document view', async () => {
+    render(
+      <TemplateStudioEditor
+        template={{
+          id: 'x',
+          format: 'docx',
+          variable_schema: {
+            fields: [{ name: 'a' }],
+            regions: [{ kind: 'each', name: 'parties', from_ordinal: 4, to_ordinal: 6 }],
+          },
+        }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('1 regions')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Unmark' }))
+    await waitFor(() => expect(screen.getByText('0 regions')).toBeInTheDocument())
+  })
+
+  it('omits the regions key entirely for a template that has none', async () => {
+    // A template with no regions must serialise exactly as it did before
+    // regions existed.
+    const onSave = vi.fn().mockResolvedValue({})
+    render(
+      <TemplateStudioEditor
+        template={templateWith([{ name: 'client_name' }])}
+        source={pdfSource()}
+        onSave={onSave}
+      />,
+    )
+    // Saving needs a change; the point is what the payload omits, not what
+    // the change was.
+    fireEvent.change(await screen.findByLabelText(/^label$/i), {
+      target: { value: 'Client' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect('regions' in onSave.mock.calls[0][0]).toBe(false)
+  })
+
+  it('renders the document view for a Word template', () => {
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [] } }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    expect(screen.getByTestId('docx-view')).toBeInTheDocument()
+  })
+
+  it('keeps fields editable for a non-PDF template instead of dead-ending', () => {
+    // Word is the format firms author in. Refusing to show its fields would
+    // leave the binding and condition controls unreachable for exactly the
+    // templates that most need them.
+    render(
+      <TemplateStudioEditor
+        template={{
+          id: 'x',
+          format: 'docx',
+          variable_schema: { fields: [{ name: 'client_name', label: 'Client' }] },
+        }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('complementary', { name: /field properties/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Client' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save fields/i })).toBeInTheDocument()
+    expect(screen.queryByLabelText(/PDF page/i)).not.toBeInTheDocument()
+  })
+
+  it('documents the logic markers a markdown author writes in the body', () => {
     render(
       <TemplateStudioEditor
         template={{ id: 'x', format: 'markdown', variable_schema: { fields: [] } }}
@@ -58,7 +227,30 @@ describe('TemplateStudioEditor', () => {
         onSave={vi.fn()}
       />,
     )
-    expect(screen.getByText(/Visual editing is available for PDF templates/i)).toBeInTheDocument()
+    expect(screen.getByText('{{#if field}} … {{/if}}')).toBeInTheDocument()
+    expect(screen.getByText('{{#each parties}} … {{/each}}')).toBeInTheDocument()
+  })
+
+  it('offers a data binding and a condition for the selected field', async () => {
+    render(
+      <TemplateStudioEditor
+        template={templateWith([{ name: 'client_name' }, { name: 'is_entity' }])}
+        source={pdfSource()}
+        onSave={vi.fn()}
+      />,
+    )
+    const binding = await screen.findByLabelText(/fills from/i)
+    // Falls back to name matching until the customer says otherwise.
+    expect(binding).toHaveValue('')
+    fireEvent.change(binding, { target: { value: 'client.name' } })
+    expect(binding).toHaveValue('client.name')
+    expect(screen.getByText(/fills from the matter every time/i)).toBeInTheDocument()
+
+    const condition = screen.getByLabelText(/only include when/i)
+    // A field cannot be conditioned on itself.
+    expect(screen.getByRole('option', { name: 'is_entity' })).toBeInTheDocument()
+    fireEvent.change(condition, { target: { value: 'is_entity' } })
+    expect(screen.getByLabelText('Condition')).toHaveValue('present')
   })
 
   it('surfaces a source load failure instead of a blank editor', () => {

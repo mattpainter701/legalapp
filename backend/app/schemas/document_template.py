@@ -44,6 +44,36 @@ class DocumentTemplateUpdate(BaseModel):
     signer_roles: Optional[list[dict[str, Any]]] = None
     branding_profile: Optional[dict[str, Any]] = None
     is_active: Optional[bool] = None
+    #: Version metadata, not a template attribute: it labels the history row
+    #: this edit creates rather than anything stored on the template itself.
+    change_summary: Optional[str] = Field(None, max_length=500)
+
+
+class DocumentTemplateVersionSummary(BaseModel):
+    version_no: int
+    title: str
+    format: Optional[str] = None
+    category: Optional[str] = None
+    body_sha256: str
+    source_sha256: Optional[str] = None
+    source_filename: Optional[str] = None
+    is_active: bool
+    field_count: int
+    change_summary: Optional[str] = None
+    created_by_user_id: Optional[str] = None
+    created_at: str
+
+
+class DocumentTemplateVersionDetail(DocumentTemplateVersionSummary):
+    body: str
+    variable_schema: Optional[dict[str, Any]] = None
+
+
+class DocumentTemplateVersionListResponse(BaseModel):
+    template_id: str
+    current_version_no: int
+    total: int
+    versions: list[DocumentTemplateVersionSummary]
 
 
 class DocumentTemplateResponse(BaseModel):
@@ -72,6 +102,7 @@ class DocumentTemplateResponse(BaseModel):
     approved_at: Optional[datetime] = None
     approved_by_user_id: Optional[str] = None
     is_active: bool
+    current_version_no: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -175,3 +206,64 @@ class DocumentTemplateUploadAnalysisResponse(BaseModel):
     suggested_variable_schema: dict[str, Any] = Field(default_factory=dict)
     detected_branding_profile: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+
+
+class DocumentTemplateBindingOption(BaseModel):
+    path: str
+    label: str
+    group: str
+
+
+class DocumentTemplateCollectionOption(BaseModel):
+    name: str
+    label: str
+    item_fields: list[str]
+
+
+class DocumentTemplateBindingCatalogue(BaseModel):
+    """The closed vocabulary a template author may draw on.
+
+    Served to the editor so a customer picks a data source from a list instead
+    of guessing the field name that happens to make Smart Fill fire.
+    """
+
+    bindings: list[DocumentTemplateBindingOption]
+    collections: list[DocumentTemplateCollectionOption]
+    operators: list[str]
+
+
+class DocumentTemplateOutlineRun(BaseModel):
+    text: str
+    start: int
+    end: int
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+
+
+class DocumentTemplateOutlineMarker(BaseModel):
+    kind: str
+    keyword: str
+    name: str = ""
+
+
+class DocumentTemplateOutlineParagraph(BaseModel):
+    ordinal: int
+    text: str
+    style: str
+    container: str
+    runs: list[DocumentTemplateOutlineRun] = Field(default_factory=list)
+    marker: Optional[DocumentTemplateOutlineMarker] = None
+
+
+class DocumentTemplateOutlineResponse(BaseModel):
+    """A Word template's paragraphs, addressed the way its fields are.
+
+    Ordinals match the iterator that fills the template, so a span selected
+    against this outline anchors to the same paragraph at generation time.
+    """
+
+    template_id: str
+    paragraphs: list[DocumentTemplateOutlineParagraph]
+    paragraph_count: int
+    truncated: bool = False

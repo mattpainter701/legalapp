@@ -21,6 +21,8 @@ import {
   Undo2,
 } from 'lucide-react'
 
+import { getTemplateBindings } from '../../api'
+import DocxDocumentView from './DocxDocumentView'
 import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocumentCanvas'
 import {
   MIN_FIELD_SIZE,
@@ -45,18 +47,30 @@ const FIELD_TOOLS = [
 
 const FIELD_TYPES = ['text', 'date', 'checkbox', 'signature', 'number', 'currency']
 
+// Operators that need no literal to compare against. The server accepts
+// equals/in/not_in too; those need a value input this panel does not have yet.
+const UNARY_OPERATORS = ['present', 'absent', 'truthy', 'falsy']
+
 export const schemaFields = (template) => {
   const fields = template?.variable_schema?.fields
   return Array.isArray(fields) ? fields : []
 }
 
+export const schemaRegions = (template) => {
+  const regions = template?.variable_schema?.regions
+  return Array.isArray(regions) ? regions : []
+}
+
 /** Merge edited fields back into the template's schema without dropping
  *  server-owned keys such as page geometry, detection metadata, or version. */
-export const mergedVariableSchema = (template, fields) => ({
+export const mergedVariableSchema = (template, fields, regions) => ({
   ...(template?.variable_schema && typeof template.variable_schema === 'object'
     ? template.variable_schema
     : {}),
   fields,
+  // Regions are authored metadata like fields, so an editor save carries both;
+  // omitting the key entirely keeps a template that has none unchanged.
+  ...(regions && regions.length ? { regions } : {}),
 })
 
 function ToolbarButton({ icon: Icon, label, onClick, disabled, active }) {
@@ -84,8 +98,50 @@ function PropertyRow({ label, children }) {
   )
 }
 
+/** Suggest an automation key from the text a user selected.
+ *  Names must start with a letter and use only [A-Za-z0-9_.-], so anything
+ *  else is folded away and a generic key is used when nothing survives. */
+export const docxFieldName = (text) => {
+  const slug = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40)
+  return /^[a-z]/.test(slug) ? slug : `field_${slug}`.replace(/_+$/, '') || 'field'
+}
+
+
+/** Load the binding catalogue once and group it for the picker.
+ *  The catalogue is static server-owned vocabulary, so a failure to load it
+ *  degrades to name matching rather than blocking the editor. */
+function useBindingCatalogue() {
+  const [catalogue, setCatalogue] = useState({ groups: {}, collections: [] })
+
+  useEffect(() => {
+    let cancelled = false
+    getTemplateBindings()
+      .then((loaded) => {
+        if (cancelled) return
+        const groups = {}
+        for (const entry of loaded?.bindings || []) {
+          if (!entry?.path) continue
+          ;(groups[entry.group || 'Other'] ||= []).push(entry)
+        }
+        setCatalogue({ groups, collections: loaded?.collections || [] })
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogue({ groups: {}, collections: [] })
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  return catalogue
+}
+
+
 export default function TemplateStudioEditor({ template, source, sourceError, onSave }) {
   const [fields, setFields] = useState(() => schemaFields(template))
+  const [regions, setRegions] = useState(() => schemaRegions(template))
   const [selectedIdentity, setSelectedIdentity] = useState(
     () => fieldIdentity(schemaFields(template)[0], 0),
   )
@@ -102,7 +158,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [historyVersion, setHistoryVersion] = useState(0)
   const scrollerRef = useRef(null)
 
+  const { groups: bindingGroups, collections } = useBindingCatalogue()
+
   const pdfSource = isPdfFile(source) ? source : null
+  const isDocx = String(template?.format || '').toLowerCase() === 'docx'
   const { document: pdfDocument, pages: pdfPages, error: pdfError } = useTemplatePdfDocument(
     pdfSource,
     { enabled: Boolean(pdfSource) },
@@ -113,6 +172,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   useEffect(() => {
     const next = schemaFields(template)
     setFields(next)
+    setRegions(schemaRegions(template))
     setSelectedIdentity(fieldIdentity(next[0], 0))
     setPageNumber(1)
     setZoom(0.9)
@@ -197,6 +257,60 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     setSelectedIdentity(field.pdf_source_key)
   }
 
+  // A Word field is created from a text selection rather than a drawn box: the
+  // span the user highlighted *is* the anchor, and the exact text it covers is
+  // what the renderer re-checks before replacing it.
+  const addDocxField = ({ ordinal, start, end, text }) => {
+    const taken = new Set(fields.map((entry) => entry.name))
+    let name = docxFieldName(text)
+    let suffix = 1
+    while (taken.has(name)) {
+      suffix += 1
+      name = `${docxFieldName(text)}_${suffix}`
+    }
+    const field = {
+      name,
+      label: text.trim().slice(0, 60) || name,
+      field_type: 'text',
+      required: false,
+      included: true,
+      source_text: text,
+      example: text,
+      docx_anchor: { paragraph_ordinal: ordinal, start, end },
+    }
+    commitFields([...fields, field])
+    setSelectedIdentity(fieldIdentity(field, fields.length))
+  }
+
+  const commitRegions = (nextRegions) => {
+    undoStack.current = [...undoStack.current.slice(-49), fields]
+    redoStack.current = []
+    setHistoryVersion((value) => value + 1)
+    setRegions(nextRegions)
+    setDirty(true)
+    setSaveError('')
+  }
+
+  const addRegion = (region) => {
+    const duplicate = regions.some((entry) => (
+      entry.kind === region.kind
+      && entry.name === region.name
+      && entry.from_ordinal === region.from_ordinal
+      && entry.to_ordinal === region.to_ordinal
+    ))
+    if (duplicate) return
+    commitRegions([...regions, region])
+  }
+
+  const removeRegion = (region) => {
+    commitRegions(regions.filter((entry) => !(
+      entry.kind === region.keyword
+      && entry.name === region.name
+      && entry.from_ordinal === region.from
+      && entry.to_ordinal === region.to
+    )))
+  }
+
   const removeField = (entry) => {
     // An AcroForm or detected field still exists in the document, so it is
     // excluded rather than deleted; only manual placements are truly removable.
@@ -246,7 +360,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     setSaving(true)
     setSaveError('')
     try {
-      await onSave(mergedVariableSchema(template, fields))
+      await onSave(mergedVariableSchema(template, fields, regions))
       setDirty(false)
       setSavedAt(new Date())
     } catch (error) {
@@ -276,52 +390,51 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
   const previewProblem = sourceError || pdfError || renderError
 
-  if (!pdfSource) {
-    return (
-      <div className="rounded-xl border border-brand-line bg-brand-surface-2 p-6">
-        <h2 className="font-semibold text-brand-ink">Visual editing is available for PDF templates</h2>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-muted">
-          {sourceError
-            || `This is a ${template?.format || 'markdown'} template. Field placement on the page is
-               available for PDF sources; edit this template's content and variables from
-               Edit template.`}
-        </p>
-      </div>
-    )
-  }
-
   return (
     <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-surface-2">
       <div className="flex flex-wrap items-center gap-2 border-b border-brand-line px-3 py-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted">Add field</span>
-        {FIELD_TOOLS.map((tool) => (
-          <ToolbarButton
-            key={tool.kind}
-            icon={tool.icon}
-            label={tool.label}
-            onClick={() => addField(tool.kind)}
-          />
-        ))}
-        <span className="mx-1 hidden h-5 w-px bg-brand-line sm:block" aria-hidden="true" />
-        <ToolbarButton icon={Undo2} label="Undo" onClick={undo} disabled={!undoStack.current.length} />
-        <ToolbarButton icon={Redo2} label="Redo" onClick={redo} disabled={!redoStack.current.length} />
-        <span className="mx-1 hidden h-5 w-px bg-brand-line sm:block" aria-hidden="true" />
-        <ToolbarButton
-          icon={Minus}
-          label="Zoom out"
-          onClick={() => setZoom((value) => clamp(value - 0.15, 0.35, 2.5))}
-        />
-        <span className="min-w-12 text-center text-xs font-semibold text-brand-ink" aria-live="polite">
-          {Math.round(zoom * 100)}%
-        </span>
-        <ToolbarButton
-          icon={Plus}
-          label="Zoom in"
-          onClick={() => setZoom((value) => clamp(value + 0.15, 0.35, 2.5))}
-        />
-        <ToolbarButton icon={Maximize2} label="Fit width" onClick={fitWidth} />
+        {/* Placement tools need page geometry, so they are PDF-only. Everything
+            else about a field — its name, what it fills from, when it applies —
+            is editable for every format. */}
+        {pdfSource ? (
+          <>
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted">Add field</span>
+            {FIELD_TOOLS.map((tool) => (
+              <ToolbarButton
+                key={tool.kind}
+                icon={tool.icon}
+                label={tool.label}
+                onClick={() => addField(tool.kind)}
+              />
+            ))}
+            <span className="mx-1 hidden h-5 w-px bg-brand-line sm:block" aria-hidden="true" />
+            <ToolbarButton icon={Undo2} label="Undo" onClick={undo} disabled={!undoStack.current.length} />
+            <ToolbarButton icon={Redo2} label="Redo" onClick={redo} disabled={!redoStack.current.length} />
+            <span className="mx-1 hidden h-5 w-px bg-brand-line sm:block" aria-hidden="true" />
+            <ToolbarButton
+              icon={Minus}
+              label="Zoom out"
+              onClick={() => setZoom((value) => clamp(value - 0.15, 0.35, 2.5))}
+            />
+            <span className="min-w-12 text-center text-xs font-semibold text-brand-ink" aria-live="polite">
+              {Math.round(zoom * 100)}%
+            </span>
+            <ToolbarButton
+              icon={Plus}
+              label="Zoom in"
+              onClick={() => setZoom((value) => clamp(value + 0.15, 0.35, 2.5))}
+            />
+            <ToolbarButton icon={Maximize2} label="Fit width" onClick={fitWidth} />
+          </>
+        ) : (
+          <>
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted">Fields</span>
+            <ToolbarButton icon={Undo2} label="Undo" onClick={undo} disabled={!undoStack.current.length} />
+            <ToolbarButton icon={Redo2} label="Redo" onClick={redo} disabled={!redoStack.current.length} />
+          </>
+        )}
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-xs text-brand-muted" role="status">
+          <span className="text-xs text-brand-muted" role="status" aria-label="Field save status">
             {saving
               ? 'Saving…'
               : dirty
@@ -353,7 +466,51 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
         </div>
       )}
 
-      <div className="grid gap-0 lg:grid-cols-[168px_minmax(0,1fr)_288px]">
+      <div className={`grid gap-0 ${pdfSource ? 'lg:grid-cols-[168px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
+        {!pdfSource && isDocx && (
+          <DocxDocumentView
+            templateId={template.id}
+            fields={fields}
+            regions={regions}
+            selectedName={selected?.name}
+            collections={collections}
+            conditionFields={fields.map((entry) => entry.name).filter(Boolean)}
+            onSelectField={(field) => {
+              const match = indexedFields.find((entry) => entry.field.name === field.name)
+              if (match) setSelectedIdentity(match.identity)
+            }}
+            onCreateField={addDocxField}
+            onCreateRegion={addRegion}
+            onRemoveRegion={removeRegion}
+          />
+        )}
+        {!pdfSource && !isDocx && (
+          <div className="max-h-[70vh] overflow-y-auto p-5">
+            <h2 className="font-semibold text-brand-ink">Markdown template</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-muted">
+              {sourceError
+                || 'Edit this template\u2019s wording from Edit template. Field names, data sources, and conditions are editable here.'}
+            </p>
+            <h3 className="mt-5 text-sm font-semibold text-brand-ink">Conditional and repeating sections</h3>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-muted">
+              Write these markers in the template body itself, each one alone on its own line.
+            </p>
+            <dl className="mt-3 max-w-2xl space-y-2 text-sm">
+              {[
+                ['{{#if field}} … {{/if}}', 'Include the clause only when that field has a value.'],
+                ['{{#unless field}} … {{/unless}}', 'Include it only when the field is empty.'],
+                ['{{#each parties}} … {{/each}}', 'Repeat the block once per matter party. Inside it, use {{party_name}} and {{party_role}}.'],
+              ].map(([marker, meaning]) => (
+                <div key={marker} className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
+                  <dt className="font-mono text-xs text-brand-ink">{marker}</dt>
+                  <dd className="mt-1 text-xs leading-5 text-brand-muted">{meaning}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        )}
+        {pdfSource && (
+        <>
         <nav aria-label="Pages" className="hidden max-h-[70vh] space-y-2 overflow-y-auto border-r border-brand-line p-2 lg:block">
           {Array.from({ length: pageCount }, (_, index) => index + 1).map((number) => (
             <PdfThumbnail
@@ -423,6 +580,9 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           </div>
         </div>
 
+        </>
+        )}
+
         <aside aria-label="Field properties" className="max-h-[70vh] overflow-y-auto border-t border-brand-line p-3 lg:border-l lg:border-t-0">
           <h2 className="text-sm font-semibold text-brand-ink">
             Fields <span className="font-normal text-brand-muted">({fields.filter((field) => field.included !== false).length})</span>
@@ -475,6 +635,66 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 >
                   {FIELD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
                 </select>
+              </PropertyRow>
+              <PropertyRow label="Fills from">
+                <select
+                  value={selected.binding || ''}
+                  onChange={(event) => updateField(selectedEntry.identity, { binding: event.target.value || undefined })}
+                  className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
+                >
+                  <option value="">Match by field name</option>
+                  <option value="manual">Always typed by hand</option>
+                  {Object.entries(bindingGroups).map(([group, entries]) => (
+                    <optgroup key={group} label={group}>
+                      {entries.map((entry) => (
+                        <option key={entry.path} value={entry.path}>{entry.label}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </PropertyRow>
+              <p className="text-[11px] leading-4 text-brand-muted">
+                {selected.binding && selected.binding !== 'manual'
+                  ? 'This field fills from the matter every time, whatever it is named.'
+                  : selected.binding === 'manual'
+                    ? 'Never filled automatically.'
+                    : 'Filled only when the field name happens to match a known record.'}
+              </p>
+              <PropertyRow label="Only include when">
+                <div className="mt-1 flex gap-1.5">
+                  <select
+                    value={selected.logic?.field || ''}
+                    onChange={(event) => updateField(selectedEntry.identity, {
+                      logic: event.target.value
+                        ? { ...(selected.logic || { operator: 'present' }), field: event.target.value }
+                        : undefined,
+                    })}
+                    className="min-w-0 flex-1 rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
+                  >
+                    <option value="">Always include</option>
+                    {fields
+                      .filter((entry) => entry?.name && entry.name !== selected.name)
+                      .map((entry) => (
+                        <option key={entry.name} value={entry.name}>{entry.label || entry.name}</option>
+                      ))}
+                  </select>
+                  {selected.logic?.field && (
+                    <select
+                      value={selected.logic?.operator || 'present'}
+                      onChange={(event) => updateField(selectedEntry.identity, {
+                        // Unary operators carry no value; dropping it keeps the
+                        // stored condition valid whichever way the user switches.
+                        logic: { field: selected.logic.field, operator: event.target.value },
+                      })}
+                      className="w-28 shrink-0 rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
+                      aria-label="Condition"
+                    >
+                      {UNARY_OPERATORS.map((operator) => (
+                        <option key={operator} value={operator}>{operator}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               </PropertyRow>
               <label className="flex items-center gap-2 text-sm text-brand-ink">
                 <input

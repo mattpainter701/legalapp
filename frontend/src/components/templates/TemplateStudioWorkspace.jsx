@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 
 import TemplateStudioEditor from './TemplateStudioEditor'
+import TemplateVersionHistory from './TemplateVersionHistory'
 
 const tabs = [
   { key: 'workspace', label: 'Workspace', suffix: '', icon: FileText },
@@ -21,6 +22,7 @@ export default function TemplateStudioWorkspace({
   sourceLoading = false,
   sourceError = '',
   onSaveFields,
+  onRestored,
 }) {
   const base = `/templates/${encodeURIComponent(String(template.id).toLowerCase())}/studio`
   const statusRef = useRef(null)
@@ -64,7 +66,7 @@ export default function TemplateStudioWorkspace({
           ))}
         </nav>
 
-        {statusMessage && <div ref={statusRef} role="status" tabIndex={-1} className="mt-4 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">{statusMessage}</div>}
+        {statusMessage && <div ref={statusRef} role="status" aria-label="Workspace status" tabIndex={-1} className="mt-4 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">{statusMessage}</div>}
 
         {section === 'workspace' ? (
           <section className="mt-4 grid gap-4 md:grid-cols-3" aria-label="Template workspace summary">
@@ -89,7 +91,7 @@ export default function TemplateStudioWorkspace({
             )}
             <div className="md:col-span-3">
               {sourceLoading ? (
-                <div className="flex items-center gap-2 rounded-xl border border-brand-line bg-brand-surface-2 px-5 py-10 text-sm text-brand-muted" role="status">
+                <div className="flex items-center gap-2 rounded-xl border border-brand-line bg-brand-surface-2 px-5 py-10 text-sm text-brand-muted" role="status" aria-label="Document loading status">
                   <Loader2 size={16} className="animate-spin" aria-hidden="true" />
                   Loading the document…
                 </div>
@@ -101,6 +103,22 @@ export default function TemplateStudioWorkspace({
                   onSave={onSaveFields}
                 />
               )}
+            </div>
+          </section>
+        ) : section === 'versions' || section === 'activity' ? (
+          <section className="mt-4" aria-labelledby={`studio-${section}-title`}>
+            <h2 id={`studio-${section}-title`} className="text-lg font-semibold capitalize text-brand-ink">{section}</h2>
+            <p className="mt-1 text-sm text-brand-muted">
+              {section === 'versions'
+                ? 'Every published wording of this template, newest first. Restore an earlier one without retyping it.'
+                : 'What changed on this template and when, drawn from its recorded versions.'}
+            </p>
+            <div className="mt-4">
+              <TemplateVersionHistory
+                templateId={template.id}
+                mode={section}
+                onRestored={onRestored}
+              />
             </div>
           </section>
         ) : (

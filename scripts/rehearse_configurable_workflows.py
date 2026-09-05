@@ -41,7 +41,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "155_matter_workflow_automations"
+EXPECTED_HEAD = "156_document_template_versions"
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 REQUIRED_REVISION = "148_configurable_workflows"
