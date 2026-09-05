@@ -86,6 +86,11 @@ from app.services.pdf_templates import (
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
 from app.services.docx_outline import docx_outline
+from app.services.template_regions import (
+    TemplateRegionError,
+    parse_regions,
+    stored_regions,
+)
 from app.services.document_template_versions import (
     get_version,
     list_versions,
@@ -111,6 +116,7 @@ from app.services.template_bindings import (
     catalogue as binding_catalogue,
     collections as binding_collections,
     declared_bindings,
+    is_item_binding,
     is_valid_binding,
 )
 from app.services.template_ocr import TemplateOcrError, image_to_pdf
@@ -1469,6 +1475,17 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
             status_code=422,
             detail="Reviewed Word schema must preserve every detected source mapping",
         )
+    if schema.get("regions") is not None:
+        try:
+            schema["regions"] = [
+                region.as_dict()
+                for region in parse_regions(
+                    schema["regions"], known_fields=seen_names
+                )
+            ]
+        except TemplateRegionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     # Conditions are checked once the full name set is known, so logic that
     # references a field the template does not define is rejected at save time
     # rather than silently dropping a clause at generation time.
@@ -2120,6 +2137,18 @@ def _bound_suggestion(
             variable=variable,
             provenance={"status": "manual_entry", "binding": binding},
             review_required=True,
+        )
+    if is_item_binding(binding):
+        # Its value comes from whichever item of a repeating section is being
+        # rendered, so there is nothing for a person to fill in once.
+        return DocumentTemplateVariableSuggestion(
+            variable=variable,
+            provenance={
+                "status": "repeat_item",
+                "binding": binding,
+                "binding_label": binding_label(binding),
+            },
+            review_required=False,
         )
     alias = alias_for_binding(binding)
     candidate = candidates.get(alias) if alias else None
@@ -3049,7 +3078,11 @@ async def update_template(
     if "variable_schema" in updates:
         try:
             validate_semantic_metadata(updates["variable_schema"])
-        except (TemplateSemanticsError, TemplateLogicError) as exc:
+        except (
+            TemplateSemanticsError,
+            TemplateLogicError,
+            TemplateRegionError,
+        ) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     if "category" in updates and updates["category"] not in CATEGORIES:
         raise HTTPException(
@@ -3617,6 +3650,7 @@ async def render_template_endpoint(
                 variables=payload.variables,
                 enforce_required=bool(payload.matter_id),
                 collections=_repeat_collections(render_parties),
+                regions=stored_regions(template.variable_schema),
             )
         except TemplateDocxError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -3,6 +3,7 @@
 import pytest
 
 from app.services.template_bindings import (
+    ITEM_BINDING_PREFIX,
     MANUAL_BINDING,
     alias_for_binding,
     binding_label,
@@ -10,7 +11,9 @@ from app.services.template_bindings import (
     collections,
     declared_bindings,
     is_valid_binding,
+    is_item_binding,
     is_valid_collection,
+    item_key,
 )
 from app.services.template_logic import TemplateLogicError
 from app.services.template_semantics import (
@@ -22,11 +25,23 @@ from app.services.template_semantics import (
 
 
 class TestCatalogue:
-    def test_every_path_and_alias_is_unique(self):
+    def test_every_path_is_unique(self):
         paths = [entry.path for entry in catalogue()]
         assert len(paths) == len(set(paths))
-        aliases = [entry.alias for entry in catalogue()]
+
+    def test_record_backed_aliases_are_unique(self):
+        # Two catalogue entries sharing an alias would resolve to the same
+        # record while claiming to name different ones.
+        aliases = [entry.alias for entry in catalogue() if entry.alias]
         assert len(aliases) == len(set(aliases))
+
+    def test_item_bindings_carry_no_alias(self):
+        # They resolve per iteration of a repeating section, so there is no
+        # single record — and no alias — behind them.
+        item_entries = [entry for entry in catalogue() if is_item_binding(entry.path)]
+        assert item_entries
+        assert all(entry.alias == "" for entry in item_entries)
+        assert all(alias_for_binding(entry.path) == "" for entry in item_entries)
 
     def test_entries_carry_presentation_metadata(self):
         assert all(entry.label and entry.group for entry in catalogue())
@@ -51,6 +66,24 @@ class TestCatalogue:
         assert binding_label("matter.court") == "Court"
         assert binding_label(MANUAL_BINDING) == "Entered by hand"
         assert binding_label("nope") is None
+
+    def test_item_bindings_name_a_collection_item_field(self):
+        assert is_item_binding("item.party_name")
+        assert not is_item_binding("client.name")
+        assert not is_item_binding(None)
+        assert item_key("item.party_name") == "party_name"
+        assert item_key("client.name") == ""
+        assert ITEM_BINDING_PREFIX == "item."
+
+    def test_every_item_binding_names_a_field_a_collection_supplies(self):
+        # An item binding naming a key no collection emits would resolve to
+        # nothing on every iteration.
+        supplied = {
+            field for entry in collections() for field in entry.item_fields
+        }
+        for entry in catalogue():
+            if is_item_binding(entry.path):
+                assert item_key(entry.path) in supplied
 
     def test_collections_declare_their_item_fields(self):
         assert is_valid_collection("parties")

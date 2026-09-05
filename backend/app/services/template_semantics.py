@@ -20,8 +20,13 @@ from typing import Any
 
 from app.services.template_bindings import is_valid_binding
 
-#: Keys a customer may change without re-deriving the field map from source.
+#: Per-field keys a customer may change without re-deriving the field map.
 SEMANTIC_FIELD_KEYS = frozenset({"binding", "label", "description", "logic"})
+
+#: Top-level schema keys that are likewise authored, not derived. Regions
+#: address paragraphs the reviewed source already has; marking one changes no
+#: anchor and no geometry.
+SEMANTIC_SCHEMA_KEYS = frozenset({"regions"})
 
 
 class TemplateSemanticsError(ValueError):
@@ -39,7 +44,9 @@ def _structural_signature(variable_schema: Any) -> str:
     if not isinstance(variable_schema, dict):
         return json.dumps(variable_schema, sort_keys=True, default=str)
     skeleton = {
-        key: value for key, value in variable_schema.items() if key != "fields"
+        key: value
+        for key, value in variable_schema.items()
+        if key != "fields" and key not in SEMANTIC_SCHEMA_KEYS
     }
     fields = variable_schema.get("fields")
     stripped: list[Any] = []
@@ -70,6 +77,11 @@ def validate_semantic_metadata(variable_schema: Any) -> None:
 
     Runs on every format, including the markdown path that performs no other
     schema validation, so a bad binding cannot reach the render path.
+
+    Regions are normalised in place to the closed vocabulary as well. Only the
+    PDF path re-derives a whole field map, so without this an unrecognised key
+    on a region would be stored verbatim — and every other Studio contract
+    forbids extra properties.
     """
 
     if not isinstance(variable_schema, dict):
@@ -99,3 +111,13 @@ def validate_semantic_metadata(variable_schema: Any) -> None:
             from app.services.template_logic import validate_condition
 
             validate_condition(logic, known_fields=names, label=name)
+
+    if variable_schema.get("regions") is not None:
+        from app.services.template_regions import parse_regions
+
+        variable_schema["regions"] = [
+            region.as_dict()
+            for region in parse_regions(
+                variable_schema["regions"], known_fields=names
+            )
+        ]

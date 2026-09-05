@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import DocxDocumentView, {
   anchorsByParagraph,
   regionsFromMarkers,
+  regionsFromStore,
   segmentsFor,
 } from './DocxDocumentView'
 import { getTemplateOutline } from '../../api'
@@ -167,5 +168,118 @@ describe('DocxDocumentView', () => {
     getTemplateOutline.mockReturnValue(new Promise(() => {}))
     render(<DocxDocumentView templateId="t1" fields={[]} />)
     expect(screen.getByRole('status', { name: 'Document loading status' })).toBeInTheDocument()
+  })
+})
+
+describe('regionsFromStore', () => {
+  it('normalises stored ranges into the marker region shape', () => {
+    expect(regionsFromStore([
+      { kind: 'each', name: 'parties', from_ordinal: 4, to_ordinal: 6 },
+    ])).toEqual([
+      { keyword: 'each', name: 'parties', from: 4, to: 6, stored: true },
+    ])
+  })
+
+  it('drops ranges the renderer would refuse', () => {
+    expect(regionsFromStore([
+      null,
+      { kind: 'switch', name: 'a', from_ordinal: 0, to_ordinal: 1 },
+      { kind: 'if', name: 'a', from_ordinal: 4, to_ordinal: 2 },
+      { kind: 'if', name: 'a', from_ordinal: '0', to_ordinal: 1 },
+    ])).toEqual([])
+  })
+
+  it('tolerates a template with no regions', () => {
+    expect(regionsFromStore(undefined)).toEqual([])
+  })
+})
+
+describe('DocxDocumentView regions', () => {
+  const paragraphs = outline([
+    { text: 'Signed:' },
+    { text: 'PARTY, as ROLE' },
+    { text: 'Tail' },
+  ])
+
+  it('marks a paragraph range as repeating', async () => {
+    getTemplateOutline.mockResolvedValue(paragraphs)
+    const onCreateRegion = vi.fn()
+    render(
+      <DocxDocumentView
+        templateId="t1"
+        fields={[]}
+        collections={[{ name: 'parties', label: 'All matter parties' }]}
+        conditionFields={['is_entity']}
+        onCreateRegion={onCreateRegion}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Select paragraph 2' }))
+    expect(screen.getByText(/1 paragraph selected/)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Repeat for each'), { target: { value: 'parties' } })
+    expect(onCreateRegion).toHaveBeenCalledWith({
+      kind: 'each', name: 'parties', from_ordinal: 1, to_ordinal: 1,
+    })
+  })
+
+  it('extends the range with a shift-click and conditions it', async () => {
+    getTemplateOutline.mockResolvedValue(paragraphs)
+    const onCreateRegion = vi.fn()
+    render(
+      <DocxDocumentView
+        templateId="t1"
+        fields={[]}
+        collections={[]}
+        conditionFields={['is_entity']}
+        onCreateRegion={onCreateRegion}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Select paragraph 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Select paragraph 3' }), { shiftKey: true })
+    expect(screen.getByText(/3 paragraphs selected/)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Only include when'), { target: { value: 'is_entity' } })
+    expect(onCreateRegion).toHaveBeenCalledWith({
+      kind: 'if', name: 'is_entity', from_ordinal: 0, to_ordinal: 2,
+    })
+  })
+
+  it('shows a stored region as a band on the paragraph it opens', async () => {
+    getTemplateOutline.mockResolvedValue(paragraphs)
+    render(
+      <DocxDocumentView
+        templateId="t1"
+        fields={[]}
+        regions={[{ kind: 'each', name: 'parties', from_ordinal: 1, to_ordinal: 1 }]}
+      />,
+    )
+    expect(await screen.findByText(/Repeat for each parties/i)).toBeInTheDocument()
+  })
+
+  it('removes a stored region', async () => {
+    getTemplateOutline.mockResolvedValue(paragraphs)
+    const onRemoveRegion = vi.fn()
+    render(
+      <DocxDocumentView
+        templateId="t1"
+        fields={[]}
+        regions={[{ kind: 'if', name: 'is_entity', from_ordinal: 0, to_ordinal: 2 }]}
+        onRemoveRegion={onRemoveRegion}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /remove/i }))
+    expect(onRemoveRegion).toHaveBeenCalledWith(
+      expect.objectContaining({ keyword: 'if', name: 'is_entity', from: 0, to: 2 }),
+    )
+  })
+
+  it('cancels a paragraph selection without creating anything', async () => {
+    getTemplateOutline.mockResolvedValue(paragraphs)
+    const onCreateRegion = vi.fn()
+    render(<DocxDocumentView templateId="t1" fields={[]} onCreateRegion={onCreateRegion} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Select paragraph 1' }))
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    expect(screen.queryByText(/paragraph selected/)).not.toBeInTheDocument()
+    expect(onCreateRegion).not.toHaveBeenCalled()
   })
 })

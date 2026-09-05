@@ -15,8 +15,11 @@ from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
+
+from app.services.template_bindings import is_item_binding, item_key
 
 
 class TemplateDocxError(ValueError):
@@ -438,6 +441,7 @@ def _apply_container_logic(
     variables: dict[str, str],
     collections: dict[str, Sequence[dict[str, str]]],
     depth: int = 0,
+    item_fields: Sequence[tuple[str, str]] = (),
 ) -> int:
     """Resolve conditional and repeating regions inside one container.
 
@@ -472,7 +476,7 @@ def _apply_container_logic(
                 for element in inner:
                     clone = copy.deepcopy(element)
                     open_element.addprevious(clone)
-                    _substitute_item(clone, parent, item)
+                    _substitute_item(clone, parent, item, item_fields)
             _drop(parent, [open_element, close_element, *inner])
             continue
 
@@ -485,7 +489,9 @@ def _apply_container_logic(
 
     # Nested regions became outermost once their parent resolved.
     if _region_bounds(list(parent), parent):
-        resolved += _apply_container_logic(parent, variables, collections, depth + 1)
+        resolved += _apply_container_logic(
+            parent, variables, collections, depth + 1, item_fields=item_fields
+        )
     return resolved
 
 
@@ -495,8 +501,21 @@ def _drop(parent: Any, elements: Sequence[Any]) -> None:
             parent.remove(element)
 
 
-def _substitute_item(element: Any, parent: Any, item: dict[str, str]) -> None:
-    """Fill one repeat item's values into a cloned region element."""
+def _substitute_item(
+    element: Any,
+    parent: Any,
+    item: dict[str, str],
+    item_fields: Sequence[tuple[str, str]] = (),
+) -> None:
+    """Fill one repeat item's values into a cloned region element.
+
+    Two things are replaced. A ``{{party_name}}`` placeholder, for an author
+    who typed one in Word; and the reviewed source text of any field bound to
+    that item key, for a field marked in the editor against text the document
+    already contained. The second is why item-bound fields are held back from
+    the main replacement pass — each clone needs a different value, and by the
+    time cloning happens a single shared value would already be in place.
+    """
 
     from docx.text.paragraph import Paragraph
 
@@ -504,6 +523,10 @@ def _substitute_item(element: Any, parent: Any, item: dict[str, str]) -> None:
         (f"{{{{{key}}}}}", "" if value is None else str(value))
         for key, value in item.items()
     ]
+    for source_text, key in item_fields:
+        if source_text and key in item:
+            value = item.get(key)
+            replacements.append((source_text, "" if value is None else str(value)))
     pattern, by_source = _compile_replacements(replacements)
     if pattern is None:
         return
@@ -514,10 +537,81 @@ def _substitute_item(element: Any, parent: Any, item: dict[str, str]) -> None:
         _replace_in_paragraph(Paragraph(paragraph_element, parent), pattern, by_source)
 
 
+def _marker_paragraph(text: str, template: Any) -> Any:
+    """Build a paragraph holding exactly one logic marker.
+
+    Cloned from a real paragraph in the document so it inherits a valid
+    namespace and section context, then emptied and refilled: constructing one
+    from scratch risks a subtly different element than the rest of the body.
+    """
+
+    element = copy.deepcopy(template)
+    for child in list(element):
+        if child.tag != qn("w:pPr"):
+            element.remove(child)
+    run = OxmlElement("w:r")
+    node = OxmlElement("w:t")
+    node.text = text
+    node.set(qn("xml:space"), "preserve")
+    run.append(node)
+    element.append(run)
+    return element
+
+
+def inject_stored_regions(document: Document, regions: Sequence[Any]) -> int:
+    """Write stored paragraph ranges into the in-memory tree as markers.
+
+    The Studio editor may not rewrite a template's retained bytes — their
+    SHA-256 is the integrity contract every fill re-checks, and inserting a
+    paragraph would shift every anchor after it. So a region marked in the
+    editor is stored as a range of ordinals and materialised here, at render
+    time, into the same markers a Word author would have typed. The tested
+    marker engine then resolves both kinds identically.
+
+    Every element is resolved by ordinal *before* anything is inserted, and
+    insertion runs from the last region backwards, so an earlier region's
+    bounds cannot be shifted by a later one's markers.
+    """
+
+    if not regions:
+        return 0
+    paragraphs = [paragraph._p for paragraph in iter_docx_paragraphs(document)]
+    ordered = sorted(
+        regions,
+        key=lambda region: (region.from_ordinal, -region.to_ordinal),
+    )
+    for region in reversed(ordered):
+        if region.to_ordinal >= len(paragraphs):
+            raise TemplateDocxError(
+                f"A {region.kind} region points past the end of the retained "
+                "Word document. Re-upload the source and mark it again."
+            )
+        first = paragraphs[region.from_ordinal]
+        last = paragraphs[region.to_ordinal]
+        if first.getparent() is None or last.getparent() is None:
+            raise TemplateDocxError(
+                f"A {region.kind} region no longer resolves in the retained "
+                "Word document. Re-upload the source and mark it again."
+            )
+        if first.getparent() is not last.getparent():
+            # A region that opens in the body and closes in a table cell cannot
+            # be removed or repeated as one unit.
+            raise TemplateDocxError(
+                f"A {region.kind} region must start and end in the same part of "
+                "the document."
+            )
+        first.addprevious(
+            _marker_paragraph(f"{{{{#{region.kind} {region.name}}}}}", first)
+        )
+        last.addnext(_marker_paragraph(f"{{{{/{region.kind}}}}}", last))
+    return len(ordered)
+
+
 def apply_docx_logic(
     document: Document,
     variables: dict[str, str],
     collections: dict[str, Sequence[dict[str, str]]] | None = None,
+    item_fields: Sequence[tuple[str, str]] = (),
 ) -> int:
     """Resolve ``{{#if}}``, ``{{#unless}}``, and ``{{#each}}`` regions in place.
 
@@ -533,7 +627,9 @@ def apply_docx_logic(
 
     resolved = 0
     for container in list(_paragraph_containers(document)):
-        resolved += _apply_container_logic(container, variables, collections or {})
+        resolved += _apply_container_logic(
+            container, variables, collections or {}, item_fields=item_fields
+        )
     return resolved
 
 
@@ -552,6 +648,7 @@ def fill_docx_template(
     variables: dict[str, str],
     enforce_required: bool = False,
     collections: dict[str, Sequence[dict[str, str]]] | None = None,
+    regions: Sequence[Any] | None = None,
 ) -> bytes:
     """Fill a retained DOCX without converting it to plain text."""
 
@@ -586,7 +683,19 @@ def fill_docx_template(
 
     replacements: list[tuple[str, str]] = []
     anchored_replacements: dict[int, list[tuple[int, int, str, str, str]]] = {}
+    # A field bound to a repeat item resolves once per clone, not once for the
+    # document, so it is excluded here and applied during cloning instead.
+    item_fields: list[tuple[str, str]] = []
     for name, field in by_name.items():
+        binding = field.get("binding")
+        if is_item_binding(str(binding or "")):
+            item_fields.append(
+                (
+                    str(field.get("source_text") or field.get("example") or ""),
+                    item_key(str(binding)),
+                )
+            )
+            continue
         value = str(variables.get(name) or "")
         if len(value) > 10_000:
             raise TemplateDocxError(
@@ -649,8 +758,13 @@ def fill_docx_template(
 
     # Regions resolve last: field anchors address paragraphs by their ordinal
     # in the original document, so nothing may be added or removed until every
-    # anchored replacement has been applied.
-    resolved_regions = apply_docx_logic(document, variables, collections)
+    # anchored replacement has been applied. Stored ranges become markers here,
+    # for the same reason and at the same moment.
+    injected = inject_stored_regions(document, regions or ())
+    resolved_regions = (
+        apply_docx_logic(document, variables, collections, item_fields=item_fields)
+        + injected
+    )
 
     # A value that only drove a conditional clause is still a value that did
     # something, so a logic-only template is not a broken field map.

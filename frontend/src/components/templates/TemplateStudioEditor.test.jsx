@@ -24,14 +24,27 @@ vi.mock('./PdfDocumentCanvas', () => ({
 // The binding catalogue is static server-owned vocabulary; the editor only
 // needs it to populate the picker.
 vi.mock('./DocxDocumentView', () => ({
-  default: ({ fields, onCreateField }) => (
+  default: ({ fields, regions, onCreateField, onCreateRegion, onRemoveRegion }) => (
     <div data-testid="docx-view">
       <span>{fields.length} mapped</span>
+      <span>{(regions || []).length} regions</span>
       <button
         type="button"
         onClick={() => onCreateField({ ordinal: 2, start: 6, end: 18, text: 'Ada Lovelace' })}
       >
         Select text
+      </button>
+      <button
+        type="button"
+        onClick={() => onCreateRegion({ kind: 'each', name: 'parties', from_ordinal: 4, to_ordinal: 6 })}
+      >
+        Mark repeating
+      </button>
+      <button
+        type="button"
+        onClick={() => onRemoveRegion({ keyword: 'each', name: 'parties', from: 4, to: 6 })}
+      >
+        Unmark
       </button>
     </div>
   ),
@@ -99,6 +112,79 @@ describe('TemplateStudioEditor', () => {
     // The renderer re-checks this exact text before replacing it.
     expect(field.source_text).toBe('Ada Lovelace')
     expect(field.name).toBe('ada_lovelace')
+  })
+
+  it('saves a region marked in the document view alongside the fields', async () => {
+    const onSave = vi.fn().mockResolvedValue({})
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [{ name: 'a' }] } }}
+        source={null}
+        onSave={onSave}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Mark repeating' }))
+    await waitFor(() => expect(screen.getByText('1 regions')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(onSave.mock.calls[0][0].regions).toEqual([
+      { kind: 'each', name: 'parties', from_ordinal: 4, to_ordinal: 6 },
+    ])
+  })
+
+  it('does not add the same region twice', async () => {
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [{ name: 'a' }] } }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Mark repeating' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mark repeating' }))
+    await waitFor(() => expect(screen.getByText('1 regions')).toBeInTheDocument())
+  })
+
+  it('removes a region marked in the document view', async () => {
+    render(
+      <TemplateStudioEditor
+        template={{
+          id: 'x',
+          format: 'docx',
+          variable_schema: {
+            fields: [{ name: 'a' }],
+            regions: [{ kind: 'each', name: 'parties', from_ordinal: 4, to_ordinal: 6 }],
+          },
+        }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('1 regions')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Unmark' }))
+    await waitFor(() => expect(screen.getByText('0 regions')).toBeInTheDocument())
+  })
+
+  it('omits the regions key entirely for a template that has none', async () => {
+    // A template with no regions must serialise exactly as it did before
+    // regions existed.
+    const onSave = vi.fn().mockResolvedValue({})
+    render(
+      <TemplateStudioEditor
+        template={templateWith([{ name: 'client_name' }])}
+        source={pdfSource()}
+        onSave={onSave}
+      />,
+    )
+    // Saving needs a change; the point is what the payload omits, not what
+    // the change was.
+    fireEvent.change(await screen.findByLabelText(/^label$/i), {
+      target: { value: 'Client' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect('regions' in onSave.mock.calls[0][0]).toBe(false)
   })
 
   it('renders the document view for a Word template', () => {

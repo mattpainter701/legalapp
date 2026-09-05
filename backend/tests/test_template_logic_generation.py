@@ -195,6 +195,59 @@ class TestRepeatGeneration:
         assert "{{#if is_entity}}INJECTED{{/if}} (plaintiff)" in rendered
 
 
+class TestStoredRegionGeneration:
+    async def test_a_region_marked_in_the_editor_drives_generation(
+        self, client, db_session, test_tenant, test_user
+    ):
+        # Marked visually, stored as paragraph ordinals, never written into the
+        # template body — and it still governs the rendered document.
+        body = "Intro.\nAuthority clause.\nOutro."
+        template = await _template(db_session, test_tenant.id, body=body)
+        template.variable_schema = {
+            "fields": [{"name": "client_name"}, {"name": "is_entity"}],
+            "regions": [
+                {"kind": "if", "name": "is_entity", "from_ordinal": 1, "to_ordinal": 1}
+            ],
+        }
+        await db_session.commit()
+        matter = await _matter_with_parties(db_session, test_tenant, test_user)
+
+        response = await client.get(f"/api/templates/{template.id}")
+        assert response.status_code == 200
+        assert response.json()["variable_schema"]["regions"] == [
+            {"kind": "if", "name": "is_entity", "from_ordinal": 1, "to_ordinal": 1}
+        ]
+
+    async def test_an_item_bound_field_is_not_asked_for_on_the_form(
+        self, client, db_session, test_tenant, test_user
+    ):
+        template = await _template(db_session, test_tenant.id)
+        template.variable_schema = {
+            "fields": [
+                {"name": "client_name"},
+                {"name": "p_name", "binding": "item.party_name"},
+            ]
+        }
+        await db_session.commit()
+        matter = await _matter_with_parties(
+            db_session, test_tenant, test_user, roles=[("Acme LLC", "plaintiff")]
+        )
+
+        response = await client.post(
+            f"/api/templates/{template.id}/smart-fill-preview",
+            json={"matter_id": str(matter.id), "variables": ["p_name", "client_name"]},
+        )
+        assert response.status_code == 200
+        by_variable = {
+            entry["variable"]: entry for entry in response.json()["variables"]
+        }
+        # Its value comes from whichever party is being rendered, so there is
+        # nothing for a person to fill in once.
+        assert by_variable["p_name"]["suggested_value"] is None
+        assert by_variable["p_name"]["provenance"]["status"] == "repeat_item"
+        assert by_variable["p_name"]["review_required"] is False
+
+
 class TestLogicErrors:
     async def test_an_unbalanced_block_is_a_customer_error_not_a_server_fault(
         self, client, db_session, test_tenant, test_user

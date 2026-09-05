@@ -43,6 +43,24 @@ export const anchorsByParagraph = (fields) => {
   return byOrdinal
 }
 
+/** Stored ranges rendered in the same shape as marker-derived regions, so the
+ *  view draws a region the same way however it was authored. */
+export const regionsFromStore = (regions) => (regions || [])
+  .filter((region) => (
+    region
+    && ['if', 'unless', 'each'].includes(region.kind)
+    && Number.isInteger(region.from_ordinal)
+    && Number.isInteger(region.to_ordinal)
+    && region.to_ordinal >= region.from_ordinal
+  ))
+  .map((region) => ({
+    keyword: region.kind,
+    name: region.name,
+    from: region.from_ordinal,
+    to: region.to_ordinal,
+    stored: true,
+  }))
+
 /** Pair {{#if}}/{{#each}} markers so the view can band the region between
  *  them. Unbalanced markers are left unpaired rather than guessed at — the
  *  renderer rejects them too, and showing a wrong region would hide that. */
@@ -82,9 +100,13 @@ function ParagraphRow({
   paragraph,
   spans,
   regionDepth,
+  inRange,
+  opensRegion,
   selectedName,
   onSelectField,
   onSelectText,
+  onPickParagraph,
+  onRemoveRegion,
 }) {
   const ref = useRef(null)
 
@@ -105,6 +127,16 @@ function ParagraphRow({
     }
   }
 
+  const gutter = (
+    <button
+      type="button"
+      onClick={(event) => onPickParagraph?.(paragraph.ordinal, event.shiftKey)}
+      title="Choose this paragraph. Shift-click another to select a range."
+      aria-label={`Select paragraph ${paragraph.ordinal + 1}`}
+      className={`absolute -left-7 top-1 h-4 w-4 rounded border text-[9px] leading-none ${inRange ? 'border-brand-accent bg-brand-accent' : 'border-brand-line bg-brand-surface-2 opacity-0 group-hover:opacity-100'}`}
+    />
+  )
+
   if (paragraph.marker) {
     const { kind, keyword, name } = paragraph.marker
     const Icon = keyword === 'each' ? Repeat : SplitSquareVertical
@@ -120,13 +152,32 @@ function ParagraphRow({
 
   const label = CONTAINER_LABELS[paragraph.container] || ''
   return (
-    <p
-      ref={ref}
-      onMouseUp={handleMouseUp}
-      data-ordinal={paragraph.ordinal}
-      style={regionDepth ? { paddingLeft: `${regionDepth * 12}px` } : undefined}
-      className={`group relative py-0.5 leading-6 text-brand-ink ${HEADING_CLASS[paragraph.style] || 'text-sm'}`}
-    >
+    <div className="relative">
+      {opensRegion && (
+        <div className="mt-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand-accent-2">
+          {opensRegion.keyword === 'each'
+            ? <Repeat size={13} aria-hidden="true" />
+            : <SplitSquareVertical size={13} aria-hidden="true" />}
+          {opensRegion.keyword === 'each'
+            ? `Repeat for each ${opensRegion.name}`
+            : `${opensRegion.keyword === 'unless' ? 'Only when empty' : 'Only when'} ${opensRegion.name}`}
+          <button
+            type="button"
+            onClick={() => onRemoveRegion?.(opensRegion)}
+            className="font-semibold text-brand-muted underline hover:text-brand-ink"
+          >
+            Remove
+          </button>
+        </div>
+      )}
+      <p
+        ref={ref}
+        onMouseUp={handleMouseUp}
+        data-ordinal={paragraph.ordinal}
+        style={regionDepth ? { paddingLeft: `${regionDepth * 12}px` } : undefined}
+        className={`group relative py-0.5 leading-6 text-brand-ink ${HEADING_CLASS[paragraph.style] || 'text-sm'} ${inRange ? 'bg-brand-accent/10' : ''}`}
+      >
+        {gutter}
       {label && (
         <span className="mr-2 rounded bg-brand-bg px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-brand-muted">
           {label}
@@ -148,17 +199,23 @@ function ParagraphRow({
             <span key={index}>{segment.text}</span>
           )
         ))
-        : <span className="text-brand-muted">&nbsp;</span>}
-    </p>
+          : <span className="text-brand-muted">&nbsp;</span>}
+      </p>
+    </div>
   )
 }
 
 export default function DocxDocumentView({
   templateId,
   fields,
+  regions,
   selectedName,
+  collections = [],
+  conditionFields = [],
   onSelectField,
   onCreateField,
+  onCreateRegion,
+  onRemoveRegion,
 }) {
   const [state, setState] = useState({ status: 'loading', paragraphs: [], truncated: false })
   const [pending, setPending] = useState(null)
@@ -188,15 +245,37 @@ export default function DocxDocumentView({
   }, [templateId])
 
   const spansByOrdinal = useMemo(() => anchorsByParagraph(fields), [fields])
+  const allRegions = useMemo(() => [
+    ...regionsFromMarkers(state.paragraphs),
+    ...regionsFromStore(regions),
+  ], [state.paragraphs, regions])
   const depthByOrdinal = useMemo(() => {
     const depths = new Map()
-    for (const region of regionsFromMarkers(state.paragraphs)) {
+    for (const region of allRegions) {
       for (let ordinal = region.from; ordinal <= region.to; ordinal += 1) {
-        depths.set(ordinal, Math.max(depths.get(ordinal) || 0, region.depth + 1))
+        depths.set(ordinal, Math.max(depths.get(ordinal) || 0, (region.depth || 0) + 1))
       }
     }
     return depths
-  }, [state.paragraphs])
+  }, [allRegions])
+  const openerByOrdinal = useMemo(() => {
+    const openers = new Map()
+    for (const region of allRegions.filter((entry) => entry.stored)) {
+      openers.set(region.from, region)
+    }
+    return openers
+  }, [allRegions])
+
+  const [range, setRange] = useState(null)
+
+  const extendRange = useCallback((ordinal, additive) => {
+    setPending(null)
+    setRange((current) => (
+      additive && current
+        ? { from: Math.min(current.from, ordinal), to: Math.max(current.to, ordinal) }
+        : { from: ordinal, to: ordinal }
+    ))
+  }, [])
 
   const confirm = useCallback(() => {
     if (!pending) return
@@ -226,7 +305,8 @@ export default function DocxDocumentView({
   return (
     <div className="relative">
       <div className="border-b border-brand-line bg-brand-bg px-4 py-2 text-xs text-brand-muted">
-        Select any text to turn it into a field. Highlighted text is already mapped.
+        Select text to make it a field. Use the margin handles to choose paragraphs —
+        shift-click for a range — then make them conditional or repeating.
       </div>
       <div className="max-h-[70vh] overflow-y-auto bg-white px-6 py-5 md:px-10">
         <article aria-label="Word template contents" className="mx-auto max-w-[7in]">
@@ -236,9 +316,13 @@ export default function DocxDocumentView({
               paragraph={paragraph}
               spans={spansByOrdinal.get(paragraph.ordinal)}
               regionDepth={depthByOrdinal.get(paragraph.ordinal) || 0}
+              inRange={Boolean(range) && paragraph.ordinal >= range.from && paragraph.ordinal <= range.to}
+              opensRegion={openerByOrdinal.get(paragraph.ordinal)}
               selectedName={selectedName}
               onSelectField={onSelectField}
-              onSelectText={setPending}
+              onSelectText={(selection) => { setRange(null); setPending(selection) }}
+              onPickParagraph={extendRange}
+              onRemoveRegion={onRemoveRegion}
             />
           ))}
         </article>
@@ -249,6 +333,55 @@ export default function DocxDocumentView({
           </p>
         )}
       </div>
+
+      {range && !pending && (
+        <div
+          role="dialog"
+          aria-label="Make the selected paragraphs conditional or repeating"
+          className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-brand-line bg-brand-surface-2 px-4 py-3"
+        >
+          <span className="text-sm text-brand-ink">
+            {range.to - range.from + 1} paragraph{range.to === range.from ? '' : 's'} selected
+          </span>
+          <select
+            value=""
+            aria-label="Only include when"
+            onChange={(event) => {
+              if (!event.target.value) return
+              onCreateRegion?.({ kind: 'if', name: event.target.value, from_ordinal: range.from, to_ordinal: range.to })
+              setRange(null)
+            }}
+            className="ml-auto rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-xs text-brand-ink"
+          >
+            <option value="">Only include when…</option>
+            {conditionFields.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          <select
+            value=""
+            aria-label="Repeat for each"
+            onChange={(event) => {
+              if (!event.target.value) return
+              onCreateRegion?.({ kind: 'each', name: event.target.value, from_ordinal: range.from, to_ordinal: range.to })
+              setRange(null)
+            }}
+            className="rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-xs text-brand-ink"
+          >
+            <option value="">Repeat for each…</option>
+            {collections.map((entry) => (
+              <option key={entry.name} value={entry.name}>{entry.label || entry.name}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setRange(null)}
+            className="rounded-lg border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-muted hover:text-brand-ink"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {pending && (
         <div

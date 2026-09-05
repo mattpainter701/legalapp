@@ -56,13 +56,21 @@ export const schemaFields = (template) => {
   return Array.isArray(fields) ? fields : []
 }
 
+export const schemaRegions = (template) => {
+  const regions = template?.variable_schema?.regions
+  return Array.isArray(regions) ? regions : []
+}
+
 /** Merge edited fields back into the template's schema without dropping
  *  server-owned keys such as page geometry, detection metadata, or version. */
-export const mergedVariableSchema = (template, fields) => ({
+export const mergedVariableSchema = (template, fields, regions) => ({
   ...(template?.variable_schema && typeof template.variable_schema === 'object'
     ? template.variable_schema
     : {}),
   fields,
+  // Regions are authored metadata like fields, so an editor save carries both;
+  // omitting the key entirely keeps a template that has none unchanged.
+  ...(regions && regions.length ? { regions } : {}),
 })
 
 function ToolbarButton({ icon: Icon, label, onClick, disabled, active }) {
@@ -107,32 +115,33 @@ export const docxFieldName = (text) => {
  *  The catalogue is static server-owned vocabulary, so a failure to load it
  *  degrades to name matching rather than blocking the editor. */
 function useBindingCatalogue() {
-  const [groups, setGroups] = useState({})
+  const [catalogue, setCatalogue] = useState({ groups: {}, collections: [] })
 
   useEffect(() => {
     let cancelled = false
     getTemplateBindings()
-      .then((catalogue) => {
+      .then((loaded) => {
         if (cancelled) return
-        const grouped = {}
-        for (const entry of catalogue?.bindings || []) {
+        const groups = {}
+        for (const entry of loaded?.bindings || []) {
           if (!entry?.path) continue
-          ;(grouped[entry.group || 'Other'] ||= []).push(entry)
+          ;(groups[entry.group || 'Other'] ||= []).push(entry)
         }
-        setGroups(grouped)
+        setCatalogue({ groups, collections: loaded?.collections || [] })
       })
       .catch(() => {
-        if (!cancelled) setGroups({})
+        if (!cancelled) setCatalogue({ groups: {}, collections: [] })
       })
     return () => { cancelled = true }
   }, [])
 
-  return groups
+  return catalogue
 }
 
 
 export default function TemplateStudioEditor({ template, source, sourceError, onSave }) {
   const [fields, setFields] = useState(() => schemaFields(template))
+  const [regions, setRegions] = useState(() => schemaRegions(template))
   const [selectedIdentity, setSelectedIdentity] = useState(
     () => fieldIdentity(schemaFields(template)[0], 0),
   )
@@ -149,7 +158,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [historyVersion, setHistoryVersion] = useState(0)
   const scrollerRef = useRef(null)
 
-  const bindingGroups = useBindingCatalogue()
+  const { groups: bindingGroups, collections } = useBindingCatalogue()
 
   const pdfSource = isPdfFile(source) ? source : null
   const isDocx = String(template?.format || '').toLowerCase() === 'docx'
@@ -163,6 +172,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   useEffect(() => {
     const next = schemaFields(template)
     setFields(next)
+    setRegions(schemaRegions(template))
     setSelectedIdentity(fieldIdentity(next[0], 0))
     setPageNumber(1)
     setZoom(0.9)
@@ -272,6 +282,35 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     setSelectedIdentity(fieldIdentity(field, fields.length))
   }
 
+  const commitRegions = (nextRegions) => {
+    undoStack.current = [...undoStack.current.slice(-49), fields]
+    redoStack.current = []
+    setHistoryVersion((value) => value + 1)
+    setRegions(nextRegions)
+    setDirty(true)
+    setSaveError('')
+  }
+
+  const addRegion = (region) => {
+    const duplicate = regions.some((entry) => (
+      entry.kind === region.kind
+      && entry.name === region.name
+      && entry.from_ordinal === region.from_ordinal
+      && entry.to_ordinal === region.to_ordinal
+    ))
+    if (duplicate) return
+    commitRegions([...regions, region])
+  }
+
+  const removeRegion = (region) => {
+    commitRegions(regions.filter((entry) => !(
+      entry.kind === region.keyword
+      && entry.name === region.name
+      && entry.from_ordinal === region.from
+      && entry.to_ordinal === region.to
+    )))
+  }
+
   const removeField = (entry) => {
     // An AcroForm or detected field still exists in the document, so it is
     // excluded rather than deleted; only manual placements are truly removable.
@@ -321,7 +360,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     setSaving(true)
     setSaveError('')
     try {
-      await onSave(mergedVariableSchema(template, fields))
+      await onSave(mergedVariableSchema(template, fields, regions))
       setDirty(false)
       setSavedAt(new Date())
     } catch (error) {
@@ -432,12 +471,17 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           <DocxDocumentView
             templateId={template.id}
             fields={fields}
+            regions={regions}
             selectedName={selected?.name}
+            collections={collections}
+            conditionFields={fields.map((entry) => entry.name).filter(Boolean)}
             onSelectField={(field) => {
               const match = indexedFields.find((entry) => entry.field.name === field.name)
               if (match) setSelectedIdentity(match.identity)
             }}
             onCreateField={addDocxField}
+            onCreateRegion={addRegion}
+            onRemoveRegion={removeRegion}
           />
         )}
         {!pdfSource && !isDocx && (

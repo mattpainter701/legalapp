@@ -181,11 +181,30 @@ What this buys beyond correctness:
   geometry; showing one on a fake page would imply a precision the format does
   not have.
 
+#### Regions marked in the editor, not typed in Word
+
+Selecting a paragraph range and marking it conditional or repeating had one
+obstacle: regions were markers *inside* the Word file, and the editor may not
+rewrite a template's retained bytes. Their SHA-256 is the integrity contract
+every fill re-checks, and inserting a paragraph would shift every anchor after
+it.
+
+So a region marked in the editor is stored as a **range of paragraph ordinals**
+in the field map — addressed exactly the way `docx_anchor` addresses a span —
+and materialised into ordinary markers in the *in-memory* document at render
+time. The same tested engine then resolves both kinds, and nothing on disk
+changes. Regions may nest but never straddle; a straddling pair is rejected at
+save time, naming the region rather than the marker it would have produced.
+
+Per-item values work through the same span model. A field bound to
+`item.party_name` is held out of the main replacement pass and resolved once
+per clone, so selecting "PARTY" in a signature block and binding it to the
+party name produces one block per party with the right name in each. Item-bound
+fields never appear on the generation form, because their value comes from
+whichever item is being rendered rather than from a person.
+
 Still open:
 
-- **Conditions and repeats from the document view.** Selecting a paragraph
-  range and marking it repeating is the natural next gesture; today the markers
-  are typed in Word and the view reads them back.
 - **Anchor reconciliation.** A drifted anchor still fails with "re-upload and
   review the template" rather than offering to re-point the field.
 - **Page-faithful preview.** Authoring does not need it, but final preview

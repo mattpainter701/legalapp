@@ -78,7 +78,28 @@ _CATALOGUE: tuple[TemplateBinding, ...] = (
     TemplateBinding("current_user.name", "current_user_name", "Current user", "People"),
     TemplateBinding("current_user.email", "current_user_email", "Current user email", "People"),
     TemplateBinding("current_user.prepared_by", "prepared_by", "Prepared by", "People"),
+    # Item bindings resolve once per iteration of a repeating section, not from
+    # the matter, so they have no alias: there is no single record behind them.
+    TemplateBinding("item.party_name", "", "Party name (this item)", "Repeating section"),
+    TemplateBinding("item.party_role", "", "Party role (this item)", "Repeating section"),
+    TemplateBinding("item.party_email", "", "Party email (this item)", "Repeating section"),
+    TemplateBinding("item.party_phone", "", "Party phone (this item)", "Repeating section"),
 )
+
+#: Prefix marking a binding that is resolved per repeat item.
+ITEM_BINDING_PREFIX = "item."
+
+
+def is_item_binding(path: str) -> bool:
+    """Return whether a binding resolves per iteration of a repeating section."""
+
+    return isinstance(path, str) and path.startswith(ITEM_BINDING_PREFIX)
+
+
+def item_key(path: str) -> str:
+    """Return the collection item field an item binding names."""
+
+    return path[len(ITEM_BINDING_PREFIX):] if is_item_binding(path) else ""
 
 _BY_PATH: dict[str, TemplateBinding] = {entry.path: entry for entry in _CATALOGUE}
 

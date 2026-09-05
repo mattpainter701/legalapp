@@ -310,6 +310,91 @@ class TestSemanticValidation:
         assert response.status_code == 200
         assert response.json()["variable_schema"]["fields"][0]["binding"] == "client.name"
 
+    async def test_a_stored_region_is_normalised_and_kept(
+        self, client, db_session, test_tenant
+    ):
+        template = await _template(db_session, test_tenant.id)
+        response = await client.patch(
+            f"/api/templates/{template.id}",
+            json={
+                "variable_schema": {
+                    "fields": [{"name": "is_entity"}],
+                    "regions": [
+                        {
+                            "kind": "if",
+                            "name": "is_entity",
+                            "from_ordinal": 3,
+                            "to_ordinal": 5,
+                            "extra": "dropped",
+                        }
+                    ],
+                }
+            },
+        )
+        assert response.status_code == 200
+        [region] = response.json()["variable_schema"]["regions"]
+        assert region == {
+            "kind": "if",
+            "name": "is_entity",
+            "from_ordinal": 3,
+            "to_ordinal": 5,
+        }
+
+    async def test_a_region_on_an_unknown_field_is_rejected(
+        self, client, db_session, test_tenant
+    ):
+        template = await _template(db_session, test_tenant.id)
+        response = await client.patch(
+            f"/api/templates/{template.id}",
+            json={
+                "variable_schema": {
+                    "fields": [{"name": "client_name"}],
+                    "regions": [
+                        {"kind": "if", "name": "ghost", "from_ordinal": 0, "to_ordinal": 1}
+                    ],
+                }
+            },
+        )
+        assert response.status_code == 422
+        assert "ghost" in response.json()["detail"]
+
+    async def test_a_repeat_must_name_a_known_collection(
+        self, client, db_session, test_tenant
+    ):
+        template = await _template(db_session, test_tenant.id)
+        response = await client.patch(
+            f"/api/templates/{template.id}",
+            json={
+                "variable_schema": {
+                    "fields": [{"name": "client_name"}],
+                    "regions": [
+                        {"kind": "each", "name": "invoices", "from_ordinal": 0, "to_ordinal": 1}
+                    ],
+                }
+            },
+        )
+        assert response.status_code == 422
+        assert "invoices" in response.json()["detail"]
+
+    async def test_straddling_regions_are_rejected(
+        self, client, db_session, test_tenant
+    ):
+        template = await _template(db_session, test_tenant.id)
+        response = await client.patch(
+            f"/api/templates/{template.id}",
+            json={
+                "variable_schema": {
+                    "fields": [{"name": "a"}, {"name": "b"}],
+                    "regions": [
+                        {"kind": "if", "name": "a", "from_ordinal": 0, "to_ordinal": 5},
+                        {"kind": "if", "name": "b", "from_ordinal": 3, "to_ordinal": 9},
+                    ],
+                }
+            },
+        )
+        assert response.status_code == 422
+        assert "overlaps" in response.json()["detail"]
+
     async def test_logic_referencing_an_unknown_field_is_rejected(
         self, client, db_session, test_tenant
     ):
