@@ -18,6 +18,17 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Governed Template Studio publication lifecycle:** migration 157 repairs the
+  version-156 pre-edit history ambiguity by appending an exact snapshot of every
+  live versioned template, then adds explicit tested and published version
+  pointers. Content and field-map edits become drafts and invalidate test
+  evidence; successful representative previews mark one exact immutable
+  version ready to publish; publication makes that tested version available;
+  and matter generation refuses a missing or mismatched published version while
+  recording its number in the matter event. Studio now has an actionable Test
+  tab, format-aware authoring guidance, tested/published badges, and a publish
+  control. Its four non-overlapping work queues come from dedicated firm-wide
+  server queries instead of mixing global counts with the current 12-row page.
 - **Template data bindings, logic, versions, and visual Word authoring:** a
   template field may declare one binding from a closed, server-owned catalogue
   (`matter.case_number`, `client.address.city`, `party.plaintiff.name`, …)
@@ -2646,4 +2657,3 @@
 - Document upload with vector embedding
 - Plugin system: Litigation Matters, Commercial Renewals
 - Admin dashboard (tenant users, usage stats)
-

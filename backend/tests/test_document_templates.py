@@ -2172,6 +2172,10 @@ async def test_pdf_upload_preview_and_matter_render_are_binary_and_unique(
         if event.metadata_json["preview_evidence_id"] == generation_preview_id
     )
     assert first_event.metadata_json["template_source_sha256"] == template.source_sha256
+    assert (
+        first_event.metadata_json["template_version_no"]
+        == template.published_version_no
+    )
     assert first_event.metadata_json["filled_variables"] == ["approved", "client_name"]
     assert "Ada Lovelace" not in str(first_event.metadata_json)
     evidence = await db_session.scalar(
@@ -2506,12 +2510,8 @@ async def test_consumed_preview_keeps_separate_duplicate_cleanup_marker(
         "output_sha256": "d" * 64,
         "document_id": duplicate_document_id,
     }
-    assert await document_templates._mark_preview_reconciliation_required(
-        **marker_args
-    )
-    assert await document_templates._mark_preview_reconciliation_required(
-        **marker_args
-    )
+    assert await document_templates._mark_preview_reconciliation_required(**marker_args)
+    assert await document_templates._mark_preview_reconciliation_required(**marker_args)
 
     original = await db_session.scalar(
         select(DocumentTemplatePreview)
@@ -2522,8 +2522,7 @@ async def test_consumed_preview_keeps_separate_duplicate_cleanup_marker(
     assert original.reconciliation_required_at is None
     marker = await db_session.scalar(
         select(DocumentTemplatePreview).where(
-            DocumentTemplatePreview.reconciliation_document_id
-            == duplicate_document_id
+            DocumentTemplatePreview.reconciliation_document_id == duplicate_document_id
         )
     )
     assert marker.id != original.id
@@ -2982,6 +2981,9 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
     )
     assert blank_activation_preview.status_code == 422
     assert "representative values" in blank_activation_preview.json()["detail"]
+    failed_template = await client.get(f"/api/templates/{template_id}")
+    assert failed_template.json()["status"] == "test_failed"
+    assert failed_template.json()["tested_version_no"] is None
 
     activation_values = {
         "client_name": "Representative Client",
@@ -2997,6 +2999,8 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
     )
     assert preview.status_code == 200, preview.text
     assert preview.headers["x-clarity-preview-purpose"] == "activation"
+    tested_template = await client.get(f"/api/templates/{template_id}")
+    assert tested_template.json()["status"] == "ready_to_publish"
 
     activated = await client.patch(
         f"/api/templates/{template_id}", json={"is_active": True}
@@ -3017,12 +3021,14 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
         in combined_edit_activation.json()["detail"]
     )
 
-    metadata_only = await client.patch(
+    renamed_draft = await client.patch(
         f"/api/templates/{template_id}", json={"title": "Mapped PDF v2"}
     )
-    assert metadata_only.status_code == 200, metadata_only.text
-    assert metadata_only.json()["is_active"] is True
-    assert metadata_only.json()["approved_at"] == activated.json()["approved_at"]
+    assert renamed_draft.status_code == 200, renamed_draft.text
+    # The title participates in output identity (including the generated file
+    # name), so even a rename returns the changed version to draft.
+    assert renamed_draft.json()["is_active"] is False
+    assert renamed_draft.json()["approved_at"] is None
 
     edited_contract = await client.patch(
         f"/api/templates/{template_id}", json={"body": "{{client_name}}"}

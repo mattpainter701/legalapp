@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.05.1 — Test and publish the exact template your firm approved
+
+Released September 5, 2026.
+
+Template Studio now separates drafting, testing, publishing, and pausing. Every version number names exact immutable wording, and matter generation refuses anything except the published version.
+
+- **Test before your team can generate.** A draft must render successfully with representative values before an authorized user can publish that exact version.
+- **Know exactly which wording was used.** Every edit creates an immutable resulting version, and matter generation records and verifies the published version instead of trusting a changing draft.
+- **Work queues that match the whole library.** Continue setup, source problems, awaiting publication, and published queues now use firm-wide results rather than whichever page happens to be open.
+
 ## 2026.09.04.2 — Templates that fill themselves and keep their history
 
 Released September 4, 2026.
@@ -14,7 +24,7 @@ Template fields can say where their value comes from, clauses can appear only wh
 - **Tell a field where its value comes from.** Pick a data source for each field — case number, client address, plaintiff, attorney — and it fills from the matter every time, whatever you named it.
 - **One template instead of near-identical copies.** Mark a clause to appear only when a field applies, with {{#if}} in the document itself. Two near-identical templates become one.
 - **Repeating sections that follow the matter.** Wrap a block in {{#each parties}} and it renders once per party on the matter — a signature block each — with no editing afterwards.
-- **Version history with restore.** Every edit records the wording it replaced. The Versions tab shows what changed and restores an earlier version without retyping it.
+- **Version history with restore.** Every saved state has its own exact version number. The Versions tab shows what changed and restores an earlier version as a new draft without retyping it.
 - **Mark up Word templates by hand.** See the document itself: highlight text to make it a field, and select paragraphs to make them conditional or repeat once per party.
 
 ## 2026.09.04.1 — Plan matter workflows automatically, approve them the same way

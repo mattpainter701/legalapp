@@ -11,9 +11,11 @@ import {
   discoverTemplateVariables,
   getTemplate,
   getTemplates,
+  getTemplateQueues,
   listTemplateVersions,
   renderTemplate,
   renderTemplateFile,
+  publishTemplate,
   updateTemplate,
 } from '../api'
 
@@ -24,12 +26,14 @@ vi.mock('../api', () => ({
   getTemplate: vi.fn(),
   getTemplateSource: vi.fn().mockRejectedValue(new Error('source unavailable in tests')),
   getTemplates: vi.fn().mockResolvedValue({ items: [{ id: 'template-1', title: 'Engagement Letter', body: 'Dear {{client_name}}', category: 'engagement_letter', is_active: true }] }),
+  getTemplateQueues: vi.fn().mockRejectedValue(new Error('queue fixture not configured')),
   getMattersV2: vi.fn().mockResolvedValue({ items: [{ id: 'matter-1', matter_name: 'Smith Matter', client_name: 'Smith' }] }),
   analyzeTemplateUpload: vi.fn(),
   proposeTemplateFieldsWithAi: vi.fn(),
   createTemplate: vi.fn().mockResolvedValue({}),
   createTemplateFromUpload: vi.fn().mockResolvedValue({}),
   updateTemplate: vi.fn(),
+  publishTemplate: vi.fn(),
   deleteTemplate: vi.fn(),
   renderTemplate: vi.fn(),
   renderTemplateFile: vi.fn(),
@@ -130,12 +134,19 @@ describe('document template workflow', () => {
       ],
       summary: { total: 3, active: 1, inactive: 2, ready: 1, source_missing: 1 },
     })
+    getTemplateQueues.mockResolvedValueOnce({
+      continue_setup: { total: 1, items: [{ id: 'draft', title: 'Draft engagement', format: 'markdown', is_active: false }] },
+      needs_attention: { total: 1, items: [{ id: 'missing', title: 'Missing PDF', format: 'pdf', is_active: false, source_ready: false }] },
+      awaiting_publish: { total: 0, items: [] },
+      published: { total: 1, items: [{ id: 'ready', title: 'Ready motion', format: 'markdown', is_active: true }] },
+    })
     render(<TemplatesPage />)
 
     expect(await screen.findByRole('heading', { name: 'Studio home' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Continue setup' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Needs attention' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Ready to generate' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Awaiting publish' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Published' })).toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: /Draft engagement/ }).length).toBeGreaterThan(0)
     expect(screen.getAllByRole('button', { name: 'Open in Studio' })).toHaveLength(3)
   })
@@ -240,7 +251,9 @@ describe('document template workflow', () => {
       body: 'Hello {{client_name}}',
       category: 'other',
       variable_schema: { fields: [{ name: 'client_name' }, { name: 'matter_name' }] },
-      is_active: true,
+      status: 'draft',
+      current_version_no: 2,
+      is_active: false,
     })
     const user = userEvent.setup()
     renderStudioRoute(`/templates/${templateId}/studio`)
@@ -253,10 +266,10 @@ describe('document template workflow', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Update' }))
 
     expect(await screen.findByRole('heading', { name: 'Saved workspace' })).toBeInTheDocument()
-    expect(screen.getByText('Ready to generate')).toBeInTheDocument()
+    expect(screen.getByText('Draft · test before publishing')).toBeInTheDocument()
     expect(screen.getByText('2')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Generate' }))
-    expect(screen.getByRole('dialog', { name: 'Generate Document: Saved workspace' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Preview draft' }))
+    expect(screen.getByRole('dialog', { name: 'Preview Draft: Saved workspace' })).toBeInTheDocument()
   })
 
   it('renders real version history on the versions route', async () => {
@@ -290,13 +303,44 @@ describe('document template workflow', () => {
     expect(screen.queryByRole('button', { name: /restore/i })).not.toBeInTheDocument()
   })
 
-  it('keeps the test route an honest shell until it has something to run', async () => {
+  it('makes the test route actionable and reports the exact draft status', async () => {
     const templateId = '11111111-1111-4111-8111-111111111111'
     getTemplate.mockResolvedValue({ id: templateId, title: 'Court form', format: 'pdf', source_filename: 'court.pdf', source_sha256: 'abc', is_active: true })
     renderStudioRoute(`/templates/${templateId}/studio/test`)
 
-    expect(await screen.findByRole('heading', { name: /^test$/i })).toBeInTheDocument()
-    expect(screen.getByText(/No test records or controls are available in Phase 1/)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /Test this exact draft/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Open test values and preview/i })).toBeInTheDocument()
+    expect(screen.getByText(/Not tested since the latest edit/)).toBeInTheDocument()
+  })
+
+  it('publishes only the exact tested workspace version', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    const tested = {
+      id: templateId,
+      title: 'Tested agreement',
+      format: 'markdown',
+      body: 'Agreement',
+      status: 'ready_to_publish',
+      is_active: false,
+      current_version_no: 4,
+      tested_version_no: 4,
+      published_version_no: 3,
+    }
+    getTemplate.mockResolvedValue(tested)
+    publishTemplate.mockResolvedValue({
+      ...tested,
+      status: 'published',
+      is_active: true,
+      current_version_no: 5,
+      tested_version_no: 5,
+      published_version_no: 5,
+    })
+    renderStudioRoute(`/templates/${templateId}/studio`)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Publish tested version' }))
+    await waitFor(() => expect(publishTemplate).toHaveBeenCalledWith(templateId))
+    expect(screen.getByRole('status', { name: 'Workspace status' })).toHaveTextContent('Version 5 is published')
+    expect(screen.getByText('Published version 5')).toBeInTheDocument()
   })
 
   it('adapts a validated lawhand.open_studio UI event to an internal route', async () => {
@@ -992,14 +1036,14 @@ describe('document template workflow', () => {
     }))
     expect(screen.getByText(/Draft preview only.*does not record activation evidence/)).toBeInTheDocument()
 
-    await user.click(within(dialog).getByRole('button', { name: 'Record activation preview' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Test this draft' }))
     expect(await screen.findByText(/Enter representative values for every non-signature PDF field/)).toBeInTheDocument()
     expect(renderTemplateFile).toHaveBeenCalledTimes(1)
 
     await user.type(screen.getByRole('textbox', { name: /Client name/ }), 'Representative Client')
     await user.type(screen.getByRole('textbox', { name: /Notes/ }), 'Representative narrative')
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:draft-preview')
-    await user.click(within(dialog).getByRole('button', { name: 'Record activation preview' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Test this draft' }))
 
     await waitFor(() => expect(renderTemplateFile).toHaveBeenNthCalledWith(2, 'draft-pdf', {
       matter_id: null,
@@ -1015,7 +1059,7 @@ describe('document template workflow', () => {
 
     expect(await screen.findByText('Source missing — recreate this PDF template')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Deactivate template' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Pause published template' })).toBeDisabled()
 
     await userEvent.click(screen.getByRole('button', { name: 'Recreate from Upload Sample' }))
     expect(screen.getByRole('heading', { name: 'Create Template From Sample' })).toBeInTheDocument()
@@ -1031,7 +1075,7 @@ describe('document template workflow', () => {
     expect(screen.getByText(/This template is inactive/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
     expect(screen.getByRole('button', { name: 'Render & Save to Matter' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: 'Preview' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Preview draft' }))
     await waitFor(() => expect(renderTemplate).toHaveBeenCalledWith('draft-template', expect.objectContaining({ matter_id: null })))
 
     await user.click(screen.getByRole('button', { name: 'Close' }))

@@ -36,7 +36,9 @@ async def _grant_manage_documents(db_session, test_tenant, test_user):
     await db_session.commit()
 
 
-async def _template(db_session: AsyncSession, tenant_id, **overrides) -> DocumentTemplate:
+async def _template(
+    db_session: AsyncSession, tenant_id, **overrides
+) -> DocumentTemplate:
     template = DocumentTemplate(
         **{
             "id": uuid.uuid4(),
@@ -72,9 +74,40 @@ class TestBindingCatalogue:
         }
         assert "present" in body["operators"]
 
-    async def test_the_catalogue_route_is_not_shadowed_by_the_template_route(self, client):
+    async def test_the_catalogue_route_is_not_shadowed_by_the_template_route(
+        self, client
+    ):
         # "/bindings" must not be parsed as a template id.
         assert (await client.get("/api/templates/bindings")).status_code == 200
+
+
+class TestStudioQueues:
+    async def test_queues_are_global_non_overlapping_lifecycle_results(
+        self, client, db_session, test_tenant
+    ):
+        await _template(db_session, test_tenant.id, title="Draft", status="draft")
+        await _template(
+            db_session,
+            test_tenant.id,
+            title="Tested",
+            status="ready_to_publish",
+        )
+        await _template(
+            db_session,
+            test_tenant.id,
+            title="Published",
+            status="published",
+            is_active=True,
+        )
+
+        response = await client.get("/api/templates/queues")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["continue_setup"]["total"] == 1
+        assert payload["awaiting_publish"]["total"] == 1
+        assert payload["published"]["total"] == 1
+        names = [item["title"] for queue in payload.values() for item in queue["items"]]
+        assert sorted(names) == ["Draft", "Published", "Tested"]
 
 
 class TestOutlineRoute:
@@ -108,14 +141,17 @@ class TestOutlineRoute:
 
 
 class TestVersionRecording:
-    async def test_an_edit_records_the_wording_it_replaces(
+    async def test_an_edit_records_the_exact_resulting_wording(
         self, client, db_session, test_tenant
     ):
         template = await _template(db_session, test_tenant.id)
 
         response = await client.patch(
             f"/api/templates/{template.id}",
-            json={"body": "Dear {{client_name}}, revised.", "change_summary": "Reworded"},
+            json={
+                "body": "Dear {{client_name}}, revised.",
+                "change_summary": "Reworded",
+            },
         )
         assert response.status_code == 200
         assert response.json()["current_version_no"] == 1
@@ -126,12 +162,9 @@ class TestVersionRecording:
         assert recorded["version_no"] == 1
         assert recorded["change_summary"] == "Reworded"
 
-        # The row holds the *previous* wording: it is what documents generated
-        # so far were produced from.
-        detail = (
-            await client.get(f"/api/templates/{template.id}/versions/1")
-        ).json()
-        assert detail["body"] == "Dear {{client_name}},"
+        # The row and current_version_no identify the same exact state.
+        detail = (await client.get(f"/api/templates/{template.id}/versions/1")).json()
+        assert detail["body"] == "Dear {{client_name}}, revised."
 
     async def test_change_summary_is_version_metadata_not_a_template_column(
         self, client, db_session, test_tenant
@@ -153,9 +186,9 @@ class TestVersionRecording:
         )
         assert response.status_code == 200
         assert response.json()["current_version_no"] == 0
-        assert (
-            await client.get(f"/api/templates/{template.id}/versions")
-        ).json()["total"] == 0
+        assert (await client.get(f"/api/templates/{template.id}/versions")).json()[
+            "total"
+        ] == 0
 
     async def test_successive_edits_number_monotonically_and_list_newest_first(
         self, client, db_session, test_tenant
@@ -179,11 +212,13 @@ class TestVersionRecording:
         second = await _template(db_session, test_tenant.id, title="Other")
         await client.patch(f"/api/templates/{first.id}", json={"title": "Edited"})
 
-        assert (
-            await client.get(f"/api/templates/{second.id}/versions")
-        ).json()["total"] == 0
+        assert (await client.get(f"/api/templates/{second.id}/versions")).json()[
+            "total"
+        ] == 0
 
-    async def test_a_missing_template_or_version_is_not_found(self, client, db_session, test_tenant):
+    async def test_a_missing_template_or_version_is_not_found(
+        self, client, db_session, test_tenant
+    ):
         template = await _template(db_session, test_tenant.id)
         assert (
             await client.get(f"/api/templates/{uuid.uuid4()}/versions")
@@ -198,22 +233,24 @@ class TestRestore:
         self, client, db_session, test_tenant
     ):
         template = await _template(db_session, test_tenant.id)
-        await client.patch(f"/api/templates/{template.id}", json={"body": "Second wording"})
-        await client.patch(f"/api/templates/{template.id}", json={"body": "Third wording"})
+        await client.patch(
+            f"/api/templates/{template.id}", json={"body": "Second wording"}
+        )
+        await client.patch(
+            f"/api/templates/{template.id}", json={"body": "Third wording"}
+        )
 
         restored = await client.post(f"/api/templates/{template.id}/versions/1/restore")
         assert restored.status_code == 200
-        assert restored.json()["body"] == "Dear {{client_name}},"
+        assert restored.json()["body"] == "Second wording"
 
-        # The state being replaced is recorded too, so nothing is lost.
+        # The restored result is appended as a new immutable state.
         versions = (await client.get(f"/api/templates/{template.id}/versions")).json()
         assert versions["total"] == 3
         assert versions["current_version_no"] == 3
-        newest = (
-            await client.get(f"/api/templates/{template.id}/versions/3")
-        ).json()
-        assert newest["body"] == "Third wording"
-        assert "restore of version 1" in newest["change_summary"]
+        newest = (await client.get(f"/api/templates/{template.id}/versions/3")).json()
+        assert newest["body"] == "Second wording"
+        assert "Restore of version 1" in newest["change_summary"]
 
     async def test_a_restored_template_is_left_inactive(
         self, client, db_session, test_tenant
@@ -259,6 +296,49 @@ class TestRestore:
         assert (
             await client.post(f"/api/templates/{uuid.uuid4()}/versions/1/restore")
         ).status_code == 404
+
+
+class TestPublicationLifecycle:
+    async def test_publish_requires_the_exact_tested_version(
+        self, client, db_session, test_tenant
+    ):
+        template = await _template(db_session, test_tenant.id, is_active=False)
+
+        refused = await client.post(f"/api/templates/{template.id}/publish", json={})
+        assert refused.status_code == 409
+
+        tested = await client.post(
+            f"/api/templates/{template.id}/render",
+            json={"variables": {"client_name": "Ada"}, "preview_purpose": "activation"},
+        )
+        assert tested.status_code == 200
+        after_test = (await client.get(f"/api/templates/{template.id}")).json()
+        assert after_test["tested_version_no"] == after_test["current_version_no"] == 1
+        assert after_test["status"] == "ready_to_publish"
+
+        published = await client.post(f"/api/templates/{template.id}/publish", json={})
+        assert published.status_code == 200
+        payload = published.json()
+        assert payload["is_active"] is True
+        assert payload["status"] == "published"
+        assert payload["published_version_no"] == payload["current_version_no"] == 2
+        assert payload["tested_version_no"] == 2
+
+        changed = await client.patch(
+            f"/api/templates/{template.id}", json={"body": "Changed {{client_name}}"}
+        )
+        assert changed.status_code == 200
+        assert changed.json()["is_active"] is False
+        assert changed.json()["tested_version_no"] is None
+        assert changed.json()["published_version_no"] == 2
+
+    async def test_direct_activation_is_rejected(self, client, db_session, test_tenant):
+        template = await _template(db_session, test_tenant.id, is_active=False)
+        response = await client.patch(
+            f"/api/templates/{template.id}", json={"is_active": True}
+        )
+        assert response.status_code == 409
+        assert "Test this exact template version" in response.json()["detail"]
 
 
 class TestImmutability:
@@ -348,7 +428,9 @@ class TestSemanticValidation:
             },
         )
         assert response.status_code == 200
-        assert response.json()["variable_schema"]["fields"][0]["binding"] == "client.name"
+        assert (
+            response.json()["variable_schema"]["fields"][0]["binding"] == "client.name"
+        )
 
     async def test_a_stored_region_is_normalised_and_kept(
         self, client, db_session, test_tenant
@@ -390,7 +472,12 @@ class TestSemanticValidation:
                 "variable_schema": {
                     "fields": [{"name": "client_name"}],
                     "regions": [
-                        {"kind": "if", "name": "ghost", "from_ordinal": 0, "to_ordinal": 1}
+                        {
+                            "kind": "if",
+                            "name": "ghost",
+                            "from_ordinal": 0,
+                            "to_ordinal": 1,
+                        }
                     ],
                 }
             },
@@ -408,7 +495,12 @@ class TestSemanticValidation:
                 "variable_schema": {
                     "fields": [{"name": "client_name"}],
                     "regions": [
-                        {"kind": "each", "name": "invoices", "from_ordinal": 0, "to_ordinal": 1}
+                        {
+                            "kind": "each",
+                            "name": "invoices",
+                            "from_ordinal": 0,
+                            "to_ordinal": 1,
+                        }
                     ],
                 }
             },

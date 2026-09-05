@@ -6,8 +6,8 @@ from app.release_notes import RECENT_RELEASE_DAYS, build_release_catalog
 from app.main import app_version
 
 
-LATEST_RELEASE_ID = "2026.09.04.2"
-LATEST_RELEASE_DATE = date(2026, 9, 4)
+LATEST_RELEASE_ID = "2026.09.05.1"
+LATEST_RELEASE_DATE = date(2026, 9, 5)
 
 
 def test_release_catalog_returns_latest_release_and_history():
@@ -17,8 +17,10 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["id"] == LATEST_RELEASE_ID
     assert latest["version"] == LATEST_RELEASE_ID
     assert latest["is_recent"] is True
-    assert len(latest["highlights"]) == 5
-    assert latest["highlights"][-1]["title"] == "Mark up Word templates by hand"
+    assert len(latest["highlights"]) == 3
+    assert (
+        latest["highlights"][-1]["title"] == "Work queues that match the whole library"
+    )
     assert catalog["release_notes"][0] == latest
 
 

@@ -1,6 +1,11 @@
 # Template Studio engine review
 
 **Date:** 2026-09-04
+**Update (2026-09-05):** PR #334 completed bindings, bounded logic, exact
+resulting-state versions, and DOCX outline authoring. Migration 157 subsequently
+added the test/publish lifecycle, published-version generation boundary, and
+firm-wide Studio queues described in the completion plan. The findings below
+are retained as the decision record that motivated that work.
 **Question asked:** does Template Studio become a fantastic product, or do we redesign how
 customers create templates and generate documents?
 

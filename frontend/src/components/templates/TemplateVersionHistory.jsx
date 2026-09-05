@@ -1,6 +1,5 @@
 // The Studio Versions and Activity tabs. Both read the same append-only
-// history: a template is edited in place, so this is the only record of what
-// a document generated last month was actually produced from.
+// history: every number identifies the exact immutable state shown in its row.
 
 import { useCallback, useEffect, useState } from 'react'
 import { History, Loader2, RotateCcw } from 'lucide-react'
@@ -31,7 +30,7 @@ export const describeChange = (version, previous) => {
 }
 
 export default function TemplateVersionHistory({ templateId, mode = 'versions', onRestored }) {
-  const [state, setState] = useState({ status: 'loading', versions: [], total: 0, current: 0 })
+  const [state, setState] = useState({ status: 'loading', versions: [], total: 0, current: 0, tested: null, published: null })
   const [busyVersion, setBusyVersion] = useState(null)
   const [error, setError] = useState('')
 
@@ -46,10 +45,12 @@ export default function TemplateVersionHistory({ templateId, mode = 'versions', 
           versions: data?.versions || [],
           total: data?.total || 0,
           current: data?.current_version_no || 0,
+          tested: data?.tested_version_no || null,
+          published: data?.published_version_no || null,
         })
       })
       .catch(() => {
-        if (!cancelled) setState({ status: 'error', versions: [], total: 0, current: 0 })
+        if (!cancelled) setState({ status: 'error', versions: [], total: 0, current: 0, tested: null, published: null })
       })
     return () => { cancelled = true }
   }, [templateId])
@@ -96,8 +97,8 @@ export default function TemplateVersionHistory({ templateId, mode = 'versions', 
         <History size={20} className="mx-auto text-brand-muted" aria-hidden="true" />
         <h2 className="mt-3 text-lg font-semibold text-brand-ink">No history yet</h2>
         <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-brand-muted">
-          The next edit to this template records the wording it is replacing. Nothing has
-          been recorded so far, so there is nothing to compare or restore.
+          Save or test this draft to create its first immutable version. Nothing has been
+          recorded so far, so there is nothing to compare or restore.
         </p>
       </div>
     )
@@ -127,6 +128,8 @@ export default function TemplateVersionHistory({ templateId, mode = 'versions', 
               <p className="mt-0.5 text-xs text-brand-muted">
                 {formatWhen(version.created_at)} · {describeChange(version, state.versions[index + 1])}
                 {version.is_active ? ' · was active' : ''}
+                {version.version_no === state.tested ? ' · tested' : ''}
+                {version.version_no === state.published ? ' · published' : ''}
               </p>
             </div>
             {mode === 'versions' && (
@@ -147,8 +150,8 @@ export default function TemplateVersionHistory({ templateId, mode = 'versions', 
       </ol>
       {mode === 'versions' && (
         <p className="text-xs leading-5 text-brand-muted">
-          Restoring records the current wording first, then puts the earlier one back as a new
-          version. The template is left inactive so you can preview it before it generates again.
+          Restoring puts the selected wording back as a new immutable draft version. The
+          template stays unpublished until that exact version is tested and approved again.
         </p>
       )}
     </div>
