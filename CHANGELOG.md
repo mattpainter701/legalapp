@@ -10,6 +10,30 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Template data bindings, logic, versions, and visual Word authoring:** a
+  template field may declare one binding from a closed, server-owned catalogue
+  (`matter.case_number`, `client.address.city`, `party.plaintiff.name`, …)
+  resolved in `build_variable_suggestions`, replacing name-only Smart Fill
+  matching that never fired on customer-authored field names. A declared
+  binding is authoritative and never falls back to name matching, including
+  when the catalogue no longer knows the path: a blank field naming the source
+  it cannot reach beats quietly re-sourcing a clause. Conditional and repeating
+  regions (`{{#if}}`, `{{#unless}}`, `{{#each}}`) resolve in markdown bodies and
+  Word sources over a closed operator vocabulary with no expression language;
+  repeat items are never inlined during expansion, so a customer value cannot
+  be reinterpreted as a marker. Word regions resolve after field replacement
+  because anchors address paragraphs by ordinal in the original document.
+  Migration 155 adds `document_template_versions`, one append-only row per
+  published state under FORCE RLS, guarded by a trigger that rejects ordinary
+  UPDATE/DELETE while still permitting the `ON DELETE CASCADE` from
+  `document_templates` (a rewrite rule would have swallowed that cascade
+  silently). `GET /templates/{id}/outline` serves a Word template's paragraphs
+  numbered by the same iterator that fills it, so the editor places fields by
+  text selection rather than by rasterizing pages; regions marked there are
+  stored as ordinal ranges and materialised as markers in the in-memory
+  document at render time, leaving retained source bytes untouched. All
+  additive: a template with no bindings, logic, regions or versions behaves
+  exactly as before.
 - **Matter document folders and tags:** case documents are no longer a single
   flat list. Migration 154 adds a per-matter folder tree (materialized paths,
   depth and cycle limits, case-insensitive sibling names, FORCE RLS) plus a
