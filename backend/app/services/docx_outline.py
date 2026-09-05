@@ -124,7 +124,8 @@ def docx_outline(content: bytes) -> dict[str, Any]:
         entry: dict[str, Any] = {
             "ordinal": ordinal,
             "text": text,
-            "style": getattr(getattr(paragraph, "style", None), "name", None) or "Normal",
+            "style": getattr(getattr(paragraph, "style", None), "name", None)
+            or "Normal",
             "container": _container_of(paragraph),
             "runs": _runs_of(paragraph),
         }

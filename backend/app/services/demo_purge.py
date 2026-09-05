@@ -45,6 +45,14 @@ _STUDIO_PURGE_ORDER = (
     "studio_source_artifacts",
 )
 _STUDIO_TABLES = frozenset(_STUDIO_PURGE_ORDER)
+
+# Template versions are append-only, and the one delete their guard permits is
+# the cascade from ``document_templates``. The generic plan deletes children
+# before parents, so an explicit delete here would fire while the template row
+# still exists and be refused. Leaving them to the cascade is not a gap: the
+# survivor check below counts every tenant-scoped table and refuses the purge
+# if any row remains.
+_CASCADE_PURGED_TABLES = frozenset({"document_template_versions"})
 _CONFIG_WORKFLOW_PURGE_ORDER = (
     # Automation dispatch evidence points at runs and rules, so it leaves
     # first; rules point at templates, so they leave before the definitions.
@@ -416,6 +424,7 @@ async def _purge_demo_tenant_locked(
                 or name in _CONFIG_WORKFLOW_TABLES
                 or name in _SMS_IMMUTABLE_TABLES
                 or name in _SMS_PURGE_TABLES
+                or name in _CASCADE_PURGED_TABLES
             ):
                 continue
             values = {}

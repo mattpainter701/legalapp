@@ -281,6 +281,46 @@ class TestImmutability:
         assert remaining is None
 
 
+class TestAuthorLifecycle:
+    async def test_off_boarding_an_author_does_not_break_on_the_append_only_guard(
+        self, client, db_session, test_tenant, test_user
+    ):
+        # created_by_user_id is ON DELETE SET NULL, which is an UPDATE on this
+        # table. Without an explicit exception the append-only guard refuses
+        # it, and deleting a departed attorney fails for every template version
+        # they ever authored.
+        from sqlalchemy import delete as sa_delete
+
+        from app.models.user import User
+
+        template = await _template(db_session, test_tenant.id)
+        await client.patch(f"/api/templates/{template.id}", json={"title": "Edited"})
+
+        version = await db_session.scalar(
+            select(DocumentTemplateVersion).where(
+                DocumentTemplateVersion.template_id == template.id
+            )
+        )
+        assert version.created_by_user_id == test_user.id
+        recorded_title = version.title
+        version_id = version.id
+
+        await db_session.execute(sa_delete(User).where(User.id == test_user.id))
+        await db_session.commit()
+
+        # populate_existing, because the identity map would otherwise hand back
+        # the instance as it looked before the database nulled the author.
+        surviving = await db_session.scalar(
+            select(DocumentTemplateVersion)
+            .where(DocumentTemplateVersion.id == version_id)
+            .execution_options(populate_existing=True)
+        )
+        # The author is forgotten; what the template said is not.
+        assert surviving is not None
+        assert surviving.created_by_user_id is None
+        assert surviving.title == recorded_title
+
+
 class TestSemanticValidation:
     async def test_an_unknown_binding_is_rejected(
         self, client, db_session, test_tenant

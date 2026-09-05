@@ -388,9 +388,7 @@ def _paragraph_containers(document: Document) -> Iterable[Any]:
             yield from walk_tables(container.tables)
 
 
-def _region_bounds(
-    children: list[Any], parent: Any
-) -> list[tuple[int, int, str, str]]:
+def _region_bounds(children: list[Any], parent: Any) -> list[tuple[int, int, str, str]]:
     """Return the outermost logic regions in one container.
 
     Each entry is ``(open index, close index, keyword, name)`` over ``children``.
@@ -530,9 +528,7 @@ def _substitute_item(
     pattern, by_source = _compile_replacements(replacements)
     if pattern is None:
         return
-    targets = (
-        [element] if element.tag == qn("w:p") else list(element.iter(qn("w:p")))
-    )
+    targets = [element] if element.tag == qn("w:p") else list(element.iter(qn("w:p")))
     for paragraph_element in targets:
         _replace_in_paragraph(Paragraph(paragraph_element, parent), pattern, by_source)
 

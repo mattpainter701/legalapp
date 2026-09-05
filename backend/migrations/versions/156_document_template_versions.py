@@ -97,11 +97,23 @@ def upgrade() -> None:
     # produced a filed or signed document, so it must never be rewritten or
     # quietly removed.
     #
-    # The one permitted delete is the cascade from ``document_templates``,
-    # recognised by the parent row already being gone: the referential action
-    # fires after the parent delete, so an ordinary application delete (parent
-    # still present) is rejected while a genuine cascade proceeds. A history
-    # with no subject is not evidence worth keeping.
+    # Two mutations are permitted, both of them the database's own referential
+    # actions rather than anything an application asks for.
+    #
+    # The delete is the cascade from ``document_templates``, recognised by the
+    # parent row already being gone: the referential action fires after the
+    # parent delete, so an ordinary application delete (parent still present)
+    # is rejected while a genuine cascade proceeds. A history with no subject
+    # is not evidence worth keeping.
+    #
+    # The update is ``created_by_user_id`` becoming NULL when its author is
+    # removed, which the FK already declares as ON DELETE SET NULL. Without
+    # this, deleting a departed attorney would fail outright for every template
+    # version they authored. Every column describing the document itself must
+    # be unchanged, so forgetting who wrote a version can never become a way to
+    # rewrite what it said. The comparison is over the whole row rather than a
+    # list of columns: a list would silently stop protecting any column added
+    # later, and ``json`` has no equality operator to compare directly.
     op.execute(
         """CREATE OR REPLACE FUNCTION prevent_document_template_version_mutation()
         RETURNS trigger AS $$
@@ -112,6 +124,12 @@ def upgrade() -> None:
                    WHERE template.id = OLD.template_id
                )
             THEN RETURN OLD; END IF;
+            IF TG_OP = 'UPDATE'
+               AND NEW.created_by_user_id IS NULL
+               AND OLD.created_by_user_id IS NOT NULL
+               AND to_jsonb(NEW) - 'created_by_user_id'
+                   IS NOT DISTINCT FROM to_jsonb(OLD) - 'created_by_user_id'
+            THEN RETURN NEW; END IF;
             RAISE EXCEPTION 'document template versions are append-only';
         END;
         $$ LANGUAGE plpgsql"""

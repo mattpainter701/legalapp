@@ -1479,9 +1479,7 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         try:
             schema["regions"] = [
                 region.as_dict()
-                for region in parse_regions(
-                    schema["regions"], known_fields=seen_names
-                )
+                for region in parse_regions(schema["regions"], known_fields=seen_names)
             ]
         except TemplateRegionError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2052,9 +2050,7 @@ async def _load_matter_parties(
     return list(result.scalars().all())
 
 
-def _schema_for_values(
-    variable_schema: Any, variables: dict[str, str]
-) -> Any:
+def _schema_for_values(variable_schema: Any, variables: dict[str, str]) -> Any:
     """Relax required-ness for fields their own logic switches off.
 
     A field carrying a condition that is false for this set of values does not
@@ -2083,9 +2079,8 @@ def _schema_for_values(
 def _party_item(party: MatterParty) -> dict[str, str]:
     contact = getattr(party, "contact", None)
     return {
-        "party_name": _stringify_suggestion(
-            getattr(contact, "display_name", None)
-        ) or "",
+        "party_name": _stringify_suggestion(getattr(contact, "display_name", None))
+        or "",
         "party_role": _stringify_suggestion(getattr(party, "role", None)) or "",
         "party_email": _stringify_suggestion(getattr(contact, "email", None)) or "",
         "party_phone": _stringify_suggestion(getattr(contact, "phone", None)) or "",
@@ -2214,9 +2209,7 @@ async def build_variable_suggestions(
             # matching here would reintroduce exactly the surprise bindings
             # exist to remove: a field the customer bound to one record
             # silently filling from another because of its name.
-            suggestions.append(
-                _bound_suggestion(variable, binding, candidates)
-            )
+            suggestions.append(_bound_suggestion(variable, binding, candidates))
             continue
         candidate = candidates.get(_normalize_variable_name(variable))
         if candidate:
@@ -2866,9 +2859,7 @@ async def get_template_outline(
         outline = await asyncio.to_thread(docx_outline, source)
     except TemplateDocxError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return DocumentTemplateOutlineResponse(
-        template_id=str(template.id), **outline
-    )
+    return DocumentTemplateOutlineResponse(template_id=str(template.id), **outline)
 
 
 @router.get("/{template_id}/source")
@@ -3274,8 +3265,12 @@ async def update_template(
     return _template_response(template)
 
 
-def _version_summary(version: DocumentTemplateVersion) -> DocumentTemplateVersionSummary:
-    schema = version.variable_schema if isinstance(version.variable_schema, dict) else {}
+def _version_summary(
+    version: DocumentTemplateVersion,
+) -> DocumentTemplateVersionSummary:
+    schema = (
+        version.variable_schema if isinstance(version.variable_schema, dict) else {}
+    )
     fields = schema.get("fields")
     return DocumentTemplateVersionSummary(
         version_no=version.version_no,

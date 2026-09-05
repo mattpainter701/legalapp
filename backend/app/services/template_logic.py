@@ -147,7 +147,9 @@ def parse_condition(raw: Any, *, label: str = "field") -> Condition:
     literals: list[str] = []
     for item in items:
         if isinstance(item, (list, tuple, dict)):
-            raise TemplateLogicError(f"Logic for {label!r} may only compare text values.")
+            raise TemplateLogicError(
+                f"Logic for {label!r} may only compare text values."
+            )
         text = str(item)
         if len(text) > MAX_LITERAL_LENGTH:
             raise TemplateLogicError(
@@ -209,9 +211,7 @@ def field_conditions(variable_schema: Any) -> dict[str, Condition]:
     return conditions
 
 
-def suppressed_fields(
-    variable_schema: Any, variables: dict[str, str]
-) -> set[str]:
+def suppressed_fields(variable_schema: Any, variables: dict[str, str]) -> set[str]:
     """Return the fields whose condition is false for this set of values.
 
     A suppressed field contributes no value to the rendered document, so a

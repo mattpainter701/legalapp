@@ -87,7 +87,9 @@ def _reject_crossing(regions: list[TemplateRegion]) -> None:
     of the marker.
     """
 
-    ordered = sorted(regions, key=lambda region: (region.from_ordinal, -region.to_ordinal))
+    ordered = sorted(
+        regions, key=lambda region: (region.from_ordinal, -region.to_ordinal)
+    )
     stack: list[TemplateRegion] = []
     for region in ordered:
         while stack and stack[-1].to_ordinal < region.from_ordinal:
@@ -132,9 +134,7 @@ def parse_regions(
     for region in regions:
         if region.kind == "each":
             if not is_valid_collection(region.name):
-                raise TemplateRegionError(
-                    f"Unknown repeating section: {region.name}."
-                )
+                raise TemplateRegionError(f"Unknown repeating section: {region.name}.")
         elif known_fields is not None and region.name not in names:
             raise TemplateRegionError(
                 f"The {region.kind!r} region references an unknown field: "

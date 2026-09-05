@@ -117,7 +117,5 @@ def validate_semantic_metadata(variable_schema: Any) -> None:
 
         variable_schema["regions"] = [
             region.as_dict()
-            for region in parse_regions(
-                variable_schema["regions"], known_fields=names
-            )
+            for region in parse_regions(variable_schema["regions"], known_fields=names)
         ]

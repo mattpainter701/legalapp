@@ -44,46 +44,78 @@ _CATALOGUE: tuple[TemplateBinding, ...] = (
     # Matter
     TemplateBinding("matter.name", "matter_name", "Matter name", "Matter"),
     TemplateBinding("matter.type", "matter_type", "Matter type", "Matter"),
-    TemplateBinding("matter.description", "matter_description", "Matter description", "Matter"),
+    TemplateBinding(
+        "matter.description", "matter_description", "Matter description", "Matter"
+    ),
     TemplateBinding("matter.status", "matter_status", "Matter status", "Matter"),
     TemplateBinding("matter.stage", "matter_stage", "Matter stage", "Matter"),
-    TemplateBinding("matter.jurisdiction", "matter_jurisdiction", "Jurisdiction", "Matter"),
+    TemplateBinding(
+        "matter.jurisdiction", "matter_jurisdiction", "Jurisdiction", "Matter"
+    ),
     TemplateBinding("matter.case_number", "case_number", "Case number", "Matter"),
     TemplateBinding("matter.court", "court", "Court", "Matter"),
     TemplateBinding("matter.judge", "judge", "Judge", "Matter"),
     TemplateBinding("matter.counterparty", "counterparty", "Counterparty", "Matter"),
     TemplateBinding("matter.role", "matter_role", "Represented side", "Matter"),
     # Billing
-    TemplateBinding("matter.billing_method", "billing_method", "Billing method", "Billing"),
-    TemplateBinding("matter.billing_cycle", "billing_cycle", "Billing cycle", "Billing"),
+    TemplateBinding(
+        "matter.billing_method", "billing_method", "Billing method", "Billing"
+    ),
+    TemplateBinding(
+        "matter.billing_cycle", "billing_cycle", "Billing cycle", "Billing"
+    ),
     TemplateBinding("matter.hourly_rate", "hourly_rate", "Hourly rate", "Billing"),
-    TemplateBinding("matter.budget_amount", "budget_amount", "Budget amount", "Billing"),
+    TemplateBinding(
+        "matter.budget_amount", "budget_amount", "Budget amount", "Billing"
+    ),
     # Client contact
     TemplateBinding("client.name", "client_name", "Client name", "Client"),
     TemplateBinding("client.email", "client_email", "Client email", "Client"),
     TemplateBinding("client.phone", "client_phone", "Client phone", "Client"),
-    TemplateBinding("client.address.street", "client_street", "Client street", "Client"),
+    TemplateBinding(
+        "client.address.street", "client_street", "Client street", "Client"
+    ),
     TemplateBinding("client.address.city", "client_city", "Client city", "Client"),
     TemplateBinding("client.address.state", "client_state", "Client state", "Client"),
     TemplateBinding("client.address.zip", "client_zip", "Client ZIP", "Client"),
-    TemplateBinding("client.address.country", "client_country", "Client country", "Client"),
+    TemplateBinding(
+        "client.address.country", "client_country", "Client country", "Client"
+    ),
     # Caption parties
-    TemplateBinding("party.plaintiff.name", "plaintiff_name", "Plaintiff (first listed)", "Parties"),
-    TemplateBinding("party.plaintiff.names", "plaintiff_names", "Plaintiffs (all)", "Parties"),
-    TemplateBinding("party.defendant.name", "defendant_name", "Defendant (first listed)", "Parties"),
-    TemplateBinding("party.defendant.names", "defendant_names", "Defendants (all)", "Parties"),
+    TemplateBinding(
+        "party.plaintiff.name", "plaintiff_name", "Plaintiff (first listed)", "Parties"
+    ),
+    TemplateBinding(
+        "party.plaintiff.names", "plaintiff_names", "Plaintiffs (all)", "Parties"
+    ),
+    TemplateBinding(
+        "party.defendant.name", "defendant_name", "Defendant (first listed)", "Parties"
+    ),
+    TemplateBinding(
+        "party.defendant.names", "defendant_names", "Defendants (all)", "Parties"
+    ),
     # People
     TemplateBinding("attorney.name", "attorney_name", "Attorney of record", "People"),
     TemplateBinding("attorney.email", "attorney_email", "Attorney email", "People"),
     TemplateBinding("current_user.name", "current_user_name", "Current user", "People"),
-    TemplateBinding("current_user.email", "current_user_email", "Current user email", "People"),
+    TemplateBinding(
+        "current_user.email", "current_user_email", "Current user email", "People"
+    ),
     TemplateBinding("current_user.prepared_by", "prepared_by", "Prepared by", "People"),
     # Item bindings resolve once per iteration of a repeating section, not from
     # the matter, so they have no alias: there is no single record behind them.
-    TemplateBinding("item.party_name", "", "Party name (this item)", "Repeating section"),
-    TemplateBinding("item.party_role", "", "Party role (this item)", "Repeating section"),
-    TemplateBinding("item.party_email", "", "Party email (this item)", "Repeating section"),
-    TemplateBinding("item.party_phone", "", "Party phone (this item)", "Repeating section"),
+    TemplateBinding(
+        "item.party_name", "", "Party name (this item)", "Repeating section"
+    ),
+    TemplateBinding(
+        "item.party_role", "", "Party role (this item)", "Repeating section"
+    ),
+    TemplateBinding(
+        "item.party_email", "", "Party email (this item)", "Repeating section"
+    ),
+    TemplateBinding(
+        "item.party_phone", "", "Party phone (this item)", "Repeating section"
+    ),
 )
 
 #: Prefix marking a binding that is resolved per repeat item.
@@ -99,7 +131,8 @@ def is_item_binding(path: str) -> bool:
 def item_key(path: str) -> str:
     """Return the collection item field an item binding names."""
 
-    return path[len(ITEM_BINDING_PREFIX):] if is_item_binding(path) else ""
+    return path[len(ITEM_BINDING_PREFIX) :] if is_item_binding(path) else ""
+
 
 _BY_PATH: dict[str, TemplateBinding] = {entry.path: entry for entry in _CATALOGUE}
 
