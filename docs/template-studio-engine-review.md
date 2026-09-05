@@ -11,6 +11,12 @@ binding and no versions — is what caps the product, and no amount of further S
 work moves that cap. Meanwhile the largest engineering investment in the codebase is currently
 unreachable by any customer.
 
+**Keep that unreachable code.** Section 5 originally offered deleting the render subsystem as an
+option; that was wrong and has been corrected. It holds the only path to DOCX→PDF conversion,
+which e-signature, filing, and client delivery all require, and the rasterizer that DOCX visual
+authoring needs. The problem is that it was built before the template model could use it — a
+sequencing failure, not a wasted one.
+
 ---
 
 ## 1. The headline finding: we built the wrong half
@@ -205,18 +211,44 @@ repeat it. Add a *reconcile* path so a drifted anchor offers "re-point this fiel
 
 ### What to do with Phase 2/3 now
 
-Be honest about the 26,000 lines. Options, in order of preference:
+**Corrected 2026-09-05 — keep it. An earlier draft of this review floated deleting the render
+subsystem; that was wrong, and this section replaces it.**
 
-1. **Harvest and freeze.** Lift the draft/revision/snapshot domain out of `studio_drafts` to
-   back Step 3, and freeze the rest (`studio_render_jobs`, CAS, worker isolation, retention)
-   behind its existing flag with a dated note saying what has to be true to revive it — a real
-   volume of long-running renders, and the CAS backup/restore gate closed.
-2. **Delete the render subsystem** if the answer to "what customer outcome does this unblock in
-   the next two quarters" is nothing. It is recoverable from git, and it currently costs review
-   time, CI time, and a second mental model of how documents render.
+The test "what customer outcome does this unblock" has a concrete answer that the first pass of
+this review missed:
 
-Either way, stop paying maintenance on a parallel system while the shipping one lacks
-conditionals.
+- **There is no DOCX→PDF conversion anywhere in the shipping pipeline.** `document_export.py`
+  converts markdown to PDF and markdown to DOCX; nothing turns a *filled Word document* into a
+  PDF.
+- **E-signature requires PDF.** `app/services/esign/dropbox_sign.py:44` submits
+  `application/pdf`. So a document generated from a Word template — the format firms actually
+  author in — cannot currently be sent for signature, filed, or delivered as a client-ready PDF
+  at all.
+- **The Phase 3 isolation profile already declares the fix.**
+  `studio_render_runtime.py:128` requires a `converter`, `rasterizer`, `font_pack`, and
+  `validator`, sandboxed with no shell and no network. That is a conversion pipeline built to
+  run untrusted customer documents safely, which is exactly the hard part.
+- **Step 4 needs the same runtime.** Rendering DOCX pages for visual field placement needs that
+  rasterizer. This review listed DOCX page rendering as an open problem without noticing the
+  answer was already written.
+
+So the criticism narrows to sequencing, not value: this was built *before* the template model
+could make use of it, and sat dark while the shipping pipeline lacked bindings and conditionals.
+Sequencing is fixed by wiring it up, not by deleting it. What Phase 3 is actually blocked on —
+per `docs/template-studio-backend.md` — is the encrypted CAS backup plus restore rehearsal
+joining the release gate. That is an operations task, not a code problem.
+
+Phase 2 is likewise not superseded. Step 3 of the completion plan added
+`document_template_versions`, which records what a template *was* after publishing.
+`studio_drafts` models something different and still missing: a workspace to edit a template
+*before* publishing, with idempotency, ETag concurrency, and a verified source-artifact
+registry. They are complementary, and the draft domain should not be reinvented a third time.
+
+**One integration gap to close before Phase 2 is switched on.** `StudioDraftService.promote()`
+(`studio_drafts.py:1687`) writes `DocumentTemplate` directly, while version recording lives in
+the `PATCH /templates/{id}` route. As written, every Studio publish would bypass version
+recording and leave holes in the history exactly where the Studio is doing the publishing.
+Promotion must call `record_version` in the same transaction.
 
 ---
 

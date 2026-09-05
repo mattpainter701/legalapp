@@ -99,12 +99,36 @@ DOCX anchors also hard-fail with "re-upload and start over" when source text dri
 bind/condition/repeat it, and add a *reconcile* path so a drifted anchor offers "re-point this
 field" instead of discarding the template.
 
-## Step 5 — Retire the parallel system
+## Step 5 — Activate the parallel system *(revised 2026-09-05)*
 
-Harvest the draft/revision/snapshot domain from `studio_drafts` into Step 3, then freeze
-`studio_render_jobs`, the CAS, worker isolation, and retention behind their existing flag with a
-dated note stating what must be true to revive them: a real volume of long-running renders, and
-the CAS backup/restore release gate closed. Delete instead if that case does not arrive.
+This step originally read "retire the parallel system" and offered deletion. That was wrong.
+The Phase 2/3 code is not dead weight; it is the delivery half of the product, built ahead of
+the template model that could use it.
+
+**Step 5a — DOCX→PDF conversion.** There is none today. `document_export.py` converts markdown
+to PDF and markdown to DOCX, but nothing converts a *filled Word document*. E-signature submits
+`application/pdf` (`esign/dropbox_sign.py:44`), so a document generated from a Word template
+cannot currently be signed, filed, or delivered as a client-ready PDF. The Phase 3 isolation
+profile already declares the `converter`, `rasterizer`, `font_pack`, and `validator` needed, in
+a sandbox with no shell and no network. Wiring it up closes the biggest remaining hole in the
+lifecycle.
+
+**Step 5b — Close the CAS release gate.** Phase 3 fails closed in production until encrypted CAS
+backup plus a restore rehearsal is part of the release gate, per
+`docs/template-studio-backend.md`. This is an operations task, not a code problem, and it is the
+actual blocker.
+
+**Step 5c — Wire Phase 2 drafts, and close the version gap.** `studio_drafts` models a
+pre-publication workspace — idempotency, ETag concurrency, a verified source-artifact registry —
+which Step 3's published-version history does not replace and should not reinvent.
+
+Before that is switched on: `StudioDraftService.promote()` (`studio_drafts.py:1687`) writes
+`DocumentTemplate` directly, while version recording lives in the `PATCH /templates/{id}` route.
+Promotion must call `record_version` in the same transaction, or every Studio publish will leave
+a hole in the history exactly where the Studio did the publishing.
+
+**What Step 4 gains from this.** DOCX page rendering for the visual editor needs the same
+rasterizer, so Steps 4 and 5a share a dependency and should be sequenced together.
 
 ## Sequencing and status
 
@@ -114,7 +138,9 @@ the CAS backup/restore release gate closed. Delete instead if that case does not
 | 2 — Template logic | One conditional template instead of N | none | **done** |
 | 3 — Template versions | Real Versions/Activity tabs, rollback | `155` | **done** |
 | 4 — DOCX authoring parity | Word editing at PDF parity | none | **partial** |
-| 5 — Retire parallel system | Less code, one mental model | none | not started |
+| 5a — DOCX→PDF conversion | Word documents can be signed, filed, delivered | none | not started |
+| 5b — CAS backup/restore gate | Phase 3 can be enabled in production | none | not started |
+| 5c — Wire Phase 2 drafts | Edit a template without touching the live one | none | not started |
 
 ### What Step 4 still needs
 
@@ -124,8 +150,9 @@ and the panel documents the markers a Word author writes in the document itself.
 Two pieces remain:
 
 - **Page rendering for DOCX.** Placing a field by clicking the page still needs
-  a PDF. Rendering DOCX pages to images would close this; a converter already
-  exists in the (disabled) Studio render runtime.
+  a PDF. Rendering DOCX pages to images would close this, and the rasterizer for
+  it is already declared in the (disabled) Studio render runtime — so this
+  depends on Step 5a rather than on new rendering code.
 - **Anchor reconciliation.** A drifted DOCX anchor still fails with "re-upload
   and review the template" rather than offering to re-point the field.
 
