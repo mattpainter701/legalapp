@@ -3325,6 +3325,10 @@ async def update_template(
 
     pdf_schema_update_requested = "variable_schema" in updates
     pdf_body_update_requested = "body" in updates
+    # Activating a PDF re-derives variable_schema from the retained source and
+    # writes it into `updates`, so the keys the caller actually asked to change
+    # have to be recorded before that rewrite hides the difference.
+    requested_update_keys = frozenset(updates)
     # A PDF field map is only trustworthy relative to the immutable retained
     # source. Re-discover form controls or text-overlay locations whenever its
     # map changes or the template is activated.
@@ -3461,7 +3465,7 @@ async def update_template(
 
     versioned_change = snapshot_differs(template, updates)
     content_change = any(
-        key in updates and updates[key] != getattr(template, key, None)
+        key in requested_update_keys and updates[key] != getattr(template, key, None)
         for key in (
             "title",
             "body",

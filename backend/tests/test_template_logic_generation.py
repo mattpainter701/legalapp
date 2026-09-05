@@ -9,6 +9,7 @@ from app.models.contact import Contact
 from app.models.document_template import DocumentTemplate
 from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
+from app.services.document_template_versions import record_version
 
 pytestmark = pytest.mark.asyncio
 
@@ -58,6 +59,19 @@ async def _template(db_session: AsyncSession, tenant_id, body=BODY) -> DocumentT
         is_active=True,
     )
     db_session.add(template)
+    await db_session.flush()
+    # Generation renders only a template whose live state still matches an
+    # exact published version, so publish this fixture the same way the API
+    # does rather than leaving it active but unpublished.
+    version = await record_version(
+        db_session,
+        template=template,
+        tenant_id=tenant_id,
+        user_id=None,
+        change_summary="Test fixture",
+    )
+    template.tested_version_no = version.version_no
+    template.published_version_no = version.version_no
     await db_session.commit()
     await db_session.refresh(template)
     return template
