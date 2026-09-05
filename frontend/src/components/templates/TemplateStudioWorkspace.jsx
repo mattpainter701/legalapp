@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, Clock3, Eye, FileText, FlaskConical, History, Loader2, Pencil, Sparkles } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, CircleCheck, Clock3, Eye, FileText, FlaskConical, History, Loader2, Pencil, Sparkles } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -18,6 +18,7 @@ export default function TemplateStudioWorkspace({
   statusMessage,
   onEdit,
   onGenerate,
+  onPublish,
   source,
   sourceLoading = false,
   sourceError = '',
@@ -28,6 +29,17 @@ export default function TemplateStudioWorkspace({
   const statusRef = useRef(null)
   const sourceMissing = template.source_ready === false
     || (['pdf', 'docx'].includes(template.format) && (!template.source_filename || !template.source_sha256))
+  const lifecycleLabel = sourceMissing
+    ? 'Source unavailable'
+    : template.status === 'published' && template.is_active
+      ? `Published version ${template.published_version_no}`
+      : template.status === 'ready_to_publish'
+        ? `Version ${template.current_version_no} tested · awaiting publication`
+        : template.status === 'test_failed'
+          ? 'Test failed · review values and template logic'
+        : template.status === 'paused'
+          ? 'Published template paused'
+          : 'Draft · test before publishing'
 
   useEffect(() => {
     if (statusMessage) statusRef.current?.focus()
@@ -46,7 +58,7 @@ export default function TemplateStudioWorkspace({
               <h1 id="template-studio-title" className="mt-2 truncate text-2xl font-semibold md:text-3xl">{template.title}</h1>
               <p className="mt-2 text-sm text-white/70">{template.description || `Review this ${template.format || 'document'} template, its fields, and generation readiness.`}</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button type="button" onClick={onEdit} className="inline-flex items-center gap-2 rounded-lg border border-white/20 px-4 py-2 text-sm font-semibold hover:bg-white/10">
                 <Pencil size={16} aria-hidden="true" /> Edit template
               </button>
@@ -54,6 +66,11 @@ export default function TemplateStudioWorkspace({
                 {template.is_active ? <Sparkles size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                 {template.is_active ? 'Generate' : 'Preview draft'}
               </button>
+              {!template.is_active && template.tested_version_no === template.current_version_no && template.current_version_no > 0 && (
+                <button type="button" onClick={onPublish} className="inline-flex items-center gap-2 rounded-lg bg-brand-green px-4 py-2 text-sm font-semibold text-white">
+                  <CircleCheck size={16} aria-hidden="true" /> Publish tested version
+                </button>
+              )}
             </div>
           </div>
         </header>
@@ -74,14 +91,14 @@ export default function TemplateStudioWorkspace({
               <h2 className="font-semibold text-brand-ink">Current template</h2>
               <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
                 <div><dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Format</dt><dd className="mt-1 text-brand-ink">{template.format || 'markdown'}</dd></div>
-                <div><dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Status</dt><dd className="mt-1 text-brand-ink">{sourceMissing ? 'Needs source' : template.is_active ? 'Ready to generate' : 'Continue setup'}</dd></div>
+                <div><dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Status</dt><dd className="mt-1 text-brand-ink">{lifecycleLabel}</dd></div>
                 <div><dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Source</dt><dd className="mt-1 break-words text-brand-ink">{template.source_filename || 'No retained source filename'}</dd></div>
                 <div><dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Fields</dt><dd className="mt-1 text-brand-ink">{template.variable_schema?.fields?.filter((field) => field.included !== false).length || 0}</dd></div>
               </dl>
             </div>
             <aside className="rounded-xl border border-brand-line bg-brand-surface-2 p-5">
               <h2 className="font-semibold text-brand-ink">Field placement</h2>
-              <p className="mt-2 text-sm leading-6 text-brand-muted">Drag a field onto the page to set where its value is written. Positions are stored in the template and reused every time it generates.</p>
+              <p className="mt-2 text-sm leading-6 text-brand-muted">{template.format === 'docx' ? 'Select text to create a field, or select paragraph ranges for conditional and repeating regions.' : 'Drag a field onto the page to set where its value is written. Positions are stored and reused every time it generates.'}</p>
             </aside>
             {sourceMissing && (
               <div role="alert" className="flex gap-3 rounded-xl border border-brand-amber/40 bg-brand-amber/10 p-4 md:col-span-3">
@@ -105,12 +122,25 @@ export default function TemplateStudioWorkspace({
               )}
             </div>
           </section>
+        ) : section === 'test' ? (
+          <section className="mt-4 rounded-xl border border-brand-line bg-brand-surface-2 p-6" aria-labelledby="studio-test-title">
+            <h2 id="studio-test-title" className="text-lg font-semibold text-brand-ink">Test this exact draft</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-muted">Generate with representative values and inspect the result. A successful test is tied to version {template.current_version_no || 'the first saved snapshot'}; any field, content, or logic edit invalidates it.</p>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button type="button" onClick={onGenerate} disabled={sourceMissing} className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">
+                <FlaskConical size={16} aria-hidden="true" /> Open test values and preview
+              </button>
+              <span className={`text-sm font-semibold ${template.tested_version_no === template.current_version_no && template.current_version_no > 0 ? 'text-brand-green' : 'text-brand-amber'}`}>
+                {template.tested_version_no === template.current_version_no && template.current_version_no > 0 ? `Version ${template.current_version_no} passed` : template.status === 'test_failed' ? 'Latest test failed' : 'Not tested since the latest edit'}
+              </span>
+            </div>
+          </section>
         ) : section === 'versions' || section === 'activity' ? (
           <section className="mt-4" aria-labelledby={`studio-${section}-title`}>
             <h2 id={`studio-${section}-title`} className="text-lg font-semibold capitalize text-brand-ink">{section}</h2>
             <p className="mt-1 text-sm text-brand-muted">
               {section === 'versions'
-                ? 'Every published wording of this template, newest first. Restore an earlier one without retyping it.'
+                ? 'Every immutable draft and published state, newest first. Restore an earlier one without retyping it.'
                 : 'What changed on this template and when, drawn from its recorded versions.'}
             </p>
             <div className="mt-4">

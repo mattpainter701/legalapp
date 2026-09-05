@@ -2,6 +2,48 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.05.2",
+      "version": "2026.09.05.2",
+      "title": "Take a Word template all the way to signature",
+      "published_at": "2026-09-05",
+      "summary": "Template Studio can now turn a completed Word template into a reviewed PDF without losing the editable DOCX option, closing the handoff from document preparation to e-signature.",
+      "highlights": [
+        {
+          "title": "Choose editable or ready to sign",
+          "description": "Generate an editable Word document for another drafting pass, or choose PDF for signature when the document is final."
+        },
+        {
+          "title": "Review the exact PDF before saving",
+          "description": "The converted PDF opens in the Studio preview and is bound to its matter and field values before the final matter file is created."
+        },
+        {
+          "title": "Keep conversion bounded and validated",
+          "description": "Word conversion runs with time, size, and page limits in a private workspace, and active or malformed PDF output is rejected."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.05.1",
+      "version": "2026.09.05.1",
+      "title": "Test and publish the exact template your firm approved",
+      "published_at": "2026-09-05",
+      "summary": "Template Studio now separates drafting, testing, publishing, and pausing. Every version number names exact immutable wording, and matter generation refuses anything except the published version.",
+      "highlights": [
+        {
+          "title": "Test before your team can generate",
+          "description": "A draft must render successfully with representative values before an authorized user can publish that exact version."
+        },
+        {
+          "title": "Know exactly which wording was used",
+          "description": "Every edit creates an immutable resulting version, and matter generation records and verifies the published version instead of trusting a changing draft."
+        },
+        {
+          "title": "Work queues that match the whole library",
+          "description": "Continue setup, source problems, awaiting publication, and published queues now use firm-wide results rather than whichever page happens to be open."
+        }
+      ]
+    },
+    {
       "id": "2026.09.04.2",
       "version": "2026.09.04.2",
       "title": "Templates that fill themselves and keep their history",
@@ -22,7 +64,7 @@
         },
         {
           "title": "Version history with restore",
-          "description": "Every edit records the wording it replaced. The Versions tab shows what changed and restores an earlier version without retyping it."
+          "description": "Every saved state has its own exact version number. The Versions tab shows what changed and restores an earlier version as a new draft without retyping it."
         },
         {
           "title": "Mark up Word templates by hand",

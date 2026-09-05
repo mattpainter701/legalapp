@@ -74,12 +74,13 @@ class DocumentTemplate(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
-    #: Highest version number recorded for this template. Zero means the
-    #: template predates versioning and has no history yet; the first edit or
-    #: explicit snapshot records the state it had before the change.
+    #: Immutable version whose content exactly matches this authoring row.
+    #: Zero means the template predates versioning and has not been edited.
     current_version_no: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    tested_version_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_version_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

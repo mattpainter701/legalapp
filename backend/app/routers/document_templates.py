@@ -54,8 +54,10 @@ from app.schemas.document_template import (
     CATEGORIES,
     DocumentTemplateCreate,
     DocumentTemplateListResponse,
+    DocumentTemplateQueueResponse,
     DocumentTemplateRenderRequest,
     DocumentTemplateRenderResponse,
+    DocumentTemplatePublishRequest,
     DocumentTemplateResponse,
     DocumentTemplateSmartFillRequest,
     DocumentTemplateSmartFillResponse,
@@ -85,6 +87,7 @@ from app.services.pdf_templates import (
     validate_representative_pdf_variables,
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
+from app.services.docx_to_pdf import DocxToPdfError, docx_to_pdf_bytes
 from app.services.docx_outline import docx_outline
 from app.services.template_regions import (
     TemplateRegionError,
@@ -159,6 +162,7 @@ _ALLOWED_TEMPLATE_UPLOAD_CONTENT_TYPES = {
     *_IMAGE_TEMPLATE_CONTENT_TYPES,
 }
 _PDF_RENDERER_VERSION = "pdf-source-v4-ocr-preview-bound"
+_DOCX_PDF_RENDERER_VERSION = "docx-libreoffice-pdf-v1-preview-bound"
 _MAX_PERSISTED_PREVIEWS_PER_USER_PURPOSE = 50
 _PDF_PREVIEW_TTLS = {
     "draft": timedelta(hours=1),
@@ -2348,6 +2352,68 @@ async def list_templates(
     )
 
 
+@router.get("/queues", response_model=DocumentTemplateQueueResponse)
+async def template_studio_queues(
+    limit: int = Query(4, ge=1, le=12),
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return globally correct, non-overlapping Studio action queues."""
+
+    tenant_id = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_id))
+    tenant_filter = DocumentTemplate.tenant_id == tenant_id
+    source_missing = and_(
+        func.lower(func.coalesce(DocumentTemplate.format, "")).in_(["pdf", "docx"]),
+        or_(
+            func.nullif(DocumentTemplate.source_storage_path, "").is_(None),
+            func.nullif(DocumentTemplate.source_filename, "").is_(None),
+            func.nullif(DocumentTemplate.source_sha256, "").is_(None),
+            DocumentTemplate.source_file_size.is_(None),
+            DocumentTemplate.source_file_size <= 0,
+        ),
+    )
+    predicates = {
+        "needs_attention": or_(
+            source_missing,
+            DocumentTemplate.status == "test_failed",
+        ),
+        "awaiting_publish": and_(
+            ~source_missing,
+            DocumentTemplate.status == "ready_to_publish",
+            DocumentTemplate.is_active.is_(False),
+        ),
+        "published": and_(
+            ~source_missing,
+            DocumentTemplate.status == "published",
+            DocumentTemplate.is_active.is_(True),
+        ),
+        "continue_setup": and_(
+            ~source_missing,
+            DocumentTemplate.is_active.is_(False),
+            DocumentTemplate.status.notin_(
+                ["ready_to_publish", "test_failed", "paused"]
+            ),
+        ),
+    }
+    queues = {}
+    for name, predicate in predicates.items():
+        total = await db.scalar(
+            select(func.count(DocumentTemplate.id)).where(tenant_filter, predicate)
+        )
+        rows = await db.scalars(
+            select(DocumentTemplate)
+            .where(tenant_filter, predicate)
+            .order_by(DocumentTemplate.updated_at.desc(), DocumentTemplate.id)
+            .limit(limit)
+        )
+        queues[name] = {
+            "total": int(total or 0),
+            "items": [_template_response(template) for template in rows.all()],
+        }
+    return DocumentTemplateQueueResponse(**queues)
+
+
 @router.post("", response_model=DocumentTemplateResponse, status_code=201)
 async def create_template(
     payload: DocumentTemplateCreate,
@@ -2373,6 +2439,8 @@ async def create_template(
         tenant_id=uuid.UUID(tenant_id),
         **payload.model_dump(exclude_none=True),
     )
+    template.is_active = False
+    template.status = "draft"
     db.add(template)
     await db.commit()
     await db.refresh(template)
@@ -2919,7 +2987,31 @@ async def preview_template_file(
             status_code=409,
             detail="File preview is available only for source-backed PDF or DOCX templates",
         )
+    if payload.convert_to_pdf and template_format != "docx":
+        raise HTTPException(
+            status_code=422,
+            detail="Word-to-PDF conversion is available only for DOCX templates.",
+        )
     if template_format == "docx":
+        purpose = payload.preview_purpose
+        if purpose == "activation" and payload.matter_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Activation previews are template-wide and cannot be tied to a matter.",
+            )
+        if purpose == "generation" and not template.is_active:
+            raise HTTPException(
+                status_code=409,
+                detail="Publish this template before previewing a matter-ready PDF.",
+            )
+        matter = await _load_render_matter(
+            db, tenant_id=tenant_id, matter_id=payload.matter_id
+        )
+        if payload.convert_to_pdf and purpose == "generation" and matter is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Choose a matter before previewing the exact PDF values for save.",
+            )
         source = await _verified_template_source(template)
         try:
             output = await asyncio.to_thread(
@@ -2927,10 +3019,106 @@ async def preview_template_file(
                 source,
                 variable_schema=template.variable_schema,
                 variables=payload.variables,
-                enforce_required=False,
+                enforce_required=payload.preview_purpose == "activation",
             )
         except TemplateDocxError as exc:
+            if payload.preview_purpose == "activation":
+                template.status = "test_failed"
+                template.tested_version_no = None
+                await db.commit()
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if payload.convert_to_pdf:
+            if not settings.DOCX_PDF_CONVERSION_ENABLED:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Word-to-PDF conversion is unavailable.",
+                )
+            try:
+                output = await docx_to_pdf_bytes(
+                    output,
+                    executable=settings.DOCX_PDF_CONVERTER_PATH,
+                    timeout_seconds=settings.DOCX_PDF_CONVERSION_TIMEOUT_SECONDS,
+                    max_output_bytes=settings.DOCX_PDF_CONVERSION_MAX_OUTPUT_BYTES,
+                    max_pages=settings.DOCX_PDF_CONVERSION_MAX_PAGES,
+                )
+            except DocxToPdfError as exc:
+                if purpose == "activation":
+                    template.status = "test_failed"
+                    template.tested_version_no = None
+                    await db.commit()
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            reviewed_fields, nonblank_count = pdf_review_evidence(
+                template.variable_schema, payload.variables
+            )
+            previewed_at = datetime.now(timezone.utc)
+            evidence = DocumentTemplatePreview(
+                tenant_id=tenant_id,
+                template_id=template.id,
+                previewed_by_user_id=current_user.id,
+                matter_id=matter.id if matter else None,
+                purpose=purpose,
+                contract_sha256=_pdf_contract_sha256(template),
+                values_hmac_sha256=_pdf_values_hmac_sha256(
+                    variables=payload.variables,
+                    flatten_pdf=True,
+                    matter_id=matter.id if matter else None,
+                ),
+                output_sha256=hashlib.sha256(output).hexdigest(),
+                renderer_version=_DOCX_PDF_RENDERER_VERSION,
+                flatten_pdf=True,
+                reviewed_field_count=len(reviewed_fields),
+                nonblank_field_count=nonblank_count,
+                reviewed_field_names=reviewed_fields,
+                created_at=previewed_at,
+                expires_at=previewed_at + _PDF_PREVIEW_TTLS[purpose],
+            )
+            db.add(evidence)
+            await db.flush()
+            await _trim_preview_evidence(
+                db,
+                tenant_id=tenant_id,
+                template_id=template.id,
+                user_id=current_user.id,
+                purpose=purpose,
+            )
+            if purpose == "activation":
+                await _ensure_current_template_version(
+                    db,
+                    template=template,
+                    tenant_id=tenant_id,
+                    user_id=current_user.id,
+                    change_summary="Tested draft",
+                )
+                template.tested_version_no = template.current_version_no
+                template.last_test_rendered_at = previewed_at
+                template.status = "ready_to_publish"
+            await db.commit()
+            filename = _safe_generated_filename(template.title, "pdf")
+            return Response(
+                content=output,
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f'inline; filename="{filename}"',
+                    "X-Content-Type-Options": "nosniff",
+                    "Cache-Control": "private, no-store",
+                    "Pragma": "no-cache",
+                    "X-Clarity-Preview-ID": str(evidence.id),
+                    "X-Clarity-Preview-Purpose": purpose,
+                },
+            )
+        if payload.preview_purpose == "activation":
+            await _ensure_current_template_version(
+                db,
+                template=template,
+                tenant_id=tenant_id,
+                user_id=current_user.id,
+                change_summary="Tested draft",
+            )
+            template.tested_version_no = template.current_version_no
+            template.last_test_rendered_at = datetime.now(timezone.utc)
+            template.status = "ready_to_publish"
+            await db.commit()
         filename = _safe_generated_filename(template.title, "docx")
         return Response(
             content=output,
@@ -2970,6 +3158,9 @@ async def preview_template_file(
                 payload.variables,
             )
         except TemplatePdfError as exc:
+            template.status = "test_failed"
+            template.tested_version_no = None
+            await db.commit()
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     source = await _verified_template_source(template)
     try:
@@ -2982,6 +3173,10 @@ async def preview_template_file(
             enforce_required=purpose == "activation",
         )
     except TemplatePdfError as exc:
+        if purpose == "activation":
+            template.status = "test_failed"
+            template.tested_version_no = None
+            await db.commit()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     reviewed_fields, nonblank_count = pdf_review_evidence(
@@ -3023,7 +3218,16 @@ async def preview_template_file(
     # and generation previews remain side-effect free with respect to template
     # lifecycle state and matter storage.
     if purpose == "activation" and payload.flatten_pdf:
+        await _ensure_current_template_version(
+            db,
+            template=template,
+            tenant_id=tenant_id,
+            user_id=current_user.id,
+            change_summary="Tested draft",
+        )
+        template.tested_version_no = template.current_version_no
         template.last_test_rendered_at = previewed_at
+        template.status = "ready_to_publish"
     await db.commit()
     filename = _safe_generated_filename(template.title, "pdf")
     disposition = f'inline; filename="{filename}"'
@@ -3226,6 +3430,14 @@ async def update_template(
                     "inspect every page, then activate the unchanged template."
                 ),
             )
+    if (
+        requested_activation
+        and template.tested_version_no != template.current_version_no
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Test this exact template version successfully before publishing it.",
+        )
 
     if pdf_contract_changed:
         # A field-map/body change invalidates the exact artifact that was tested
@@ -3244,11 +3456,43 @@ async def update_template(
     ):
         updates["approved_at"] = None
         updates["approved_by_user_id"] = None
+    if requested_activation:
+        updates["status"] = "published"
 
-    # Capture what the template said before this edit. The row is written
-    # first so a failure applying the update cannot leave a version claiming a
-    # state that was never published.
-    if snapshot_differs(template, updates):
+    versioned_change = snapshot_differs(template, updates)
+    content_change = any(
+        key in updates and updates[key] != getattr(template, key, None)
+        for key in (
+            "title",
+            "body",
+            "variable_schema",
+            "format",
+            "category",
+            "source_sha256",
+        )
+    )
+    if content_change:
+        # Editing creates a new draft.  Previously published wording remains
+        # identifiable, but the changed live row cannot generate until this
+        # exact version is tested and published.
+        updates["is_active"] = False
+        updates["status"] = "draft"
+        updates["tested_version_no"] = None
+        updates["last_test_rendered_at"] = None
+        updates["approved_at"] = None
+        updates["approved_by_user_id"] = None
+    elif updates.get("is_active") is False and template.is_active:
+        updates["status"] = "paused"
+        updates["approved_at"] = None
+        updates["approved_by_user_id"] = None
+
+    for field, value in updates.items():
+        setattr(template, field, value)
+
+    # The version number identifies the resulting state, never the wording it
+    # replaced.  Both writes share this transaction, so neither can exist
+    # without the other.
+    if versioned_change:
         await record_version(
             db,
             template=template,
@@ -3256,9 +3500,9 @@ async def update_template(
             user_id=current_user.id,
             change_summary=payload.change_summary,
         )
-
-    for field, value in updates.items():
-        setattr(template, field, value)
+        if requested_activation:
+            template.tested_version_no = template.current_version_no
+            template.published_version_no = template.current_version_no
 
     await db.commit()
     await db.refresh(template)
@@ -3287,6 +3531,45 @@ def _version_summary(
             str(version.created_by_user_id) if version.created_by_user_id else None
         ),
         created_at=version.created_at.isoformat(),
+    )
+
+
+async def _ensure_current_template_version(
+    db: AsyncSession,
+    *,
+    template: DocumentTemplate,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    change_summary: str,
+) -> DocumentTemplateVersion:
+    """Return an immutable row that exactly matches the live authoring row."""
+
+    if template.current_version_no:
+        current = await get_version(
+            db,
+            tenant_id=tenant_id,
+            template_id=template.id,
+            version_no=int(template.current_version_no),
+        )
+        if current and not snapshot_differs(
+            template,
+            {
+                "title": current.title,
+                "body": current.body,
+                "variable_schema": current.variable_schema,
+                "format": current.format,
+                "category": current.category,
+                "source_sha256": current.source_sha256,
+                "is_active": current.is_active,
+            },
+        ):
+            return current
+    return await record_version(
+        db,
+        template=template,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        change_summary=change_summary,
     )
 
 
@@ -3326,6 +3609,8 @@ async def list_template_versions(
     return DocumentTemplateVersionListResponse(
         template_id=str(template.id),
         current_version_no=int(template.current_version_no or 0),
+        tested_version_no=template.tested_version_no,
+        published_version_no=template.published_version_no,
         total=total,
         versions=[_version_summary(version) for version in versions],
     )
@@ -3418,14 +3703,6 @@ async def restore_template_version(
             ),
         )
 
-    await record_version(
-        db,
-        template=template,
-        tenant_id=parsed_tenant_id,
-        user_id=current_user.id,
-        change_summary=f"Replaced by restore of version {version_no}",
-    )
-
     template.title = version.title
     template.body = version.body
     template.variable_schema = version.variable_schema
@@ -3434,7 +3711,73 @@ async def restore_template_version(
     template.last_test_rendered_at = None
     template.approved_at = None
     template.approved_by_user_id = None
+    template.tested_version_no = None
+    template.status = "draft"
 
+    await record_version(
+        db,
+        template=template,
+        tenant_id=parsed_tenant_id,
+        user_id=current_user.id,
+        change_summary=f"Restore of version {version_no}",
+    )
+
+    await db.commit()
+    await db.refresh(template)
+    return _template_response(template)
+
+
+@router.post(
+    "/{template_id}/publish",
+    response_model=DocumentTemplateResponse,
+)
+async def publish_template(
+    template_id: uuid.UUID,
+    payload: DocumentTemplatePublishRequest,
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Publish only the exact immutable version the user successfully tested."""
+
+    tenant_id = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_id))
+    template = await db.scalar(
+        select(DocumentTemplate)
+        .where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == tenant_id,
+        )
+        .with_for_update()
+    )
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if (
+        template.is_active
+        and template.published_version_no == template.current_version_no
+        and template.tested_version_no == template.current_version_no
+    ):
+        return _template_response(template)
+    if not template.current_version_no or (
+        template.tested_version_no != template.current_version_no
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Test this exact template version successfully before publishing it.",
+        )
+
+    template.is_active = True
+    template.status = "published"
+    template.approved_at = datetime.now(timezone.utc)
+    template.approved_by_user_id = current_user.id
+    await record_version(
+        db,
+        template=template,
+        tenant_id=tenant_id,
+        user_id=current_user.id,
+        change_summary=payload.change_summary or "Published after successful test",
+    )
+    template.tested_version_no = template.current_version_no
+    template.published_version_no = template.current_version_no
     await db.commit()
     await db.refresh(template)
     return _template_response(template)
@@ -3566,6 +3909,42 @@ async def render_template_endpoint(
             status_code=409,
             detail="Only active templates can be saved to a matter. Preview and activate this template first.",
         )
+    published_version = None
+    if matter is not None:
+        if not template.published_version_no or (
+            template.tested_version_no != template.published_version_no
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Publish a successfully tested template version before saving a generated document.",
+            )
+        published_version = await get_version(
+            db,
+            tenant_id=parsed_tenant_id,
+            template_id=template.id,
+            version_no=int(template.published_version_no),
+        )
+        if not published_version:
+            raise HTTPException(
+                status_code=409,
+                detail="The published template version is unavailable. Pause generation and contact an administrator.",
+            )
+        if snapshot_differs(
+            template,
+            {
+                "title": published_version.title,
+                "body": published_version.body,
+                "variable_schema": published_version.variable_schema,
+                "format": published_version.format,
+                "category": published_version.category,
+                "source_sha256": published_version.source_sha256,
+                "is_active": published_version.is_active,
+            },
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="The live template no longer matches its published version. Republish before generation.",
+            )
 
     # Repeating sections iterate the matter's own party records, so a
     # rendered document reflects however many parties this matter actually
@@ -3580,10 +3959,26 @@ async def render_template_endpoint(
             collections=_repeat_collections(render_parties),
         )
     except TemplateLogicError as exc:
+        if matter is None and payload.preview_purpose == "activation":
+            template.status = "test_failed"
+            template.tested_version_no = None
+            await db.commit()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     template_format = str(template.format or "").lower()
+    if payload.convert_to_pdf and template_format != "docx":
+        raise HTTPException(
+            status_code=422,
+            detail="Word-to-PDF conversion is available only for DOCX templates.",
+        )
+    convert_docx_to_pdf = (
+        template_format == "docx"
+        and bool(template.source_sha256)
+        and payload.convert_to_pdf
+    )
     output_format = (
-        template_format
+        "pdf"
+        if convert_docx_to_pdf
+        else template_format
         if template_format in {"pdf", "docx"} and template.source_sha256
         else "markdown"
     )
@@ -3614,7 +4009,7 @@ async def render_template_endpoint(
         template.title,
         {"pdf": "pdf", "docx": "docx"}.get(output_format, "md"),
     )
-    if output_format == "pdf":
+    if template_format == "pdf" and output_format == "pdf":
         source = await _verified_template_source(template)
         try:
             output_bytes = await asyncio.to_thread(
@@ -3633,7 +4028,7 @@ async def render_template_endpoint(
             f'PDF ready: "{output_filename}"\n'
             f"Filled {sum(1 for value in payload.variables.values() if value)} reviewed field(s)."
         )
-    elif output_format == "docx":
+    elif template_format == "docx" and template.source_sha256:
         source = await _verified_template_source(template)
         try:
             output_bytes = await asyncio.to_thread(
@@ -3649,13 +4044,50 @@ async def render_template_endpoint(
             )
         except TemplateDocxError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        rendered = (
-            f'Word document ready: "{output_filename}"\n'
-            f"Filled {sum(1 for value in payload.variables.values() if value)} reviewed field(s) while preserving the original DOCX layout."
-        )
+        if convert_docx_to_pdf:
+            if not settings.DOCX_PDF_CONVERSION_ENABLED:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Word-to-PDF conversion is unavailable.",
+                )
+            try:
+                output_bytes = await docx_to_pdf_bytes(
+                    output_bytes,
+                    executable=settings.DOCX_PDF_CONVERTER_PATH,
+                    timeout_seconds=settings.DOCX_PDF_CONVERSION_TIMEOUT_SECONDS,
+                    max_output_bytes=settings.DOCX_PDF_CONVERSION_MAX_OUTPUT_BYTES,
+                    max_pages=settings.DOCX_PDF_CONVERSION_MAX_PAGES,
+                )
+            except DocxToPdfError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            rendered = (
+                f'PDF ready for signature: "{output_filename}"\n'
+                f"Filled {sum(1 for value in payload.variables.values() if value)} reviewed field(s) from the Word template."
+            )
+        else:
+            rendered = (
+                f'Word document ready: "{output_filename}"\n'
+                f"Filled {sum(1 for value in payload.variables.values() if value)} reviewed field(s) while preserving the original DOCX layout."
+            )
     else:
         output_bytes = rendered.encode("utf-8")
     output_sha256 = hashlib.sha256(output_bytes).hexdigest()
+    if (
+        matter is None
+        and payload.preview_purpose == "activation"
+        and output_format == "markdown"
+    ):
+        await _ensure_current_template_version(
+            db,
+            template=template,
+            tenant_id=parsed_tenant_id,
+            user_id=current_user.id,
+            change_summary="Tested draft",
+        )
+        template.tested_version_no = template.current_version_no
+        template.last_test_rendered_at = datetime.now(timezone.utc)
+        template.status = "ready_to_publish"
+        await db.commit()
     if preview_evidence and not hmac.compare_digest(
         output_sha256,
         preview_evidence.output_sha256,
@@ -3853,6 +4285,7 @@ async def render_template_endpoint(
                 "template_id": str(template.id),
                 "template_title": template.title,
                 "template_source_sha256": template.source_sha256,
+                "template_version_no": template.published_version_no,
                 "output_document_id": str(doc.id),
                 "output_filename": output_filename,
                 "output_format": output_format,
@@ -3862,7 +4295,9 @@ async def render_template_endpoint(
                 ),
                 "flatten_pdf": payload.flatten_pdf if output_format == "pdf" else None,
                 "renderer_version": (
-                    _PDF_RENDERER_VERSION
+                    _DOCX_PDF_RENDERER_VERSION
+                    if convert_docx_to_pdf
+                    else _PDF_RENDERER_VERSION
                     if output_format == "pdf"
                     else "docx-source-v1"
                     if output_format == "docx"
