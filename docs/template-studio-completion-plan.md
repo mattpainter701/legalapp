@@ -99,6 +99,47 @@ DOCX anchors also hard-fail with "re-upload and start over" when source text dri
 bind/condition/repeat it, and add a *reconcile* path so a drifted anchor offers "re-point this
 field" instead of discarding the template.
 
+## Step 6 — Template lifecycle *(from the PR #334 UX review)*
+
+A review of PR #334 raised findings that Steps 1-4 do not close. They are real,
+they are recorded here rather than in a comment thread, and they are the reason
+this work is not yet "a full templating studio".
+
+The load-bearing one is that **a template's state does not mean what it says**:
+
+- **"Ready" means active-with-a-source**, not mapped, tested and approved. The
+  library summary and the card status both compute it that way. A firm reading
+  "Ready to generate" is being told something the system has not checked.
+- **Activation bypasses testing** on DOCX and markdown. A PDF must produce a
+  flattened activation preview first; nothing equivalent gates the others, so a
+  template can be made available to a team without ever having rendered.
+- **Generation is not pinned to a version.** Step 3 records what a template
+  said, but generation still reads the live row, so an edit mid-flight changes
+  what a matter produces.
+
+Together these want one change, not three: an explicit lifecycle — draft →
+fields need mapping → ready to test → test failed → awaiting approval →
+published → paused → source unavailable — where "active" is the *consequence*
+of publishing an approved version, generation runs from that version, and
+automation stays pinned to it. That also connects published templates to the
+workflow automation added in `155_matter_workflow_automations`.
+
+Two further findings are smaller and independent:
+
+- **The Studio home queues are wrong.** Lists are built from the current
+  library page (12 templates) while their badges carry global counts, so the
+  dashboard can say "14 need attention" above three cards that merely happened
+  to be on this page. This needs dedicated server queries with stable ordering
+  and "view all" navigation. It is a correctness bug and worth fixing ahead of
+  the lifecycle work.
+- **The queues overlap.** "Recent templates" repeats what the other three
+  already show, spending the most screen space on the least decisive question.
+
+Information architecture is the remaining piece: the library, the Studio, and
+Generate/Smart Fill overlap, and a template card offers four competing actions
+plus a separate activation control. Worth settling once the lifecycle exists,
+since the lifecycle is what the screens should be organised around.
+
 ## Step 5 — Activate the parallel system *(revised 2026-09-05)*
 
 This step originally read "retire the parallel system" and offered deletion. That was wrong.
@@ -143,6 +184,9 @@ place a field.
 | 5a — DOCX→PDF conversion | Word documents can be signed, filed, delivered | none | not started |
 | 5b — CAS backup/restore gate | Phase 3 can be enabled in production | none | not started |
 | 5c — Wire Phase 2 drafts | Edit a template without touching the live one | none | not started |
+| 6a — Studio home queue correctness | A dashboard whose counts match its lists | none | not started |
+| 6b — Template lifecycle | "Ready" that means tested and approved | yes | not started |
+| 6c — Generate from a published version | Automation pinned to approved wording | none | not started |
 
 ### Step 4, revised: a document view, not a rendered page
 
