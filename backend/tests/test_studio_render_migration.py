@@ -22,7 +22,7 @@ def test_studio_render_revision_is_the_single_next_head():
     script = ScriptDirectory.from_config(config)
     revision = script.get_revision("150_studio_render_jobs")
 
-    assert script.get_heads() == ["157_template_publication_lifecycle"]
+    assert script.get_heads() == ["157_template_pub_lifecycle"]
     assert revision.down_revision == "149_firm_memory_source_auth"
     assert (
         script.get_revision("151_fm_native_authz").down_revision
@@ -49,7 +49,7 @@ def test_studio_render_revision_is_the_single_next_head():
         == "155_matter_workflow_automations"
     )
     assert (
-        script.get_revision("157_template_publication_lifecycle").down_revision
+        script.get_revision("157_template_pub_lifecycle").down_revision
         == "156_document_template_versions"
     )
 

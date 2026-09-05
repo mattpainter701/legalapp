@@ -12,7 +12,28 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["157_template_publication_lifecycle"]
+    assert heads == ["157_template_pub_lifecycle"]
+
+
+def test_alembic_revision_ids_fit_the_version_table_column():
+    """Alembic stores the head in alembic_version.version_num, a varchar(32).
+
+    A longer revision id passes every offline graph check and only fails once a
+    migration actually runs against PostgreSQL, so guard the width here.
+    """
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_dir / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_dir / "migrations"))
+    script = ScriptDirectory.from_config(config)
+
+    too_long = {
+        revision.revision: len(revision.revision)
+        for revision in script.walk_revisions()
+        if len(revision.revision) > 32
+    }
+
+    assert too_long == {}
 
 
 def test_template_publication_migration_repairs_exact_version_identity():

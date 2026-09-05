@@ -4,7 +4,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "157_template_publication_lifecycle"
+revision = "157_template_pub_lifecycle"
 down_revision = "156_document_template_versions"
 branch_labels = None
 depends_on = None
