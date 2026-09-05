@@ -3961,3 +3961,264 @@ async def test_premium_ai_proposal_is_audited_and_reconciled_locally(monkeypatch
     assert result.variable_schema["detection"]["ai_added_count"] == 1
     assert database.added[0].operation_type == "template_ai_map"
     assert database.commits == 1
+
+
+async def _docx_template_via_intake(client, monkeypatch, tmp_path, title="engagement"):
+    """Create a source-backed DOCX template the way a customer does."""
+
+    from docx import Document
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    document = Document()
+    document.add_paragraph("Dear [client_name],")
+    source = BytesIO()
+    document.save(source)
+
+    created = await client.post(
+        "/api/templates/intake/create",
+        files={
+            "file": (
+                f"{title}.docx",
+                source.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert created.status_code == 201, created.text
+    return created.json()
+
+
+def _blank_pdf_bytes() -> bytes:
+    from pypdf import PdfWriter
+
+    output = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_pdf_conversion_is_refused_for_a_template_that_is_not_word(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    created = await client.post(
+        "/api/templates/intake/create",
+        files={"file": ("form.pdf", _fillable_pdf(), "application/pdf")},
+    )
+    assert created.status_code == 201, created.text
+
+    response = await client.post(
+        f"/api/templates/{created.json()['id']}/render-file",
+        json={"variables": {}, "convert_to_pdf": True},
+    )
+
+    assert response.status_code == 422
+    assert "only for DOCX templates" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_activation_preview_cannot_be_bound_to_a_matter(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    """An activation test proves the template itself, so tying it to one
+    matter would let matter-specific values stand in as firm-wide evidence."""
+
+    from app.models.plugin import Matter
+
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    template = await _docx_template_via_intake(client, monkeypatch, tmp_path)
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug="docx-activation-matter",
+        matter_name="Activation Matter",
+        matter_type="general",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+
+    response = await client.post(
+        f"/api/templates/{template['id']}/render-file",
+        json={
+            "variables": {"client_name": "Ada"},
+            "preview_purpose": "activation",
+            "matter_id": str(matter.id),
+        },
+    )
+
+    assert response.status_code == 422
+    assert "cannot be tied to a matter" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generation_preview_requires_a_published_word_template(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    template = await _docx_template_via_intake(client, monkeypatch, tmp_path)
+
+    response = await client.post(
+        f"/api/templates/{template['id']}/render-file",
+        json={"variables": {"client_name": "Ada"}, "preview_purpose": "generation"},
+    )
+
+    assert response.status_code == 409
+    assert "Publish this template" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_word_to_pdf_conversion_fails_closed_when_it_is_switched_off(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    template = await _docx_template_via_intake(client, monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        document_templates.settings, "DOCX_PDF_CONVERSION_ENABLED", False
+    )
+
+    response = await client.post(
+        f"/api/templates/{template['id']}/render-file",
+        json={
+            "variables": {"client_name": "Ada"},
+            "preview_purpose": "activation",
+            "convert_to_pdf": True,
+        },
+    )
+
+    assert response.status_code == 503
+    assert "unavailable" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_conversion_marks_the_activation_test_as_failed(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    """A template whose test conversion failed must not look tested."""
+
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    template = await _docx_template_via_intake(client, monkeypatch, tmp_path)
+
+    async def failing_conversion(*args, **kwargs):
+        raise document_templates.DocxToPdfError("The converted PDF failed validation.")
+
+    monkeypatch.setattr(document_templates, "docx_to_pdf_bytes", failing_conversion)
+
+    response = await client.post(
+        f"/api/templates/{template['id']}/render-file",
+        json={
+            "variables": {"client_name": "Ada"},
+            "preview_purpose": "activation",
+            "convert_to_pdf": True,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "failed validation" in response.json()["detail"]
+
+    current = await client.get(f"/api/templates/{template['id']}")
+    assert current.json()["status"] == "test_failed"
+    assert current.json()["tested_version_no"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_successful_activation_conversion_records_evidence_and_readies_publish(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    template = await _docx_template_via_intake(client, monkeypatch, tmp_path)
+    converted = _blank_pdf_bytes()
+
+    async def fake_conversion(content, **kwargs):
+        return converted
+
+    monkeypatch.setattr(document_templates, "docx_to_pdf_bytes", fake_conversion)
+
+    response = await client.post(
+        f"/api/templates/{template['id']}/render-file",
+        json={
+            "variables": {"client_name": "Ada"},
+            "preview_purpose": "activation",
+            "convert_to_pdf": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.content == converted
+    assert response.headers["x-clarity-preview-purpose"] == "activation"
+    assert response.headers["x-clarity-preview-id"]
+
+    current = (await client.get(f"/api/templates/{template['id']}")).json()
+    assert current["status"] == "ready_to_publish"
+    assert current["tested_version_no"] == current["current_version_no"]
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_for_signature_preview_needs_the_matter_it_will_be_saved_to(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    template = await _docx_template_via_intake(client, monkeypatch, tmp_path)
+    converted = _blank_pdf_bytes()
+
+    async def fake_conversion(content, **kwargs):
+        return converted
+
+    monkeypatch.setattr(document_templates, "docx_to_pdf_bytes", fake_conversion)
+
+    tested = await client.post(
+        f"/api/templates/{template['id']}/render-file",
+        json={
+            "variables": {"client_name": "Ada"},
+            "preview_purpose": "activation",
+            "convert_to_pdf": True,
+        },
+    )
+    assert tested.status_code == 200, tested.text
+    published = await client.post(f"/api/templates/{template['id']}/publish", json={})
+    assert published.status_code == 200, published.text
+
+    response = await client.post(
+        f"/api/templates/{template['id']}/render-file",
+        json={
+            "variables": {"client_name": "Ada"},
+            "preview_purpose": "generation",
+            "convert_to_pdf": True,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Choose a matter" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_word_activation_test_without_conversion_still_readies_publish(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    """Testing a Word template as DOCX is a full test in its own right: firms
+    that never convert to PDF must still be able to publish."""
+
+    from docx import Document
+
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    template = await _docx_template_via_intake(client, monkeypatch, tmp_path)
+
+    response = await client.post(
+        f"/api/templates/{template['id']}/render-file",
+        json={"variables": {"client_name": "Ada"}, "preview_purpose": "activation"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert Document(BytesIO(response.content)).paragraphs[0].text == "Dear Ada,"
+
+    current = (await client.get(f"/api/templates/{template['id']}")).json()
+    assert current["status"] == "ready_to_publish"
+    assert current["tested_version_no"] == current["current_version_no"]
+    assert current["last_test_rendered_at"]
