@@ -4,7 +4,18 @@ from pathlib import Path
 
 import pytest
 
-from clarity_agent import updater
+from clarity_agent import __version__, updater
+
+
+# An update only applies when it is newer than the running agent, so derive the
+# target from the current version. A pinned literal turns into a silent no-op
+# the first time the agent is bumped past it, and the test stops testing.
+def _one_version_newer(version: str) -> str:
+    major, minor, patch = (int(part) for part in version.split("."))
+    return f"{major}.{minor}.{patch + 1}"
+
+
+NEWER_VERSION = _one_version_newer(__version__)
 
 
 def _manifest():
@@ -182,9 +193,9 @@ def test_windows_update_uses_detached_status_wrapper(monkeypatch, tmp_path):
         lambda command, **kwargs: launched.append((command, kwargs)) or Process(),
     )
     info = updater.UpdateInfo(
-        "0.16.1",
+        NEWER_VERSION,
         "lawhand-agent-x64.msi",
-        updater.RELEASE_ASSET_BASE + "0.16.1/lawhand-agent-x64.msi",
+        updater.RELEASE_ASSET_BASE + NEWER_VERSION + "/lawhand-agent-x64.msi",
         "a" * 64,
         updater.RELEASE_MANIFEST_URL,
     )
@@ -261,9 +272,9 @@ def test_windows_portal_update_refuses_custom_service_account_before_download(
         lambda _info: pytest.fail("custom-account update must not download an MSI"),
     )
     info = updater.UpdateInfo(
-        "0.16.1",
+        NEWER_VERSION,
         "lawhand-agent-x64.msi",
-        updater.RELEASE_ASSET_BASE + "0.16.1/lawhand-agent-x64.msi",
+        updater.RELEASE_ASSET_BASE + NEWER_VERSION + "/lawhand-agent-x64.msi",
         "a" * 64,
         updater.RELEASE_MANIFEST_URL,
     )

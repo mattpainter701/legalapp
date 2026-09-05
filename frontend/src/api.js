@@ -2276,6 +2276,23 @@ export const rollbackMatterWorkflow = (matterId, runId, data, idempotencyKey) =>
     { headers: { 'Idempotency-Key': idempotencyKey } },
   ).then(r => r.data)
 
+// Approval-gated automation rules. Activating one only lets it PLAN a run;
+// applying a planned run stays the existing approve-and-apply step.
+export const listWorkflowAutomations = (params = {}) =>
+  api.get('/workflow-config/automations', { params }).then(r => r.data)
+export const createWorkflowAutomation = (data) =>
+  api.post('/workflow-config/automations', data).then(r => r.data)
+export const updateWorkflowAutomation = (ruleId, data) =>
+  api.patch(`/workflow-config/automations/${ruleId}`, data).then(r => r.data)
+export const activateWorkflowAutomation = (ruleId, data) =>
+  api.post(`/workflow-config/automations/${ruleId}/activate`, data).then(r => r.data)
+export const archiveWorkflowAutomation = (ruleId) =>
+  api.post(`/workflow-config/automations/${ruleId}/archive`).then(r => r.data)
+export const getWorkflowAutomationEvents = (ruleId) =>
+  api.get(`/workflow-config/automations/${ruleId}/events`).then(r => r.data)
+export const getMatterAutomationEvents = (matterId) =>
+  api.get(`/matters/${matterId}/workflow-automation-events`).then(r => r.data)
+
 // Assignments
 export const getMatterAssignments = (id) =>
   api.get(`/matters/${id}/assignments`).then(r => r.data)

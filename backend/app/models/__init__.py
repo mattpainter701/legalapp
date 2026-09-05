@@ -207,6 +207,10 @@ from app.models.configurable_workflow import (
     MatterWorkflowTemplate,
     MatterWorkflowTemplateVersion,
 )
+from app.models.workflow_automation import (
+    MatterWorkflowAutomationEvent,
+    MatterWorkflowAutomationRule,
+)
 
 __all__ = [
     "Tenant",
@@ -384,6 +388,8 @@ __all__ = [
     "ContactCustomFieldValue",
     "MatterWorkflowTemplate",
     "MatterWorkflowTemplateVersion",
+    "MatterWorkflowAutomationRule",
+    "MatterWorkflowAutomationEvent",
     "MatterWorkflowStageDefinition",
     "MatterWorkflowChecklistDefinition",
     "MatterWorkflowFieldRequirement",

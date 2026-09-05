@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.09.04.1",
-      "version": "2026.09.04.1",
+      "id": "2026.09.04.2",
+      "version": "2026.09.04.2",
       "title": "Templates that fill themselves and keep their history",
       "published_at": "2026-09-04",
       "summary": "Template fields can say where their value comes from, clauses can appear only when they apply, repeating sections scale with the matter's parties, and every published version is kept so you can restore an earlier wording.",
@@ -27,6 +27,56 @@
         {
           "title": "Mark up Word templates by hand",
           "description": "See the document itself: highlight text to make it a field, and select paragraphs to make them conditional or repeat once per party."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.04.1",
+      "version": "2026.09.04.1",
+      "title": "Plan matter workflows automatically, approve them the same way",
+      "published_at": "2026-09-04",
+      "summary": "Firms can have an approved workflow template prepared the moment a matter opens or reaches a stage. The automation only prepares the work; a reviewer still approves and applies it.",
+      "highlights": [
+        {
+          "title": "Two bounded triggers, one action",
+          "description": "A rule fires when a matter is opened or enters a named stage, optionally narrowed by matter type or practice area, and plans one approved workflow template. Nothing else."
+        },
+        {
+          "title": "Automation is approved like legal work",
+          "description": "A rule is created as a draft and does nothing until an approver activates the exact definition they reviewed. Editing a rule returns it to draft for a fresh approval."
+        },
+        {
+          "title": "Nothing is applied without a person",
+          "description": "A matching rule creates the same reviewable preview the Workflow tab creates by hand. Tasks and matter stages change only when someone applies the planned run."
+        },
+        {
+          "title": "A rule that does nothing says why",
+          "description": "Every match is recorded as immutable evidence naming the rule, the matter, and the planned run, or the reason it was blocked. The matter's Workflow tab shows it too."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.03.1",
+      "version": "2026.09.03.1",
+      "title": "Firm-wide Firm Memory research that opens the document",
+      "published_at": "2026-09-03",
+      "summary": "Firm Memory research now searches document text across every matter you are authorized on, says what it could not cover, and every on-premise result opens to its matter file.",
+      "highlights": [
+        {
+          "title": "Ask without picking a matter first",
+          "description": "A query with no matter filter searches the matters on each file share you are already authorized on, decided by the same matter policy a chosen matter goes through."
+        },
+        {
+          "title": "Search inside documents, not just file names",
+          "description": "Results come from the firm's own search node with real page numbers and passages; if that node cannot be reached, the response says so."
+        },
+        {
+          "title": "Open every result you find",
+          "description": "An on-premise result links to its matter file, which rechecks the matter binding, the live index entry, and the bound folder before showing it."
+        },
+        {
+          "title": "Know what a search did not cover",
+          "description": "Every incomplete response states in one sentence why, so “no matches” is only ever said about a search that actually covered its sources."
         }
       ]
     },

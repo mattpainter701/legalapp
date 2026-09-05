@@ -17,8 +17,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 
-revision = "155_document_template_versions"
-down_revision = "154_matter_document_folders"
+revision = "156_document_template_versions"
+down_revision = "155_matter_workflow_automations"
 branch_labels = None
 depends_on = None
 

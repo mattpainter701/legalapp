@@ -70,6 +70,7 @@ from app.services.matter_budget import (
 )
 from app.services.task_notifications import remove_task_from_calendars_now
 from app.services.task_visibility import task_is_sms_expression
+from app.services.workflow_automations import dispatch_matter_event_safely
 
 _cloud_search = CloudSearchService()
 _cloud_sync = CloudSyncService()
@@ -845,6 +846,16 @@ async def create_matter(
     await set_tenant_context(db, str(tenant_id))
     await db.refresh(matter)
 
+    # Approved automation rules plan a reviewable workflow run for the new
+    # matter. Dispatch runs after the matter is durable and never raises, so
+    # firm automation configuration cannot cost anyone a saved matter.
+    await dispatch_matter_event_safely(
+        db,
+        matter=matter,
+        trigger_event="matter_created",
+        actor_user_id=user.id,
+    )
+
     # Reload with relationships
     result = await db.execute(
         select(Matter)
@@ -1180,6 +1191,7 @@ async def update_matter(
     matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
 
     update_data = body.model_dump(exclude_unset=True)
+    prior_stage = matter.stage
 
     # Handle UUID FK conversions
     if "client_contact_id" in update_data:
@@ -1213,6 +1225,14 @@ async def update_matter(
     await db.commit()
     await db.refresh(matter)
     await _invalidate_matter_context_cache(user.tenant_id, matter.id)
+
+    if matter.stage != prior_stage:
+        await dispatch_matter_event_safely(
+            db,
+            matter=matter,
+            trigger_event="matter_stage_changed",
+            actor_user_id=user.id,
+        )
 
     # Reload with relationships
     result = await db.execute(

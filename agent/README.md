@@ -301,7 +301,7 @@ Both drive the shared PyInstaller spec at `packaging/lawhand-agent.spec`, so the
 two platforms ship the same code with the same entry point.
 
 To publish, merge the tested change to `main`, then tag the exact version from
-`clarity_agent/__init__.py` (currently `agent-v0.16.0`) and push that tag. The
+`clarity_agent/__init__.py` (currently `agent-v0.17.0`) and push that tag. The
 workflow rejects a mismatched tag and does not publish either platform unless
 both builds finish successfully.
 

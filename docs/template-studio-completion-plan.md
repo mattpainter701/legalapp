@@ -138,7 +138,7 @@ place a field.
 |-|-|-|-|
 | 1 — Data bindings | Smart Fill that works on customer templates | none | **done** |
 | 2 — Template logic | One conditional template instead of N | none | **done** |
-| 3 — Template versions | Real Versions/Activity tabs, rollback | `155` | **done** |
+| 3 — Template versions | Real Versions/Activity tabs, rollback | `156` | **done** |
 | 4 — DOCX authoring parity | Select text in the document to make a field | none | **done** |
 | 5a — DOCX→PDF conversion | Word documents can be signed, filed, delivered | none | not started |
 | 5b — CAS backup/restore gate | Phase 3 can be enabled in production | none | not started |

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Firm Memory result links no longer fail silently:** a shared
+  `/firm-memory?matter=…&file=…` link resolved only when its matter appeared in
+  the picker's first page of matters, so links into large firms rendered an
+  empty page. The deep link now resolves on its own; the server authorizes it
+  either way. A response that searched no source at all is now reported as
+  partial rather than as a quiet non-partial zero.
+
 ### Documentation
 - **COMP-02/03 closure audit:** reconciled the merged switching and conversion
   slices against current `origin/main`, recorded focused validation evidence,
@@ -23,7 +31,7 @@
   repeat items are never inlined during expansion, so a customer value cannot
   be reinterpreted as a marker. Word regions resolve after field replacement
   because anchors address paragraphs by ordinal in the original document.
-  Migration 155 adds `document_template_versions`, one append-only row per
+  Migration 156 adds `document_template_versions`, one append-only row per
   published state under FORCE RLS, guarded by a trigger that rejects ordinary
   UPDATE/DELETE while still permitting the `ON DELETE CASCADE` from
   `document_templates` (a rewrite rule would have swallowed that cascade
@@ -34,6 +42,54 @@
   document at render time, leaving retained source bytes untouched. All
   additive: a template with no bindings, logic, regions or versions behaves
   exactly as before.
+- **Bounded matter workflow automations (COMP-09 trigger/action slice):**
+  approved workflow templates no longer wait for someone to remember them.
+  Migration 155 adds `matter_workflow_automation_rules` and append-only
+  `matter_workflow_automation_events`, both FORCE RLS with composite
+  `(tenant_id, id)` parents. A rule pairs one bounded trigger — a matter is
+  opened, or a matter enters a named stage — with optional matter-type and
+  practice-area equality conditions and one approved template. It plans the
+  same reviewable `planned` run the manual preview endpoint plans and never
+  applies it: tasks and matter stages still change only through the existing
+  `approve_legal_work` + `manage_matters` apply path. Rules are authored with
+  `manage_workflows`, activated with `approve_legal_work` against the exact
+  reviewed `definition_sha256`, and an edit that changes what a rule does
+  returns it to draft — enforced by a database trigger, not just the API, while
+  a rename costs no approval because the name is not part of the definition. Dispatch runs after the matter
+  change commits, in its own transaction, and never raises into the caller, so
+  a broken automation cannot cost a firm a saved matter; each rule is planned
+  in its own savepoint. A dedupe key unique per rule makes one plan per rule,
+  matter, and triggering condition, so retries, concurrent requests, and a
+  matter re-entering an automated stage do not produce a second run. A rule
+  that cannot plan records a `blocked` outcome with a failure code instead of
+  going silent, and both the rule and the matter surface that history.
+  Automation evidence reuses migration 148's append-only trigger, so the
+  verified expired-demo purge remains its only delete path.
+- **Firm-wide Firm Memory research over document text:** the unified Firm Memory
+  search now routes matter-bound SMB sources through the customer search-node
+  relay, so results carry document text, passages and page numbers instead of
+  file names and a capped preview. A query with no matter filter expands into
+  the matters on each share the actor is already authorized on, decided by the
+  same matter policy a typed filter goes through, capped at 100 matters and
+  reported when truncated. The relay now accepts a matter set and sends one task
+  per agent rather than per matter; agent 0.17.0 binds that set in the signed
+  identity ticket, and an older agent is reported as uncovered rather than
+  searched with a weaker binding. Coverage names the index that answered
+  (`smb_local_fulltext` or the `smb_metadata_fts` fallback), a node that did not
+  answer is never reported as an empty corpus, and every response that is not
+  complete states in one sentence why.
+- **Service-account authorization model made explicit:** LawHand reads a file
+  share through one service account and firm logins do not map one-to-one onto
+  Windows accounts, so the matter binding — not file permissions — is the
+  authorization boundary. An SMB source with no matter binding is now reported
+  `matter_binding_required` and is never searched, and every returned path is
+  re-checked against the bound folders of the actor's authorized matters before
+  it leaves the service, on the full-text path as well as the metadata one.
+- **Firm Memory result actions:** matter-bound on-premises results now carry a
+  server-issued `lawhand_result` action addressing the existing fail-closed
+  matter-file resolver, so a found document can be opened. The opaque
+  `document_id` remains a non-reversible HMAC, and `open_on_device` is reported
+  unavailable with a reason rather than as a dead control.
 - **Matter document folders and tags:** case documents are no longer a single
   flat list. Migration 154 adds a per-matter folder tree (materialized paths,
   depth and cycle limits, case-insensitive sibling names, FORCE RLS) plus a

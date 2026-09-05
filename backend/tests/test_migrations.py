@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["155_document_template_versions"]
+    assert heads == ["156_document_template_versions"]
 
 
 def test_configurable_workflow_migration_is_tenant_safe_and_immutable():
@@ -607,3 +607,109 @@ def test_studio_model_and_migration_table_column_parity():
         assert f'"{model.__tablename__}"' in source
         for column in model.__table__.columns:
             assert f'"{column.name}"' in source
+
+
+def test_workflow_automation_migration_is_tenant_safe_and_approval_gated():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir
+        / "migrations"
+        / "versions"
+        / "155_matter_workflow_automations.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "155_matter_workflow_automations"' in source
+    assert 'down_revision = "154_matter_document_folders"' in source
+    for table in (
+        "matter_workflow_automation_rules",
+        "matter_workflow_automation_events",
+    ):
+        assert table in source
+    assert "NULLIF(current_setting('app.current_tenant_id', true), '')::uuid" in source
+    assert "WITH CHECK" in source
+    assert "FORCE ROW LEVEL SECURITY" in source
+
+    # A rule only fires once an approver has signed the exact definition, and
+    # editing it has to hand it back to draft.
+    assert (
+        "(status = 'active') = "
+        "(activated_by_user_id IS NOT NULL AND activated_at IS NOT NULL)" in source
+    )
+    assert "an edited workflow automation rule must return to draft" in source
+    assert "workflow automation approval must not change the rule" in source
+    assert "archived workflow automation rules cannot be reopened" in source
+    assert "workflow automation rules are archived, never deleted" in source
+
+    # Dispatch evidence reuses the COMP-09 append-only trigger, so the expired
+    # demo purge stays the only authorized delete path.
+    assert "CREATE TRIGGER matter_workflow_automation_events_immutable" in source
+    assert "BEFORE UPDATE OR DELETE ON matter_workflow_automation_events" in source
+    assert "prevent_config_workflow_immutable" in source
+    assert "config_workflow_demo_purge_authorized" in source
+
+    # One plan per rule and matter event, and no two identical live rules.
+    assert (
+        "CONSTRAINT uq_matter_workflow_automation_events_dedupe "
+        "UNIQUE (tenant_id,rule_id,dedupe_key)" in source
+    )
+    assert "uq_matter_workflow_automation_rules_active_trigger" in source
+    for parent in (
+        "matters(tenant_id,id)",
+        "users(tenant_id,id)",
+        "matter_workflow_templates(tenant_id,id)",
+        "matter_workflow_runs(tenant_id,id)",
+    ):
+        assert parent in source
+
+    downgrade = source.split("def downgrade()", 1)[1]
+    assert "DROP TABLE IF EXISTS matter_workflow_automation_events" in downgrade
+    assert "DROP TABLE IF EXISTS matter_workflow_automation_rules" in downgrade
+    assert "DROP FUNCTION IF EXISTS prevent_workflow_automation_rule_tamper" in downgrade
+    # The shared COMP-09 helpers belong to migration 148 and must survive.
+    assert "DROP FUNCTION IF EXISTS prevent_config_workflow_immutable" not in downgrade
+    assert "config_workflow_demo_purge_authorized()" not in downgrade
+
+
+def test_workflow_automation_model_and_migration_column_parity():
+    from app.models.workflow_automation import (
+        MatterWorkflowAutomationEvent,
+        MatterWorkflowAutomationRule,
+    )
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir
+        / "migrations"
+        / "versions"
+        / "155_matter_workflow_automations.py"
+    ).read_text(encoding="utf-8")
+    for model in (MatterWorkflowAutomationRule, MatterWorkflowAutomationEvent):
+        assert model.__tablename__ in source
+        for column in model.__table__.columns:
+            assert column.name in source
+
+
+def test_workflow_automation_tables_are_purged_but_never_cloned():
+    from app.services.demo_purge import _CONFIG_WORKFLOW_PURGE_ORDER
+    from app.services.demo_registry import DEMO_TABLE_REGISTRY
+
+    for table in (
+        "matter_workflow_automation_rules",
+        "matter_workflow_automation_events",
+    ):
+        policy = DEMO_TABLE_REGISTRY[table]
+        assert policy.purge is True
+        assert policy.clone is False
+        assert table in _CONFIG_WORKFLOW_PURGE_ORDER
+
+    order = list(_CONFIG_WORKFLOW_PURGE_ORDER)
+    # Evidence points at runs and rules; rules point at templates.
+    assert order.index("matter_workflow_automation_events") < order.index(
+        "matter_workflow_runs"
+    )
+    assert order.index("matter_workflow_automation_events") < order.index(
+        "matter_workflow_automation_rules"
+    )
+    assert order.index("matter_workflow_automation_rules") < order.index(
+        "matter_workflow_templates"
+    )

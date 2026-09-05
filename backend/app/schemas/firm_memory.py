@@ -151,6 +151,10 @@ class FirmMemorySourceCoverage(BaseModel):
     partial: bool = False
     result_count: int = Field(0, ge=0)
     reason: str | None = Field(None, max_length=120)
+    # What was actually searched for this source. A metadata index is not
+    # document text, so the depth travels with the coverage truth.
+    index_kind: str | None = Field(None, max_length=60)
+    matter_scope_count: int = Field(0, ge=0)
 
 
 class FirmMemoryDocumentSearchResponse(BaseModel):
@@ -161,6 +165,10 @@ class FirmMemoryDocumentSearchResponse(BaseModel):
     partial: bool = False
     complete: bool = False
     generalized_search_enabled: bool = False
+    # A reader must be able to see why a response is incomplete without
+    # decoding coverage reasons, so the server states it in one sentence.
+    coverage_message: str | None = Field(None, max_length=400)
+    duration_ms: float | None = Field(None, ge=0)
 
 
 class FirmMemorySourceInfo(BaseModel):

@@ -9,6 +9,7 @@ import {
   approveWorkflowTemplateVersion,
   archiveWorkflowTemplate,
 } from "../api";
+import WorkflowAutomationRules from "../components/workflows/WorkflowAutomationRules";
 
 const TYPES = [
   "text",
@@ -788,6 +789,7 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
               </article>
             ))}
           </section>
+          <WorkflowAutomationRules user={user} templates={templates} />
         </>
       )}
     </Container>

@@ -14,14 +14,75 @@ The unified page depends on the FM-01 source-authorization foundation merged bef
 - `GET /api/v1/firm-memory/capabilities` combines the broad search entitlement with the default-off generalized-search flag; the frontend does not infer rollout from RBAC capabilities.
 - `GET /api/v1/firm-memory/sources` returns only sources authorized by the foundation policy and supplies source, provider, share, coverage, and collection metadata when available.
 - The response returns opaque document identities, provenance, optional matter IDs, a per-source coverage array, and explicit `partial` and `complete` truth values.
-- Optional result actions are server-issued typed entries: `provider_open`, `lawhand_result`, and `open_on_device`. The UI does not synthesize provider or workstation destinations. FM-01 emits no available `lawhand_result` action because its HMAC document identity is not reversible. Stable links remain visibly unavailable until a later durable opaque-ID mapping and fail-closed result-detail resolver exist.
+- Optional result actions are server-issued typed entries: `provider_open`, `lawhand_result`, and `open_on_device`. The UI does not synthesize provider or workstation destinations. A matter-bound on-premises hit now carries an available `lawhand_result` action addressing the existing fail-closed matter-file resolver (`/firm-memory?matter=<id>&file=<id>`); the response's opaque `document_id` stays a non-reversible HMAC, and the action's identifiers are only meaningful to that resolver, which re-checks the tenant, the matter/share binding, the live index row and the bound folder before it shows anything. A hit that matched no authorized matter carries an unavailable action with a reason instead of a link. `open_on_device` is reported unavailable with a reason, because launching a workstation file needs a signed open intent that only the result page can mint.
 - A source-list endpoint supplies authorized filter options. The temporary adapter is isolated in `frontend/src/documentSearchApi.js` so route or additive field changes remain separate from the page.
 
 FM-02 intentionally contains no fallback that broadens an existing matter-scoped SMB search into firm-wide search. If the foundation reports generalized search unsupported, unauthorized, partial, indexing, stale, or offline, the interface preserves that state.
 
+## The authorization model: service account, matter boundary
+
+The agent reads the file share through one service account, and firm logins do
+not map one-to-one onto Windows accounts. Per-user NTFS ACL trimming is
+therefore not the enforcement mechanism, and this is a design decision rather
+than a gap awaiting a connector. What authorizes a document is the matter: the
+matter policy decides who may search it, and the matter's share/folder binding
+decides which paths belong to it.
+
+Two invariants follow, and both are enforced server-side:
+
+- An SMB source with no matter binding is never searched. It is reported
+  `unsupported` with reason `matter_binding_required`, whatever its
+  source-level policy says, because a service account that can read the whole
+  share leaves nothing to scope a search by.
+- Every returned path is re-checked against the bound folders of the actor's
+  authorized matters before it leaves the service, on the full-text path as
+  well as the metadata one. The relay performs the same scoping, but the
+  boundary does not depend on it having done so.
+
+Where a firm does enable per-user native authorization, the identity ticket
+remains in force and adds to these rules; it never replaces them.
+
+## Where results come from
+
+A matter-bound SMB source is searched through the customer's own search node,
+the same relay the matter-scoped page uses, so results carry document text,
+passages and page numbers rather than file names. The relay returns identifiers
+the SaaS has already matched against the live index inside the requested share;
+every field on a result card, and its link, is then read from the SaaS
+database, never from the agent.
+
+The node answering with no hits is a real absence and is reported as such. The
+node not answering at all — offline, timed out, busy, or too old to bind a
+matter set — falls back to the file-name and preview index, and coverage says
+so. The two are never conflated.
+
+One relay task is sent per agent, not per matter: the task already carries a
+list of `(share, folder)` scopes, so a firm-wide search over fifty matters on
+one file server is one round trip. Scope lists are deduplicated and capped at
+the wire contract's 100 entries, and exceeding the cap is reported.
+
+## Matterless scope on matter-bound sources
+
+A search with no matter filter is not a search with no authorization. For a
+matter-bound SMB source, the server expands the scope into the matters bound to
+that share which this actor is already authorized on, deciding every candidate
+through the same matter policy a typed filter goes through: firm policy,
+assignment, or an explicit grant on a restricted matter. Nothing else is
+searched, and nothing that policy does not positively allow is included.
+
+- The expansion is capped at 100 matters. Exceeding the cap is reported as
+  `matter_scope_truncated` coverage, never silently trimmed.
+- A share on which the actor holds no authorized matter is reported as
+  `no_authorized_matter_scope` coverage rather than dropped from the response.
+- The source list applies the same rule, so the filter offers exactly the
+  sources a search can reach.
+
 ## Coverage truth rules
 
 - **No matching documents** is shown only when `complete` is true, `partial` is false, and all reported source coverage is ready.
+- A response that searched no source at all is `partial`, never a quiet `complete: false, partial: false`.
+- Coverage names the index that actually answered. `smb_local_fulltext` is the customer node's document text and may be reported as complete; `smb_metadata_fts` is the SaaS-side file-name and preview index, is only ever a fallback, and stays partial with reason `metadata_index_fallback` so a unified search never asserts that a phrase is absent from the corpus.
+- The response carries a one-sentence `coverage_message` naming the reason a search is incomplete, so a reader does not have to decode coverage tokens, and `duration_ms`.
 - Every incomplete search says **No matches in available sources** when it has zero hits.
 - Source and provenance labels remain on every result card.
 - On-premises cards show relative location and local-index freshness. Cloud cards use validated provider-native HTTPS actions.

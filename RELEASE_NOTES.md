@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.04.1 — Templates that fill themselves and keep their history
+## 2026.09.04.2 — Templates that fill themselves and keep their history
 
 Released September 4, 2026.
 
@@ -16,6 +16,28 @@ Template fields can say where their value comes from, clauses can appear only wh
 - **Repeating sections that follow the matter.** Wrap a block in {{#each parties}} and it renders once per party on the matter — a signature block each — with no editing afterwards.
 - **Version history with restore.** Every edit records the wording it replaced. The Versions tab shows what changed and restores an earlier version without retyping it.
 - **Mark up Word templates by hand.** See the document itself: highlight text to make it a field, and select paragraphs to make them conditional or repeat once per party.
+
+## 2026.09.04.1 — Plan matter workflows automatically, approve them the same way
+
+Released September 4, 2026.
+
+Firms can have an approved workflow template prepared the moment a matter opens or reaches a stage. The automation only prepares the work; a reviewer still approves and applies it.
+
+- **Two bounded triggers, one action.** A rule fires when a matter is opened or enters a named stage, optionally narrowed by matter type or practice area, and plans one approved workflow template. Nothing else.
+- **Automation is approved like legal work.** A rule is created as a draft and does nothing until an approver activates the exact definition they reviewed. Editing a rule returns it to draft for a fresh approval.
+- **Nothing is applied without a person.** A matching rule creates the same reviewable preview the Workflow tab creates by hand. Tasks and matter stages change only when someone applies the planned run.
+- **A rule that does nothing says why.** Every match is recorded as immutable evidence naming the rule, the matter, and the planned run, or the reason it was blocked. The matter's Workflow tab shows it too.
+
+## 2026.09.03.1 — Firm-wide Firm Memory research that opens the document
+
+Released September 3, 2026.
+
+Firm Memory research now searches document text across every matter you are authorized on, says what it could not cover, and every on-premise result opens to its matter file.
+
+- **Ask without picking a matter first.** A query with no matter filter searches the matters on each file share you are already authorized on, decided by the same matter policy a chosen matter goes through.
+- **Search inside documents, not just file names.** Results come from the firm's own search node with real page numbers and passages; if that node cannot be reached, the response says so.
+- **Open every result you find.** An on-premise result links to its matter file, which rechecks the matter binding, the live index entry, and the bound folder before showing it.
+- **Know what a search did not cover.** Every incomplete response states in one sentence why, so “no matches” is only ever said about a search that actually covered its sources.
 
 ## 2026.09.02.1 — Organize matter documents with folders and tags
 

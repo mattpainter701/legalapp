@@ -41,7 +41,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "155_document_template_versions"
+EXPECTED_HEAD = "156_document_template_versions"
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 REQUIRED_REVISION = "148_configurable_workflows"
@@ -57,6 +57,8 @@ TABLES = (
     "matter_workflow_runs",
     "matter_workflow_run_events",
     "matter_workflow_run_steps",
+    "matter_workflow_automation_rules",
+    "matter_workflow_automation_events",
 )
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -191,6 +193,8 @@ def seed_fixture(owner) -> dict[str, Any]:
                 "run": uuid.uuid4(),
                 "event": uuid.uuid4(),
                 "step": uuid.uuid4(),
+                "automation_rule": uuid.uuid4(),
+                "automation_event": uuid.uuid4(),
             }
             records.append(record)
             definition_sha256 = hashlib.sha256(
@@ -393,6 +397,43 @@ def seed_fixture(owner) -> dict[str, Any]:
                 """,
                 (record["step"], tenant_id, record["run"], task_id, HASH_B),
             )
+            cursor.execute(
+                """
+                INSERT INTO matter_workflow_automation_rules
+                  (id,tenant_id,name,trigger_event,template_id,status,
+                   definition_sha256,created_by_user_id,activated_by_user_id,
+                   activated_at)
+                VALUES (%s,%s,'Open new matters','matter_created',%s,'active',
+                        %s,%s,%s,now())
+                """,
+                (
+                    record["automation_rule"],
+                    tenant_id,
+                    record["template"],
+                    HASH_C,
+                    user_id,
+                    user_id,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO matter_workflow_automation_events
+                  (id,tenant_id,rule_id,matter_id,trigger_event,dedupe_key,
+                   outcome,run_id,rule_sha256,actor_user_id,evidence_sha256)
+                VALUES (%s,%s,%s,%s,'matter_created',%s,'planned',%s,%s,%s,%s)
+                """,
+                (
+                    record["automation_event"],
+                    tenant_id,
+                    record["automation_rule"],
+                    matter_id,
+                    HASH_D,
+                    record["run"],
+                    HASH_C,
+                    user_id,
+                    HASH_A,
+                ),
+            )
     owner.commit()
     return {
         "tenants": tenants,
@@ -411,7 +452,10 @@ def seed_demo_purge_fixture(owner, fixture_tenant_id: uuid.UUID) -> dict[str, An
     matter_id, contact_id = uuid.uuid4(), uuid.uuid4()
     matter_field_id, contact_field_id = uuid.uuid4(), uuid.uuid4()
     template_id, version_id, run_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-    ids = {name: uuid.uuid4() for name in ("stage", "checklist", "requirement")}
+    ids = {
+        name: uuid.uuid4()
+        for name in ("stage", "checklist", "requirement", "automation_rule")
+    }
     with owner.cursor() as cursor:
         cursor.execute(
             """
@@ -571,12 +615,42 @@ def seed_demo_purge_fixture(owner, fixture_tenant_id: uuid.UUID) -> dict[str, An
             """,
             (tenant_id, run_id, HASH_B),
         )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_automation_rules
+              (id,tenant_id,name,trigger_event,trigger_stage,template_id,status,
+               definition_sha256,created_by_user_id,activated_by_user_id,
+               activated_at)
+            VALUES (%s,%s,'Demo stage rule','matter_stage_changed','Filed',%s,
+                    'active',%s,%s,%s,now())
+            """,
+            (ids["automation_rule"], tenant_id, template_id, HASH_C, user_id, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_automation_events
+              (tenant_id,rule_id,matter_id,trigger_event,dedupe_key,outcome,
+               run_id,rule_sha256,actor_user_id,evidence_sha256)
+            VALUES (%s,%s,%s,'matter_stage_changed',%s,'planned',%s,%s,%s,%s)
+            """,
+            (
+                tenant_id,
+                ids["automation_rule"],
+                matter_id,
+                HASH_D,
+                run_id,
+                HASH_C,
+                user_id,
+                HASH_A,
+            ),
+        )
     owner.commit()
     return {
         "tenant_id": tenant_id,
         "session_id": session_id,
         "run_id": run_id,
         "stage_id": ids["stage"],
+        "automation_rule_id": ids["automation_rule"],
     }
 
 
@@ -752,6 +826,7 @@ def assert_integrity_and_immutability(
         uuid.uuid4(),
         uuid.uuid4(),
     )
+    archived_rule = uuid.uuid4()
     relationship_field = uuid.uuid4()
     typed_field = uuid.uuid4()
     with owner.cursor() as cursor:
@@ -774,6 +849,15 @@ def assert_integrity_and_immutability(
         cursor.execute(
             "INSERT INTO custom_field_definitions (id,tenant_id,entity_type,field_key,label,field_type,sensitive,created_by_user_id) VALUES (%s,%s,'matter','typed_text','Typed text','text',true,%s)",
             (typed_field, tenant_a, user_a),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_automation_rules
+              (id,tenant_id,name,trigger_event,template_id,status,
+               definition_sha256,created_by_user_id,archived_at)
+            VALUES (%s,%s,'Retired opener','matter_created',%s,'archived',%s,%s,now())
+            """,
+            (archived_rule, tenant_a, draft_template, HASH_C, user_a),
         )
     owner.commit()
 
@@ -1033,6 +1117,75 @@ def assert_integrity_and_immutability(
             (user_a, HASH_B, draft_version),
             {"P0001"},
         ),
+        (
+            "automation_dispatch_update",
+            "UPDATE matter_workflow_automation_events SET outcome='blocked' WHERE id=%s",
+            (record_a["automation_event"],),
+            {"P0001"},
+        ),
+        (
+            "automation_dispatch_delete",
+            "DELETE FROM matter_workflow_automation_events WHERE id=%s",
+            (record_a["automation_event"],),
+            {"P0001"},
+        ),
+        (
+            "automation_dispatch_replay",
+            "INSERT INTO matter_workflow_automation_events (tenant_id,rule_id,matter_id,trigger_event,dedupe_key,outcome,run_id,rule_sha256,actor_user_id,evidence_sha256) VALUES (%s,%s,%s,'matter_created',%s,'planned',%s,%s,%s,%s)",
+            (
+                tenant_a,
+                record_a["automation_rule"],
+                matter_a,
+                HASH_D,
+                record_a["run"],
+                HASH_C,
+                user_a,
+                HASH_A,
+            ),
+            {"23505"},
+        ),
+        (
+            "automation_rule_delete",
+            "DELETE FROM matter_workflow_automation_rules WHERE id=%s",
+            (record_a["automation_rule"],),
+            {"P0001"},
+        ),
+        (
+            "active_automation_rule_retargeted",
+            "UPDATE matter_workflow_automation_rules SET template_id=%s WHERE id=%s",
+            (draft_template, record_a["automation_rule"]),
+            {"P0001"},
+        ),
+        (
+            "automation_rule_identity_rewrite",
+            "UPDATE matter_workflow_automation_rules SET created_by_user_id=%s WHERE id=%s",
+            (user_b, record_a["automation_rule"]),
+            {"P0001"},
+        ),
+        (
+            "archived_automation_rule_reopened",
+            "UPDATE matter_workflow_automation_rules SET status='draft', archived_at=NULL WHERE id=%s",
+            (archived_rule,),
+            {"P0001"},
+        ),
+        (
+            "automation_rule_planned_without_approval",
+            "INSERT INTO matter_workflow_automation_rules (tenant_id,name,trigger_event,template_id,status,definition_sha256,created_by_user_id) VALUES (%s,'Unapproved rule','matter_created',%s,'active',%s,%s)",
+            (tenant_a, draft_template, HASH_C, user_a),
+            {"23514"},
+        ),
+        (
+            "automation_rule_stage_without_trigger",
+            "INSERT INTO matter_workflow_automation_rules (tenant_id,name,trigger_event,trigger_stage,template_id,definition_sha256,created_by_user_id) VALUES (%s,'Stage on create','matter_created','Filed',%s,%s,%s)",
+            (tenant_a, draft_template, HASH_C, user_a),
+            {"23514"},
+        ),
+        (
+            "duplicate_active_automation_trigger",
+            "INSERT INTO matter_workflow_automation_rules (tenant_id,name,trigger_event,template_id,status,definition_sha256,created_by_user_id,activated_by_user_id,activated_at) VALUES (%s,'Second opener','matter_created',%s,'active',%s,%s,%s,now())",
+            (tenant_a, record_a["template"], HASH_C, user_a, user_a),
+            {"23505"},
+        ),
     )
     for name, statement, params, states in cases:
         expect_database_error(owner, statement, params, sqlstates=states)
@@ -1242,6 +1395,13 @@ def assert_demo_purge_lifecycle(
             sqlstates={"P0001"},
             tenant_id=tenant_id,
         )
+        expect_database_error(
+            runtime,
+            "DELETE FROM public.matter_workflow_automation_events WHERE rule_id=%s",
+            (purge_fixture["automation_rule_id"],),
+            sqlstates={"P0001"},
+            tenant_id=tenant_id,
+        )
         with runtime.cursor() as cursor:
             cursor.execute(
                 """
@@ -1323,6 +1483,8 @@ def assert_demo_purge_lifecycle(
         "matter_workflow_runs": 1,
         "matter_workflow_run_events": 1,
         "matter_workflow_run_steps": 1,
+        "matter_workflow_automation_rules": 1,
+        "matter_workflow_automation_events": 1,
     }
     actual = {table: deleted.get(table, 0) for table in TABLES}
     if actual != expected:
