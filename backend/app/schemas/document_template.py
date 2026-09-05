@@ -230,3 +230,40 @@ class DocumentTemplateBindingCatalogue(BaseModel):
     bindings: list[DocumentTemplateBindingOption]
     collections: list[DocumentTemplateCollectionOption]
     operators: list[str]
+
+
+class DocumentTemplateOutlineRun(BaseModel):
+    text: str
+    start: int
+    end: int
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+
+
+class DocumentTemplateOutlineMarker(BaseModel):
+    kind: str
+    keyword: str
+    name: str = ""
+
+
+class DocumentTemplateOutlineParagraph(BaseModel):
+    ordinal: int
+    text: str
+    style: str
+    container: str
+    runs: list[DocumentTemplateOutlineRun] = Field(default_factory=list)
+    marker: Optional[DocumentTemplateOutlineMarker] = None
+
+
+class DocumentTemplateOutlineResponse(BaseModel):
+    """A Word template's paragraphs, addressed the way its fields are.
+
+    Ordinals match the iterator that fills the template, so a span selected
+    against this outline anchors to the same paragraph at generation time.
+    """
+
+    template_id: str
+    paragraphs: list[DocumentTemplateOutlineParagraph]
+    paragraph_count: int
+    truncated: bool = False

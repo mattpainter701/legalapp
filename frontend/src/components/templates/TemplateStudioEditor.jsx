@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 
 import { getTemplateBindings } from '../../api'
+import DocxDocumentView from './DocxDocumentView'
 import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocumentCanvas'
 import {
   MIN_FIELD_SIZE,
@@ -89,6 +90,19 @@ function PropertyRow({ label, children }) {
   )
 }
 
+/** Suggest an automation key from the text a user selected.
+ *  Names must start with a letter and use only [A-Za-z0-9_.-], so anything
+ *  else is folded away and a generic key is used when nothing survives. */
+export const docxFieldName = (text) => {
+  const slug = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40)
+  return /^[a-z]/.test(slug) ? slug : `field_${slug}`.replace(/_+$/, '') || 'field'
+}
+
+
 /** Load the binding catalogue once and group it for the picker.
  *  The catalogue is static server-owned vocabulary, so a failure to load it
  *  degrades to name matching rather than blocking the editor. */
@@ -138,6 +152,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const bindingGroups = useBindingCatalogue()
 
   const pdfSource = isPdfFile(source) ? source : null
+  const isDocx = String(template?.format || '').toLowerCase() === 'docx'
   const { document: pdfDocument, pages: pdfPages, error: pdfError } = useTemplatePdfDocument(
     pdfSource,
     { enabled: Boolean(pdfSource) },
@@ -230,6 +245,31 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     const field = createManualField(kind, { page, pageNumber, fields })
     commitFields([...fields, field])
     setSelectedIdentity(field.pdf_source_key)
+  }
+
+  // A Word field is created from a text selection rather than a drawn box: the
+  // span the user highlighted *is* the anchor, and the exact text it covers is
+  // what the renderer re-checks before replacing it.
+  const addDocxField = ({ ordinal, start, end, text }) => {
+    const taken = new Set(fields.map((entry) => entry.name))
+    let name = docxFieldName(text)
+    let suffix = 1
+    while (taken.has(name)) {
+      suffix += 1
+      name = `${docxFieldName(text)}_${suffix}`
+    }
+    const field = {
+      name,
+      label: text.trim().slice(0, 60) || name,
+      field_type: 'text',
+      required: false,
+      included: true,
+      source_text: text,
+      example: text,
+      docx_anchor: { paragraph_ordinal: ordinal, start, end },
+    }
+    commitFields([...fields, field])
+    setSelectedIdentity(fieldIdentity(field, fields.length))
   }
 
   const removeField = (entry) => {
@@ -388,18 +428,28 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
       )}
 
       <div className={`grid gap-0 ${pdfSource ? 'lg:grid-cols-[168px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
-        {!pdfSource && (
+        {!pdfSource && isDocx && (
+          <DocxDocumentView
+            templateId={template.id}
+            fields={fields}
+            selectedName={selected?.name}
+            onSelectField={(field) => {
+              const match = indexedFields.find((entry) => entry.field.name === field.name)
+              if (match) setSelectedIdentity(match.identity)
+            }}
+            onCreateField={addDocxField}
+          />
+        )}
+        {!pdfSource && !isDocx && (
           <div className="max-h-[70vh] overflow-y-auto p-5">
-            <h2 className="font-semibold text-brand-ink">
-              {template?.format === 'docx' ? 'Word template' : 'Markdown template'}
-            </h2>
+            <h2 className="font-semibold text-brand-ink">Markdown template</h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-muted">
               {sourceError
-                || 'Placing fields on the page needs a PDF source, but everything else about a field is editable here: rename it, set what it fills from, and choose when it applies.'}
+                || 'Edit this template\u2019s wording from Edit template. Field names, data sources, and conditions are editable here.'}
             </p>
             <h3 className="mt-5 text-sm font-semibold text-brand-ink">Conditional and repeating sections</h3>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-muted">
-              Write these markers in the {template?.format === 'docx' ? 'Word document' : 'template body'} itself, each one alone on its own line.
+              Write these markers in the template body itself, each one alone on its own line.
             </p>
             <dl className="mt-3 max-w-2xl space-y-2 text-sm">
               {[

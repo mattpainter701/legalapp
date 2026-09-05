@@ -23,7 +23,22 @@ vi.mock('./PdfDocumentCanvas', () => ({
 
 // The binding catalogue is static server-owned vocabulary; the editor only
 // needs it to populate the picker.
+vi.mock('./DocxDocumentView', () => ({
+  default: ({ fields, onCreateField }) => (
+    <div data-testid="docx-view">
+      <span>{fields.length} mapped</span>
+      <button
+        type="button"
+        onClick={() => onCreateField({ ordinal: 2, start: 6, end: 18, text: 'Ada Lovelace' })}
+      >
+        Select text
+      </button>
+    </div>
+  ),
+}))
+
 vi.mock('../../api', () => ({
+  getTemplateOutline: () => Promise.resolve({ paragraphs: [], paragraph_count: 0 }),
   getTemplateBindings: () => Promise.resolve({
     bindings: [
       { path: 'client.name', label: 'Client name', group: 'Client' },
@@ -63,6 +78,40 @@ describe('TemplateStudioEditor', () => {
     expect(schemaFields({ variable_schema: { fields: 'not-a-list' } })).toEqual([])
   })
 
+  it('creates a Word field from a text selection, anchored to that span', async () => {
+    // A Word field is a character span, not a rectangle, so the selection the
+    // user made *is* the anchor — there is no page to place anything on.
+    const onSave = vi.fn().mockResolvedValue({})
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [] } }}
+        source={null}
+        onSave={onSave}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Select text' }))
+    await waitFor(() => expect(screen.getByText('1 mapped')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    const [field] = onSave.mock.calls[0][0].fields
+    expect(field.docx_anchor).toEqual({ paragraph_ordinal: 2, start: 6, end: 18 })
+    // The renderer re-checks this exact text before replacing it.
+    expect(field.source_text).toBe('Ada Lovelace')
+    expect(field.name).toBe('ada_lovelace')
+  })
+
+  it('renders the document view for a Word template', () => {
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [] } }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    expect(screen.getByTestId('docx-view')).toBeInTheDocument()
+  })
+
   it('keeps fields editable for a non-PDF template instead of dead-ending', () => {
     // Word is the format firms author in. Refusing to show its fields would
     // leave the binding and condition controls unreachable for exactly the
@@ -81,15 +130,13 @@ describe('TemplateStudioEditor', () => {
     expect(screen.getByRole('complementary', { name: /field properties/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Client' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /save fields/i })).toBeInTheDocument()
-    // Page placement genuinely needs a PDF, and the panel says so.
     expect(screen.queryByLabelText(/PDF page/i)).not.toBeInTheDocument()
-    expect(screen.getByText(/needs a PDF source/i)).toBeInTheDocument()
   })
 
-  it('documents the logic markers a Word author writes in the document itself', () => {
+  it('documents the logic markers a markdown author writes in the body', () => {
     render(
       <TemplateStudioEditor
-        template={{ id: 'x', format: 'docx', variable_schema: { fields: [] } }}
+        template={{ id: 'x', format: 'markdown', variable_schema: { fields: [] } }}
         source={null}
         onSave={vi.fn()}
       />,

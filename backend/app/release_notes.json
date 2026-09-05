@@ -25,8 +25,8 @@
           "description": "Every edit records the wording it replaced. The Versions tab shows what changed and restores an earlier version without retyping it."
         },
         {
-          "title": "Word templates are editable again",
-          "description": "The editor no longer stops at 'PDF only' for Word and Markdown: rename fields, set their data source, and set their conditions for every format."
+          "title": "Place Word fields by selecting text",
+          "description": "Open a Word template and see the document itself. Highlight a name or a date and make it a field; conditional sections show as labelled bands."
         }
       ]
     },

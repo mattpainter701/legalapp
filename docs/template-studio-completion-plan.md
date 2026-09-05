@@ -127,8 +127,10 @@ Before that is switched on: `StudioDraftService.promote()` (`studio_drafts.py:16
 Promotion must call `record_version` in the same transaction, or every Studio publish will leave
 a hole in the history exactly where the Studio did the publishing.
 
-**What Step 4 gains from this.** DOCX page rendering for the visual editor needs the same
-rasterizer, so Steps 4 and 5a share a dependency and should be sequenced together.
+**What Step 4 needs from this: nothing.** An earlier revision said DOCX authoring shared the
+rasterizer dependency. It does not — Word fields are character spans, so authoring works from a
+paragraph outline. Step 5a is needed for page-faithful *preview* and for conversion, not to
+place a field.
 
 ## Sequencing and status
 
@@ -137,24 +139,57 @@ rasterizer, so Steps 4 and 5a share a dependency and should be sequenced togethe
 | 1 — Data bindings | Smart Fill that works on customer templates | none | **done** |
 | 2 — Template logic | One conditional template instead of N | none | **done** |
 | 3 — Template versions | Real Versions/Activity tabs, rollback | `155` | **done** |
-| 4 — DOCX authoring parity | Word editing at PDF parity | none | **partial** |
+| 4 — DOCX authoring parity | Select text in the document to make a field | none | **done** |
 | 5a — DOCX→PDF conversion | Word documents can be signed, filed, delivered | none | not started |
 | 5b — CAS backup/restore gate | Phase 3 can be enabled in production | none | not started |
 | 5c — Wire Phase 2 drafts | Edit a template without touching the live one | none | not started |
 
-### What Step 4 still needs
+### Step 4, revised: a document view, not a rendered page
 
-Field editing now works for every format — the editor no longer dead-ends on
-"PDF only", so a Word template's fields can be renamed, bound, and conditioned,
-and the panel documents the markers a Word author writes in the document itself.
-Two pieces remain:
+The first plan for Word authoring was to rasterize DOCX to page images and
+reuse the PDF canvas. That is the wrong tool, and the anchor model says why.
 
-- **Page rendering for DOCX.** Placing a field by clicking the page still needs
-  a PDF. Rendering DOCX pages to images would close this, and the rasterizer for
-  it is already declared in the (disabled) Studio render runtime — so this
-  depends on Step 5a rather than on new rendering code.
-- **Anchor reconciliation.** A drifted DOCX anchor still fails with "re-upload
-  and review the template" rather than offering to re-point the field.
+A **PDF** field is geometry: `{page, rect}`. It has no meaning without a drawn
+page, so the page has to be rendered before anything can be placed on it.
+
+A **Word** field is not geometry at all. `docx_anchor` is
+`{paragraph_ordinal, start, end}` — a character span inside a paragraph. Pixels
+carry no paragraph identity, so a rasterized canvas would have to map every
+click *back* to an ordinal by extracting text and re-matching it: fragile in
+general, and wrong exactly where a document repeats a phrase, which contracts
+do constantly.
+
+So Word authoring renders the **paragraphs** instead, served by
+`GET /api/templates/{id}/outline` and numbered by the same
+`iter_docx_paragraphs()` iterator that fills the template. Ordinals are correct
+*by construction* rather than by reconstruction — the same
+single-source-of-truth rule the engine review argued for — and a browser text
+selection already carries the offsets an anchor needs, so selecting
+"Ada Lovelace" and pressing **Add field** produces
+`{paragraph_ordinal, start, end}` with no inference at all.
+
+What this buys beyond correctness:
+
+- **It ships now.** No sandbox, no converter, no CAS release gate. Step 4 is
+  no longer blocked behind Step 5a, which an earlier revision of this plan
+  wrongly claimed.
+- **Regions become visible.** Because logic markers are identified server-side,
+  the view draws `{{#if}}` and `{{#each}}` blocks as labelled, indented bands
+  instead of showing raw syntax — so a customer can *see* which clauses are
+  conditional.
+- **Placement is honest about the medium.** A Word document has no fixed
+  geometry; showing one on a fake page would imply a precision the format does
+  not have.
+
+Still open:
+
+- **Conditions and repeats from the document view.** Selecting a paragraph
+  range and marking it repeating is the natural next gesture; today the markers
+  are typed in Word and the view reads them back.
+- **Anchor reconciliation.** A drifted anchor still fails with "re-upload and
+  review the template" rather than offering to re-point the field.
+- **Page-faithful preview.** Authoring does not need it, but final preview
+  does. That is Step 5a, and it is now decoupled from authoring.
 
 ### Decisions made while building
 

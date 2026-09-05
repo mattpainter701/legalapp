@@ -45,6 +45,7 @@ from app.models.plugin import Matter, MatterEvent
 from app.models.tenant import TenantSettings
 from app.schemas.document_template import (
     DocumentTemplateBindingCatalogue,
+    DocumentTemplateOutlineResponse,
     DocumentTemplateVersionDetail,
     DocumentTemplateVersionListResponse,
     DocumentTemplateVersionSummary,
@@ -84,6 +85,7 @@ from app.services.pdf_templates import (
     validate_representative_pdf_variables,
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
+from app.services.docx_outline import docx_outline
 from app.services.document_template_versions import (
     get_version,
     list_versions,
@@ -2796,6 +2798,48 @@ async def get_template(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     return _template_response(template)
+
+
+@router.get("/{template_id}/outline", response_model=DocumentTemplateOutlineResponse)
+async def get_template_outline(
+    template_id: uuid.UUID,
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a Word template's paragraphs, numbered as filling numbers them.
+
+    This is the authoring surface for DOCX. A Word field is a character span in
+    a paragraph, not a rectangle on a page, so the editor needs addressable
+    text rather than a rendered image — and the ordinals come from the same
+    iterator that fills the template, so an anchor placed here addresses the
+    same paragraph at generation time.
+    """
+
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    template = await db.scalar(
+        select(DocumentTemplate).where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == uuid.UUID(tenant_id),
+        )
+    )
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if str(template.format or "").lower() != "docx":
+        raise HTTPException(
+            status_code=422,
+            detail="A paragraph outline is available for Word templates only.",
+        )
+
+    source = await _verified_template_source(template)
+    try:
+        outline = await asyncio.to_thread(docx_outline, source)
+    except TemplateDocxError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return DocumentTemplateOutlineResponse(
+        template_id=str(template.id), **outline
+    )
 
 
 @router.get("/{template_id}/source")

@@ -77,6 +77,36 @@ class TestBindingCatalogue:
         assert (await client.get("/api/templates/bindings")).status_code == 200
 
 
+class TestOutlineRoute:
+    async def test_a_markdown_template_has_no_paragraph_outline(
+        self, client, db_session, test_tenant
+    ):
+        template = await _template(db_session, test_tenant.id)
+        response = await client.get(f"/api/templates/{template.id}/outline")
+        assert response.status_code == 422
+        assert "Word templates" in response.json()["detail"]
+
+    async def test_a_missing_template_is_not_found(self, client):
+        assert (
+            await client.get(f"/api/templates/{uuid.uuid4()}/outline")
+        ).status_code == 404
+
+    async def test_a_word_template_with_no_retained_source_says_so(
+        self, client, db_session, test_tenant
+    ):
+        # The outline is derived from the exact retained bytes, so it cannot be
+        # served from the field map alone.
+        template = await _template(
+            db_session,
+            test_tenant.id,
+            format="docx",
+            source_sha256="a" * 64,
+            source_filename="letter.docx",
+        )
+        response = await client.get(f"/api/templates/{template.id}/outline")
+        assert response.status_code == 409
+
+
 class TestVersionRecording:
     async def test_an_edit_records_the_wording_it_replaces(
         self, client, db_session, test_tenant

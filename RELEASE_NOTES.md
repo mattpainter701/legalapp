@@ -15,7 +15,7 @@ Template fields can say where their value comes from, clauses can appear only wh
 - **One template instead of near-identical copies.** Mark a clause to appear only when a field applies, with {{#if}} in the document itself. Two near-identical templates become one.
 - **Repeating sections that follow the matter.** Wrap a block in {{#each parties}} and it renders once per party on the matter — a signature block each — with no editing afterwards.
 - **Version history with restore.** Every edit records the wording it replaced. The Versions tab shows what changed and restores an earlier version without retyping it.
-- **Word templates are editable again.** The editor no longer stops at 'PDF only' for Word and Markdown: rename fields, set their data source, and set their conditions for every format.
+- **Place Word fields by selecting text.** Open a Word template and see the document itself. Highlight a name or a date and make it a field; conditional sections show as labelled bands.
 
 ## 2026.09.02.1 — Organize matter documents with folders and tags
 

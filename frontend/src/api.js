@@ -2193,6 +2193,12 @@ export const discoverTemplateVariables = (id, data = {}) =>
 export const getTemplateBindings = () =>
   api.get('/templates/bindings').then(r => r.data)
 
+// A Word template's paragraphs, numbered by the same iterator that fills it.
+// This is the authoring surface for DOCX, where a field is a character span
+// rather than a rectangle on a page.
+export const getTemplateOutline = (id) =>
+  api.get(`/templates/${id}/outline`).then(r => r.data)
+
 export const listTemplateVersions = (id, params = {}) =>
   api.get(`/templates/${id}/versions`, { params }).then(r => r.data)
 export const getTemplateVersion = (id, versionNo) =>
