@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import ClientIntakeChecklist from '../components/ClientIntakeChecklist'
 import {
   getClientPortalSession,
   logoutClientPortal,
@@ -265,7 +266,7 @@ export default function ClientPortalMatterPage() {
           aria-labelledby={`portal-tab-${tab}`}
           className="py-6"
         >
-          {tab === 'overview' && <OverviewTab {...tabProps} onNavigate={setTab} />}
+          {tab === 'overview' && <><ClientIntakeChecklist onSign={() => setTab('signatures')} /><OverviewTab {...tabProps} onNavigate={setTab} /></>}
           {tab === 'messages' && <MessagesTab {...tabProps} />}
           {tab === 'documents' && <DocumentsTab {...tabProps} />}
           {tab === 'signatures' && <SignaturesTab {...tabProps} />}

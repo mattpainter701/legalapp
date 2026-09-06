@@ -62,6 +62,10 @@ from app.routers.engagement_packets import router as engagement_packets_router
 from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
 from app.routers.matter_imports import router as matter_imports_router
+from app.routers.matter_intake import (
+    router as matter_intake_router,
+    portal_router as client_intake_router,
+)
 from app.routers.matter_document_folders import (
     router as matter_document_folders_router,
 )
@@ -476,6 +480,8 @@ app.include_router(engagement_packets_router)
 app.include_router(matter_parties_router)
 app.include_router(matter_documents_router)
 app.include_router(matter_imports_router)
+app.include_router(matter_intake_router)
+app.include_router(client_intake_router)
 app.include_router(matter_document_folders_router)
 app.include_router(matters_correspondence_router)
 app.include_router(reports_router)

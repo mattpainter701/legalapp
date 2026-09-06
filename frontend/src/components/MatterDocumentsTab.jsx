@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import MatterImportWizard from './MatterImportWizard'
+import MatterIntakePanel from './MatterIntakePanel'
 import { format, parseISO } from 'date-fns'
 import {
   uploadMatterDocument,
@@ -265,6 +266,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
     refreshTags,
     refreshDocuments,
   } = explorer
+  const [intakeOpen, setIntakeOpen] = useState(false)
   const [cloudFiles, setCloudFiles] = useState(null)
 
   // Upload form state
@@ -650,6 +652,10 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
       <details className="border border-brand-line rounded-lg p-3">
         <summary className="cursor-pointer font-semibold">Import files &amp; emails</summary>
         <MatterImportWizard matterId={matterId} onComplete={() => { refreshDocuments(); refreshFolders() }} />
+      </details>
+      <details className="border border-brand-line rounded-lg p-3">
+        <summary className="cursor-pointer font-semibold" onClick={() => setIntakeOpen(value => !value)}>Client intake, portal invitations &amp; follow-ups</summary>
+        {intakeOpen && <MatterIntakePanel matterId={matterId} documents={docs} />}
       </details>
       {/* Upload form */}
       {showUpload && (

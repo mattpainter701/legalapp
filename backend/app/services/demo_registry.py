@@ -85,6 +85,7 @@ _CLONE_TABLES = {
 # ephemeral work, or audit evidence. A demo may create rows in these tables even
 # though fixture rows must never be copied into a disposable tenant.
 _PURGE_ONLY_TABLES = {
+    "matter_intakes",
     "api_access_logs",
     "brief_check_audits",
     "brief_checks",

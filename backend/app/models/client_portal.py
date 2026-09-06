@@ -9,7 +9,7 @@ portal JWT (see ``app.services.portal_token.create_matter_portal_token``).
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -19,6 +19,7 @@ from app.database import Base
 class ClientPortalInvite(Base):
     __tablename__ = "client_portal_invites"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_client_portal_invites_tenant_id"),
         Index("ix_client_portal_invites_token_hash", "token_hash"),
         Index("ix_client_portal_invites_matter_id", "matter_id"),
     )

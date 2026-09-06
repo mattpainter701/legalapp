@@ -1187,6 +1187,9 @@ export const logoutClientPortal = () =>
 export const getClientPortalMatter = () =>
   clientPortalApi.get('/portal/client/matter').then((r) => r.data)
 
+export const getClientIntake = () => clientPortalApi.get('/portal/client/intake').then(r => r.data)
+export const submitClientIntake = (answers) => clientPortalApi.post('/portal/client/intake/questionnaire', { answers, confirm_complete: true }).then(r => r.data)
+
 export const getClientPortalMediation = () =>
   clientPortalApi.get('/portal/client/mediation').then((r) => r.data)
 

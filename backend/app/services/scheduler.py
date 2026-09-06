@@ -519,6 +519,16 @@ class LegalScheduler:
             renew_teams_voice_subscriptions,
         )
         from app.services.sms import mark_stale_sms_dispatches_for_reconciliation
+        from app.services.matter_intake import tick as intake_tick
+
+        self.scheduler.add_job(
+            self._guarded("matter-intake", intake_tick),
+            "interval",
+            seconds=60,
+            id="matter-intake",
+            replace_existing=True,
+            max_instances=1,
+        )
 
         self.scheduler.add_job(
             process_pending_jobs,

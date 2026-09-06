@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.06.7 — Keep new-client intake moving from paperwork to meeting
+
+Released September 6, 2026.
+
+Start a reviewed fee agreement and client questionnaire from Create Matter, deliver secure portal invitations by email or SMS, and track document and meeting follow-ups.
+
+- **Start intake as part of matter creation.** Authorized attorneys, paralegals and secretaries can prepare the packet, choose email or SMS and assign responsible staff.
+- **Wait for both completed documents.** The signed agreement and questionnaire are tracked independently. Both completed requirements close the seven-day follow-up and create a scheduling task due within 24 hours.
+- **Work with Microsoft 365 or Google.** Use connected email and storage, existing staff task calendars and the secure client portal. Review uncertain delivery and record a conference call or in-person meeting.
+
 ## 2026.09.06.6 — Bring existing matters and historical email into LawHand
 
 Released September 6, 2026.
