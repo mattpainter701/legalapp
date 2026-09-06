@@ -751,3 +751,16 @@ async def test_invalid_mobile_is_a_reviewable_validation_error(ctx):
         await s.start_packet(c.db, c.user, c.matter, body, "fee.pdf", b"%PDF-reviewed")
     assert exc.value.status_code == 422
     s.send_sms.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_followup_is_unassigned_when_owner_loses_matter_access(
+    ctx, monkeypatch
+):
+    c = ctx
+    monkeypatch.setattr(s, "can_access_matter", AsyncMock(return_value=False))
+    c.packet.sent_at = TIME
+    await s.reconcile(c.db, c.packet)
+    task = c.db.tasks[uuid.uuid5(c.packet.id, "documents")]
+    assert task.assigned_to_user_id is None
+    assert task.matter_id == c.matter.id

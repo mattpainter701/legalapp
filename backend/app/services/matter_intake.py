@@ -144,12 +144,21 @@ async def ensure_task(db, packet, kind, title, due):
     )
     if task is None:
         owner = await db.scalar(
-            select(User.id).where(
+            select(User).where(
                 User.id == packet.owner_id,
                 User.tenant_id == packet.tenant_id,
                 User.is_active.is_(True),
             )
         )
+        owner_id = None
+        if owner and await can_access_matter(
+            db,
+            tenant_id=packet.tenant_id,
+            user_id=owner.id,
+            is_admin=owner.role == "admin",
+            matter_id=packet.matter_id,
+        ):
+            owner_id = owner.id
         local = due.astimezone(ZoneInfo(packet.config["timezone"]))
         task = Task(
             id=task_id,
@@ -163,7 +172,7 @@ async def ensure_task(db, packet, kind, title, due):
             priority="high",
             due_date=local.date(),
             due_time=local.time().replace(tzinfo=None),
-            assigned_to_user_id=owner,
+            assigned_to_user_id=owner_id,
             created_by_user_id=packet.created_by,
             source="intake",
             external_ref=f"intake:{packet.id}:{kind}",
