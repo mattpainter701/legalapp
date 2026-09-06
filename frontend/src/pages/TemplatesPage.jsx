@@ -1186,6 +1186,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const [smartFillState, setSmartFillState] = useState('idle')
   const [smartFillMessage, setSmartFillMessage] = useState('')
   const [fieldSources, setFieldSources] = useState({})
+  useEffect(() => { setFieldSources({}) }, [matterId])
   const previewRequestGenerationRef = useRef(0)
   const smartFillRequestGenerationRef = useRef(0)
   const formRevisionRef = useRef(0)
@@ -1603,6 +1604,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                     </label>
                   )}
                   {fieldSources[name] && <p className="mb-1 text-xs text-brand-muted">{fieldSources[name].suggested_value == null ? 'Missing: review or enter a value' : `From ${fieldSources[name].provenance?.binding_label || fieldSources[name].source_type || 'record'} · verify current accuracy`}{fieldSources[name].provenance?.updated_at ? ` · Updated ${new Date(fieldSources[name].provenance.updated_at).toLocaleDateString()}` : ''}</p>}
+                  {fieldSources[name]?.provenance?.source_document_id && <a className="block mb-1 text-xs underline" href={getMatterDocumentDownloadUrl(matterId, fieldSources[name].provenance.source_document_id)} target="_blank" rel="noreferrer">Open reviewed source document</a>}
                   {fieldType === 'signature' ? (
                     <p className="text-sm text-brand-muted">
                       Signature area is left blank for signing; it is not populated during document generation.

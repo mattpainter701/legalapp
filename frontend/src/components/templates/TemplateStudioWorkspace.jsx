@@ -40,7 +40,9 @@ export default function TemplateStudioWorkspace({
           ? 'Test failed · review values and template logic'
         : template.status === 'paused'
           ? 'Published template paused'
-          : 'Draft · test before publishing'
+          : template.is_active && template.published_version_no
+            ? `Draft version ${template.current_version_no} · published version ${template.published_version_no} remains available`
+            : 'Draft · test before publishing'
 
   useEffect(() => {
     if (statusMessage) statusRef.current?.focus()

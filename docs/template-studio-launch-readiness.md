@@ -23,3 +23,7 @@ Configure a non-sensitive boolean matter detail “Has children”. Bind a templ
 ## Release acceptance still required
 
 Local unit/component tests do not prove customer usability, live provider access, migration/RLS integration, or exact rendered-page correctness. Rehearse PDF and Word generation, source changes, pause/publication races, zero/one/several-child scenarios and conflicting intake answers against the release candidate. Two representative office staff should import, map, test and publish real templates without developer intervention. Keep scans/tables/unlabeled extraction and arbitrary repeated children/assets explicitly outside the supported first increment.
+
+### Local verification for the initial review
+
+119 focused backend tests passed, including real Word text replacement from a selected span, actual PDF label extraction, source/actor/value/definition rejection, Workspace published-snapshot reuse and custom binding provenance. 66 component tests passed; production frontend build and focused ESLint/ruff checks passed. Synthetic Chromium renders at 1440 and 390 pixels had no page errors or horizontal overflow; computed heading color is white and the Edit label is visibly readable. These are development fixtures, not customer acceptance. CI PostgreSQL/RLS coverage and final-head merge gates remain required.

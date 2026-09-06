@@ -628,6 +628,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
           {selected ? (
             <div className="mt-4 space-y-3 border-t border-brand-line pt-3">
+              <details><summary className="cursor-pointer text-xs text-brand-muted">Advanced: internal field name</summary>
               <PropertyRow label="Variable name">
                 <input
                   value={selected.name || ''}
@@ -635,6 +636,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                   className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
                 />
               </PropertyRow>
+              </details>
               <PropertyRow label="Label">
                 <input
                   value={selected.label || ''}

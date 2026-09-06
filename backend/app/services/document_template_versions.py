@@ -8,6 +8,8 @@ only advanced after that resulting state has been snapshotted here.
 from __future__ import annotations
 
 import hashlib
+from types import SimpleNamespace
+from copy import deepcopy
 import uuid
 
 from sqlalchemy import func, select
@@ -138,3 +140,41 @@ async def get_version(
             DocumentTemplateVersion.version_no == version_no,
         )
     )
+
+
+async def published_template_view(db, template):
+    """Read-only release view; draft edits/test failures never change this content."""
+    if not template.is_active or not template.published_version_no:
+        raise ValueError("Publish a tested version before generating documents.")
+    version = await get_version(
+        db,
+        tenant_id=template.tenant_id,
+        template_id=template.id,
+        version_no=int(template.published_version_no),
+    )
+    if not version or not version.is_active:
+        raise ValueError("The published version is unavailable.")
+    # Source replacement requires a fresh template; never combine an old map
+    # with new bytes. The source loader also verifies the retained bytes.
+    if version.source_sha256 != template.source_sha256:
+        raise ValueError("The published source is unavailable.")
+    values = {
+        column.key: getattr(template, column.key)
+        for column in DocumentTemplate.__table__.columns
+    }
+    for key in (
+        "title",
+        "body",
+        "variable_schema",
+        "format",
+        "category",
+        "source_sha256",
+        "source_filename",
+    ):
+        values[key] = deepcopy(getattr(version, key))
+    values.update(
+        current_version_no=version.version_no,
+        tested_version_no=version.version_no,
+        status="published",
+    )
+    return SimpleNamespace(**values)

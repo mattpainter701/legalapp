@@ -139,3 +139,85 @@ def docx_outline(content: bytes) -> dict[str, Any]:
         "paragraph_count": len(paragraphs),
         "truncated": truncated,
     }
+
+
+def validate_visual_field_map(content: bytes, current: dict, proposed: dict) -> None:
+    """Permit selected Word spans only after verifying them against retained bytes."""
+    from app.services.template_semantics import is_semantic_only_change
+    from app.services.docx_templates import TemplateDocxError
+
+    if {
+        key: value
+        for key, value in current.items()
+        if key not in {"fields", "regions", "applicability"}
+    } != {
+        key: value
+        for key, value in proposed.items()
+        if key not in {"fields", "regions", "applicability"}
+    }:
+        raise TemplateDocxError(
+            "Source metadata cannot be changed in the visual editor"
+        )
+    fields = proposed.get("fields")
+    if not isinstance(fields, list) or len(fields) > 200:
+        raise TemplateDocxError("Use at most 200 Word fields")
+    paragraphs = {
+        item["ordinal"]: item["text"] for item in docx_outline(content)["paragraphs"]
+    }
+    existing = {field.get("name"): field for field in current.get("fields", [])}
+    names = set()
+    spans = {}
+    allowed = {
+        "name",
+        "label",
+        "description",
+        "field_type",
+        "required",
+        "included",
+        "source_text",
+        "example",
+        "docx_anchor",
+        "binding",
+        "logic",
+    }
+    for field in fields:
+        name = field.get("name", "") if isinstance(field, dict) else ""
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", name) or name in names:
+            raise TemplateDocxError("Each Word field needs a unique generated name")
+        names.add(name)
+        old = existing.get(name)
+        if old and is_semantic_only_change({"fields": [old]}, {"fields": [field]}):
+            # Previously reviewed fields without anchors remain source-backed.
+            if not field.get("docx_anchor"):
+                continue
+        elif set(field) - allowed:
+            raise TemplateDocxError("New Word fields must come from a text selection")
+        anchor = field.get("docx_anchor")
+        if (
+            not isinstance(anchor, dict)
+            or set(anchor) != {"paragraph_ordinal", "start", "end"}
+            or any(type(value) is not int for value in anchor.values())
+        ):
+            raise TemplateDocxError("Select the exact Word text for this field")
+        ordinal, start, end = (
+            anchor["paragraph_ordinal"],
+            anchor["start"],
+            anchor["end"],
+        )
+        source = field.get("source_text")
+        if (
+            not isinstance(source, str)
+            or not source
+            or start < 0
+            or end <= start
+            or paragraphs.get(ordinal, "")[start:end] != source
+        ):
+            raise TemplateDocxError(
+                "The selected Word text does not match the retained source"
+            )
+        if any(
+            start < other_end and other_start < end
+            for other_start, other_end in spans.get(ordinal, [])
+        ):
+            raise TemplateDocxError("Word fields cannot overlap; select separate text")
+        spans.setdefault(ordinal, []).append((start, end))

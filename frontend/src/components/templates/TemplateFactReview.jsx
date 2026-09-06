@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getMatterDocuments, getMatterDocumentDownloadUrl, proposeTemplateFact, acceptTemplateFact } from '../../api'
 
 export default function TemplateFactReview({ matterId, fields, onAccepted }) {
+  const requestVersion = useRef(0)
   const [documents, setDocuments] = useState([])
   const [documentId, setDocumentId] = useState('')
   const [fieldId, setFieldId] = useState('')
@@ -13,6 +14,8 @@ export default function TemplateFactReview({ matterId, fields, onAccepted }) {
   const eligible = fields.filter(field => field.binding?.startsWith('custom.matter.'))
   useEffect(() => {
     let current = true
+    requestVersion.current += 1
+    setBusy(false)
     setProposal(null)
     setDocuments([])
     setDocumentId('')
@@ -23,15 +26,17 @@ export default function TemplateFactReview({ matterId, fields, onAccepted }) {
   }, [matterId, eligible.length])
   if (!matterId || !eligible.length) return null
   const reset = () => { setProposal(null); setReplace(false); setMessage('') }
-  const find = async () => {
+  const readProposal = async () => {
+    const version = ++requestVersion.current
     setBusy(true); reset()
     try {
       const result = await proposeTemplateFact(matterId, documentId, fieldId)
+      if (version !== requestVersion.current) return
       setProposal(result)
       const candidate = result.status === 'suggested' ? result.candidates.find(item => item.value != null)?.value : ''
       setValue(candidate == null ? '' : String(candidate))
-    } catch (error) { setMessage(error?.response?.data?.detail || 'The source could not be read.') }
-    finally { setBusy(false) }
+    } catch (error) { if (version === requestVersion.current) setMessage(error?.response?.data?.detail || 'The source could not be read.') }
+    finally { if (version === requestVersion.current) setBusy(false) }
   }
   const accept = async () => {
     setBusy(true)
@@ -46,7 +51,7 @@ export default function TemplateFactReview({ matterId, fields, onAccepted }) {
     <p className="my-2 text-xs text-brand-muted">Finds exact “Label: value” lines in PDF, Word and text files. Scans, tables and unlabeled details may need manual entry. Nothing is saved until you accept it.</p>
     <label className="block text-xs">Source document<select aria-label="Fact source document" value={documentId} disabled={busy} onChange={event => { setDocumentId(event.target.value); reset() }} className="block w-full border rounded p-2 text-brand-ink bg-brand-bg"><option value="">Choose a source</option>{documents.map(doc => <option key={doc.id} value={doc.id}>{doc.filename}</option>)}</select></label>
     <label className="block text-xs mt-2">Matter detail<select aria-label="Fact to review" value={fieldId} disabled={busy} onChange={event => { setFieldId(event.target.value); reset() }} className="block w-full border rounded p-2 text-brand-ink bg-brand-bg"><option value="">Choose a detail</option>{eligible.map(field => <option key={field.name} value={field.binding.slice('custom.matter.'.length)}>{field.label || field.name}</option>)}</select></label>
-    <button type="button" onClick={find} disabled={busy || !fieldId || !documentId} className="mt-2 border rounded p-2 text-sm">Read source for review</button>
+    <button type="button" onClick={readProposal} disabled={busy || !fieldId || !documentId} className="mt-2 border rounded p-2 text-sm">Read source for review</button>
     {proposal && <div className="mt-3 space-y-2 text-sm">
       <p>{proposal.status === 'conflicting_sources' ? 'Conflicting values found. Resolve them against the original document.' : proposal.status === 'missing' ? 'No supported value found. Read the original before entering a value.' : 'Suggested from the source; verify before accepting.'}</p>
       <a className="underline" href={getMatterDocumentDownloadUrl(matterId, documentId)} target="_blank" rel="noreferrer">Open {proposal.source_filename}</a>

@@ -11,6 +11,7 @@ from docx import Document
 from app.models.document_template import DocumentTemplate
 from app.routers import document_templates as routes
 from app.services import template_fact_review as facts, template_custom_fields as custom
+from app.services import document_template_versions as versions
 from app.services.template_bindings import is_valid_binding
 from app.services.template_semantics import (
     validate_semantic_metadata,
@@ -126,7 +127,7 @@ async def test_published_view_does_not_mutate_or_depend_on_draft_test(
         is_active=True,
     )
     monkeypatch.setattr(
-        routes, "get_version", AsyncMock(return_value=None if missing else version)
+        versions, "get_version", AsyncMock(return_value=None if missing else version)
     )
     if missing or paused or source_changed:
         with pytest.raises(HTTPException) as error:
@@ -138,7 +139,7 @@ async def test_published_view_does_not_mutate_or_depend_on_draft_test(
         result.variable_schema["fields"].clear()
         assert version.variable_schema["fields"]
         assert template.body == "UNREVIEWED" and template.tested_version_no is None
-        assert routes.get_version.call_args.kwargs["tenant_id"] == template.tenant_id
+        assert versions.get_version.call_args.kwargs["tenant_id"] == template.tenant_id
 
 
 @pytest.mark.asyncio
@@ -415,3 +416,195 @@ async def test_malformed_word_is_rejected_before_text_parser(monkeypatch):
         await facts.propose(None, user, identity(), document.id, field.id)
     assert error.value.status_code == 422
     parser.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entity,has_value,reviewed",
+    [
+        ("matter", True, True),
+        ("matter", True, False),
+        ("matter", False, False),
+        ("contact", True, False),
+    ],
+)
+async def test_custom_binding_sources_and_provenance(
+    monkeypatch, entity, has_value, reviewed
+):
+    user, field, document = objects()
+    field.entity_type = entity
+    matter = NS(id=identity(), client_contact_id=identity())
+    value = NS(
+        id=identity(),
+        value_json=False,
+        value_hmac="signed",
+        updated_at=field.updated_at,
+        updated_by_user_id=user.id,
+    )
+    event = NS(
+        created_by=user.id,
+        metadata_json={
+            "document": str(document.id),
+            "source_sha256": "a",
+            "reviewed_at": field.updated_at.isoformat(),
+        },
+    )
+    monkeypatch.setattr(custom, "definitions", AsyncMock(return_value=[field]))
+    results = [value if has_value else None]
+    if has_value and entity == "matter":
+        results.append(event if reviewed else None)
+    db = NS(scalar=AsyncMock(side_effect=results))
+    result = (
+        await custom.suggestions(
+            db, user.tenant_id, matter, {"kids": f"custom.{entity}.{field.id}"}
+        )
+    )["kids"]
+    assert result.suggested_value == ("false" if has_value else None)
+    assert result.review_required
+    assert result.provenance["status"] == (
+        "reviewed_from_document"
+        if reviewed
+        else "from_custom_record"
+        if has_value
+        else "binding_unresolved"
+    )
+    for call in db.scalar.call_args_list:
+        assert user.tenant_id in call.args[0].compile().params.values()
+
+
+@pytest.mark.asyncio
+async def test_custom_catalogue_excludes_sensitive_inactive_and_foreign_fields():
+    tenant_id = identity()
+    db = NS(scalars=AsyncMock(return_value=NS(all=lambda: [])))
+    assert await custom.definitions(db, tenant_id) == []
+    query = db.scalars.call_args.args[0]
+    assert tenant_id in query.compile().params.values()
+    assert "sensitive IS false" in str(query) and "active IS true" in str(query)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_custom_definition_never_falls_back(monkeypatch):
+    monkeypatch.setattr(custom, "definitions", AsyncMock(return_value=[]))
+    db = NS(scalar=AsyncMock())
+    assert await custom.suggestions(db, identity(), None, {"x": "manual"}) == {}
+    result = await custom.suggestions(
+        db, identity(), NS(id=identity()), {"x": "custom.matter." + str(identity())}
+    )
+    assert result["x"].suggested_value is None
+    db.scalar.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [(None, None), (True, "true"), (False, "false"), (3, "3"), ("Ada", "Ada")],
+)
+def test_custom_value_display(value, expected):
+    assert custom.display_value(value) == expected
+
+
+@pytest.mark.parametrize("bad", [None, "mismatch", "overlap", "metadata"])
+def test_selected_word_fields_render_and_bad_anchors_rejected(bad):
+    from app.services.docx_outline import validate_visual_field_map
+    from app.services.docx_templates import fill_docx_template, TemplateDocxError
+
+    doc = Document()
+    doc.add_paragraph("Dear Ada Lovelace,")
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    field = {
+        "name": "recipient",
+        "source_text": "Ada Lovelace",
+        "field_type": "text",
+        "docx_anchor": {"paragraph_ordinal": 0, "start": 5, "end": 17},
+    }
+    proposed = {"fields": [field]}
+    if bad == "mismatch":
+        field["source_text"] = "wrong"
+    if bad == "overlap":
+        proposed["fields"].append({**field, "name": "duplicate"})
+    if bad == "metadata":
+        proposed["untrusted"] = "override"
+    if bad:
+        with pytest.raises(TemplateDocxError):
+            validate_visual_field_map(buffer.getvalue(), {"fields": []}, proposed)
+    else:
+        validate_visual_field_map(buffer.getvalue(), {"fields": []}, proposed)
+        output = fill_docx_template(
+            buffer.getvalue(),
+            variable_schema=proposed,
+            variables={"recipient": "Grace Hopper"},
+        )
+        assert Document(io.BytesIO(output)).paragraphs[0].text == "Dear Grace Hopper,"
+
+
+@pytest.mark.asyncio
+async def test_workspace_automation_uses_published_wording_while_draft_is_untested(
+    monkeypatch,
+):
+    from app.services import document_template_workspace as workspace
+
+    matter = NS(id=identity(), jurisdiction=None, stage=None, primary_plugin=None)
+    template = DocumentTemplate(
+        id=identity(),
+        tenant_id=identity(),
+        title="Draft",
+        body="UNREVIEWED",
+        format="markdown",
+        is_active=True,
+        published_version_no=1,
+        current_version_no=2,
+        tested_version_no=None,
+        status="draft",
+        variable_schema={"fields": []},
+    )
+    version = NS(
+        version_no=1,
+        title="Published",
+        body="Reviewed v1",
+        variable_schema={"fields": []},
+        format="markdown",
+        category="other",
+        source_sha256=None,
+        source_filename=None,
+        is_active=True,
+    )
+    monkeypatch.setattr(versions, "get_version", AsyncMock(return_value=version))
+    context = NS(
+        db=NS(scalar=AsyncMock(side_effect=[matter, template])),
+        tenant_id=template.tenant_id,
+    )
+    _, release = await workspace.require_workspace_template(
+        context, matter_id=matter.id, template_id=template.id
+    )
+    assert release.body == "Reviewed v1" and release.current_version_no == 1
+    assert template.body == "UNREVIEWED"
+
+
+@pytest.mark.asyncio
+async def test_real_pdf_label_extraction(monkeypatch):
+    from reportlab.pdfgen.canvas import Canvas
+
+    user, field, document = objects()
+    document.filename = "intake.pdf"
+    document.content_type = "application/pdf"
+    buffer = io.BytesIO()
+    canvas = Canvas(buffer)
+    canvas.drawString(50, 750, "Has children: yes")
+    canvas.save()
+    monkeypatch.setattr(
+        facts,
+        "context",
+        AsyncMock(
+            return_value=(
+                field,
+                document,
+                None,
+                buffer.getvalue(),
+                {"source_sha256": "a"},
+            )
+        ),
+    )
+    response = await facts.propose(None, user, identity(), document.id, field.id)
+    assert (
+        response["status"] == "suggested" and response["candidates"][0]["value"] is True
+    )

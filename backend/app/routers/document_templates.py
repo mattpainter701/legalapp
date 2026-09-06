@@ -25,8 +25,6 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from types import SimpleNamespace
-from copy import deepcopy
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
@@ -91,7 +89,7 @@ from app.services.pdf_templates import (
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
 from app.services.docx_to_pdf import DocxToPdfError, docx_to_pdf_bytes
-from app.services.docx_outline import docx_outline
+from app.services.docx_outline import docx_outline, validate_visual_field_map
 from app.services.template_regions import (
     TemplateRegionError,
     parse_regions,
@@ -2207,48 +2205,12 @@ async def _check_applicability(db, template, matter, user):
 
 
 async def _published_template(db, template):
-    """Read-only release view; draft edits/test failures never change this content."""
-    if not template.is_active or not template.published_version_no:
-        raise HTTPException(
-            status_code=409,
-            detail="Publish a tested version before generating documents.",
-        )
-    version = await get_version(
-        db,
-        tenant_id=template.tenant_id,
-        template_id=template.id,
-        version_no=int(template.published_version_no),
-    )
-    if not version or not version.is_active:
-        raise HTTPException(
-            status_code=409, detail="The published version is unavailable."
-        )
-    # Source replacement requires a fresh template; never combine an old map
-    # with new bytes. The source loader also verifies the retained bytes.
-    if version.source_sha256 != template.source_sha256:
-        raise HTTPException(
-            status_code=409, detail="The published source is unavailable."
-        )
-    values = {
-        column.key: getattr(template, column.key)
-        for column in DocumentTemplate.__table__.columns
-    }
-    for key in (
-        "title",
-        "body",
-        "variable_schema",
-        "format",
-        "category",
-        "source_sha256",
-        "source_filename",
-    ):
-        values[key] = deepcopy(getattr(version, key))
-    values.update(
-        current_version_no=version.version_no,
-        tested_version_no=version.version_no,
-        status="published",
-    )
-    return SimpleNamespace(**values)
+    from app.services.document_template_versions import published_template_view
+
+    try:
+        return await published_template_view(db, template)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 async def build_variable_suggestions(
@@ -3406,24 +3368,28 @@ async def update_template(
             status_code=422,
             detail="A source-backed DOCX template cannot be converted to another format in place.",
         )
-    if current_format == "docx" and (
-        "body" in updates
-        or (
-            "variable_schema" in updates
-            # A field map is only trustworthy relative to the retained Word
-            # bytes, so anchors and geometry still require a re-upload. What a
-            # customer *authors* about a field — its label, its data binding,
-            # the condition that governs it — touches no anchor, so refusing it
-            # would leave Word templates permanently unbindable.
-            and not is_semantic_only_change(
-                template.variable_schema, updates["variable_schema"]
-            )
-        )
-    ):
+    if current_format == "docx" and "body" in updates:
         raise HTTPException(
             status_code=422,
-            detail="Upload a new Word source to change a DOCX template body or field map.",
+            detail="Upload a new Word source to change a DOCX template body.",
         )
+    if (
+        current_format == "docx"
+        and "variable_schema" in updates
+        and not is_semantic_only_change(
+            template.variable_schema, updates["variable_schema"]
+        )
+    ):
+        try:
+            source = await _verified_template_source(template)
+            await asyncio.to_thread(
+                validate_visual_field_map,
+                source,
+                template.variable_schema or {},
+                updates["variable_schema"],
+            )
+        except TemplateDocxError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if "format" in updates:
         updates["format"] = requested_format
 
@@ -3506,7 +3472,7 @@ async def update_template(
                 "Save the field-map change, run Preview, then activate the template."
             ),
         )
-    if current_format == "pdf" and requested_activation and not template.is_active:
+    if current_format == "pdf" and requested_activation:
         effective_schema = updates.get("variable_schema", template.variable_schema)
         effective_body = str(updates.get("body", template.body) or "")
         expected_contract = _pdf_contract_sha256(
@@ -3554,7 +3520,7 @@ async def update_template(
         updates["last_test_rendered_at"] = None
         updates["approved_at"] = None
         updates["approved_by_user_id"] = None
-    elif current_format == "pdf" and requested_activation and not template.is_active:
+    elif current_format == "pdf" and requested_activation:
         updates["approved_at"] = datetime.now(timezone.utc)
         updates["approved_by_user_id"] = current_user.id
     elif (
@@ -3608,9 +3574,9 @@ async def update_template(
             user_id=current_user.id,
             change_summary=payload.change_summary,
         )
-        if requested_activation:
-            template.tested_version_no = template.current_version_no
-            template.published_version_no = template.current_version_no
+    if requested_activation:
+        template.tested_version_no = template.current_version_no
+        template.published_version_no = template.current_version_no
 
     await db.commit()
     await db.refresh(template)
@@ -4019,7 +3985,7 @@ async def render_template_endpoint(
             status_code=409,
             detail="Only active templates can be saved to a matter. Preview and activate this template first.",
         )
-    if matter is not None:
+    if matter is not None or payload.preview_purpose == "generation":
         template = await _published_template(db, template)
         await _check_applicability(db, template, matter, current_user)
 
