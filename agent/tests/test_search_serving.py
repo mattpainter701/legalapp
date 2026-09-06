@@ -1,5 +1,6 @@
 """Scanner manifest -> extraction -> OpenSearch -> portal permission contract."""
 
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 import time
@@ -73,29 +74,33 @@ async def serving(tmp_path):
     index = OpenSearchServingIndex(
         str(tmp_path / "manifest.db"), engine, extractor_settings=settings
     )
-    await index.init()
-    index.acl = normalize_sddl(f"D:(A;;FA;;;{SID})")
+    try:
+        await index.init()
+        index.acl = normalize_sddl(f"D:(A;;FA;;;{SID})")
 
-    async def fetch(job):
-        return b"confidential pleading text"
+        async def fetch(job):
+            return b"confidential pleading text"
 
-    async def valid(job):
-        return True
+        async def valid(job):
+            return True
 
-    index.start(fetch, path_validator=valid, acl_loader=lambda job: index.acl)
-    await index.enqueue(
-        dict(
-            path=PATH,
-            share_id="share",
-            ext=".txt",
-            content_hash="v1",
-            size_bytes=26,
-            modified_time="2026-09-06T00:00:00Z",
+        index.start(fetch, path_validator=valid, acl_loader=lambda job: index.acl)
+        await index.enqueue(
+            dict(
+                path=PATH,
+                share_id="share",
+                ext=".txt",
+                content_hash="v1",
+                size_bytes=26,
+                modified_time="2026-09-06T00:00:00Z",
+            )
         )
-    )
-    await index.wait_until_idle()
-    yield index, engine
-    await index.close()
+        async with asyncio.timeout(15):
+            await index.wait_until_idle()
+        yield index, engine
+    finally:
+        async with asyncio.timeout(15):
+            await index.close()
 
 
 async def search(index, **kwargs):
@@ -205,7 +210,8 @@ async def test_unknown_acl_is_terminal_and_engine_failure_is_not_ready(serving):
         worker.cancel()
     import asyncio
 
-    await asyncio.gather(*index._workers, return_exceptions=True)
+    async with asyncio.timeout(15):
+        await asyncio.gather(*index._workers, return_exceptions=True)
     index._workers.clear()
     job = await index._claim()
     with pytest.raises(RuntimeError, match="publish_incomplete"):

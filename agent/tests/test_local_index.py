@@ -682,3 +682,32 @@ async def test_expired_running_lease_can_be_reclaimed(tmp_path):
         await index.close()
         if "restarted" in locals():
             await restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_wins_when_idle_wake_completes_concurrently(
+    tmp_path, monkeypatch
+):
+    index = LocalSearchIndex(str(tmp_path / "unused.db"))
+
+    async def no_job():
+        return None
+
+    async def wait_seconds():
+        return 60
+
+    monkeypatch.setattr(index, "_claim", no_job)
+    monkeypatch.setattr(index, "_next_wait_seconds", wait_seconds)
+    worker = asyncio.create_task(index._run())
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        index._wake.set()
+        await asyncio.sleep(0)
+        worker.cancel()
+        done, _ = await asyncio.wait({worker}, timeout=1)
+        assert worker in done, "idle worker swallowed its shutdown cancellation"
+        assert worker.cancelled()
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)

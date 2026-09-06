@@ -749,7 +749,7 @@ class LocalSearchIndex:
                 job["_claim_attempt"] = claimed_attempt
                 job["_claim_lease_until"] = lease_until
                 return job
-            except Exception:
+            except BaseException:
                 await self._db.rollback()
                 raise
 
@@ -772,9 +772,11 @@ class LocalSearchIndex:
             job = await self._claim()
             if not job:
                 try:
-                    await asyncio.wait_for(
-                        self._wake.wait(), timeout=await self._next_wait_seconds()
-                    )
+                    # Python 3.11 wait_for can swallow external cancellation
+                    # when the wake completes concurrently (CPython #86296).
+                    # Keep the deadline in this task so shutdown always wins.
+                    async with asyncio.timeout(await self._next_wait_seconds()):
+                        await self._wake.wait()
                 except asyncio.TimeoutError:
                     pass
                 continue
@@ -833,7 +835,7 @@ class LocalSearchIndex:
                                 "local index claim changed during commit"
                             )
                         await self._db.commit()
-                    except Exception:
+                    except BaseException:
                         await self._db.rollback()
                         raise
             except asyncio.CancelledError:
