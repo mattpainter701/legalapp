@@ -676,6 +676,11 @@ def test_source_dict_from_chunk_links_and_cleans_public_authority():
         "authority_tier": None,
         "official_status": None,
         "effective_date": None,
+        "source_jurisdiction": None,
+        "document_status": None,
+        "retrieved_at": None,
+        "last_successful_sync_at": None,
+        "termination_date": None,
         "cited": False,
     }
 

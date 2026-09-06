@@ -643,6 +643,6 @@ describe('research source evidence metadata', () => {
     expect(evidence).toHaveTextContent(`Retrieved: ${retrieved}`)
     expect(evidence).toHaveTextContent(`Termination date: ${terminated}`)
     expect(evidence).toHaveTextContent('Current law and treatment require review')
-    expect(screen.queryByText(/<script>/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/<script>/i)).not.toBeInTheDocument()
   })
 })
