@@ -6,6 +6,8 @@ import MatterIntakePanel from './MatterIntakePanel'
 import NewMatterModal from './NewMatterModal'
 import api, { getClientIntake, submitClientIntake, createMatterV2, getContacts, getAdminUsers, getPlugins } from '../api'
 
+vi.mock('./MatterImportWizard', () => ({ default: () => <div>Historical import wizard</div> }))
+
 vi.mock('../api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
   getClientIntake: vi.fn(), submitClientIntake: vi.fn(), createMatterV2: vi.fn(), getContacts: vi.fn(), getAdminUsers: vi.fn(), getPlugins: vi.fn(), createContact: vi.fn(),
@@ -101,4 +103,17 @@ it('clears the previous intake when switching to a matter without a packet', asy
   rerender(<MatterIntakePanel matterId="second" />)
   await screen.findByRole('button', { name: 'Start intake & send portal invitation' })
   expect(screen.queryByText('Initial packet sent: Not yet')).not.toBeInTheDocument()
+})
+
+it('keeps intake submission out of the historical import path', async () => {
+  const user = userEvent.setup()
+  render(<NewMatterModal open onClose={vi.fn()} onCreated={vi.fn()} />)
+  await user.click(screen.getByLabelText('Start client intake with this matter'))
+  expect(screen.getByRole('button', { name: 'Create Matter & Start Intake' })).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Import existing matters' }))
+  expect(screen.getByText('Historical import wizard')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Create Matter & Start Intake' })).not.toBeInTheDocument()
+  expect(api.post).not.toHaveBeenCalled()
+  await user.click(screen.getByRole('button', { name: 'New matter' }))
+  expect(screen.getByRole('button', { name: 'Create Matter & Start Intake' })).toBeInTheDocument()
 })
