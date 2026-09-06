@@ -32,6 +32,7 @@ on:
     branches: [main]
     paths:
       - "agent/**"
+      - "search-node/**"
       - ".github/workflows/agent-release.yml"
   workflow_dispatch:
 
@@ -52,14 +53,17 @@ jobs:
           python-version: "3.11"
 
       - name: Install agent with test extras
-        run: python -m pip install "./agent[dev]"
+        run: python -m pip install "./agent[dev]" "./search-node"
 
       - name: Run agent tests on Windows
-        run: python -m pytest agent/tests -q
+        run: python -m pytest agent/tests -v -o faulthandler_timeout=60 --durations=20
 
       - name: Build unsigned validation installers
         shell: pwsh
         run: ./agent/packaging/windows/build.ps1
+
+      - name: Verify packaged search runtime boundary
+        run: python agent/packaging/test_search_preflight.py agent/dist/lawhand-agent.exe
 
       - name: Smoke-test unsigned validation MSI overtop upgrade
         shell: pwsh
@@ -210,16 +214,19 @@ jobs:
           python-version: "3.11"
 
       - name: Install agent with test extras
-        run: python -m pip install "./agent[dev]"
+        run: python -m pip install "./agent[dev]" "./search-node"
 
       - name: Run agent tests
-        run: python -m pytest agent/tests -q
+        run: python -m pytest agent/tests -v -o faulthandler_timeout=60 --durations=20
 
       - name: Validate Linux installer scripts
         run: bash -n agent/packaging/linux/build.sh agent/packaging/linux/install.sh agent/packaging/linux/lawhand-agent-update
 
       - name: Build agent binary
         run: ./agent/packaging/linux/build.sh
+
+      - name: Verify packaged search runtime boundary
+        run: python agent/packaging/test_search_preflight.py agent/dist/lawhand-agent
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)

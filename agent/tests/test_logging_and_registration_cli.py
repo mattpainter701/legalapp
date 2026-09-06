@@ -77,3 +77,52 @@ def test_register_cli_hides_http_error_and_pairing_code(monkeypatch):
         "SaaS rejected registration (HTTP 400): Pairing code expired"
     )
     assert "SECRET-CODE" not in str(exc.value)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_search_preflight_cli_reports_runtime_result(monkeypatch, capsys, failure):
+    import sys
+    from search_node import extraction, config
+
+    monkeypatch.setattr(config.Settings, "from_env", lambda: object())
+
+    class Extractor:
+        def __init__(self, settings):
+            pass
+
+        def preflight(self):
+            if failure:
+                raise RuntimeError("missing isolated runtime")
+
+    monkeypatch.setattr(extraction, "IsolatedExtractor", Extractor)
+    monkeypatch.setattr(sys, "argv", ["lawhand-agent", "search-preflight"])
+    if failure:
+        with pytest.raises(SystemExit, match="missing isolated runtime"):
+            cli.main()
+    else:
+        cli.main()
+        assert "runtime and process containment are ready" in capsys.readouterr().out
+
+
+def test_status_reports_opensearch_manifest_without_search(
+    monkeypatch, capsys, tmp_path
+):
+    from clarity_agent.config import AgentConfig
+
+    config = AgentConfig(
+        search_node_enabled=True, ledger_path=str(tmp_path / "ledger.db")
+    )
+    monkeypatch.setattr(cli.AgentConfig, "load", lambda: config)
+
+    async def stats(path):
+        assert path.endswith("opensearch-manifest.db")
+        return {
+            "available": True,
+            "statuses": {"error": {"files": 2}, "ready": {"files": 4}},
+        }
+
+    monkeypatch.setattr(cli, "read_index_stats", stats)
+    cli.cmd_status(Namespace())
+    output = capsys.readouterr().out
+    assert "OpenSearch:" in output and "error: 2 file(s)" in output
+    assert "search-preflight" in output

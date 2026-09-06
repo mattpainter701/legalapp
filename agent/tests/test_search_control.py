@@ -309,3 +309,21 @@ def test_windows_requires_a_fixed_persistent_volume(monkeypatch, tmp_path):
     )
     path = type(tmp_path)("C:/lawhand/control.db")
     assert control_module._is_network_filesystem(path, os_name="nt", platform="win32")
+
+
+@pytest.mark.asyncio
+async def test_engine_generation_survives_restart_and_clock_rollback(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "generations.db")
+    state = SqliteControlState(path)
+    await state.init()
+    assert await state.next_mutation_generation("share:path") == 1
+    assert await state.next_mutation_generation("other:path") == 1
+    await state.close()
+    monkeypatch.setattr(control_module.time, "time", lambda: 1)
+    resumed = SqliteControlState(path)
+    await resumed.init()
+    assert await resumed.next_mutation_generation("share:path") == 2
+    assert await resumed.next_mutation_generation("share:path") == 3
+    await resumed.close()

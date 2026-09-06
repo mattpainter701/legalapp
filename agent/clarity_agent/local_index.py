@@ -749,7 +749,7 @@ class LocalSearchIndex:
                 job["_claim_attempt"] = claimed_attempt
                 job["_claim_lease_until"] = lease_until
                 return job
-            except Exception:
+            except BaseException:
                 await self._db.rollback()
                 raise
 
@@ -772,9 +772,11 @@ class LocalSearchIndex:
             job = await self._claim()
             if not job:
                 try:
-                    await asyncio.wait_for(
-                        self._wake.wait(), timeout=await self._next_wait_seconds()
-                    )
+                    # Python 3.11 wait_for can swallow external cancellation
+                    # when the wake completes concurrently (CPython #86296).
+                    # Keep the deadline in this task so shutdown always wins.
+                    async with asyncio.timeout(await self._next_wait_seconds()):
+                        await self._wake.wait()
                 except asyncio.TimeoutError:
                     pass
                 continue
@@ -789,9 +791,7 @@ class LocalSearchIndex:
                 content = await self._fetcher(job)
                 if len(content) > self.max_file_bytes:
                     raise PermanentIndexError("file_too_large")
-                rows, page_count = await asyncio.to_thread(
-                    _extract_chunks, job["path"], content, self.max_text_chars
-                )
+                rows, page_count = await self._extract_text(job, content)
                 if not rows:
                     raise PermanentIndexError("no_extractable_text")
                 assert self._db
@@ -810,23 +810,7 @@ class LocalSearchIndex:
                         await self._db.execute(
                             "DELETE FROM index_fts WHERE path=?", (job["path"],)
                         )
-                        ext = PureWindowsPath(job["path"]).suffix.lower()
-                        await self._db.executemany(
-                            """INSERT INTO index_fts(
-                                   text,path,share_id,page_no,ordinal,ext
-                               ) VALUES(?,?,?,?,?,?)""",
-                            [
-                                (
-                                    text,
-                                    job["path"],
-                                    job["share_id"],
-                                    page,
-                                    ordinal,
-                                    ext,
-                                )
-                                for page, ordinal, text in rows
-                            ],
-                        )
+                        acl_record = await self._publish_text(job, rows, acl_record)
                         completed = await self._db.execute(
                             """UPDATE index_files
                                SET status='ready', page_count=?, extraction_error=NULL,
@@ -851,7 +835,7 @@ class LocalSearchIndex:
                                 "local index claim changed during commit"
                             )
                         await self._db.commit()
-                    except Exception:
+                    except BaseException:
                         await self._db.rollback()
                         raise
             except asyncio.CancelledError:
@@ -865,6 +849,33 @@ class LocalSearchIndex:
                 # failure category, not document data in the queue ledger.
                 reason = f"transient:{type(exc).__name__}"
                 await self._record_failure(job, reason, retry=attempts < MAX_ATTEMPTS)
+
+    async def _extract_text(self, job: dict, content: bytes):
+        return await asyncio.to_thread(
+            _extract_chunks, job["path"], content, self.max_text_chars
+        )
+
+    async def _publish_text(self, job: dict, rows: list, acl_record: dict) -> dict:
+        """Commit derived text while the manifest claim is fenced by its lock."""
+        assert self._db
+        ext = PureWindowsPath(job["path"]).suffix.lower()
+        await self._db.executemany(
+            """INSERT INTO index_fts(
+                   text,path,share_id,page_no,ordinal,ext
+               ) VALUES(?,?,?,?,?,?)""",
+            [
+                (
+                    text,
+                    job["path"],
+                    job["share_id"],
+                    page,
+                    ordinal,
+                    ext,
+                )
+                for page, ordinal, text in rows
+            ],
+        )
+        return acl_record
 
     async def _record_failure(self, job: dict, reason: str, *, retry: bool) -> None:
         if not self._db:

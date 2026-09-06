@@ -35,6 +35,43 @@ class IsolatedExtractor:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def runtime(self) -> str:
+        configured = os.environ.get("SEARCH_NODE_PYTHON_EXECUTABLE")
+        if getattr(sys, "frozen", False) and not configured:
+            raise RuntimeError("Packaged Search Node requires SEARCH_NODE_PYTHON_EXECUTABLE")
+        executable = Path(configured or sys.executable)
+        if not executable.is_absolute() or not executable.is_file():
+            raise RuntimeError("Search Node Python runtime must be an existing absolute executable")
+        return str(executable)
+
+    def preflight(self) -> None:
+        self.settings.assert_worker_safe()
+        with ProcessContainer(self.settings) as container:
+            if not container.contained:
+                raise RuntimeError("Search Node process containment is unavailable")
+        external = bool(os.environ.get("SEARCH_NODE_PYTHON_EXECUTABLE"))
+        environment = {"PATH": os.environ.get("PATH", ""), "PYTHONIOENCODING": "utf-8"}
+        if os.name == "nt":
+            environment["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", "C:\\Windows")
+        if not external:
+            environment["PYTHONPATH"] = os.pathsep.join(sys.path)
+        with tempfile.TemporaryDirectory(prefix="lawhand-parser-preflight-") as directory:
+            result = subprocess.run(
+                [
+                    self.runtime(),
+                    *(["-I"] if external else []),
+                    "-c",
+                    "import search_node.parser_child",
+                ],
+                capture_output=True,
+                timeout=15,
+                check=False,
+                env=environment,
+                cwd=directory,
+            )
+        if result.returncode:
+            raise RuntimeError("Search Node Python runtime lacks the installed extraction package")
+
     def extract(self, job: ManifestJob) -> ExtractionRecord:
         self.settings.assert_worker_safe()
         path = Path(job.source_path)
@@ -71,6 +108,13 @@ class IsolatedExtractor:
                 "PYTHONPATH": os.pathsep.join(sys.path),
                 "PYTHONIOENCODING": "utf-8",
             }
+            if os.name == "nt":
+                env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", "C:\\Windows")
+            external = bool(os.environ.get("SEARCH_NODE_PYTHON_EXECUTABLE"))
+            if external:
+                # A provisioned runtime loads its reviewed installed package,
+                # never the frozen agent's import paths.
+                env.pop("PYTHONPATH", None)
             tika_jar = os.environ.get("SEARCH_NODE_TIKA_APP_JAR")
             if tika_jar:
                 jar_path = Path(tika_jar).resolve(strict=True)
@@ -79,10 +123,17 @@ class IsolatedExtractor:
             # container owns killing every descendant and, on Windows, the only
             # memory and process-count limits the parser gets.
             with ProcessContainer(self.settings, jvm_expected=bool(tika_jar)) as container:
+                if not container.contained:
+                    raise RuntimeError("Search Node process containment is unavailable")
                 proc = subprocess.Popen(
                     # cwd is a private empty directory and PYTHONPATH is rebuilt
                     # from the reviewed supervisor process, never from the job.
-                    [sys.executable, "-m", "search_node.parser_child"],
+                    [
+                        self.runtime(),
+                        *(["-I"] if external else []),
+                        "-m",
+                        "search_node.parser_child",
+                    ],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,

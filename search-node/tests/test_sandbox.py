@@ -165,3 +165,47 @@ def test_grandchild_dies_with_the_container(tmp_path: Path):
 
     assert proc.returncode is not None
     assert _wait_until(lambda: not _pid_alive(grandchild_pid)), "grandchild outlived its container"
+
+
+def test_failed_windows_job_assignment_kills_child(tmp_path):
+    from types import SimpleNamespace
+
+    calls = []
+    container = ProcessContainer(settings(tmp_path))
+    container._job = object()
+    container._kernel32 = SimpleNamespace(AssignProcessToJobObject=lambda *args: False)
+    proc = SimpleNamespace(
+        _handle=1, kill=lambda: calls.append("kill"), communicate=lambda: calls.append("wait")
+    )
+    with pytest.raises(RuntimeError, match="could not contain"):
+        container.adopt(proc)
+    assert calls == ["kill", "wait"]
+
+
+def test_frozen_extractor_requires_external_runtime(tmp_path, monkeypatch):
+    from search_node.extraction import IsolatedExtractor
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.delenv("SEARCH_NODE_PYTHON_EXECUTABLE", raising=False)
+    extractor = IsolatedExtractor(settings(tmp_path))
+    with pytest.raises(RuntimeError, match="SEARCH_NODE_PYTHON_EXECUTABLE"):
+        extractor.runtime()
+    monkeypatch.setenv("SEARCH_NODE_PYTHON_EXECUTABLE", "relative-python")
+    with pytest.raises(RuntimeError, match="absolute"):
+        extractor.runtime()
+    monkeypatch.setenv("SEARCH_NODE_PYTHON_EXECUTABLE", sys.executable)
+    assert extractor.runtime() == sys.executable
+
+
+def test_extractor_preflight_requires_containment_and_package(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from search_node import extraction
+
+    extractor = extraction.IsolatedExtractor(settings(tmp_path))
+    monkeypatch.setattr(ProcessContainer, "contained", property(lambda self: False))
+    with pytest.raises(RuntimeError, match="containment"):
+        extractor.preflight()
+    monkeypatch.setattr(ProcessContainer, "contained", property(lambda self: True))
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=1))
+    with pytest.raises(RuntimeError, match="lacks the installed"):
+        extractor.preflight()

@@ -68,6 +68,8 @@ class SearchNode:
     def from_config(cls, config: AgentConfig) -> SearchNode:
         if not config.search_node_enabled:
             raise ValueError("Search Node is not enabled")
+        if not config.native_authz_enabled or not config.search_identity_public_key:
+            raise ValueError("OpenSearch serving requires native authorization and identity verification")
         if config.local_index_enabled:
             raise ValueError(
                 "legacy SQLite FTS and production Search Node cannot both serve"

@@ -172,7 +172,8 @@ async def test_optional_index_failure_does_not_block_saas_sync(monkeypatch):
     )
 
     assert [item["path"] for item in ledger.upserts] == [r"\\FS\Legal\ok.txt"]
-    assert outcome["status"] == "success"
+    assert outcome["status"] == "partial"
+    assert outcome["error"] == "local_index_update_failed:OSError"
 
 
 @pytest.mark.asyncio

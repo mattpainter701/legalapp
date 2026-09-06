@@ -15,6 +15,7 @@ from clarity_agent.opensearch_engine import (
     SearchUnavailableError,
 )
 from clarity_agent.search_engine import (
+    INDEX_SCHEMA_VERSION,
     BulkResult,
     DocumentChunk,
     DocumentMutation,
@@ -22,7 +23,14 @@ from clarity_agent.search_engine import (
     SearchRequest,
 )
 
-ACTIVE_INDEX = "lawhand-firm-memory-v1-existing"
+# Derived from the engine constant so a schema bump does not require a
+# find-and-replace across this file again.
+INDEX_PREFIX = "lawhand-firm-memory"
+READ_ALIAS = f"{INDEX_PREFIX}-read-v{INDEX_SCHEMA_VERSION}"
+WRITE_ALIAS = f"{INDEX_PREFIX}-write-v{INDEX_SCHEMA_VERSION}"
+COORDINATION_INDEX = f"{INDEX_PREFIX}-coordination-v{INDEX_SCHEMA_VERSION}"
+PHYSICAL_PREFIX = f"{INDEX_PREFIX}-v{INDEX_SCHEMA_VERSION}-"
+ACTIVE_INDEX = f"{PHYSICAL_PREFIX}existing"
 
 
 def _chunk(number: int = 1) -> DocumentChunk:
@@ -89,7 +97,9 @@ def test_versioned_mapping_is_strict_bm25_and_page_aware():
     engine = _engine()
     mapping = engine._mapping()
     assert mapping["mappings"]["dynamic"] == "strict"
-    assert mapping["mappings"]["_meta"]["lawhand_schema_version"] == 1
+    assert (
+        mapping["mappings"]["_meta"]["lawhand_schema_version"] == INDEX_SCHEMA_VERSION
+    )
     assert mapping["settings"]["similarity"]["default"]["type"] == "BM25"
     properties = mapping["mappings"]["properties"]
     assert properties["chunks"]["type"] == "nested"
@@ -98,6 +108,47 @@ def test_versioned_mapping_is_strict_bm25_and_page_aware():
     assert properties["chunks"]["properties"]["page_number"]["type"] == "integer"
     assert properties["chunks"]["properties"]["section_path"]["type"] == "keyword"
     assert properties["acl_tokens"]["type"] == "keyword"
+    assert properties["deny_acl_tokens"]["type"] == "keyword"
+
+
+def test_explicit_deny_beats_an_allow_from_another_group():
+    """Windows resolves a DENY ACE ahead of any allow, including an inherited one."""
+    engine = _engine()
+    body = engine._search_body(
+        SearchRequest(query="settlement", acl_tokens=("sid:S-1-5-21-1", "sid:S-1-5-32"))
+    )
+    clause = body["query"]["bool"]
+    assert {"terms": {"acl_tokens": ["sid:S-1-5-21-1", "sid:S-1-5-32"]}} in clause[
+        "filter"
+    ]
+    # The deny clause covers the caller's whole principal set, so being denied
+    # through any one of their groups removes the document.
+    assert clause["must_not"] == [
+        {"terms": {"deny_acl_tokens": ["sid:S-1-5-21-1", "sid:S-1-5-32"]}}
+    ]
+
+
+def test_deny_tokens_travel_with_the_document_envelope():
+    engine = _engine()
+    source = engine._document_source(
+        [replace(_chunk(1), acl_tokens=("allow",), deny_acl_tokens=("deny",))]
+    )
+    assert source["acl_tokens"] == ["allow"]
+    assert source["deny_acl_tokens"] == ["deny"]
+    # Deny is part of the atomic envelope, so a revocation cannot land as a
+    # partial update that leaves the allow set behind.
+    assert source["mutation_digest"]
+
+
+def test_chunks_disagreeing_on_deny_tokens_are_rejected():
+    engine = _engine()
+    with pytest.raises(ValueError):
+        engine._document_source(
+            [
+                replace(_chunk(1), deny_acl_tokens=("deny",)),
+                replace(_chunk(2), deny_acl_tokens=()),
+            ]
+        )
 
 
 def test_query_preserves_phrase_boolean_syntax_and_applies_acl_and_fields():
@@ -142,8 +193,8 @@ async def test_bulk_index_is_bounded_and_keeps_text_only_in_opensearch_request()
                 json={
                     ACTIVE_INDEX: {
                         "aliases": {
-                            "lawhand-firm-memory-read-v1": {},
-                            "lawhand-firm-memory-write-v1": {"is_write_index": True},
+                            READ_ALIAS: {},
+                            WRITE_ALIAS: {"is_write_index": True},
                         }
                     }
                 },
@@ -152,7 +203,11 @@ async def test_bulk_index_is_bounded_and_keeps_text_only_in_opensearch_request()
             return httpx.Response(
                 200,
                 json={
-                    ACTIVE_INDEX: {"mappings": {"_meta": {"lawhand_schema_version": 1}}}
+                    ACTIVE_INDEX: {
+                        "mappings": {
+                            "_meta": {"lawhand_schema_version": INDEX_SCHEMA_VERSION}
+                        }
+                    }
                 },
             )
         if request.url.path == "/_bulk":
@@ -214,7 +269,7 @@ async def test_rebuild_swaps_aliases_only_after_refresh():
                 200, json={"acknowledged": True, "shards_acknowledged": True}
             )
         if request.method == "PUT" and request.url.path.startswith(
-            "/lawhand-firm-memory-v1-"
+            f"/{PHYSICAL_PREFIX}"
         ):
             return httpx.Response(200, json={"acknowledged": True})
         if request.url.path == "/_bulk":
@@ -236,8 +291,8 @@ async def test_rebuild_swaps_aliases_only_after_refresh():
                 json={
                     active_index: {
                         "aliases": {
-                            "lawhand-firm-memory-read-v1": {},
-                            "lawhand-firm-memory-write-v1": {"is_write_index": True},
+                            READ_ALIAS: {},
+                            WRITE_ALIAS: {"is_write_index": True},
                         }
                     }
                 },
@@ -274,14 +329,14 @@ async def test_rebuild_swaps_aliases_only_after_refresh():
         yield _chunk()
 
     index = await engine.rebuild(chunks())
-    assert index.startswith("lawhand-firm-memory-v1-")
+    assert index.startswith(PHYSICAL_PREFIX)
     refresh_index = next(
         i for i, event in enumerate(events) if event[1].endswith("/_refresh")
     )
     alias_index = events.index(("POST", "/_aliases"))
     assert refresh_index < alias_index
     assert all(
-        action.get("remove", {}).get("index", "").startswith("lawhand-firm-memory-v1-")
+        action.get("remove", {}).get("index", "").startswith(PHYSICAL_PREFIX)
         for action in alias_actions
         if "remove" in action
     )
@@ -310,12 +365,12 @@ async def test_aliases_must_be_single_complete_and_write_enabled():
             json={
                 "old": {
                     "aliases": {
-                        "lawhand-firm-memory-read-v1": {},
-                        "lawhand-firm-memory-write-v1": {"is_write_index": True},
+                        READ_ALIAS: {},
+                        WRITE_ALIAS: {"is_write_index": True},
                     }
                 },
                 "current": {
-                    "aliases": {"lawhand-firm-memory-read-v1": {}},
+                    "aliases": {READ_ALIAS: {}},
                 },
             },
         )
@@ -332,10 +387,10 @@ async def test_aliases_must_be_single_complete_and_write_enabled():
 @pytest.mark.asyncio
 async def test_missing_or_split_aliases_fail_closed():
     def missing_handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("read-v1"):
+        if request.url.path.endswith(f"read-v{INDEX_SCHEMA_VERSION}"):
             return httpx.Response(
                 200,
-                json={ACTIVE_INDEX: {"aliases": {"lawhand-firm-memory-read-v1": {}}}},
+                json={ACTIVE_INDEX: {"aliases": {READ_ALIAS: {}}}},
             )
         return httpx.Response(404)
 
@@ -382,8 +437,8 @@ async def test_aliases_reject_foreign_indexes_filters_and_routing(
             json={
                 index: {
                     "aliases": {
-                        "lawhand-firm-memory-read-v1": read_metadata,
-                        "lawhand-firm-memory-write-v1": write_metadata,
+                        READ_ALIAS: read_metadata,
+                        WRITE_ALIAS: write_metadata,
                     }
                 }
             },
@@ -402,6 +457,8 @@ async def test_aliases_reject_foreign_indexes_filters_and_routing(
 async def test_replacement_deletes_old_chunks_before_partial_bulk_failure():
     events = []
     bulk_calls = 0
+    tombstone_requests: list[httpx.Request] = []
+    document_requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal bulk_calls
@@ -414,8 +471,8 @@ async def test_replacement_deletes_old_chunks_before_partial_bulk_failure():
                 json={
                     ACTIVE_INDEX: {
                         "aliases": {
-                            "lawhand-firm-memory-read-v1": {},
-                            "lawhand-firm-memory-write-v1": {"is_write_index": True},
+                            READ_ALIAS: {},
+                            WRITE_ALIAS: {"is_write_index": True},
                         }
                     }
                 },
@@ -424,15 +481,38 @@ async def test_replacement_deletes_old_chunks_before_partial_bulk_failure():
             return httpx.Response(
                 200,
                 json={
-                    ACTIVE_INDEX: {"mappings": {"_meta": {"lawhand_schema_version": 1}}}
+                    ACTIVE_INDEX: {
+                        "mappings": {
+                            "_meta": {"lawhand_schema_version": INDEX_SCHEMA_VERSION}
+                        }
+                    }
                 },
             )
         if request.url.path == "/_bulk":
             bulk_calls += 1
+            lines = [json.loads(line) for line in request.content.splitlines()]
+            sources = lines[1::2]
+            if all(source.get("record_type") == "tombstone" for source in sources):
+                tombstone_requests.append(request)
+                return httpx.Response(
+                    200,
+                    json={"items": [{"index": {"status": 201}} for _ in sources]},
+                )
+            document_requests.append(request)
+            # doc-1 loses its replacement; doc-2's must still land.
             return httpx.Response(
                 200,
                 json={
-                    "items": [{"index": {"status": 409 if bulk_calls == 1 else 201}}]
+                    "items": [
+                        {
+                            "index": {
+                                "status": 409
+                                if source["document_id"] == "doc-1"
+                                else 201
+                            }
+                        }
+                        for source in sources
+                    ]
                 },
             )
         return httpx.Response(500)
@@ -453,10 +533,22 @@ async def test_replacement_deletes_old_chunks_before_partial_bulk_failure():
     ]
     result = await engine.bulk_index(revoked_chunks)
     assert result.accepted == 1 and result.failed_ids == ("doc-1:1", "doc-1:2")
+
+    # Both documents were tombstoned before any replacement was attempted, so a
+    # failed replacement cannot leave old authorized content searchable.
+    assert len(tombstone_requests) == 1
+    tombstoned = {
+        json.loads(line)["document_id"]
+        for line in tombstone_requests[0].content.splitlines()[1::2]
+    }
+    assert tombstoned == {"doc-1", "doc-2"}
+    assert events.index("/_bulk") < len(events) - 1
     assert events.count("/_bulk") == 2
-    tombstones = [event for event in events if "/_doc/" in event]
-    assert len(tombstones) == 2
-    assert events.index(tombstones[0]) < events.index("/_bulk")
+
+    # One refresh for the whole revocation, not one per document: the visibility
+    # guarantee is unchanged but ingest no longer refreshes per document.
+    assert tombstone_requests[0].url.params.get("refresh") == "true"
+    assert document_requests[0].url.params.get("refresh") is None
     await client.aclose()
 
 
@@ -516,8 +608,8 @@ async def test_health_reads_actual_watermarks_without_cluster_mutation():
                 json={
                     ACTIVE_INDEX: {
                         "aliases": {
-                            "lawhand-firm-memory-read-v1": {},
-                            "lawhand-firm-memory-write-v1": {"is_write_index": True},
+                            READ_ALIAS: {},
+                            WRITE_ALIAS: {"is_write_index": True},
                         }
                     }
                 },
@@ -694,8 +786,8 @@ async def test_alias_commit_recovers_after_committed_response_loss():
                 json={
                     active_index: {
                         "aliases": {
-                            "lawhand-firm-memory-read-v1": {},
-                            "lawhand-firm-memory-write-v1": {"is_write_index": True},
+                            READ_ALIAS: {},
+                            WRITE_ALIAS: {"is_write_index": True},
                         }
                     }
                 },
@@ -709,8 +801,8 @@ async def test_alias_commit_recovers_after_committed_response_loss():
         base_url="http://127.0.0.1:9200", transport=httpx.MockTransport(handler)
     )
     engine = _engine(client=client)
-    await engine._commit_aliases("lawhand-firm-memory-v1-new")
-    assert active_index == "lawhand-firm-memory-v1-new" and not deletes
+    await engine._commit_aliases(f"{PHYSICAL_PREFIX}new")
+    assert active_index == f"{PHYSICAL_PREFIX}new" and not deletes
     await client.aclose()
 
 
@@ -726,14 +818,14 @@ async def test_alias_commit_lost_response_is_uncertain_even_if_old_alias_is_obse
     engine._swap_aliases = swap_aliases
     engine._active_index = active_index
     with pytest.raises(RebuildReplayUncertain, match="terminal outcome"):
-        await engine._commit_aliases("lawhand-firm-memory-v1-new")
+        await engine._commit_aliases(f"{PHYSICAL_PREFIX}new")
     await engine.close()
 
 
 @pytest.mark.asyncio
 async def test_initialization_retains_cutover_lease_when_alias_outcome_is_unknown():
     engine = _engine()
-    candidate = "lawhand-firm-memory-v1-initial"
+    candidate = f"{PHYSICAL_PREFIX}initial"
     active_reads = 0
     phases = []
     released = False
@@ -788,8 +880,8 @@ async def test_alias_lookup_uses_one_faithful_combined_response():
             json={
                 ACTIVE_INDEX: {
                     "aliases": {
-                        "lawhand-firm-memory-read-v1": {},
-                        "lawhand-firm-memory-write-v1": {"is_write_index": True},
+                        READ_ALIAS: {},
+                        WRITE_ALIAS: {"is_write_index": True},
                     }
                 }
             },
@@ -800,7 +892,7 @@ async def test_alias_lookup_uses_one_faithful_combined_response():
     )
     engine = _engine(client=client)
     assert await engine._active_index() == ACTIVE_INDEX
-    assert paths == ["/_alias/lawhand-firm-memory-read-v1,lawhand-firm-memory-write-v1"]
+    assert paths == [f"/_alias/{READ_ALIAS},{WRITE_ALIAS}"]
     await client.aclose()
 
 
@@ -845,7 +937,7 @@ async def test_rebuild_excludes_concurrent_delete_until_cutover():
 @pytest.mark.asyncio
 async def test_rebuild_replays_mutation_from_second_engine_before_cutover():
     old_index = ACTIVE_INDEX
-    new_index = "lawhand-firm-memory-v1-rebuild"
+    new_index = f"{PHYSICAL_PREFIX}rebuild"
     stores = {old_index: {}, new_index: {}}
     block_entered = asyncio.Event()
     mutation_finished = asyncio.Event()
@@ -944,8 +1036,8 @@ async def test_rebuild_replays_mutation_from_second_engine_before_cutover():
 
 @pytest.mark.asyncio
 async def test_first_rebuild_serializes_initialization_before_replaying_mutations():
-    initial = "lawhand-firm-memory-v1-initial"
-    candidate = "lawhand-firm-memory-v1-candidate"
+    initial = f"{PHYSICAL_PREFIX}initial"
+    candidate = f"{PHYSICAL_PREFIX}candidate"
     state = {"active": None, "lease_owner": None}
     stores = {initial: {}, candidate: {}}
     names = iter((initial, candidate))
@@ -1086,7 +1178,7 @@ async def test_rebuild_lease_excludes_second_engine_and_releases_with_occ():
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal delete_params
-        if request.url.path == "/lawhand-firm-memory-coordination-v1":
+        if request.url.path == f"/{COORDINATION_INDEX}":
             return httpx.Response(200, json={"acknowledged": True})
         if request.url.path.endswith("/_create/rebuild-lock"):
             if lock["source"] is not None:
@@ -1152,7 +1244,7 @@ async def test_lost_rebuild_lease_create_ack_is_read_from_document_endpoint():
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal source
         paths.append((request.method, request.url.path))
-        if request.url.path == "/lawhand-firm-memory-coordination-v1":
+        if request.url.path == f"/{COORDINATION_INDEX}":
             return httpx.Response(200, json={"acknowledged": True})
         if request.url.path.endswith("/_create/rebuild-lock"):
             source = json.loads(request.content)
@@ -1170,10 +1262,10 @@ async def test_lost_rebuild_lease_create_ack_is_read_from_document_endpoint():
     engine = _engine(client=client)
     lease = await engine._acquire_rebuild_lease(ACTIVE_INDEX, "candidate-a")
     assert lease == (source["owner"], 7, 3)
-    assert ("GET", "/lawhand-firm-memory-coordination-v1/_doc/rebuild-lock") in paths
+    assert ("GET", f"/{COORDINATION_INDEX}/_doc/rebuild-lock") in paths
     assert (
         "GET",
-        "/lawhand-firm-memory-coordination-v1/_create/rebuild-lock",
+        f"/{COORDINATION_INDEX}/_create/rebuild-lock",
     ) not in paths
     await client.aclose()
 
@@ -1262,7 +1354,7 @@ async def test_rebuild_replay_uses_bounded_async_task_polling():
     engine = _engine(
         client=client, limits=OpenSearchLimits(rebuild_replay_poll_seconds=0)
     )
-    result = await engine._replay_index(ACTIVE_INDEX, "lawhand-firm-memory-v1-new")
+    result = await engine._replay_index(ACTIVE_INDEX, f"{PHYSICAL_PREFIX}new")
     start = calls[0]
     assert start.url.params["wait_for_completion"] == "false"
     assert json.loads(start.content)["dest"]["version_type"] == "external"
@@ -1286,7 +1378,7 @@ async def test_ambiguous_rebuild_replay_start_is_never_retried():
     )
     engine = _engine(client=client)
     with pytest.raises(RebuildReplayUncertain, match="start outcome is uncertain"):
-        await engine._replay_index(ACTIVE_INDEX, "lawhand-firm-memory-v1-new")
+        await engine._replay_index(ACTIVE_INDEX, f"{PHYSICAL_PREFIX}new")
     assert starts == 1
     await client.aclose()
 
@@ -1310,7 +1402,7 @@ async def test_rebuild_replay_timeout_is_explicitly_quarantined():
         ),
     )
     with pytest.raises(RebuildReplayUncertain, match="before quarantine"):
-        await engine._replay_index(ACTIVE_INDEX, "lawhand-firm-memory-v1-new")
+        await engine._replay_index(ACTIVE_INDEX, f"{PHYSICAL_PREFIX}new")
     await client.aclose()
 
 
@@ -1332,7 +1424,7 @@ async def test_rebuild_replay_task_http_error_is_explicitly_quarantined():
     )
     engine = _engine(client=client)
     with pytest.raises(RebuildReplayUncertain, match="task state is uncertain"):
-        await engine._replay_index(ACTIVE_INDEX, "lawhand-firm-memory-v1-new")
+        await engine._replay_index(ACTIVE_INDEX, f"{PHYSICAL_PREFIX}new")
     assert starts == 1
     await client.aclose()
 
@@ -1856,7 +1948,7 @@ async def test_rebuild_requires_document_order_for_constant_memory_validation():
 
 @pytest.mark.asyncio
 async def test_rebuild_rejects_oversized_document_before_accumulating_rest():
-    engine = _engine(limits=OpenSearchLimits(max_bulk_documents=2))
+    engine = _engine(limits=OpenSearchLimits(max_document_chunks=2))
     _stub_rebuild_lease(engine)
     _stub_rebuild_source(engine)
     yielded = 0
@@ -1880,6 +1972,122 @@ async def test_rebuild_rejects_oversized_document_before_accumulating_rest():
         await engine.rebuild(chunks())
     assert yielded == 3
     await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_one_document_may_hold_more_chunks_than_a_bulk_batch():
+    """A 2,000-page PDF is one document; the batch size must not cap its chunks."""
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/_bulk":
+            bodies.append(request.content)
+            return httpx.Response(200, json={"items": [{"index": {"status": 201}}]})
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(
+        base_url="http://127.0.0.1:9200", transport=httpx.MockTransport(handler)
+    )
+    # Two documents per bulk request, but up to fifty chunks in one document.
+    engine = _engine(
+        client=client,
+        limits=OpenSearchLimits(max_bulk_documents=2, max_document_chunks=50),
+    )
+    result = await engine._bulk_to(
+        WRITE_ALIAS, [_chunk(number) for number in range(10)]
+    )
+    assert result.accepted == 10 and result.failed_ids == ()
+    # One document, therefore one bulk action carrying all ten chunks.
+    assert len(bodies) == 1
+    action, source = [json.loads(line) for line in bodies[0].splitlines()]
+    assert action["index"]["_index"] == WRITE_ALIAS
+    assert len(source["chunks"]) == 10
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_document_over_the_chunk_ceiling_fails_without_its_neighbours():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/_bulk":
+            return httpx.Response(200, json={"items": [{"index": {"status": 201}}]})
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(
+        base_url="http://127.0.0.1:9200", transport=httpx.MockTransport(handler)
+    )
+    engine = _engine(client=client, limits=OpenSearchLimits(max_document_chunks=2))
+    oversized = [replace(_chunk(number), document_id="doc-2") for number in range(5)]
+    result = await engine._bulk_to(WRITE_ALIAS, [_chunk(1)] + oversized)
+    # The healthy neighbour still lands; only the oversized document fails.
+    assert result.accepted == 1
+    assert set(result.failed_ids) == {chunk.chunk_id for chunk in oversized}
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_document_larger_than_the_batch_budget_still_indexes():
+    """The 8 MiB transport budget must not cap the 20 MiB extraction budget."""
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/_bulk":
+            bodies.append(request.content)
+            return httpx.Response(200, json={"items": [{"index": {"status": 201}}]})
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(
+        base_url="http://127.0.0.1:9200", transport=httpx.MockTransport(handler)
+    )
+    engine = _engine(
+        client=client,
+        limits=OpenSearchLimits(max_bulk_bytes=4_096, max_document_bytes=1_000_000),
+    )
+    big = replace(_chunk(1), content="x" * 50_000)
+    result = await engine._bulk_to(WRITE_ALIAS, [big])
+    assert result.accepted == 1 and result.failed_ids == ()
+    assert len(bodies) == 1 and len(bodies[0]) > 4_096
+
+    # Past its own ceiling the document does fail, and says so as a document.
+    engine.limits = OpenSearchLimits(max_bulk_bytes=4_096, max_document_bytes=1_000)
+    refused = await engine._bulk_to(WRITE_ALIAS, [big])
+    assert refused.accepted == 0 and refused.failed_ids == (big.chunk_id,)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_batches_split_on_the_byte_budget_rather_than_failing():
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/_bulk":
+            bodies.append(request.content)
+            count = len(request.content.decode().strip().splitlines()) // 2
+            return httpx.Response(
+                200, json={"items": [{"index": {"status": 201}} for _ in range(count)]}
+            )
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(
+        base_url="http://127.0.0.1:9200", transport=httpx.MockTransport(handler)
+    )
+    engine = _engine(
+        client=client,
+        limits=OpenSearchLimits(max_bulk_documents=100, max_bulk_bytes=3_000),
+    )
+    documents = [
+        replace(
+            _chunk(1),
+            document_id=f"doc-{number}",
+            chunk_id=f"doc-{number}:1",
+            content="y" * 800,
+        )
+        for number in range(6)
+    ]
+    result = await engine._bulk_to(WRITE_ALIAS, documents)
+    assert result.accepted == 6 and result.failed_ids == ()
+    assert len(bodies) > 1, "the batch should have been split, not rejected"
+    assert all(len(body) <= 3_000 for body in bodies)
+    await client.aclose()
 
 
 @pytest.mark.asyncio
@@ -2031,7 +2239,7 @@ async def test_snapshot_restore_is_prefix_scoped_alias_free_and_synchronous():
                 "snapshots": [
                     {
                         "state": "SUCCESS",
-                        "indices": ["lawhand-firm-memory-v1-restored"],
+                        "indices": [f"{PHYSICAL_PREFIX}restored"],
                         "shards": {"total": 1, "successful": 1, "failed": 0},
                     }
                 ]
@@ -2040,7 +2248,7 @@ async def test_snapshot_restore_is_prefix_scoped_alias_free_and_synchronous():
             payload = {"accepted": True}
         else:
             payload = {
-                "lawhand-firm-memory-v1-restored": {
+                f"{PHYSICAL_PREFIX}restored": {
                     "shards": [
                         {
                             "id": 0,
@@ -2063,7 +2271,7 @@ async def test_snapshot_restore_is_prefix_scoped_alias_free_and_synchronous():
     restore = next(call for call in calls if call[0] == "POST")
     assert restore[2]["params"] == {"wait_for_completion": "false"}
     assert restore[2]["json"] == {
-        "indices": "lawhand-firm-memory-v1-restored",
+        "indices": f"{PHYSICAL_PREFIX}restored",
         "include_aliases": False,
         "include_global_state": False,
     }
@@ -2101,7 +2309,7 @@ async def test_snapshot_restore_holds_until_exact_recovery_or_timeout():
                 "snapshots": [
                     {
                         "state": "SUCCESS",
-                        "indices": ["lawhand-firm-memory-v1-restored"],
+                        "indices": [f"{PHYSICAL_PREFIX}restored"],
                         "shards": {"total": 1, "successful": 1, "failed": 0},
                     }
                 ]
@@ -2110,7 +2318,7 @@ async def test_snapshot_restore_holds_until_exact_recovery_or_timeout():
             payload = {"accepted": True}
         else:
             payload = {
-                "lawhand-firm-memory-v1-restored": {
+                f"{PHYSICAL_PREFIX}restored": {
                     "shards": [
                         {
                             "id": 0,
@@ -2144,7 +2352,7 @@ async def test_snapshot_restore_recovers_after_lost_acceptance_response():
                 "snapshots": [
                     {
                         "state": "SUCCESS",
-                        "indices": ["lawhand-firm-memory-v1-restored"],
+                        "indices": [f"{PHYSICAL_PREFIX}restored"],
                         "shards": {"total": 1, "successful": 1, "failed": 0},
                     }
                 ]
@@ -2153,7 +2361,7 @@ async def test_snapshot_restore_recovers_after_lost_acceptance_response():
             raise httpx.ReadTimeout("response lost")
         else:
             payload = {
-                "lawhand-firm-memory-v1-restored": {
+                f"{PHYSICAL_PREFIX}restored": {
                     "shards": [
                         {
                             "id": 0,
@@ -2189,7 +2397,7 @@ async def test_snapshot_restore_rejects_wrong_or_incomplete_primary_shard_set():
                 "snapshots": [
                     {
                         "state": "SUCCESS",
-                        "indices": ["lawhand-firm-memory-v1-restored"],
+                        "indices": [f"{PHYSICAL_PREFIX}restored"],
                         "shards": {"total": 3, "successful": 3, "failed": 0},
                     }
                 ]
@@ -2198,7 +2406,7 @@ async def test_snapshot_restore_rejects_wrong_or_incomplete_primary_shard_set():
             payload = {"accepted": True}
         else:
             payload = {
-                "lawhand-firm-memory-v1-restored": {
+                f"{PHYSICAL_PREFIX}restored": {
                     "shards": [
                         {
                             "id": shard_id,
@@ -2226,3 +2434,24 @@ async def test_snapshot_restore_rejects_wrong_or_incomplete_primary_shard_set():
     with pytest.raises(TimeoutError, match="did not complete"):
         await engine.restore_snapshot("repo", "snapshot")
     await engine.close()
+
+
+def test_folder_scopes_are_paired_with_share_and_bounded():
+    engine = _engine()
+    request = SearchRequest(
+        "notice",
+        ("sid",),
+        filters=SearchFilters(path_scopes=(("a", "root-a"), ("b", "root-b"))),
+    )
+    body = engine._search_body(request)
+    scopes = body["query"]["bool"]["filter"][2]["bool"]["should"]
+    assert scopes[0]["bool"]["filter"][0] == {"term": {"share_id": "a"}}
+    assert (
+        scopes[0]["bool"]["filter"][1]["prefix"]["relative_path"]["case_insensitive"]
+        is True
+    )
+    assert scopes[1]["bool"]["filter"][0] == {"term": {"share_id": "b"}}
+    with pytest.raises(ValueError, match="path scopes"):
+        engine._search_body(
+            replace(request, filters=SearchFilters(path_scopes=(("a", "root"),) * 101))
+        )

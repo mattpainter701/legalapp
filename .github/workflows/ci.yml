@@ -767,7 +767,7 @@ jobs:
           cache: pip
           cache-dependency-path: agent/pyproject.toml
       - name: Install agent test dependencies
-        run: pip install -e "agent[dev]"
+        run: pip install -e "agent[dev]" "./search-node"
       - name: Export the pinned node CA certificate
         run: >-
           docker cp
@@ -782,8 +782,8 @@ jobs:
         run: python -m pytest -q agent/tests/test_opensearch_integration.py
 
   # The extraction/OCR workers parse untrusted customer documents. They live in
-  # their own distribution, so neither the backend jobs nor agent-release.yml
-  # (which filters on agent/**) ever ran them before this job existed.
+  # their own distribution. Agent builds install that package for the serving
+  # adapter; this job independently exercises its parser/OCR sandbox contracts.
   search-node-extraction:
     name: Search Node — extraction and OCR
     runs-on: ${{ matrix.os }}
