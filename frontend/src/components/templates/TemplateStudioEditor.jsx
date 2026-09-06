@@ -141,6 +141,7 @@ function useBindingCatalogue() {
 
 export default function TemplateStudioEditor({ template, source, sourceError, onSave }) {
   const [fields, setFields] = useState(() => schemaFields(template))
+  const [applicability, setApplicability] = useState(template.variable_schema?.applicability || null)
   const [regions, setRegions] = useState(() => schemaRegions(template))
   const [selectedIdentity, setSelectedIdentity] = useState(
     () => fieldIdentity(schemaFields(template)[0], 0),
@@ -160,6 +161,9 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
   const { groups: bindingGroups, collections } = useBindingCatalogue()
 
+  const scenarioBinding = fields.find(field => field.name === applicability?.field)?.binding
+  const scenarioDefinition = Object.values(bindingGroups).flat().find(entry => entry.path === scenarioBinding)
+  const scenarioOptions = scenarioDefinition?.field_type === 'boolean' ? [{ value: 'true', label: 'Yes' }, { value: 'false', label: 'No' }] : (scenarioDefinition?.options || []).map(value => ({ value, label: value }))
   const pdfSource = isPdfFile(source) ? source : null
   const isDocx = String(template?.format || '').toLowerCase() === 'docx'
   const { document: pdfDocument, pages: pdfPages, error: pdfError } = useTemplatePdfDocument(
@@ -173,6 +177,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     const next = schemaFields(template)
     setFields(next)
     setRegions(schemaRegions(template))
+    setApplicability(template.variable_schema?.applicability || null)
     setSelectedIdentity(fieldIdentity(next[0], 0))
     setPageNumber(1)
     setZoom(0.9)
@@ -360,7 +365,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     setSaving(true)
     setSaveError('')
     try {
-      await onSave(mergedVariableSchema(template, fields, regions))
+      await onSave({ ...mergedVariableSchema(template, fields, regions), ...(applicability || template.variable_schema?.applicability ? { applicability } : {}) })
       setDirty(false)
       setSavedAt(new Date())
     } catch (error) {
@@ -457,6 +462,16 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
         </div>
       </div>
 
+      <details className="border-b border-brand-line p-3 text-sm">
+        <summary className="cursor-pointer font-semibold">When to use this template{applicability?.label ? `: ${applicability.label}` : ''}</summary>
+        <p className="mt-2 text-xs text-brand-muted">Name the scenario, such as Divorce with children. Generation checks a saved matter or client detail; missing values block selection. This does not create a list of children.</p>
+        <label className="mt-2 flex gap-2"><input type="checkbox" checked={Boolean(applicability)} onChange={event => { setApplicability(event.target.checked ? { label: '', field: '', value: '' } : null); setDirty(true) }} />Use only for a matching scenario</label>
+        {applicability && <div className="mt-2 grid gap-2 sm:grid-cols-3">
+          <label>Scenario label<input aria-label="Scenario label" value={applicability.label} onChange={event => { setApplicability({ ...applicability, label: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink" /></label>
+          <label>Saved detail<select aria-label="Scenario detail" value={applicability.field} onChange={event => { setApplicability({ ...applicability, field: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink"><option value="">Choose a linked detail</option>{fields.filter(field => field.binding?.startsWith('custom.')).map(field => <option key={field.name} value={field.name}>{field.label || field.name}</option>)}</select></label>
+          <label>Required answer{scenarioOptions.length ? <select aria-label="Scenario required answer" value={applicability.value} onChange={event => { setApplicability({ ...applicability, value: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink"><option value="">Choose an answer</option>{scenarioOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input aria-label="Scenario required answer" type={['number', 'date'].includes(scenarioDefinition?.field_type) ? scenarioDefinition.field_type : 'text'} placeholder="Answer required for this scenario" value={applicability.value} onChange={event => { setApplicability({ ...applicability, value: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink" />}</label>
+        </div>}
+      </details>
       {(saveError || duplicateNames.size > 0 || invalidNames.length > 0) && (
         <div role="alert" className="border-b border-brand-line bg-brand-amber/10 px-4 py-2 text-sm text-brand-ink">
           {saveError
@@ -613,6 +628,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
           {selected ? (
             <div className="mt-4 space-y-3 border-t border-brand-line pt-3">
+              <details><summary className="cursor-pointer text-xs text-brand-muted">Advanced: internal field name</summary>
               <PropertyRow label="Variable name">
                 <input
                   value={selected.name || ''}
@@ -620,6 +636,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                   className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
                 />
               </PropertyRow>
+              </details>
               <PropertyRow label="Label">
                 <input
                   value={selected.label || ''}

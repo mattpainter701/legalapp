@@ -1,0 +1,62 @@
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import TemplateFactReview from './TemplateFactReview'
+import { getMatterDocuments, proposeTemplateFact, acceptTemplateFact } from '../../api'
+vi.mock('../../api', () => ({ getMatterDocuments: vi.fn(), getMatterDocumentDownloadUrl: () => "https://api.example.test/source", proposeTemplateFact: vi.fn(), acceptTemplateFact: vi.fn() }))
+afterEach(cleanup)
+beforeEach(() => { vi.clearAllMocks(); getMatterDocuments.mockResolvedValue([{ id: 'source', filename: 'Intake.docx' }]); acceptTemplateFact.mockResolvedValue({ status: 'accepted' }) })
+const fields = [{ name: 'kids', label: 'Has children', binding: 'custom.matter.field-id' }]
+it('reviews a conflicting document value without saving until explicit corrected acceptance', async () => {
+  proposeTemplateFact.mockResolvedValue({ proposal_token: 'bound-evidence', status: 'conflicting_sources', source_filename: 'Intake.docx', current_value: false, candidates: [{ line: 1, value: true }, { line: 3, value: false }] })
+  render(<TemplateFactReview matterId="matter" fields={fields} />)
+  fireEvent.click(screen.getByText('Review a detail from a matter document'))
+  await screen.findByText('Intake.docx')
+  fireEvent.change(screen.getByLabelText('Fact source document'), { target: { value: 'source' } })
+  fireEvent.change(screen.getByLabelText('Fact to review'), { target: { value: 'field-id' } })
+  fireEvent.click(screen.getByText('Read source for review'))
+  await screen.findByText('Conflicting values found. Resolve them against the original document.')
+  expect(acceptTemplateFact).not.toHaveBeenCalled()
+  expect(screen.getByLabelText('Reviewed fact value').value).toBe('')
+  fireEvent.change(screen.getByLabelText('Reviewed fact value'), { target: { value: 'true' } })
+  fireEvent.click(screen.getByText('Replace the existing matter value with my reviewed value'))
+  fireEvent.click(screen.getByText('Accept reviewed matter detail'))
+  await waitFor(() => expect(acceptTemplateFact).toHaveBeenCalledWith('matter', 'source', 'field-id', { proposal_token: 'bound-evidence', value: 'true', replace_existing: true }))
+  await screen.findByText('Reviewed matter detail saved. Run Smart Fill to reuse it.')
+})
+it('keeps missing source evidence unresolved and reports stale acceptance', async () => {
+  proposeTemplateFact.mockResolvedValue({ proposal_token: 'expired', status: 'missing', source_filename: 'Intake.docx', current_value: null, candidates: [] })
+  acceptTemplateFact.mockRejectedValue({ response: { data: { detail: 'The source changed. Review again.' } } })
+  render(<TemplateFactReview matterId="matter" fields={fields} />)
+  fireEvent.click(screen.getByText('Review a detail from a matter document'))
+  await screen.findByText('Intake.docx')
+  fireEvent.change(screen.getByLabelText('Fact source document'), { target: { value: 'source' } })
+  fireEvent.change(screen.getByLabelText('Fact to review'), { target: { value: 'field-id' } })
+  fireEvent.click(screen.getByText('Read source for review'))
+  await screen.findByText('No supported value found. Read the original before entering a value.')
+  expect(screen.getByText('Accept reviewed matter detail')).toBeDisabled()
+  fireEvent.change(screen.getByLabelText('Reviewed fact value'), { target: { value: 'false' } })
+  fireEvent.click(screen.getByText('Accept reviewed matter detail'))
+  await screen.findByText('The source changed. Review again.')
+})
+it('does not expose review for manually entered or client-only fields', () => {
+  const { container } = render(<TemplateFactReview matterId="matter" fields={[{ name: 'x', binding: 'manual' }]} />)
+  expect(container).toBeEmptyDOMElement()
+  expect(getMatterDocuments).not.toHaveBeenCalled()
+})
+
+it('discards a pending source proposal when the selected matter changes', async () => {
+  let complete
+  proposeTemplateFact.mockImplementation(() => new Promise(resolve => { complete = resolve }))
+  const view = render(<TemplateFactReview matterId="first-matter" fields={fields} />)
+  fireEvent.click(screen.getByText('Review a detail from a matter document'))
+  await screen.findByText('Intake.docx')
+  fireEvent.change(screen.getByLabelText('Fact source document'), { target: { value: 'source' } })
+  fireEvent.change(screen.getByLabelText('Fact to review'), { target: { value: 'field-id' } })
+  fireEvent.click(screen.getByText('Read source for review'))
+  view.rerender(<TemplateFactReview matterId="second-matter" fields={fields} />)
+  await act(async () => { complete({ status: 'suggested', source_filename: 'Old client source.docx', candidates: [{ value: 'Private old value', line: 1 }] }); await Promise.resolve() })
+  expect(screen.queryByText('Old client source.docx')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Reviewed fact value')).not.toBeInTheDocument()
+  expect(screen.getByLabelText('Fact to review').value).toBe('')
+  expect(acceptTemplateFact).not.toHaveBeenCalled()
+})

@@ -205,6 +205,7 @@ class DocumentTemplateRenderResponse(BaseModel):
 
 
 class DocumentTemplateSmartFillRequest(BaseModel):
+    published: bool = False
     matter_id: Optional[str] = None
     variables: Optional[list[str]] = None
 
@@ -234,6 +235,8 @@ class DocumentTemplateBindingOption(BaseModel):
     path: str
     label: str
     group: str
+    field_type: str | None = None
+    options: list[str] = Field(default_factory=list)
 
 
 class DocumentTemplateCollectionOption(BaseModel):

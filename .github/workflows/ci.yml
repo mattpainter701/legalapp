@@ -626,6 +626,31 @@ jobs:
           echo "files=$files" >> "$GITHUB_OUTPUT"
           python scripts/shard_tests.py --shards 4 --index ${{ matrix.shard }} --summary
 
+      - name: Prepare isolated Template Studio fact review database
+        if: matrix.shard == 2
+        working-directory: backend
+        env:
+          PGPASSWORD: test
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/legalapp_studio_fact_review_test
+        run: |
+          createdb -h localhost -U test legalapp_studio_fact_review_test
+          alembic upgrade head
+          psql -h localhost -U test -d legalapp_studio_fact_review_test -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT CONNECT ON DATABASE legalapp_studio_fact_review_test TO clarity_app;
+          GRANT USAGE ON SCHEMA public TO clarity_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO clarity_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO clarity_app;
+          SQL
+
+      - name: Run focused Template Studio fact review PostgreSQL test
+        if: matrix.shard == 2
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/legalapp_studio_fact_review_test
+          TEST_DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/legalapp_studio_fact_review_test
+          RLS_TEST_DATABASE_URL: postgresql+asyncpg://clarity_app:clarity-ci-runtime-password@localhost:5432/legalapp_studio_fact_review_test
+        run: pytest tests/test_template_fact_review_postgres.py -v --tb=short --maxfail=1
+
       - name: Run tests
         working-directory: backend
         env:

@@ -267,7 +267,7 @@ describe('document template workflow', () => {
 
     expect(await screen.findByRole('heading', { name: 'Saved workspace' })).toBeInTheDocument()
     expect(screen.getByText('Draft · test before publishing')).toBeInTheDocument()
-    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.getByText('2 fields')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Preview draft' }))
     expect(screen.getByRole('dialog', { name: 'Preview Draft: Saved workspace' })).toBeInTheDocument()
   })

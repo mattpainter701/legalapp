@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildOAuthLoginUrl, isSafeInternalReturnTo, readBlobErrorDetail, streamMessage } from './api'
+import { API_BASE_URL, getMatterDocumentDownloadUrl, buildOAuthLoginUrl, isSafeInternalReturnTo, readBlobErrorDetail, streamMessage } from './api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -120,5 +120,37 @@ describe('chat event stream', () => {
       { inactivityTimeoutMs: 5 },
     )).rejects.toThrow('stopped sending updates for too long')
     expect(cancel).toHaveBeenCalledOnce()
+  })
+})
+
+
+describe('matter document download links', () => {
+  it('retains the configured API base and ordinary document identities', () => {
+    expect(getMatterDocumentDownloadUrl('matter-id', 'document-id')).toBe(`${API_BASE_URL}/matters/matter-id/documents/document-id/download`)
+  })
+
+  it.each([
+    '../other?redirect=https://attacker.example/#fragment',
+    '"><img src=x onerror=alert(1)>',
+    'javascript:alert(1)',
+    '//attacker.example/path',
+    'folder\\document',
+    '%2f..%2fother',
+  ])('keeps malformed ID %s inside its own path component', id => {
+    const link = getMatterDocumentDownloadUrl(id, id)
+    expect(link).toBe(`${API_BASE_URL}/matters/${encodeURIComponent(id)}/documents/${encodeURIComponent(id)}/download`)
+    const url = new URL(link, 'https://lawhand.example')
+    const baseline = new URL(API_BASE_URL, 'https://lawhand.example')
+    expect(url.origin).toBe(baseline.origin)
+    expect(url.search).toBe('')
+    expect(url.hash).toBe('')
+    expect(url.pathname.split('/').slice(-5)).toEqual(['matters', encodeURIComponent(id), 'documents', encodeURIComponent(id), 'download'])
+    expect(link).not.toContain('<')
+    expect(link).not.toContain('>')
+  })
+
+  it.each(['', '.', '..', null, undefined])('omits a navigable link for missing/dot ID %s', id => {
+    expect(getMatterDocumentDownloadUrl(id, 'document-id')).toBeUndefined()
+    expect(getMatterDocumentDownloadUrl('matter-id', id)).toBeUndefined()
   })
 })

@@ -1946,8 +1946,13 @@ export const updateMatterDocument = (matterId, docId, data) =>
 export const deleteMatterDocument = (matterId, docId) =>
   api.delete(`/matters/${matterId}/documents/${docId}`).then(r => r.data)
 
-export const getMatterDocumentDownloadUrl = (matterId, docId) =>
-  `${API_BASE_URL}/matters/${matterId}/documents/${docId}/download`
+export const getMatterDocumentDownloadUrl = (matterId, docId) => {
+  const ids = [matterId, docId].map(id => String(id ?? ''))
+  // Browsers normalize standalone dot segments even when percent-encoded.
+  // Omit the link for missing/dot IDs; encode every other ID as one segment.
+  if (ids.some(id => !id || id === '.' || id === '..')) return undefined
+  return `${API_BASE_URL}/matters/${encodeURIComponent(ids[0])}/documents/${encodeURIComponent(ids[1])}/download`
+}
 
 // Matter document revisions
 export const createMatterDocumentRevision = (matterId, sourceDocumentId, data) =>
@@ -2106,8 +2111,8 @@ export const createTemplateFromUpload = (formData) =>
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then(r => r.data)
 
-export const getTemplate = (id) =>
-  api.get(`/templates/${id}`).then(r => r.data)
+export const getTemplate = (id, params = {}) =>
+  api.get(`/templates/${id}`, { params }).then(r => r.data)
 
 export const updateTemplate = (id, data) =>
   api.patch(`/templates/${id}`, data).then(r => r.data)
@@ -2651,3 +2656,8 @@ export const requestCustomerOffboarding = (body) =>
   api.post('/compliance/operating/offboarding', body).then(r => r.data)
 
 export default api
+
+export const proposeTemplateFact = (matterId, documentId, fieldId) =>
+  api.post(`/templates/fact-review/${matterId}/${documentId}/${fieldId}`).then(r => r.data)
+export const acceptTemplateFact = (matterId, documentId, fieldId, payload) =>
+  api.post(`/templates/fact-review/${matterId}/${documentId}/${fieldId}/accept`, payload).then(r => r.data)

@@ -22,6 +22,9 @@ from app.services.cloud_docx_snapshot import (
     inspect_cloud_docx_snapshot,
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
+from app.services.document_template_versions import published_template_view
+from app.services.template_bindings import declared_bindings
+from app.services.template_custom_fields import suggestions as custom_suggestions
 
 settings = get_settings()
 _VARIABLE_PATTERN = re.compile(r"{{\s*([^{}]+?)\s*}}")
@@ -55,7 +58,11 @@ def _automation_ready(template: DocumentTemplate) -> bool:
     if not status or status in {"draft", "deprecated", "inactive", "archived"}:
         return False
     template_format = _normalized(template.format)
-    if template_format == "pdf" and template.approved_at is None:
+    if (
+        template_format == "pdf"
+        and template.approved_at is None
+        and not getattr(template, "published_version_no", None)
+    ):
         return False
     if template.source_storage_path and not template.source_sha256:
         return False
@@ -83,6 +90,11 @@ async def require_workspace_template(
             DocumentTemplate.is_active.is_(True),
         )
     )
+    if template is not None and getattr(template, "published_version_no", None):
+        try:
+            template = await published_template_view(context.db, template)
+        except ValueError as exc:
+            raise CapabilityError("template_not_found", str(exc)) from exc
     if template is None or not _automation_ready(template):
         raise CapabilityError("template_not_found", "Active template not found")
     if not _compatible(template.jurisdiction, matter.jurisdiction):
@@ -98,6 +110,25 @@ async def require_workspace_template(
         raise CapabilityError(
             "template_incompatible", "Template workflow does not match the matter"
         )
+    rule = (template.variable_schema or {}).get("applicability")
+    if rule:
+        sources = await custom_suggestions(
+            context.db,
+            context.tenant_id,
+            matter,
+            declared_bindings(template.variable_schema),
+        )
+        source = sources.get(rule.get("field"))
+        if (
+            not source
+            or source.suggested_value is None
+            or source.suggested_value.strip().casefold()
+            != str(rule.get("value", "")).strip().casefold()
+        ):
+            raise CapabilityError(
+                "template_incompatible",
+                "Template scenario does not match saved matter details",
+            )
     return matter, template
 
 

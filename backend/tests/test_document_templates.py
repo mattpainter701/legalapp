@@ -3027,14 +3027,14 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
     assert renamed_draft.status_code == 200, renamed_draft.text
     # The title participates in output identity (including the generated file
     # name), so even a rename returns the changed version to draft.
-    assert renamed_draft.json()["is_active"] is False
+    assert renamed_draft.json()["is_active"] is True
     assert renamed_draft.json()["approved_at"] is None
 
     edited_contract = await client.patch(
         f"/api/templates/{template_id}", json={"body": "{{client_name}}"}
     )
     assert edited_contract.status_code == 200, edited_contract.text
-    assert edited_contract.json()["is_active"] is False
+    assert edited_contract.json()["is_active"] is True
     assert edited_contract.json()["last_test_rendered_at"] is None
     assert edited_contract.json()["approved_at"] is None
     assert edited_contract.json()["approved_by_user_id"] is None
@@ -4067,7 +4067,7 @@ async def test_generation_preview_requires_a_published_word_template(
     )
 
     assert response.status_code == 409
-    assert "Publish this template" in response.json()["detail"]
+    assert "Publish a tested version" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

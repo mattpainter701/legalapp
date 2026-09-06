@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.06.2",
+      "version": "2026.09.06.2",
+      "title": "Keep approved templates available while preparing the next version",
+      "published_at": "2026-09-06",
+      "summary": "Template Studio keeps the published wording available during draft edits and adds reviewed matter-document details and clearer scenario selection.",
+      "highlights": [
+        {
+          "title": "Draft without interrupting the team",
+          "description": "Test the next draft separately while colleagues generate from the last published version."
+        },
+        {
+          "title": "Review details from source documents",
+          "description": "Find labeled details in Word, PDF and text matter documents, correct them, then explicitly accept them into supported matter fields. Existing values require confirmation."
+        },
+        {
+          "title": "Choose the right scenario",
+          "description": "Name a scenario and require a matching saved matter or client detail, including Yes/No answers, before generating. Missing details stay unresolved."
+        }
+      ]
+    },
+    {
       "id": "2026.09.06.1",
       "version": "2026.09.06.1",
       "title": "Firm Memory keeps native file permissions intact",
