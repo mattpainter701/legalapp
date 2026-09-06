@@ -330,7 +330,10 @@ async def test_sensitive_definition_is_not_read_or_written(db_session, fact_case
     await db_session.execute(
         update(CustomFieldDefinition)
         .where(CustomFieldDefinition.id == case.field_id)
-        .values(sensitive=True)
+        .values(
+            sensitive=True,
+            schema_version=CustomFieldDefinition.schema_version + 1,
+        )
     )
     await db_session.commit()
     for token in (None, pending["proposal_token"]):
