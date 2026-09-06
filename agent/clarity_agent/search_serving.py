@@ -189,25 +189,34 @@ class OpenSearchServingIndex(LocalSearchIndex):
 
     async def _drain_deletions(self):
         async with self._db_lock:
-            cursor = await self._db.execute(
-                "SELECT * FROM pending_engine_deletions LIMIT 1000"
-            )
-            rows = await cursor.fetchall()
-            for row in rows:
-                try:
-                    await self.engine.delete_documents(
-                        [DocumentMutation(row["document_id"], row["generation"])]
-                    )
-                except RuntimeError as exc:
-                    # A newer document may already have superseded this delete.
-                    # The engine's generation fence proves it must be retained.
-                    if str(exc) != "document mutation generation is stale":
-                        raise
-                await self._db.execute(
-                    "DELETE FROM pending_engine_deletions WHERE document_id=? AND generation=?",
-                    (row["document_id"], row["generation"]),
+            try:
+                await self._db.execute("BEGIN IMMEDIATE")
+                cursor = await self._db.execute(
+                    "SELECT * FROM pending_engine_deletions LIMIT 1000"
                 )
-            await self._db.commit()
+                rows = await cursor.fetchall()
+                for row in rows:
+                    try:
+                        await self.engine.delete_documents(
+                            [DocumentMutation(row["document_id"], row["generation"])]
+                        )
+                    except RuntimeError as exc:
+                        # A newer document may already have superseded this delete.
+                        # The engine's generation fence proves it must be retained.
+                        if str(exc) != "document mutation generation is stale":
+                            raise
+                    await self._db.execute(
+                        "DELETE FROM pending_engine_deletions WHERE document_id=? AND generation=?",
+                        (row["document_id"], row["generation"]),
+                    )
+                await self._db.commit()
+            except BaseException:
+                # A later engine failure (including cancellation) must not
+                # strand earlier outbox DELETEs in an open SQLite transaction.
+                # Rollback retains those acknowledged tombstones for safe,
+                # generation-fenced replay and leaves scanning usable.
+                await self._db.rollback()
+                raise
 
     async def authorize_path(self, path, authorization, *, acl_max_age_seconds=3600):
         # Keep manifest/deletion/source fencing, then re-read the actual DACL.

@@ -317,3 +317,79 @@ async def test_mixed_ocr_document_preserves_native_text_with_partial_coverage(
     assert result["hits"][0]["snippet"] == "native wording"
     assert result["index_state"] == "partial"
     assert (await index.stats())["statuses"]["ocr_pending"]["files"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_multi_delete_failure_rolls_back_outbox_and_keeps_scan_usable(
+    serving, cancelled
+):
+    import asyncio
+    import aiosqlite
+
+    index, engine = serving
+    second_path = ROOT + r"\Matter\second.txt"
+    await index.enqueue(
+        dict(
+            path=second_path,
+            share_id="share",
+            ext=".txt",
+            content_hash="second",
+            size_bytes=26,
+            modified_time="2026-09-06T00:00:00Z",
+        )
+    )
+    await index.wait_until_idle()
+    calls = []
+    second_started = asyncio.Event()
+
+    async def fail_second(batch):
+        calls.extend(batch)
+        if len(calls) == 2:
+            second_started.set()
+            if cancelled:
+                await asyncio.Event().wait()
+            raise RuntimeError("second delete unavailable")
+
+    engine.delete_documents = fail_second
+    task = asyncio.create_task(index.delete([PATH, second_path]))
+    await asyncio.wait_for(second_started.wait(), timeout=5)
+    if cancelled:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        with pytest.raises(RuntimeError, match="second delete unavailable"):
+            await task
+    assert not index._db.in_transaction
+    # Both source rows remain denied; both retry records are durably retained,
+    # including the engine-acknowledged first deletion rolled back locally.
+    assert (await search(index))["hits"] == []
+    async with aiosqlite.connect(index.db_path) as observer:
+        cursor = await observer.execute("SELECT count(*) FROM pending_engine_deletions")
+        assert (await cursor.fetchone())[0] == 2
+        cursor = await observer.execute("SELECT count(*) FROM index_files")
+        assert (await cursor.fetchone())[0] == 0
+    await index.enqueue(
+        dict(
+            path=ROOT + r"\Matter\new.bin",
+            share_id="share",
+            ext=".bin",
+            content_hash="new",
+            size_bytes=1,
+            modified_time="2026-09-06T00:00:00Z",
+        )
+    )
+    retried = []
+
+    async def recovered(batch):
+        retried.extend(batch)
+
+    engine.delete_documents = recovered
+    await index.delete([])
+    assert {item.document_id for item in retried} == {
+        item.document_id for item in calls
+    }
+    cursor = await index._db.execute("SELECT count(*) FROM pending_engine_deletions")
+    assert (await cursor.fetchone())[0] == 0
+    assert not index._db.in_transaction
