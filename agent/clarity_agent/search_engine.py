@@ -49,13 +49,13 @@ class DocumentChunk:
 
 @dataclass(frozen=True)
 class SearchFilters:
-    path_scopes: tuple[tuple[str, str], ...] = ()
     share_ids: tuple[str, ...] = ()
     matter_ids: tuple[str, ...] = ()
     extensions: tuple[str, ...] = ()
     document_ids: tuple[str, ...] = ()
     modified_after: datetime | None = None
     modified_before: datetime | None = None
+    path_scopes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

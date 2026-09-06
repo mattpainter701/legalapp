@@ -229,3 +229,8 @@ def test_preflight_never_returns_an_empty_explanation():
     assert search_node_module.preflight_reasons(_health()) == [
         "engine reported degraded"
     ]
+
+
+def test_opensearch_requires_native_identity_configuration():
+    with pytest.raises(ValueError, match="native authorization"):
+        SearchNode.from_config(AgentConfig(search_node_enabled=True))

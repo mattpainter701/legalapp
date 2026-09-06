@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import time
 
 import pytest
+import pytest_asyncio
 
 from clarity_agent.native_acl import normalize_sddl
 from clarity_agent.search_engine import BulkResult, SearchHit
@@ -53,7 +54,7 @@ class Engine:
         return SimpleNamespace(hits=hits)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def serving(tmp_path):
     engine = Engine()
     from search_node.config import Settings, Limits

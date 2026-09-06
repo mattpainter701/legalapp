@@ -98,8 +98,7 @@ def test_versioned_mapping_is_strict_bm25_and_page_aware():
     mapping = engine._mapping()
     assert mapping["mappings"]["dynamic"] == "strict"
     assert (
-        mapping["mappings"]["_meta"]["lawhand_schema_version"]
-        == INDEX_SCHEMA_VERSION
+        mapping["mappings"]["_meta"]["lawhand_schema_version"] == INDEX_SCHEMA_VERSION
     )
     assert mapping["settings"]["similarity"]["default"]["type"] == "BM25"
     properties = mapping["mappings"]["properties"]
@@ -204,7 +203,11 @@ async def test_bulk_index_is_bounded_and_keeps_text_only_in_opensearch_request()
             return httpx.Response(
                 200,
                 json={
-                    ACTIVE_INDEX: {"mappings": {"_meta": {"lawhand_schema_version": INDEX_SCHEMA_VERSION}}}
+                    ACTIVE_INDEX: {
+                        "mappings": {
+                            "_meta": {"lawhand_schema_version": INDEX_SCHEMA_VERSION}
+                        }
+                    }
                 },
             )
         if request.url.path == "/_bulk":
@@ -478,7 +481,11 @@ async def test_replacement_deletes_old_chunks_before_partial_bulk_failure():
             return httpx.Response(
                 200,
                 json={
-                    ACTIVE_INDEX: {"mappings": {"_meta": {"lawhand_schema_version": INDEX_SCHEMA_VERSION}}}
+                    ACTIVE_INDEX: {
+                        "mappings": {
+                            "_meta": {"lawhand_schema_version": INDEX_SCHEMA_VERSION}
+                        }
+                    }
                 },
             )
         if request.url.path == "/_bulk":
@@ -497,7 +504,13 @@ async def test_replacement_deletes_old_chunks_before_partial_bulk_failure():
                 200,
                 json={
                     "items": [
-                        {"index": {"status": 409 if source["document_id"] == "doc-1" else 201}}
+                        {
+                            "index": {
+                                "status": 409
+                                if source["document_id"] == "doc-1"
+                                else 201
+                            }
+                        }
                         for source in sources
                     ]
                 },
@@ -1977,9 +1990,12 @@ async def test_one_document_may_hold_more_chunks_than_a_bulk_batch():
     )
     # Two documents per bulk request, but up to fifty chunks in one document.
     engine = _engine(
-        client=client, limits=OpenSearchLimits(max_bulk_documents=2, max_document_chunks=50)
+        client=client,
+        limits=OpenSearchLimits(max_bulk_documents=2, max_document_chunks=50),
     )
-    result = await engine._bulk_to(WRITE_ALIAS, [_chunk(number) for number in range(10)])
+    result = await engine._bulk_to(
+        WRITE_ALIAS, [_chunk(number) for number in range(10)]
+    )
     assert result.accepted == 10 and result.failed_ids == ()
     # One document, therefore one bulk action carrying all ten chunks.
     assert len(bodies) == 1
@@ -2059,7 +2075,12 @@ async def test_batches_split_on_the_byte_budget_rather_than_failing():
         limits=OpenSearchLimits(max_bulk_documents=100, max_bulk_bytes=3_000),
     )
     documents = [
-        replace(_chunk(1), document_id=f"doc-{number}", chunk_id=f"doc-{number}:1", content="y" * 800)
+        replace(
+            _chunk(1),
+            document_id=f"doc-{number}",
+            chunk_id=f"doc-{number}:1",
+            content="y" * 800,
+        )
         for number in range(6)
     ]
     result = await engine._bulk_to(WRITE_ALIAS, documents)
@@ -2413,3 +2434,24 @@ async def test_snapshot_restore_rejects_wrong_or_incomplete_primary_shard_set():
     with pytest.raises(TimeoutError, match="did not complete"):
         await engine.restore_snapshot("repo", "snapshot")
     await engine.close()
+
+
+def test_folder_scopes_are_paired_with_share_and_bounded():
+    engine = _engine()
+    request = SearchRequest(
+        "notice",
+        ("sid",),
+        filters=SearchFilters(path_scopes=(("a", "root-a"), ("b", "root-b"))),
+    )
+    body = engine._search_body(request)
+    scopes = body["query"]["bool"]["filter"][2]["bool"]["should"]
+    assert scopes[0]["bool"]["filter"][0] == {"term": {"share_id": "a"}}
+    assert (
+        scopes[0]["bool"]["filter"][1]["prefix"]["relative_path"]["case_insensitive"]
+        is True
+    )
+    assert scopes[1]["bool"]["filter"][0] == {"term": {"share_id": "b"}}
+    with pytest.raises(ValueError, match="path scopes"):
+        engine._search_body(
+            replace(request, filters=SearchFilters(path_scopes=(("a", "root"),) * 101))
+        )
