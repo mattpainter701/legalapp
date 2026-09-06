@@ -737,3 +737,17 @@ async def test_recording_external_signature_voids_pending_portal_request(ctx):
     assert c.signature.status == "voided"
     assert c.packet.requirements["fee_agreement"]["completed"]
     assert c.packet.completed_at is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_mobile_is_a_reviewable_validation_error(ctx):
+    c = ctx
+    c.db.rows[s.MatterIntake] = None
+    c.contact.phone = "not a number"
+    body = start_body(c)
+    body.channels = ["sms"]
+    body.sms_permission_verified = True
+    with pytest.raises(HTTPException) as exc:
+        await s.start_packet(c.db, c.user, c.matter, body, "fee.pdf", b"%PDF-reviewed")
+    assert exc.value.status_code == 422
+    s.send_sms.assert_not_awaited()

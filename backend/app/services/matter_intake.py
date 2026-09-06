@@ -266,7 +266,10 @@ async def start_packet(db, user, matter, body, filename, content):
                     422,
                     "Record verified SMS permission before selecting text delivery.",
                 )
-            mobile = normalize_e164(contact.phone)
+            try:
+                mobile = normalize_e164(contact.phone)
+            except SmsError as exc:
+                raise HTTPException(exc.status_code, str(exc)) from exc
             lead = Lead(
                 id=uuid.uuid4(),
                 tenant_id=user.tenant_id,
@@ -634,6 +637,7 @@ async def deliver(db, packet, key):
     await db.commit()  # durable claim precedes provider I/O and token refresh commits
     outcome = "unknown"
     provider = channel
+    detail = "Check provider records before retrying an uncertain delivery."
     deferred = False
     sms_message_id = None
     try:
@@ -653,6 +657,7 @@ async def deliver(db, packet, key):
                 result.delivery_certainty, "unknown"
             )
             provider = result.provider
+            detail = getattr(result, "detail", "")
         else:
             result = await send_sms(
                 db,
@@ -671,6 +676,7 @@ async def deliver(db, packet, key):
                 else "unknown"
             )
     except SmsError as exc:
+        detail = str(exc)
         sms_message_id = str(exc.sms_message_id) if exc.sms_message_id else None
         outcome = "blocked" if exc.delivery_certainty == "not_attempted" else "unknown"
         deferred = (
@@ -690,6 +696,7 @@ async def deliver(db, packet, key):
             "state": outcome,
             "provider": provider,
             "sms_message_id": sms_message_id,
+            "detail": detail if outcome != "sent" else "",
             "updated_at": now().isoformat(),
         },
     }
