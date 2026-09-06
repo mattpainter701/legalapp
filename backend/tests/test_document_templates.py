@@ -4067,7 +4067,7 @@ async def test_generation_preview_requires_a_published_word_template(
     )
 
     assert response.status_code == 409
-    assert "Publish this template" in response.json()["detail"]
+    assert "Publish a tested version" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
