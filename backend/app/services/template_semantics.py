@@ -26,7 +26,7 @@ SEMANTIC_FIELD_KEYS = frozenset({"binding", "label", "description", "logic"})
 #: Top-level schema keys that are likewise authored, not derived. Regions
 #: address paragraphs the reviewed source already has; marking one changes no
 #: anchor and no geometry.
-SEMANTIC_SCHEMA_KEYS = frozenset({"regions"})
+SEMANTIC_SCHEMA_KEYS = frozenset({"regions", "applicability"})
 
 
 class TemplateSemanticsError(ValueError):
@@ -86,6 +86,7 @@ def validate_semantic_metadata(variable_schema: Any) -> None:
 
     if not isinstance(variable_schema, dict):
         return
+    validate_applicability(variable_schema)
     fields = variable_schema.get("fields")
     if not isinstance(fields, list):
         return
@@ -119,3 +120,41 @@ def validate_semantic_metadata(variable_schema: Any) -> None:
             region.as_dict()
             for region in parse_regions(variable_schema["regions"], known_fields=names)
         ]
+
+
+def validate_applicability(schema):
+    rule = (schema or {}).get("applicability")
+    if rule is None:
+        return
+    if not isinstance(rule, dict) or set(rule) != {"label", "field", "value"}:
+        raise TemplateSemanticsError(
+            "Applicability needs a scenario label, detail and expected value"
+        )
+    if (
+        not isinstance(rule["label"], str)
+        or not rule["label"].strip()
+        or len(rule["label"]) > 160
+    ):
+        raise TemplateSemanticsError("Enter a scenario label of up to 160 characters")
+    if (
+        not isinstance(rule["value"], str)
+        or not rule["value"].strip()
+        or len(rule["value"]) > 500
+    ):
+        raise TemplateSemanticsError(
+            "Enter the exact matter value required for this scenario"
+        )
+    field = next(
+        (
+            field
+            for field in schema.get("fields", [])
+            if field.get("name") == rule["field"]
+        ),
+        None,
+    )
+    from app.services.template_bindings import custom_binding
+
+    if not field or not custom_binding(field.get("binding", "")):
+        raise TemplateSemanticsError(
+            "Scenario selection requires a field linked to a custom matter or client detail"
+        )

@@ -17,6 +17,7 @@ expression, so nothing a customer authors can reach a renderer or a query.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 #: A field the customer always types by hand.  Declaring it suppresses the
 #: legacy name-matching fallback, so an intentionally manual field stops being
@@ -146,7 +147,9 @@ def catalogue() -> tuple[TemplateBinding, ...]:
 def is_valid_binding(path: str) -> bool:
     """Return whether ``path`` is the manual marker or a catalogue entry."""
 
-    return path == MANUAL_BINDING or path in _BY_PATH
+    return (
+        path == MANUAL_BINDING or path in _BY_PATH or custom_binding(path) is not None
+    )
 
 
 def alias_for_binding(path: str) -> str | None:
@@ -249,3 +252,12 @@ def is_valid_collection(name: str) -> bool:
     """Return whether ``name`` is a known repeatable collection."""
 
     return name in _COLLECTIONS_BY_NAME
+
+
+def custom_binding(path: str) -> tuple[str, str] | None:
+    """A definition identity, never an expression or a customer-controlled path."""
+    match = re.fullmatch(
+        r"custom\.(matter|contact)\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+        path or "",
+    )
+    return (match[1], match[2]) if match else None

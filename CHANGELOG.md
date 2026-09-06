@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.09.06.2 — Template Studio launch preparation
+
+- Read immutable published snapshots for generation while authoring/testing later drafts; preserve source-hash and reviewed PDF contracts.
+- Bind fields to non-sensitive typed matter/client custom definitions and show source/review provenance without confidence-as-truth labels.
+- Add bounded PDF/DOCX/text label-value extraction with explicit corrected acceptance, optimistic source/value/definition evidence, tenant/actor binding, and HMAC-only matter audit metadata.
+- Add named single-rule applicability using saved custom facts, friendly boolean/select controls, guided setup, and header contrast fixes.
+- No migration or production activation. Structured child/asset repeats, unlabeled extraction and customer acceptance remain outside this increment.
+
 ## [Unreleased]
 
 ### Fixed

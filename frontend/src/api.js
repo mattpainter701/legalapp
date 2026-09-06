@@ -2106,8 +2106,8 @@ export const createTemplateFromUpload = (formData) =>
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then(r => r.data)
 
-export const getTemplate = (id) =>
-  api.get(`/templates/${id}`).then(r => r.data)
+export const getTemplate = (id, params = {}) =>
+  api.get(`/templates/${id}`, { params }).then(r => r.data)
 
 export const updateTemplate = (id, data) =>
   api.patch(`/templates/${id}`, data).then(r => r.data)
@@ -2651,3 +2651,8 @@ export const requestCustomerOffboarding = (body) =>
   api.post('/compliance/operating/offboarding', body).then(r => r.data)
 
 export default api
+
+export const proposeTemplateFact = (matterId, documentId, fieldId) =>
+  api.post(`/templates/fact-review/${matterId}/${documentId}/${fieldId}`).then(r => r.data)
+export const acceptTemplateFact = (matterId, documentId, fieldId, payload) =>
+  api.post(`/templates/fact-review/${matterId}/${documentId}/${fieldId}/accept`, payload).then(r => r.data)

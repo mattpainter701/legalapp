@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.06.2 — Keep approved templates available while preparing the next version
+
+Released September 6, 2026.
+
+Template Studio keeps the published wording available during draft edits and adds reviewed matter-document details and clearer scenario selection.
+
+- **Draft without interrupting the team.** Test the next draft separately while colleagues generate from the last published version.
+- **Review details from source documents.** Find labeled details in Word, PDF and text matter documents, correct them, then explicitly accept them into supported matter fields. Existing values require confirmation.
+- **Choose the right scenario.** Name a scenario and require a matching saved matter or client detail, including Yes/No answers, before generating. Missing details stay unresolved.
+
 ## 2026.09.06.1 — Firm Memory keeps native file permissions intact
 
 Released September 6, 2026.

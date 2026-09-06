@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import PrepareFormWorkspace from '../components/templates/PrepareFormWorkspace'
 import TemplateStudioHome from '../components/templates/TemplateStudioHome'
 import TemplateStudioWorkspace from '../components/templates/TemplateStudioWorkspace'
+import TemplateFactReview from '../components/templates/TemplateFactReview'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
   getTemplate,
@@ -994,8 +995,10 @@ function UploadTemplateForm({ onCreated, onCancel }) {
               </div>
               <span className="text-xs text-brand-muted">{fields.length} field{fields.length === 1 ? '' : 's'}</span>
             </div>
+            <details><summary className="cursor-pointer text-sm text-brand-muted">Advanced: inspect or repair extracted text</summary>
             <label htmlFor="reviewed-template-body" className="block text-xs font-semibold text-brand-muted mb-2">{isPdfAnalysis ? 'Text found in the document (the page design is unchanged)' : 'Extracted template body'}</label>
             <textarea id="reviewed-template-body" value={draftBody} readOnly={isPdfAnalysis} onChange={(event) => { setReviewConfirmed(false); setDraftBody(event.target.value) }} rows={18} className="w-full rounded border border-brand-line bg-brand-surface-2 p-3 font-mono text-xs text-brand-ink read-only:opacity-75" />
+            </details>
           </div>
 
           <div className="space-y-3">
@@ -1014,7 +1017,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
                         <p className="font-semibold text-brand-ink">{field.label || `Detail ${index + 1}`}</p>
                         <div className="mt-1 flex flex-wrap gap-1.5">
                           <span className={`rounded border px-2 py-0.5 ${Number(field.confidence || 0) >= 0.75 ? 'border-brand-green/30 bg-brand-green/10 text-brand-ink' : 'border-brand-amber/40 bg-brand-amber/10 text-brand-ink'}`}>
-                            {Number(field.confidence || 0) >= 0.75 ? 'Strong match' : 'Please verify'}
+                            {Number(field.confidence || 0) >= 0.75 ? 'Location found · verify value' : 'Please verify location'}
                           </span>
                           {(field.pdf_overlay?.source_kind === 'ocr' || field.pdf_overlays?.some((item) => item?.source_kind === 'ocr')) && <span className="rounded border border-brand-line bg-brand-bg px-2 py-0.5 text-brand-muted">Read from scan</span>}
                           {field.ai_suggested && <span className="rounded border border-brand-accent/30 bg-brand-accent/10 px-2 py-0.5 text-brand-ink">AI proposal · verify</span>}
@@ -1182,6 +1185,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const [error, setError] = useState(null)
   const [smartFillState, setSmartFillState] = useState('idle')
   const [smartFillMessage, setSmartFillMessage] = useState('')
+  const [fieldSources, setFieldSources] = useState({})
   const previewRequestGenerationRef = useRef(0)
   const smartFillRequestGenerationRef = useRef(0)
   const formRevisionRef = useRef(0)
@@ -1306,6 +1310,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     try {
       const res = await discoverTemplateVariables(template.id, {
         matter_id: requestMatterId,
+        published: Boolean(template.is_active),
         variables: fillableNames,
       })
       if (
@@ -1322,11 +1327,12 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         setSmartFillMessage('No smart-fill values were returned for this template yet.')
         return
       }
-      setVariables((prev) => ({ ...prev, ...discovered }))
+      setFieldSources(Object.fromEntries((res.variables || []).map(item => [item.variable, item])))
+      setVariables((prev) => Object.fromEntries(Object.keys(prev).map(name => [name, prev[name] || discovered[name] || ''])))
       invalidatePreview()
       setSaved(false)
       setSmartFillState('ready')
-      setSmartFillMessage('Smart-fill values loaded. Review each field before saving.')
+      setSmartFillMessage('Available values loaded into empty fields. Existing entries kept. Review the source and each value before saving.')
     } catch (err) {
       if (smartFillRequestGenerationRef.current !== requestGeneration) return
       if ([404, 405, 501].includes(err?.response?.status)) {
@@ -1550,6 +1556,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           </div>
         )}
 
+        <TemplateFactReview matterId={matterId.trim()} fields={Object.values(fieldDefinitions)} onAccepted={() => { setFieldSources({}); invalidatePreview() }} />
         {smartFillMessage && (
           <div className={`text-sm border px-3 py-2 ${
             smartFillState === 'ready'
@@ -1595,6 +1602,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                       </span>
                     </label>
                   )}
+                  {fieldSources[name] && <p className="mb-1 text-xs text-brand-muted">{fieldSources[name].suggested_value == null ? 'Missing: review or enter a value' : `From ${fieldSources[name].provenance?.binding_label || fieldSources[name].source_type || 'record'} · verify current accuracy`}{fieldSources[name].provenance?.updated_at ? ` · Updated ${new Date(fieldSources[name].provenance.updated_at).toLocaleDateString()}` : ''}</p>}
                   {fieldType === 'signature' ? (
                     <p className="text-sm text-brand-muted">
                       Signature area is left blank for signing; it is not populated during document generation.
@@ -1825,6 +1833,16 @@ export default function TemplatesPage() {
   const [editTemplate, setEditTemplate] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [renderTarget, setRenderTarget] = useState(null)
+  const openRender = async (template) => {
+    try {
+      const release = template.is_active && template.published_version_no !== template.current_version_no
+        ? await getTemplate(template.id, { published: true }) : template
+      setRenderTarget(release)
+    } catch (error) {
+      setError(error?.response?.data?.detail || 'The published version could not be loaded.')
+    }
+  }
+
   const [workspaceTemplate, setWorkspaceTemplate] = useState(null)
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
   const [workspaceError, setWorkspaceError] = useState(null)
@@ -2275,6 +2293,7 @@ export default function TemplatesPage() {
                         <h3 className="mt-2 truncate text-base font-semibold text-brand-ink" title={tpl.title}>
                           {tpl.title}
                         </h3>
+                        {tpl.variable_schema?.applicability?.label && <p className="text-xs font-semibold text-brand-accent">Use for: {tpl.variable_schema.applicability.label}</p>}
                       </div>
                       <span
                         className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${CATEGORY_COLORS[tpl.category] || CATEGORY_COLORS.other}`}
@@ -2319,7 +2338,7 @@ export default function TemplatesPage() {
                         Open in Studio
                       </button>
                       <button
-                        onClick={() => setRenderTarget(tpl)}
+                        onClick={() => openRender(tpl)}
                         disabled={sourceMissing}
                         title={sourceMissing
                           ? 'Recreate the template from its original source document before previewing it'
@@ -2402,7 +2421,7 @@ export default function TemplatesPage() {
             </p>
           </div>
           <button
-            onClick={() => selectedTemplate && setRenderTarget(selectedTemplate)}
+            onClick={() => selectedTemplate && openRender(selectedTemplate)}
             disabled={generationLoading || !selectedTemplate || isSourceBackedTemplateMissing(selectedTemplate)}
             title={isSourceBackedTemplateMissing(selectedTemplate) ? 'Re-upload the source document before generating' : undefined}
             className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
@@ -2418,12 +2437,13 @@ export default function TemplatesPage() {
             return (
               <button
                 key={tpl.id}
-                onClick={() => setRenderTarget(tpl)}
+                onClick={() => openRender(tpl)}
                 className="text-left border border-brand-line rounded p-4 bg-brand-bg hover:border-brand-accent/50"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-brand-ink truncate">{tpl.title}</p>
+                    {tpl.variable_schema?.applicability?.label && <p className="text-xs text-brand-muted">Use for: {tpl.variable_schema.applicability.label}</p>}
                     <p className="text-xs text-brand-muted mt-1">
                       {vars.length} review field{vars.length === 1 ? '' : 's'}
                     </p>
@@ -2491,7 +2511,8 @@ export default function TemplatesPage() {
           section={workspaceSection}
           statusMessage={routeStatus}
           onEdit={() => setEditTemplate(workspaceTemplate)}
-          onGenerate={() => setRenderTarget(workspaceTemplate)}
+          onGenerate={() => openRender(workspaceTemplate)}
+          onTest={() => setRenderTarget({ ...workspaceTemplate, is_active: false })}
           onPublish={handlePublishWorkspace}
           source={workspaceSource}
           sourceLoading={workspaceSourceLoading}

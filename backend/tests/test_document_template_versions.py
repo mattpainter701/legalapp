@@ -328,9 +328,16 @@ class TestPublicationLifecycle:
             f"/api/templates/{template.id}", json={"body": "Changed {{client_name}}"}
         )
         assert changed.status_code == 200
-        assert changed.json()["is_active"] is False
+        assert changed.json()["is_active"] is True
         assert changed.json()["tested_version_no"] is None
         assert changed.json()["published_version_no"] == 2
+        release = await client.get(f"/api/templates/{template.id}?published=true")
+        assert release.status_code == 200
+        assert release.json()["body"] == "Dear {{client_name}},"
+        assert release.json()["current_version_no"] == 2
+        assert release.json()["tested_version_no"] == 2
+        assert (await client.get(f"/api/templates/{template.id}")).json()["body"] == "Changed {{client_name}}"
+
 
     async def test_direct_activation_is_rejected(self, client, db_session, test_tenant):
         template = await _template(db_session, test_tenant.id, is_active=False)

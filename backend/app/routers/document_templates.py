@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
+from copy import deepcopy
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
@@ -66,6 +68,7 @@ from app.schemas.document_template import (
     DocumentTemplateVariableSuggestion,
 )
 from app.schemas.matter_party import normalize_matter_party_role
+from app.services import template_custom_fields, template_fact_review
 from app.services.template_intake import (
     TemplateAnalysis,
     analyze_template_upload,
@@ -124,7 +127,7 @@ from app.services.template_bindings import (
 )
 from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
-from app.services.access_control import require_capability
+from app.services.access_control import require_capability, require_capabilities
 from app.utils.text_processing import extract_text
 from app.utils.sql_filters import escape_like
 
@@ -396,6 +399,8 @@ def _pdf_contract_sha256(
         normalized_field.setdefault("included", True)
         schema_contract_fields.append(normalized_field)
     schema_contract = {"fields": schema_contract_fields}
+    if (schema or {}).get("applicability"):
+        schema_contract["applicability"] = schema["applicability"]
     return _canonical_sha256(
         {
             "renderer_version": _PDF_RENDERER_VERSION,
@@ -2173,6 +2178,79 @@ def _bound_suggestion(
     )
 
 
+async def _check_applicability(db, template, matter, user):
+    rule = (template.variable_schema or {}).get("applicability")
+    if not rule:
+        return
+    from app.services.template_semantics import validate_applicability
+
+    try:
+        validate_applicability(template.variable_schema)
+    except TemplateSemanticsError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="This template's scenario needs correction before use",
+        ) from exc
+    sources = await template_custom_fields.suggestions(
+        db, template.tenant_id, matter, declared_bindings(template.variable_schema)
+    )
+    source = sources.get(rule["field"])
+    if (
+        not source
+        or source.suggested_value is None
+        or source.suggested_value.strip().casefold() != rule["value"].strip().casefold()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Scenario '{rule['label']}' does not match the current matter details. Review missing or conflicting facts before generating.",
+        )
+
+
+async def _published_template(db, template):
+    """Read-only release view; draft edits/test failures never change this content."""
+    if not template.is_active or not template.published_version_no:
+        raise HTTPException(
+            status_code=409,
+            detail="Publish a tested version before generating documents.",
+        )
+    version = await get_version(
+        db,
+        tenant_id=template.tenant_id,
+        template_id=template.id,
+        version_no=int(template.published_version_no),
+    )
+    if not version or not version.is_active:
+        raise HTTPException(
+            status_code=409, detail="The published version is unavailable."
+        )
+    # Source replacement requires a fresh template; never combine an old map
+    # with new bytes. The source loader also verifies the retained bytes.
+    if version.source_sha256 != template.source_sha256:
+        raise HTTPException(
+            status_code=409, detail="The published source is unavailable."
+        )
+    values = {
+        column.key: getattr(template, column.key)
+        for column in DocumentTemplate.__table__.columns
+    }
+    for key in (
+        "title",
+        "body",
+        "variable_schema",
+        "format",
+        "category",
+        "source_sha256",
+        "source_filename",
+    ):
+        values[key] = deepcopy(getattr(version, key))
+    values.update(
+        current_version_no=version.version_no,
+        tested_version_no=version.version_no,
+        status="published",
+    )
+    return SimpleNamespace(**values)
+
+
 async def build_variable_suggestions(
     *,
     template: DocumentTemplate,
@@ -2205,8 +2283,12 @@ async def build_variable_suggestions(
     )
     bindings = declared_bindings(getattr(template, "variable_schema", None))
 
+    custom = await template_custom_fields.suggestions(db, tenant_id, matter, bindings)
     suggestions: list[DocumentTemplateVariableSuggestion] = []
     for variable in variables:
+        if variable in custom:
+            suggestions.append(custom[variable])
+            continue
         binding = bindings.get(variable)
         if binding:
             # A declared binding is authoritative. Falling back to name
@@ -2232,6 +2314,7 @@ async def build_variable_suggestions(
 
 @router.get("/bindings", response_model=DocumentTemplateBindingCatalogue)
 async def list_template_bindings(
+    db: AsyncSession = Depends(get_db),
     current_user=Depends(require_capability("manage_documents")),
 ):
     """Return the data sources a template field may bind to.
@@ -2241,12 +2324,26 @@ async def list_template_bindings(
     the editor that consumes it.
     """
 
+    await set_tenant_context(db, str(current_user.tenant_id))
+    custom_fields = await template_custom_fields.definitions(db, current_user.tenant_id)
     return DocumentTemplateBindingCatalogue(
         bindings=[
             DocumentTemplateBindingOption(
                 path=entry.path, label=entry.label, group=entry.group
             )
             for entry in binding_catalogue()
+        ]
+        + [
+            DocumentTemplateBindingOption(
+                field_type=field.field_type,
+                options=field.options_json or [],
+                path=f"custom.{field.entity_type}.{field.id}",
+                label=field.label,
+                group="Matter details"
+                if field.entity_type == "matter"
+                else "Client details",
+            )
+            for field in custom_fields
         ],
         collections=[
             DocumentTemplateCollectionOption(
@@ -2872,6 +2969,7 @@ async def create_template_from_sample(
 @router.get("/{template_id}", response_model=DocumentTemplateResponse)
 async def get_template(
     template_id: uuid.UUID,
+    published: bool = Query(False),
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2887,6 +2985,8 @@ async def get_template(
     template = result.scalar_one_or_none()
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    if published:
+        template = await _published_template(db, template)
     return _template_response(template)
 
 
@@ -2981,6 +3081,8 @@ async def preview_template_file(
     )
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    if payload.preview_purpose == "generation":
+        template = await _published_template(db, template)
     template_format = str(template.format or "").lower()
     if template_format not in {"pdf", "docx"}:
         raise HTTPException(
@@ -3146,6 +3248,8 @@ async def preview_template_file(
         tenant_id=tenant_id,
         matter_id=payload.matter_id,
     )
+    if purpose == "generation":
+        await _check_applicability(db, template, matter, current_user)
     if purpose == "generation" and matter is None:
         raise HTTPException(
             status_code=422,
@@ -3476,10 +3580,10 @@ async def update_template(
         )
     )
     if content_change:
-        # Editing creates a new draft.  Previously published wording remains
-        # identifiable, but the changed live row cannot generate until this
-        # exact version is tested and published.
-        updates["is_active"] = False
+        # Keep the last release live while this authoring row becomes a draft.
+        updates["is_active"] = bool(
+            template.is_active and template.published_version_no
+        )
         updates["status"] = "draft"
         updates["tested_version_no"] = None
         updates["last_test_rendered_at"] = None
@@ -3711,7 +3815,7 @@ async def restore_template_version(
     template.body = version.body
     template.variable_schema = version.variable_schema
     template.category = version.category or template.category
-    template.is_active = False
+    template.is_active = bool(template.is_active and template.published_version_no)
     template.last_test_rendered_at = None
     template.approved_at = None
     template.approved_by_user_id = None
@@ -3862,6 +3966,9 @@ async def smart_fill_preview(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
 
+    if payload.published:
+        template = await _published_template(db, template)
+
     resolved_matter_id, suggestions = await build_variable_suggestions(
         template=template,
         requested_variables=payload.variables,
@@ -3902,7 +4009,6 @@ async def render_template_endpoint(
     template = result.scalar_one_or_none()
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    template_revision = template.updated_at
     matter = await _load_render_matter(
         db,
         tenant_id=parsed_tenant_id,
@@ -3913,42 +4019,9 @@ async def render_template_endpoint(
             status_code=409,
             detail="Only active templates can be saved to a matter. Preview and activate this template first.",
         )
-    published_version = None
     if matter is not None:
-        if not template.published_version_no or (
-            template.tested_version_no != template.published_version_no
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="Publish a successfully tested template version before saving a generated document.",
-            )
-        published_version = await get_version(
-            db,
-            tenant_id=parsed_tenant_id,
-            template_id=template.id,
-            version_no=int(template.published_version_no),
-        )
-        if not published_version:
-            raise HTTPException(
-                status_code=409,
-                detail="The published template version is unavailable. Pause generation and contact an administrator.",
-            )
-        if snapshot_differs(
-            template,
-            {
-                "title": published_version.title,
-                "body": published_version.body,
-                "variable_schema": published_version.variable_schema,
-                "format": published_version.format,
-                "category": published_version.category,
-                "source_sha256": published_version.source_sha256,
-                "is_active": published_version.is_active,
-            },
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="The live template no longer matches its published version. Republish before generation.",
-            )
+        template = await _published_template(db, template)
+        await _check_applicability(db, template, matter, current_user)
 
     # Repeating sections iterate the matter's own party records, so a
     # rendered document reflects however many parties this matter actually
@@ -4179,7 +4252,9 @@ async def render_template_endpoint(
                 if (
                     not final_template
                     or not final_template.is_active
-                    or final_template.updated_at != template_revision
+                    or final_template.published_version_no
+                    != template.published_version_no
+                    or final_template.source_sha256 != template.source_sha256
                 ):
                     raise HTTPException(
                         status_code=409,
@@ -4188,7 +4263,7 @@ async def render_template_endpoint(
                             "Preview the current template and values again."
                         ),
                     )
-                template = final_template
+                template = await _published_template(db, final_template)
                 (
                     preview_evidence,
                     existing_document,
@@ -4481,4 +4556,33 @@ async def render_template_endpoint(
         storage_backend=storage_backend,
         storage_provider=storage_provider,
         storage_warning=storage_warning,
+    )
+
+
+@router.post("/fact-review/{matter_id}/{document_id}/{field_id}")
+async def propose_matter_fact(
+    matter_id: uuid.UUID,
+    document_id: uuid.UUID,
+    field_id: uuid.UUID,
+    current_user=Depends(require_capabilities("manage_documents", "manage_matters")),
+    db: AsyncSession = Depends(get_db),
+):
+    await set_tenant_context(db, str(current_user.tenant_id))
+    return await template_fact_review.propose(
+        db, current_user, matter_id, document_id, field_id
+    )
+
+
+@router.post("/fact-review/{matter_id}/{document_id}/{field_id}/accept")
+async def accept_matter_fact(
+    matter_id: uuid.UUID,
+    document_id: uuid.UUID,
+    field_id: uuid.UUID,
+    payload: template_fact_review.FactAccept,
+    current_user=Depends(require_capabilities("manage_documents", "manage_matters")),
+    db: AsyncSession = Depends(get_db),
+):
+    await set_tenant_context(db, str(current_user.tenant_id))
+    return await template_fact_review.accept(
+        db, current_user, matter_id, document_id, field_id, payload
     )
