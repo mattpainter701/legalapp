@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.06.6",
+      "version": "2026.09.06.6",
+      "title": "Bring existing matters and historical email into LawHand",
+      "published_at": "2026-09-06",
+      "summary": "Import USB folders or ZIP files from New Matter, review client and matter mappings, and preserve historical emails in Correspondence.",
+      "highlights": [
+        {
+          "title": "Create many matters from folders",
+          "description": "Authorized staff review folder mappings, clients and intake stages before creating matters."
+        },
+        {
+          "title": "Preserve former-firm email",
+          "description": "EML messages retain their original files and appear in Correspondence without requiring a matching email domain."
+        },
+        {
+          "title": "Resume incomplete imports",
+          "description": "Review each file result and retry unfinished uploads using the saved import ID."
+        }
+      ]
+    },
+    {
       "id": "2026.09.06.5",
       "version": "2026.09.06.5",
       "title": "Keep everyday casework within reach on your phone",

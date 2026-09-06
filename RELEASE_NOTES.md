@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.06.6 — Bring existing matters and historical email into LawHand
+
+Released September 6, 2026.
+
+Import USB folders or ZIP files from New Matter, review client and matter mappings, and preserve historical emails in Correspondence.
+
+- **Create many matters from folders.** Authorized staff review folder mappings, clients and intake stages before creating matters.
+- **Preserve former-firm email.** EML messages retain their original files and appear in Correspondence without requiring a matching email domain.
+- **Resume incomplete imports.** Review each file result and retry unfinished uploads using the saved import ID.
+
 ## 2026.09.06.5 — Keep everyday casework within reach on your phone
 
 Released September 6, 2026.

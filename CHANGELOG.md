@@ -6,6 +6,10 @@
 
 # Changelog
 
+## 2026.09.06.6
+
+- Add reviewed folder/ZIP matter creation and historical EML correspondence imports with persistent per-file results, destination authorization and Microsoft/Google storage routing.
+
 ## 2026.09.06.2 — Template Studio launch preparation
 
 - Read immutable published snapshots for generation while authoring/testing later drafts; preserve source-hash and reviewed PDF contracts.

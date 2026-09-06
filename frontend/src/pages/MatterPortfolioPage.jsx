@@ -717,6 +717,7 @@ export default function MatterPortfolioPage() {
       <NewMatterModal
         open={showCreate}
         onClose={() => setShowCreate(false)}
+        onImportComplete={() => { loadMatters(); loadMyMatters() }}
         onCreated={m => {
           setMatters(prev => [m, ...prev])
           navigate(`/matters/${m.id}`)

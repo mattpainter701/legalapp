@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import MatterImportWizard from './MatterImportWizard'
 import { format, parseISO } from 'date-fns'
 import {
   uploadMatterDocument,
@@ -646,6 +647,10 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
         </div>
       )}
 
+      <details className="border border-brand-line rounded-lg p-3">
+        <summary className="cursor-pointer font-semibold">Import files &amp; emails</summary>
+        <MatterImportWizard matterId={matterId} onComplete={() => { refreshDocuments(); refreshFolders() }} />
+      </details>
       {/* Upload form */}
       {showUpload && (
         <div className="bg-brand-bg border border-brand-line rounded-xl p-6 space-y-4">

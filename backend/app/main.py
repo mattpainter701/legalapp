@@ -61,6 +61,7 @@ from app.routers.sms import router as sms_router
 from app.routers.engagement_packets import router as engagement_packets_router
 from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
+from app.routers.matter_imports import router as matter_imports_router
 from app.routers.matter_document_folders import (
     router as matter_document_folders_router,
 )
@@ -474,6 +475,7 @@ app.include_router(intake_assistant_router)
 app.include_router(engagement_packets_router)
 app.include_router(matter_parties_router)
 app.include_router(matter_documents_router)
+app.include_router(matter_imports_router)
 app.include_router(matter_document_folders_router)
 app.include_router(matters_correspondence_router)
 app.include_router(reports_router)
