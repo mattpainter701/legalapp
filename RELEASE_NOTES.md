@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.06.3 — See the limits of research evidence
+
+Released September 6, 2026.
+
+Research checks source jurisdiction before treating a requested location as covered and keeps source capture details visible with cited authorities.
+
+- **Know which jurisdiction a source supports.** Wrong-jurisdiction and unknown-jurisdiction hits no longer fill a requested coverage gap.
+- **Inspect source dates and status.** Cited public sources show catalogue status, retrieval and sync dates, and unknown values. These details do not establish current law or treatment.
+
 ## 2026.09.06.2 — Keep approved templates available while preparing the next version
 
 Released September 6, 2026.

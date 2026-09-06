@@ -11,6 +11,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, func as sa_func
 
+from app.research_metadata import research_source_metadata
 from app.config import get_settings
 from app.database import async_session_maker, set_tenant_context
 from app.services.embeddings import EmbeddingService
@@ -689,9 +690,9 @@ def _mcp_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
         "case_name": item.get("case_name") or "Unknown Case",
         "citation": item.get("citation") or "",
         "court": item.get("court_name") or item.get("court_id") or "",
-        "decision_date": str(item.get("date_filed"))
-        if item.get("date_filed")
-        else None,
+        "decision_date": (
+            str(item.get("date_filed")) if item.get("date_filed") else None
+        ),
         "chunk_index": item.get("chunk_index") or 0,
         "section_path": "CourtListener",
         "clause_type": "public_authority",
@@ -699,6 +700,10 @@ def _mcp_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
         "relevance_score": similarity or _score_value(item.get("keyword_rank")),
         "source": "courtlistener_mcp",
         "retrieval_mode": item.get("search_source") or "unknown",
+        **research_source_metadata(
+            {**item, "source_jurisdiction": item.get("jurisdiction")}
+        ),
+        "court_id": item.get("court_id"),
         "opinion_id": item.get("opinion_id"),
         "cluster_id": item.get("cluster_id"),
         "url": item.get("url") or item.get("source_url"),
@@ -757,12 +762,35 @@ def _mcp_authority_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
         "document_id": item.get("document_id"),
         "source_key": item.get("source_key"),
         "official_status": item.get("official_status"),
+        **research_source_metadata(
+            {**item, "source_jurisdiction": item.get("jurisdiction")}
+        ),
         "effective_date": item.get("effective_date"),
-        "retrieved_at": item.get("retrieved_at"),
-        "last_successful_sync_at": item.get("last_successful_sync_at"),
         "url": source_url,
         "source_url": source_url,
     }
+
+
+def _verified_retrieval_jurisdiction(chunk: dict, requested: str) -> str | None:
+    """Confirm a search scope from source metadata, never from the query alone.
+
+    CourtListener jurisdiction codes describe court categories (S/F), while
+    court IDs and the authority catalogue use different vocabularies.
+    """
+    actual = chunk.get("source_jurisdiction")
+    court = chunk.get("court_id")
+    if not isinstance(actual, str):
+        actual = ""
+    if not isinstance(court, str):
+        court = ""
+    if chunk.get("source") == "courtlistener_mcp":
+        for _pattern, court_id, canonical in _PUBLIC_JURISDICTIONS:
+            if canonical == requested and (
+                court.strip() == court_id or (court_id == "F" and actual.strip() == "F")
+            ):
+                return canonical
+        return None
+    return requested if actual.strip().upper() == requested else None
 
 
 async def _call_public_mcp_search(
@@ -1015,7 +1043,10 @@ async def search_courtlistener_mcp(
         tool_name,
         requested_jurisdiction,
         canonical_jurisdiction,
-    ), (response, outcome) in zip(search_plan, search_results):
+    ), (
+        response,
+        outcome,
+    ) in zip(search_plan, search_results):
         mapper = (
             _mcp_authority_item_to_chunk
             if tool_name == "search_legal_authorities"
@@ -1028,6 +1059,12 @@ async def search_courtlistener_mcp(
         ]
         mapped_chunks = filter_public_retrieval_results(query, raw_chunks)
         if canonical_jurisdiction:
+            # Unverified/mismatched rows cannot close a requested coverage gap.
+            mapped_chunks = [
+                chunk
+                for chunk in mapped_chunks
+                if _verified_retrieval_jurisdiction(chunk, canonical_jurisdiction)
+            ]
             for chunk in mapped_chunks:
                 chunk["retrieval_jurisdiction"] = canonical_jurisdiction
         chunks_by_jurisdiction[canonical_jurisdiction].extend(mapped_chunks)
@@ -1135,8 +1172,23 @@ async def build_rag_context(chunks: List[dict]) -> str:
             header_parts.append(f"Citation: {citation}")
         if source_url:
             header_parts.append(f"URL: {source_url}")
-        if is_public and retrieval_jurisdiction:
-            header_parts.append(f"Retrieval jurisdiction: {retrieval_jurisdiction}")
+        if is_public:
+            header_parts.append(
+                f"Source jurisdiction: {chunk.get('source_jurisdiction') or 'unknown'}"
+            )
+            if retrieval_jurisdiction:
+                header_parts.append(f"Retrieval jurisdiction: {retrieval_jurisdiction}")
+            header_parts.append(
+                f"Catalogue status: {chunk.get('document_status') or 'unknown'}; "
+                f"retrieved at: {chunk.get('retrieved_at') or 'unknown'}; "
+                f"last source sync: {chunk.get('last_successful_sync_at') or 'unknown'}; "
+                f"termination date: {chunk.get('termination_date') or 'unknown'}"
+            )
+            header_parts.append(
+                "Treatment/current law: not established by retrieval. Catalogue status, "
+                "retrieval dates and relevance scores do not verify currentness, "
+                "controlling authority or good law. Disclose unknown or stale evidence."
+            )
         if court:
             header_parts.append(f"Court: {court}")
         if decision_date:

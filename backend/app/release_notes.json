@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.06.3",
+      "version": "2026.09.06.3",
+      "title": "See the limits of research evidence",
+      "published_at": "2026-09-06",
+      "summary": "Research checks source jurisdiction before treating a requested location as covered and keeps source capture details visible with cited authorities.",
+      "highlights": [
+        {
+          "title": "Know which jurisdiction a source supports",
+          "description": "Wrong-jurisdiction and unknown-jurisdiction hits no longer fill a requested coverage gap."
+        },
+        {
+          "title": "Inspect source dates and status",
+          "description": "Cited public sources show catalogue status, retrieval and sync dates, and unknown values. These details do not establish current law or treatment."
+        }
+      ]
+    },
+    {
       "id": "2026.09.06.2",
       "version": "2026.09.06.2",
       "title": "Keep approved templates available while preparing the next version",

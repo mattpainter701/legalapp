@@ -4828,6 +4828,7 @@ def test_legacy_upgrade_bootstrap_rehearsal():
             cur.execute(
                 """CREATE TABLE courts (
                     court_id text PRIMARY KEY, full_name text NOT NULL,
+                    jurisdiction text,
                     metadata jsonb NOT NULL DEFAULT '{}'::jsonb)"""
             )
             cur.execute(

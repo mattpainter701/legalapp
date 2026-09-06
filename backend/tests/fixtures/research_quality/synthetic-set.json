@@ -1,0 +1,54 @@
+{
+  "id": "synthetic-research-contract-v1",
+  "evidence_kind": "synthetic",
+  "thresholds": {
+    "min_authority_recall": 1,
+    "max_latency_ms": 1000,
+    "max_cost_usd": 0.1
+  },
+  "cases": [
+    {
+      "id": "fixture-question",
+      "question": "What does the fictional rule require?",
+      "allowed_jurisdictions": [
+        "ND"
+      ],
+      "expected_authorities": [
+        "fictional:rule"
+      ],
+      "expected_propositions": [
+        "fixture-notice"
+      ],
+      "must_abstain": false,
+      "required_gaps": [
+        "currentness_not_established"
+      ]
+    },
+    {
+      "id": "missing-corpus",
+      "question": "Synthetic missing-corpus question",
+      "allowed_jurisdictions": [
+        "ND"
+      ],
+      "expected_authorities": [],
+      "expected_propositions": [],
+      "must_abstain": true,
+      "required_gaps": [
+        "missing_jurisdiction"
+      ]
+    },
+    {
+      "id": "unavailable-source",
+      "question": "Synthetic unavailable-source question",
+      "allowed_jurisdictions": [
+        "ND"
+      ],
+      "expected_authorities": [],
+      "expected_propositions": [],
+      "must_abstain": true,
+      "required_gaps": [
+        "source_unavailable"
+      ]
+    }
+  ]
+}

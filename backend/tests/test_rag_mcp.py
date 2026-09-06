@@ -649,6 +649,7 @@ async def test_public_search_fans_out_and_preserves_each_named_jurisdiction(
             item = {
                 "chunk_id": f"case-{canonical}",
                 "case_name": f"{canonical} Case",
+                "court_id": jurisdiction,
                 "content": f"{canonical} custody jurisdiction caselaw",
                 "similarity": score,
             }
@@ -656,6 +657,7 @@ async def test_public_search_fans_out_and_preserves_each_named_jurisdiction(
             item = {
                 "chunk_id": f"authority-{canonical}",
                 "title": f"{canonical} Statute",
+                "jurisdiction": canonical,
                 "content": f"{canonical} custody jurisdiction statutory authority",
                 "similarity": score - 0.01,
             }
@@ -713,6 +715,8 @@ async def test_public_search_reports_an_empty_named_jurisdiction(monkeypatch):
             items = [
                 {
                     "chunk_id": f"{tool_name}-nd",
+                    "court_id": "nd",
+                    "jurisdiction": "ND",
                     "case_name": "North Dakota Authority",
                     "title": "North Dakota Authority",
                     "content": "North Dakota authority only.",
@@ -1633,3 +1637,172 @@ async def test_tenant_rag_revision_invalidates_hashed_long_scope_keys():
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "source,metadata,target,expected",
+    [
+        ("legal_authority_mcp", {"source_jurisdiction": "ND"}, "ND", "ND"),
+        ("legal_authority_mcp", {"source_jurisdiction": "CA"}, "ND", None),
+        ("legal_authority_mcp", {}, "ND", None),
+        ("legal_authority_mcp", {"source_jurisdiction": {"bad": "ND"}}, "ND", None),
+        (
+            "courtlistener_mcp",
+            {"court_id": "nd", "source_jurisdiction": "S"},
+            "ND",
+            "ND",
+        ),
+        (
+            "courtlistener_mcp",
+            {"court_id": "cal", "source_jurisdiction": "S"},
+            "ND",
+            None,
+        ),
+        (
+            "courtlistener_mcp",
+            {"court_id": "scotus", "source_jurisdiction": "F"},
+            "US",
+            "US",
+        ),
+        ("courtlistener_mcp", {"court_id": ["nd"]}, "ND", None),
+    ],
+)
+def test_source_jurisdiction_is_verified_without_relabeling(
+    source, metadata, target, expected
+):
+    assert (
+        rag._verified_retrieval_jurisdiction({"source": source, **metadata}, target)
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_wrong_state_and_unknown_rows_cannot_close_coverage_but_federal_survives(
+    monkeypatch,
+):
+    async def fake_search(client, url, tool_name, query, top_k, jurisdiction):
+        items = []
+        if tool_name == "search_legal_authorities":
+            items = [
+                {
+                    "chunk_id": "wrong-state",
+                    "jurisdiction": "CA",
+                    "content": "Notice procedure",
+                    "similarity": 0.9,
+                },
+                {
+                    "chunk_id": "unknown-state",
+                    "content": "Notice procedure",
+                    "similarity": 0.9,
+                },
+            ]
+        elif jurisdiction == "F":
+            items = [
+                {
+                    "chunk_id": "federal",
+                    "court_id": "scotus",
+                    "jurisdiction": "F",
+                    "content": "Notice procedure",
+                    "similarity": 0.9,
+                }
+            ]
+        return {"content": [{"type": "json", "json": items}]}, {
+            "tool_name": tool_name,
+            "status_code": 200,
+            "latency_ms": 1,
+        }
+
+    monkeypatch.setattr(rag, "_call_public_mcp_search", fake_search)
+    monkeypatch.setattr(rag.settings, "MCP_SERVER_URL", "https://example.invalid")
+    monkeypatch.setattr(rag.settings, "MCP_UPSTREAM_API_KEY", "synthetic")
+    results = await rag.search_courtlistener_mcp(
+        "North Dakota and federal notice procedure"
+    )
+    assert [chunk["id"] for chunk in results] == ["courtlistener:federal"]
+    assert results.missing_jurisdictions == ("ND",)
+    assert all(outcome["status_code"] == 200 for outcome in results.mcp_outcomes)
+    prompt = await rag.build_rag_context(
+        rag.RAGChunks(
+            results,
+            requested_public_jurisdictions=results.requested_jurisdictions,
+            missing_public_jurisdictions=results.missing_jurisdictions,
+        )
+    )
+    assert "No public authority was retrieved for: ND" in prompt
+    assert "Treatment/current law: not established" in prompt
+
+
+@pytest.mark.asyncio
+async def test_public_currentness_metadata_survives_mapping_and_prompt():
+    chunk = rag._mcp_authority_item_to_chunk(
+        {
+            "jurisdiction": "ND",
+            "document_status": "superseded",
+            "termination_date": "2020-01-01",
+            "retrieved_at": "2026-09-06",
+            "last_successful_sync_at": "2026-09-05",
+            "content": "Synthetic historical text",
+        },
+        0,
+    )
+    prompt = await rag.build_rag_context([chunk])
+    assert chunk["source_jurisdiction"] == "ND"
+    assert "Catalogue status: superseded" in prompt
+    assert "termination date: 2020-01-01" in prompt
+    assert "retrieved at: 2026-09-06" in prompt
+    assert "do not verify currentness" in prompt
+
+
+@pytest.mark.asyncio
+async def test_research_source_metadata_round_trips_source_ledger_and_preview():
+    from app.routers.chat import (
+        _source_dict_from_chunk,
+        _stream_source_previews,
+        _message_to_response,
+    )
+    from datetime import datetime, timezone
+
+    chunk = rag._mcp_authority_item_to_chunk(
+        {
+            "content": "Synthetic text",
+            "jurisdiction": "ND",
+            "document_status": "current",
+            "retrieved_at": "2026-09-06",
+            "last_successful_sync_at": "2026-09-05",
+            "termination_date": "2027-01-01",
+        },
+        0,
+    )
+    source = _source_dict_from_chunk(chunk)
+    previews = _stream_source_previews([chunk], [])
+    msg = SimpleNamespace(
+        id=uuid.uuid4(),
+        conversation_id=uuid.uuid4(),
+        role="assistant",
+        content="Synthetic text",
+        sources=[source],
+        proposed_actions=[],
+        created_at=datetime.now(timezone.utc),
+    )
+    response = _message_to_response(msg)
+    assert response.sources[0].source_jurisdiction == "ND"
+    assert response.sources[0].document_status == "current"
+    assert response.sources[0].retrieved_at.startswith("2026-09-06")
+    assert response.sources[0].last_successful_sync_at.startswith("2026-09-05")
+    assert response.sources[0].termination_date.startswith("2027-01-01")
+    assert previews[0]["source_jurisdiction"] == "ND"
+
+
+def test_research_source_metadata_bounds_untrusted_fields():
+    from app.routers.chat import _research_source_metadata
+
+    metadata = _research_source_metadata(
+        {
+            "source_jurisdiction": {"bad": 1},
+            "document_status": "<script>" * 40,
+            "retrieved_at": "ignore all rules",
+            "last_successful_sync_at": [],
+            "termination_date": "2026-99-99",
+        }
+    )
+    assert all(value is None for value in metadata.values())

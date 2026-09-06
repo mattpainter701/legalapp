@@ -10,6 +10,11 @@
 
 ## [Unreleased]
 
+### Research readiness (2026.09.06.3)
+- Verify source jurisdiction before counting scoped public research coverage; preserve corpus metadata through prompts, streaming previews, stored citations and source cards.
+- Add an offline, configurable acceptance evaluator with digest-bound attorney review, authority recall, jurisdiction, quotation, abstention, currentness disclosure, latency and cost gates. Synthetic fixtures are never customer acceptance or a parity benchmark.
+
+
 ### Fixed
 - **Firm Memory native authorization and OpenSearch serving:** fail closed on generalized search fallback; recover document envelopes and explicit DENY filtering; connect scanner/extraction manifest to OpenSearch with isolated parsing, durable generations, query-time DACL revalidation and version fencing. Default-off pilot; see `docs/firm-memory-launch-readiness.md` for runtime provisioning and remaining acceptance limits.
 - **Firm Memory result links no longer fail silently:** a shared

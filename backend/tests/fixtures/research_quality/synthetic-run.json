@@ -1,0 +1,72 @@
+{
+  "evidence_kind": "synthetic",
+  "candidate_sha": "fixture-sha",
+  "captured_at": "2026-09-06",
+  "corpus": {
+    "version": "fixture",
+    "manifest_hash": "fixture-hash",
+    "as_of": "2026-09-06",
+    "coverage_artifact": "synthetic.json"
+  },
+  "observations": [
+    {
+      "id": "fixture-question",
+      "answer": "The fictional rule requires notice.",
+      "sources": [
+        {
+          "id": "source-1",
+          "authority_id": "fictional:rule",
+          "jurisdiction": "ND",
+          "url": "https://example.invalid/rule",
+          "content": "The fictional rule requires notice.",
+          "currentness": "unknown"
+        }
+      ],
+      "claims": [
+        {
+          "id": "claim-1",
+          "source_ids": [
+            "source-1"
+          ],
+          "quotes": [
+            {
+              "source_id": "source-1",
+              "text": "requires notice"
+            }
+          ]
+        }
+      ],
+      "abstained": false,
+      "disclosed_gaps": [
+        "currentness_not_established"
+      ],
+      "latency_ms": 200,
+      "cost_usd": 0.01
+    },
+    {
+      "id": "missing-corpus",
+      "answer": "Unable to establish an answer from the available sources.",
+      "sources": [],
+      "claims": [],
+      "abstained": true,
+      "disclosed_gaps": [
+        "missing_jurisdiction"
+      ],
+      "latency_ms": 200,
+      "cost_usd": 0.01
+    },
+    {
+      "id": "unavailable-source",
+      "answer": "Unable to establish an answer from the available sources.",
+      "sources": [],
+      "claims": [],
+      "abstained": true,
+      "disclosed_gaps": [
+        "source_unavailable"
+      ],
+      "latency_ms": 200,
+      "cost_usd": 0.01
+    }
+  ],
+  "reviews": {}
+}

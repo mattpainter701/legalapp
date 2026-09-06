@@ -24,6 +24,11 @@ import { API_BASE_URL, approveProposedTask, getTask, waitForTaskDelivery } from 
 import ActionProposalCard from './chat/ActionProposalCard'
 import ArtifactCard from './ArtifactCard'
 
+function researchSourceDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value) || !Number.isFinite(Date.parse(value))) return 'unknown'
+  return value.slice(0, 10)
+}
+
 function cleanSourceText(value) {
   if (!value) return ''
   const textarea = typeof document !== 'undefined' ? document.createElement('textarea') : null
@@ -340,6 +345,16 @@ function SourcesLedger({ sources, messageId }) {
                       <span className="ml-2 mt-1 inline-flex w-fit font-mono text-[9px] uppercase tracking-wide text-brand-muted">
                         {evidenceMeta.join(' · ')}
                       </span>
+                    )}
+                    {src?.source_type === 'public_authority' && (
+                      <p className="mt-1 text-xs leading-relaxed text-brand-muted">
+                        Source jurisdiction: {cleanSourceText(src.source_jurisdiction).slice(0, 40) || 'unknown'}.
+                        {' '}Catalogue status: {readableSourceMeta(src.document_status).slice(0, 40) || 'unknown'}.
+                        {' '}Retrieved: {researchSourceDate(src.retrieved_at)}.
+                        {' '}Last sync: {researchSourceDate(src.last_successful_sync_at)}.
+                        {' '}Termination date: {researchSourceDate(src.termination_date)}.
+                        {' '}Current law and treatment require review.
+                      </p>
                     )}
                     {locator && (
                       <a

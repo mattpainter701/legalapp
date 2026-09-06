@@ -631,3 +631,18 @@ describe('Chat workspace drawer', () => {
     expect(document.body.style.overflow).toBe('')
   })
 })
+
+describe('research source evidence metadata', () => {
+  it.each([
+    [{ source_jurisdiction: 'ND', document_status: 'superseded', retrieved_at: '2026-09-06T12:00:00Z', last_successful_sync_at: '2026-09-05', termination_date: '2020-01-01' }, 'ND', 'superseded', '2026-09-06', '2020-01-01'],
+    [{ retrieved_at: '<script>alert(1)</script>', termination_date: '2026-99-99' }, 'unknown', 'unknown', 'unknown', 'unknown'],
+  ])('shows source evidence and honest unknowns', (metadata, jurisdiction, status, retrieved, terminated) => {
+    render(<ChatMessage message={{ id: 'research-metadata', role: 'assistant', content: 'Fixture notice. [source: authority:fixture]', created_at: '2026-09-06T00:00:00Z', sources: [{ source_id: 'authority:fixture', case_name: 'Fictional rule', citation: 'fixture', excerpt: 'Fixture notice.', source_type: 'public_authority', ...metadata }] }} />)
+    const evidence = screen.getByText(new RegExp(`Source jurisdiction: ${jurisdiction}`))
+    expect(evidence).toHaveTextContent(`Catalogue status: ${status}`)
+    expect(evidence).toHaveTextContent(`Retrieved: ${retrieved}`)
+    expect(evidence).toHaveTextContent(`Termination date: ${terminated}`)
+    expect(evidence).toHaveTextContent('Current law and treatment require review')
+    expect(screen.queryByText(/<script>/i)).not.toBeInTheDocument()
+  })
+})
