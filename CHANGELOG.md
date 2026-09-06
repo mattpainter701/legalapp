@@ -6,6 +6,11 @@
 
 # Changelog
 
+## 2026.09.06.7
+
+- Add matter intake packets with independently verified fee agreement and questionnaire completion, encrypted portal invitations, connected Microsoft/Google email and storage, existing Twilio SMS delivery, seven-day document follow-up and scheduling tasks due within 24 hours.
+- Add staff receipt/meeting/retry/renewal controls and a client questionnaire checklist. Migration 158 persists tenant-scoped packet, delivery and timing state; demo data purges include packets.
+
 ## 2026.09.06.6
 
 - Add reviewed folder/ZIP matter creation and historical EML correspondence imports with persistent per-file results, destination authorization and Microsoft/Google storage routing.

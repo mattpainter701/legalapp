@@ -559,7 +559,7 @@ async def activate_portal_account(  # pragma: no cover - exercised by browser/E2
             id=uuid.uuid4(),
             tenant_id=invite.tenant_id,
             email=(invite.email or contact.email).lower(),
-            full_name=contact.full_name or "Client",
+            full_name=contact.display_name or "Client",
             role="client",
             is_active=True,
         )
@@ -1843,7 +1843,7 @@ async def create_portal_invite(
                     id=uuid.uuid4(),
                     tenant_id=user.tenant_id,
                     email=email.lower().strip(),
-                    full_name=contact.full_name or email,
+                    full_name=contact.display_name or email,
                     role="client",
                     is_active=True,
                 )

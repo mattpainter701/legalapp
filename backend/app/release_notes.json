@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.06.7",
+      "version": "2026.09.06.7",
+      "title": "Keep new-client intake moving from paperwork to meeting",
+      "published_at": "2026-09-06",
+      "summary": "Start a reviewed fee agreement and client questionnaire from Create Matter, deliver secure portal invitations by email or SMS, and track document and meeting follow-ups.",
+      "highlights": [
+        {
+          "title": "Start intake as part of matter creation",
+          "description": "Authorized attorneys, paralegals and secretaries can prepare the packet, choose email or SMS and assign responsible staff."
+        },
+        {
+          "title": "Wait for both completed documents",
+          "description": "The signed agreement and questionnaire are tracked independently. Both completed requirements close the seven-day follow-up and create a scheduling task due within 24 hours."
+        },
+        {
+          "title": "Work with Microsoft 365 or Google",
+          "description": "Use connected email and storage, existing staff task calendars and the secure client portal. Review uncertain delivery and record a conference call or in-person meeting."
+        }
+      ]
+    },
+    {
       "id": "2026.09.06.6",
       "version": "2026.09.06.6",
       "title": "Bring existing matters and historical email into LawHand",

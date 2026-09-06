@@ -18,6 +18,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -27,7 +28,10 @@ from app.database import Base
 
 class SignatureRequest(Base):
     __tablename__ = "signature_requests"
-    __table_args__ = (Index("ix_signature_requests_matter_id", "matter_id"),)
+    __table_args__ = (
+        Index("ix_signature_requests_matter_id", "matter_id"),
+        UniqueConstraint("tenant_id", "id", name="uq_signature_requests_tenant_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

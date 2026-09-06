@@ -1,3 +1,4 @@
+from app.models.matter_intake import MatterIntake
 from app.models.tenant import Tenant, TenantSettings
 from app.models.demo_session import DemoSession, DemoUsageReservation
 from app.models.platform import PlatformSetting
@@ -213,6 +214,7 @@ from app.models.workflow_automation import (
 )
 
 __all__ = [
+    "MatterIntake",
     "Tenant",
     "TenantSettings",
     "DemoSession",
