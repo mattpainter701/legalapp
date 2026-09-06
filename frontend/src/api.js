@@ -1946,8 +1946,13 @@ export const updateMatterDocument = (matterId, docId, data) =>
 export const deleteMatterDocument = (matterId, docId) =>
   api.delete(`/matters/${matterId}/documents/${docId}`).then(r => r.data)
 
-export const getMatterDocumentDownloadUrl = (matterId, docId) =>
-  `${API_BASE_URL}/matters/${matterId}/documents/${docId}/download`
+export const getMatterDocumentDownloadUrl = (matterId, docId) => {
+  const ids = [matterId, docId].map(id => String(id ?? ''))
+  // Browsers normalize standalone dot segments even when percent-encoded.
+  // Omit the link for missing/dot IDs; encode every other ID as one segment.
+  if (ids.some(id => !id || id === '.' || id === '..')) return undefined
+  return `${API_BASE_URL}/matters/${encodeURIComponent(ids[0])}/documents/${encodeURIComponent(ids[1])}/download`
+}
 
 // Matter document revisions
 export const createMatterDocumentRevision = (matterId, sourceDocumentId, data) =>
