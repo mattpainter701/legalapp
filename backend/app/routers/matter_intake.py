@@ -39,7 +39,7 @@ async def staff_matter(db, user, matter_id):
     return await db.scalar(
         select(Matter)
         .where(Matter.id == matter_id, Matter.tenant_id == user.tenant_id)
-        .with_for_update()
+        .with_for_update(of=Matter)
     )
 
 
