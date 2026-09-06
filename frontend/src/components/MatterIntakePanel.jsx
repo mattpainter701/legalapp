@@ -62,7 +62,7 @@ export default function MatterIntakePanel({ matterId, documents = [] }) {
         <button type="button" disabled={busy || !meeting.starts_at || !meeting.details} onClick={() => action('meeting', { ...meeting, starts_at: new Date(meeting.starts_at).toISOString() })}>Save meeting & notify client</button>
       </fieldset>}
       {packet.meeting && <p>{packet.meeting.kind === 'in_person' ? 'In-person meeting' : 'Conference call'}: {date(packet.meeting.starts_at)} — {packet.meeting.details}</p>}
-      {packet.status !== 'cancelled' && <p><button type="button" className="underline" disabled={busy} onClick={() => action('renew-invitation', {})}>Send renewed portal invitation</button> � replaces the previous invitation and portal sessions.</p>}
+      {packet.status !== 'cancelled' && <p><button type="button" className="underline" disabled={busy} onClick={() => action('renew-invitation', {})}>Send renewed portal invitation</button> — replaces the previous invitation and portal sessions.</p>}
       {packet.status !== 'cancelled' && <button type="button" disabled={busy} onClick={() => action('cancel', {})}>Cancel intake follow-ups</button>}
     </>}
     {error && <p role="alert" className="text-red-700">{error}</p>}
