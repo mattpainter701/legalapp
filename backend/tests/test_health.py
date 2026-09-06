@@ -72,3 +72,37 @@ async def test_llm_health_status_contract(monkeypatch):
         response = await client.get("/health/llm")
     assert response.status_code == 200
     assert response.json() == {"status": "disabled"}
+
+
+@pytest.mark.asyncio
+async def test_readiness_ignores_synthetic_tenants_with_no_scheduler(db_session):
+    """A synthetic tenant must not hold readiness down where no scheduler runs.
+
+    dev1 deliberately starts no scheduler, so nothing ever writes a
+    scheduler-heartbeat there. The seeded demo fixture tenant is created with
+    billing_tier "fixture", which the customer boundary did not exclude, so
+    readiness reported scheduler "stale" on every probe for four days.
+    """
+    import uuid
+
+    from app.models.tenant import Tenant
+
+    db_session.add(
+        Tenant(
+            id=uuid.uuid4(),
+            name="LawHand Practice Demo - Synthetic",
+            domain="lawhand-corporate-demo.invalid",
+            billing_tier="fixture",
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/health/readiness")
+
+    components = response.json()["components"]
+    assert components["scheduler"] == "ok"
+    assert components["queue"] == "ok"

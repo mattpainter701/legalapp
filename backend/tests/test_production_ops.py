@@ -19,6 +19,8 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 import yaml
 import pytest
 
+from app.models.tenant import SYNTHETIC_BILLING_TIERS
+
 
 ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT = ROOT / "scripts" / "prod_env_preflight.sh"
@@ -1903,23 +1905,37 @@ def test_upload_bind_scheduler_and_launch_capability_contracts() -> None:
     production_check = (ROOT / "scripts" / "production_check.sh").read_text(
         encoding="utf-8"
     )
-    assert "billing_tier <> 'demo'" in production_check
-    assert "t.billing_tier <> 'demo'" in production_check
+    assert "billing_tier NOT IN ('demo', 'fixture')" in production_check
+    assert "t.billing_tier NOT IN ('demo', 'fixture')" in production_check
     assert "ZOOM_REQUIRED_TENANT_ID" in production_check
 
 
-def test_demo_tenants_are_excluded_from_scheduler_health_gates() -> None:
+def test_synthetic_tenants_are_excluded_from_scheduler_health_gates() -> None:
     deploy = (ROOT / "scripts" / "deploy_prod.sh").read_text(encoding="utf-8")
     production_check = (ROOT / "scripts" / "production_check.sh").read_text(
         encoding="utf-8"
     )
     main = (ROOT / "backend" / "app" / "main.py").read_text(encoding="utf-8")
+    scheduler = (ROOT / "backend" / "app" / "services" / "scheduler.py").read_text(
+        encoding="utf-8"
+    )
+    tenant_model = (ROOT / "backend" / "app" / "models" / "tenant.py").read_text(
+        encoding="utf-8"
+    )
 
-    # Demo tenants are intentionally excluded by tenant_scoped_job. Every
+    # Synthetic tenants are excluded by tenant_scoped_job, so every
     # release/readiness population query must use the same customer boundary.
-    assert "billing_tier <> 'demo'" in deploy
-    assert "billing_tier <> 'demo'" in production_check
-    assert "billing_tier <> 'demo' ORDER BY id" in main
+    # dev1 runs no scheduler at all: a tenant left inside this boundary there
+    # can never have a heartbeat, which pins readiness at 503 forever. The
+    # seeded 'fixture' tenant did exactly that for four days.
+    assert 'SYNTHETIC_BILLING_TIERS = ("demo", "fixture")' in tenant_model
+    assert "Tenant.billing_tier.notin_(SYNTHETIC_BILLING_TIERS)" in scheduler
+
+    # One source of truth: each SQL copy must spell out exactly the tiers the
+    # Python constant lists, so adding a tier cannot leave a gate behind.
+    rendered = ", ".join(f"'{tier}'" for tier in SYNTHETIC_BILLING_TIERS)
+    for source in (main, deploy, production_check):
+        assert f"billing_tier NOT IN ({rendered})" in source
     assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
     assert "SMTP no-delivery capability probe" in production_check
     assert "client.starttls" in production_check

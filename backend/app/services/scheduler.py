@@ -35,7 +35,7 @@ from app.models.smb_agent import SmbAgent
 from app.models.estate import EstateDeadline
 from app.models.scheduler import SchedulerLog
 from app.models.task import Task
-from app.models.tenant import Tenant
+from app.models.tenant import SYNTHETIC_BILLING_TIERS, Tenant
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
 from app.models.user_oauth_token import UserOAuthToken
@@ -184,7 +184,7 @@ async def _run_for_active_tenants(coro_fn: Callable[[], Awaitable[Any]]) -> list
                     select(Tenant.id)
                     .where(
                         Tenant.is_active.is_(True),
-                        Tenant.billing_tier != "demo",
+                        Tenant.billing_tier.notin_(SYNTHETIC_BILLING_TIERS),
                     )
                     .order_by(Tenant.id)
                 )
