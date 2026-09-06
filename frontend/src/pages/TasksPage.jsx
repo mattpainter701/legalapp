@@ -1144,7 +1144,7 @@ export default function TasksPage() {
   const [boardScope, setBoardScope] = useState('mine')
   const [boardDueWindow, setBoardDueWindow] = useState('')
   const [boardAssignee, setBoardAssignee] = useState(null)
-  const [boardMatterId, setBoardMatterId] = useState('')
+  const [boardMatterId, setBoardMatterId] = useState(() => new URLSearchParams(window.location.search).get('matter_id') || '')
   const [boardMatters, setBoardMatters] = useState([])
   const [boardData, setBoardData] = useState(null)
   const [boardEnabled, setBoardEnabled] = useState(null)
@@ -1189,12 +1189,13 @@ export default function TasksPage() {
     setError(null)
     try {
       const params = { limit: 200 }
+      if (boardMatterId) params.matter_id = boardMatterId
       if (filterStatus) params.status = filterStatus
       if (filterPriority) params.priority = filterPriority
       if (filterType) params.task_type = filterType
       const [tasksData, overdueData] = await Promise.all([
         getTasks(params),
-        getOverdueTasks(),
+        getOverdueTasks(boardMatterId ? { matter_id: boardMatterId } : {}),
       ])
       const allTasks = tasksData.items || []
       if (taskId && !allTasks.some(t => t.id === taskId)) {
@@ -1215,7 +1216,7 @@ export default function TasksPage() {
     } finally {
       setLoading(false)
     }
-  }, [filterStatus, filterPriority, filterType, taskId])
+  }, [filterStatus, filterPriority, filterType, taskId, boardMatterId])
 
   useEffect(() => { loadTasks() }, [loadTasks])
   useEffect(() => {
@@ -1241,7 +1242,7 @@ export default function TasksPage() {
     }
   }, [viewMode, boardScope, boardEnabled, loadBoard])
   useEffect(() => {
-    if (viewMode !== 'board' || !canOpenMatters || boardMatters.length > 0) return
+    if (!canOpenMatters || boardMatters.length > 0) return
     getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
       .then(data => setBoardMatters(data.items || []))
       .catch(() => setBoardMatters([]))
@@ -1352,7 +1353,7 @@ export default function TasksPage() {
     .filter(column => column.status !== 'completed')
     .reduce((sum, column) => sum + column.total, 0)
   const displayedActive = viewMode === 'board' && boardData ? boardActive : totalActive
-  const hasFilters = Boolean(filterStatus || filterPriority || filterType)
+  const hasFilters = Boolean(filterStatus || filterPriority || filterType || boardMatterId)
   const taskRowActions = {
     currentUserId: user?.id,
     canOpenMatters,
@@ -1445,9 +1446,10 @@ export default function TasksPage() {
               <option value="none">No due date</option>
             </select>
           )}
-          {viewMode === 'board' && canOpenMatters && (
+          {canOpenMatters && (
             <select aria-label="Filter tasks by matter" value={boardMatterId} onChange={e => setBoardMatterId(e.target.value)} className="min-h-10 max-w-56 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
               <option value="">All matters</option>
+              {boardMatterId && !boardMatters.some(matter => matter.id === boardMatterId) && <option value={boardMatterId}>Linked matter</option>}
               {boardMatters.map(matter => <option key={matter.id} value={matter.id}>{matter.matter_name}{matter.case_number ? ` · ${matter.case_number}` : ''}</option>)}
             </select>
           )}

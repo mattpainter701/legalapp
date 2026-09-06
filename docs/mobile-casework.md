@@ -1,0 +1,21 @@
+# Phone casework
+
+Open LawHand in your phone browser and sign in with your firm account. Open a matter from My Matters. Its current stage and a pending task are shown above the Matter section picker. This is a pending-task shortcut, not a ranked legal recommendation; Manage tasks also contains waiting and review work.
+
+- **Quick note:** enter a title and content, then Save Note. Keyboard dictation, if provided by your phone, can enter ordinary text. Wait for “Note saved.” If confirmation is lost, the text stays on this open page and the fields are locked to the submitted version. Save Note retries the same request safely. A permission or validation rejection leaves the text editable. Switching matter sections keeps the draft; closing, reloading or leaving the matter page does not preserve an unsaved draft. Check Activity before starting a new copy after a reload.
+- **Read documents:** open an existing permitted document download or provider link. Your browser/provider determines supported viewing formats and may require another sign-in. A network-file search snippet is not a full-document preview. The Windows File Opener requires a supported Windows computer on the firm network/VPN; it cannot open a network file on an iPhone. Open the result on that computer or use an existing authorized provider route when available.
+- **Manage tasks:** opens tasks filtered to this matter in both list and board views. Open the task, inspect its instructions and sources, then explicitly complete or use its available review actions. Server authorization still applies.
+- **Review work:** opens the existing matter workflow review screen. Proposed assistant tasks are also reviewed through their existing proposal/task screens. Read the prepared content, evidence and stated effect before approval. A note save never approves a task or sends a message.
+- **Contact client:** opens the existing email composer. Verify the recipient, subject and message before pressing Send. A failed send keeps the composer text; do not infer delivery from an archived attempt. After an uncertain provider response, inspect the matter correspondence/activity before sending again. Email delivery has a separate provider contract from idempotent note saving.
+
+## Rehearsal before first customer use
+
+Use synthetic data first, then the firm's authorized test matter. On physical iPhone Safari and Android Chrome at normal and enlarged text sizes, complete each job above. Exercise the real software keyboard, rotation, long names/text, session expiry, poor connectivity, note double taps, reconnect/retry, document authorization denial, and task approval denial. Verify saved activity after reload and check delivery receipts through the configured channel. Browser viewport emulation and WebKit engine testing are useful regressions but are not physical iPhone certification.
+
+The repository mobile browser suite uses synthetic API transport fixtures; PostgreSQL note tests separately exercise transactions and concurrent retries. Run `E2E_API_FIXTURES_ONLY=true` with the normal Playwright config to start only Vite for the fixture suite. The WebKit project matches only `mobile-casework.e2e.js`; Chromium runs that file and the existing suite. CI installs both browsers.
+
+This release is an online browser workflow. It does not introduce offline client-data storage, a service worker, push delivery, camera scanning, native transcription, or a native app. Keep desktop Template Studio authoring on a desktop for this release.
+
+## Note API retry contract
+
+`POST /api/matters/{matter_id}/notes` accepts optional UUID `request_id`. Legacy requests remain supported. A keyed request derives IDs from tenant, actor, matter and request identity, locks the authorized matter, and atomically writes one note and one timeline event. Replays compare a canonical payload digest (including billing fields) stored on the event and return the existing note. Changed content or a deleted note returns 409; authorization is checked again before reading the receipt. The receipt holds a digest, not a second copy of note content. Request IDs must be reused only for retries of the same intended note, and must be replaced for a deliberate new note. The browser retains identity only while the page remains open.

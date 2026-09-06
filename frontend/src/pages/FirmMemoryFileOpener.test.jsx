@@ -12,6 +12,7 @@ vi.mock('../api', () => api)
 
 describe('FirmMemoryPage file opener', () => {
   beforeEach(() => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
     vi.resetModules()
     vi.stubEnv('VITE_ENABLE_FILE_OPENER', 'true')
     api.getMattersV2.mockResolvedValue({ items: [{ id: 'matter-1', name: 'Acme' }] })
@@ -30,6 +31,7 @@ describe('FirmMemoryPage file opener', () => {
     cleanup()
     vi.unstubAllEnvs()
     vi.clearAllMocks()
+    vi.restoreAllMocks()
   })
 
   it('creates a source-aware intent and shows safe recovery without a raw file URL', async () => {

@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.06.5 — Keep everyday casework within reach on your phone
+
+Released September 6, 2026.
+
+Matter pages now put notes, documents, tasks, workflow review and client contact together on small screens, with visible note-save recovery.
+
+- **Reach your matter work quickly.** Choose any matter section from a phone-friendly picker, see the current stage and open tasks, or jump directly to documents, review and client contact.
+- **Retry a note without duplicating it.** Interrupted note saves keep text on the open page. Confirmed saves show a receipt; retrying the same request creates one note and activity event.
+- **Know where a file can open.** Phone users see the Windows network-file opener limitation and can use existing permitted document or provider links. Email forms fit shorter screens.
+
 ## 2026.09.06.4 — Keep workflow preparation visible and recoverable
 
 Released September 6, 2026.

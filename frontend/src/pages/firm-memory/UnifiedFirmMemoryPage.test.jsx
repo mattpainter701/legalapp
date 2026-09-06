@@ -149,7 +149,8 @@ describe('UnifiedFirmMemoryPage', () => {
     expect(screen.queryByRole('heading', { name: 'No matching documents' })).not.toBeInTheDocument()
   })
 
-  it('keeps source provenance and source-specific actions visible', async () => {
+  it.each(['Win32', 'iPhone'])('keeps source actions honest on %s', async platform => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
     searchAuthorizedDocuments.mockResolvedValue({
       coverage: { state: 'partial', complete: false, sources: [] },
       durationMs: 25,
@@ -174,7 +175,12 @@ describe('UnifiedFirmMemoryPage', () => {
 
     expect((await screen.findAllByText('Legacy archive')).length).toBeGreaterThan(1)
     expect(screen.getByText('2019/Order.pdf')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open on this computer' })).toHaveAttribute('href', '/v1/document-search/results/local-1/open')
+    if (platform === 'Win32') expect(screen.getByRole('link', { name: 'Open on this computer' })).toHaveAttribute('href', '/v1/document-search/results/local-1/open')
+    else {
+      expect(screen.getByRole('button', { name: 'Open on this computer' })).toBeDisabled()
+      expect(screen.getByText(/This is not a phone document preview/)).toBeVisible()
+    }
+    vi.restoreAllMocks()
     expect(screen.getByRole('link', { name: 'Open in Microsoft 365' })).toHaveAttribute('href', 'https://contoso.sharepoint.com/document')
     expect(screen.getAllByText('Acme v. Northstar')).toHaveLength(2)
     expect(screen.getAllByText('None')).toHaveLength(1)
