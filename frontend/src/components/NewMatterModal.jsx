@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import MatterImportWizard from './MatterImportWizard'
 import { createMatterV2, getContacts, getAdminUsers, getPlugins, createContact } from '../api'
 
 const PRACTICE_AREAS = [
@@ -30,7 +31,8 @@ function ChevronIcon({ size = 16 }) {
   )
 }
 
-export default function NewMatterModal({ open, onClose, onCreated }) {
+export default function NewMatterModal({ open, onClose, onCreated, onImportComplete }) {
+  const [importMode, setImportMode] = useState(false)
   const [form, setForm] = useState({
     matter_name: '',
     description: '',
@@ -179,8 +181,13 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
           </button>
         </div>
 
+        <div className="flex gap-3 px-6 py-3 border-b border-brand-line">
+          <button type="button" aria-pressed={!importMode} onClick={() => setImportMode(false)}>New matter</button>
+          <button type="button" aria-pressed={importMode} onClick={() => setImportMode(true)}>Import existing matters</button>
+        </div>
+        {importMode && <div className="overflow-y-auto"><MatterImportWizard onComplete={onImportComplete} /></div>}
         {/* Form */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+        <form hidden={importMode} onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
           {/* Title */}
           <div>
             <label htmlFor="newmattermodal-matter-title" className={labelCls}>Matter Title <span className="text-brand-rose">*</span></label>
