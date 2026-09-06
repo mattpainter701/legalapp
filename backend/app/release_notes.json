@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.06.4",
+      "version": "2026.09.06.4",
+      "title": "Keep workflow preparation visible and recoverable",
+      "published_at": "2026-09-06",
+      "summary": "Matter workflow rules now queue preparation reliably with the matter save and show progress through review.",
+      "highlights": [
+        {
+          "title": "Recover interrupted planning",
+          "description": "Queued workflow preparation retries temporary failures without duplicating a reviewed run."
+        },
+        {
+          "title": "Review prepared work from the matter",
+          "description": "See pending, retrying, planned, blocked and failed activity, then open a prepared run before explicitly approving it."
+        },
+        {
+          "title": "Recheck changed facts and permissions",
+          "description": "Changed matter facts, rules, templates or actor permissions require a fresh manual review instead of silently replaying old events."
+        }
+      ]
+    },
+    {
       "id": "2026.09.06.3",
       "version": "2026.09.06.3",
       "title": "See the limits of research evidence",

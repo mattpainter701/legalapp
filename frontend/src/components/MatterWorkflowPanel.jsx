@@ -1,3 +1,4 @@
+import { automationStatus } from "./workflows/automationStatus";
 import { useCallback, useEffect, useState } from "react";
 import {
   getMatterCustomFields,
@@ -74,14 +75,14 @@ function FieldInput({ field, value, onChange }) {
           id={id}
           multiple={type === "multi_select"}
           value={value ?? (type === "multi_select" ? [] : "")}
-            onChange={(e) =>
-              onChange(
-                type === "multi_select"
-                  ? [...e.target.selectedOptions]
-                      .map((o) => o.value)
-                      .filter(Boolean)
-                  : e.target.value || null,
-              )
+          onChange={(e) =>
+            onChange(
+              type === "multi_select"
+                ? [...e.target.selectedOptions]
+                    .map((o) => o.value)
+                    .filter(Boolean)
+                : e.target.value || null,
+            )
           }
         >
           <option value="">Select…</option>
@@ -117,7 +118,9 @@ export default function MatterWorkflowPanel({
   const canApproveLegal = (user?.capabilities || []).includes(
     "approve_legal_work",
   );
-  const canManageMatters = (user?.capabilities || []).includes("manage_matters");
+  const canManageMatters = (user?.capabilities || []).includes(
+    "manage_matters",
+  );
   const canApprove = canApproveLegal && canManageMatters;
   const canManageWorkflows = (user?.capabilities || []).includes(
     "manage_workflows",
@@ -156,7 +159,7 @@ export default function MatterWorkflowPanel({
           getMatterCustomFields(matterId),
           getMatterWorkflowTemplates(matterId),
           getMatterWorkflowRuns(matterId),
-          getMatterAutomationEvents(matterId).catch(() => ({ items: [] })),
+          getMatterAutomationEvents(matterId),
         ]);
       const fs = items(fieldData);
       setFields(fs);
@@ -305,6 +308,15 @@ export default function MatterWorkflowPanel({
       <h2 id="matter-workflow-title" className="text-lg font-semibold">
         Matter workflow
       </h2>
+      <button
+        type="button"
+        onClick={load}
+        disabled={
+          loading || saving || working || Object.keys(dirtyFields).length > 0
+        }
+      >
+        Refresh workflow activity
+      </button>
       {message && (
         <p
           role="status"
@@ -463,9 +475,7 @@ export default function MatterWorkflowPanel({
             {automationEvents.map((event) => (
               <li key={event.id}>
                 {event.rule_name || "Automation rule"} ·{" "}
-                {event.outcome === "planned"
-                  ? "planned a run for review"
-                  : `blocked: ${event.detail?.message || event.detail?.failure_code || "see evidence"}`}
+                {automationStatus(event)}
               </li>
             ))}
           </ul>
@@ -486,6 +496,26 @@ export default function MatterWorkflowPanel({
                   {run.steps?.length || 0} steps · evidence{" "}
                   {latestEvidence ? latestEvidence.slice(0, 12) : "recorded"}
                 </p>
+                {run.status === "planned" && run.preview && (
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={() => {
+                      setPreview({
+                        ...run.preview,
+                        run_id: id,
+                        preview_sha256: run.preview_sha256,
+                      });
+                      setPreviewStale(false);
+                      setMessage({
+                        type: "success",
+                        text: "Prepared run opened for review. Check the preview before approving.",
+                      });
+                    }}
+                  >
+                    Review prepared run
+                  </button>
+                )}
                 {run.failure_detail && (
                   <p className="text-amber-700">{run.failure_detail}</p>
                 )}

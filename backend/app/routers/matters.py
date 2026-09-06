@@ -70,7 +70,7 @@ from app.services.matter_budget import (
 )
 from app.services.task_notifications import remove_task_from_calendars_now
 from app.services.task_visibility import task_is_sms_expression
-from app.services.workflow_automations import dispatch_matter_event_safely
+from app.services.durable_workflow_automations import enqueue_matter_event
 
 _cloud_search = CloudSearchService()
 _cloud_sync = CloudSyncService()
@@ -842,19 +842,16 @@ async def create_matter(
             )
 
     matter_id = matter.id
-    await db.commit()
-    await set_tenant_context(db, str(tenant_id))
-    await db.refresh(matter)
-
-    # Approved automation rules plan a reviewable workflow run for the new
-    # matter. Dispatch runs after the matter is durable and never raises, so
-    # firm automation configuration cannot cost anyone a saved matter.
-    await dispatch_matter_event_safely(
+    # The trigger and matter save share one transaction: neither can be lost.
+    await enqueue_matter_event(
         db,
         matter=matter,
         trigger_event="matter_created",
         actor_user_id=user.id,
     )
+    await db.commit()
+    await set_tenant_context(db, str(tenant_id))
+    await db.refresh(matter)
 
     # Reload with relationships
     result = await db.execute(
@@ -1222,17 +1219,17 @@ async def update_matter(
         if hasattr(matter, field):
             setattr(matter, field, value)
 
-    await db.commit()
-    await db.refresh(matter)
-    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
-
     if matter.stage != prior_stage:
-        await dispatch_matter_event_safely(
+        await enqueue_matter_event(
             db,
             matter=matter,
             trigger_event="matter_stage_changed",
             actor_user_id=user.id,
         )
+    await db.commit()
+    await set_tenant_context(db, str(user.tenant_id))
+    await db.refresh(matter)
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
 
     # Reload with relationships
     result = await db.execute(

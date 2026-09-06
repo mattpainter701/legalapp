@@ -174,7 +174,9 @@ describe("MatterWorkflowPanel", () => {
       />,
     );
     expect(
-      await screen.findByText(/Primary contact: contact-linked values require/i),
+      await screen.findByText(
+        /Primary contact: contact-linked values require/i,
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("Primary contact")).not.toBeInTheDocument();
   });
@@ -201,7 +203,9 @@ describe("MatterWorkflowPanel", () => {
     await waitFor(() =>
       expect(screen.getByText(/Initial stage:\s*Initial/)).toBeInTheDocument(),
     );
-    expect(screen.getByText(`Preview fingerprint: ${"a".repeat(64)}`)).toBeInTheDocument();
+    expect(
+      screen.getByText(`Preview fingerprint: ${"a".repeat(64)}`),
+    ).toBeInTheDocument();
     expect(api.previewMatterWorkflow).toHaveBeenCalledWith(
       "m1",
       "v1",
@@ -379,13 +383,13 @@ describe("MatterWorkflowPanel", () => {
     );
     const activity = await screen.findByLabelText("Automation activity");
     expect(activity.textContent).toContain("Open litigation matters");
-    expect(activity.textContent).toContain("planned a run for review");
+    expect(activity.textContent).toContain("Planned a run for review");
     expect(activity.textContent).toContain(
-      "blocked: Template has no approved version",
+      "Blocked: Template has no approved version",
     );
   });
 
-  it("still loads the workflow tab when automation history is unavailable", async () => {
+  it("shows an error and allows retry when automation history is unavailable", async () => {
     api.getMatterAutomationEvents.mockRejectedValue(new Error("boom"));
     render(
       <MatterWorkflowPanel
@@ -393,7 +397,75 @@ describe("MatterWorkflowPanel", () => {
         user={{ capabilities: ["manage_matters"] }}
       />,
     );
-    expect(await screen.findByLabelText("Approved workflow template")).toBeTruthy();
-    expect(screen.queryByLabelText("Automation activity")).toBeNull();
+    expect(
+      await screen.findByLabelText("Approved workflow template"),
+    ).toBeTruthy();
+    expect(await screen.findByRole("status")).toHaveTextContent("boom");
+    expect(screen.getByText("Refresh workflow activity")).toBeEnabled();
+  });
+  it("opens the durable prepared preview without creating another run and requires explicit apply", async () => {
+    api.getMatterWorkflowRuns.mockResolvedValue({
+      items: [
+        {
+          id: "prepared",
+          status: "planned",
+          preview_sha256: "receipt",
+          events: [],
+          preview: {
+            can_apply: true,
+            tasks: [
+              {
+                item_key: "followup",
+                title: "Review intake and prepare follow-up",
+                due_date: "2026-09-08",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    api.applyMatterWorkflow.mockResolvedValue({});
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters", "approve_legal_work"] }}
+      />,
+    );
+    fireEvent.click(await screen.findByText("Review prepared run"));
+    expect(
+      screen.getByText(/Review intake and prepare follow-up/),
+    ).toBeInTheDocument();
+    expect(api.previewMatterWorkflow).not.toHaveBeenCalled();
+    expect(api.applyMatterWorkflow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Approve and apply"));
+    await waitFor(() =>
+      expect(api.applyMatterWorkflow).toHaveBeenCalledWith("m1", "prepared", {
+        preview_sha256: "receipt",
+        confirm_apply: true,
+      }),
+    );
+  });
+  it("shows queue, retry and failure states without claiming completion", async () => {
+    api.getMatterAutomationEvents.mockResolvedValue({
+      items: [
+        { id: "a", outcome: "pending" },
+        { id: "b", outcome: "running" },
+        { id: "c", outcome: "retrying", attempts: 2, max_attempts: 5 },
+        { id: "d", outcome: "failed" },
+      ],
+    });
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters"] }}
+      />,
+    );
+    const activity = await screen.findByLabelText("Automation activity");
+    expect(activity).toHaveTextContent("Pending — waiting for planning");
+    expect(activity).toHaveTextContent("Planning — no work applied");
+    expect(activity).toHaveTextContent("Retry scheduled — attempt 2 of 5");
+    expect(activity).toHaveTextContent(
+      "Planning failed — open the matter and create a manual preview",
+    );
   });
 });

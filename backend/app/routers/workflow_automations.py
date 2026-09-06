@@ -26,6 +26,7 @@ from app.services.access_control import (
     require_capability,
 )
 from app.services.configurable_workflows import acquire_workflow_config_lock
+from app.services.durable_workflow_automations import pending_activity
 from app.services.workflow_automations import (
     automation_event_response,
     count_rules,
@@ -311,7 +312,12 @@ async def list_automation_rule_events(
         .scalars()
         .all()
     )
-    return {"items": [automation_event_response(event) for event in events]}
+    return {
+        "items": await pending_activity(
+            db, user.tenant_id, rule_id=rule_id, limit=limit
+        )
+        + [automation_event_response(event) for event in events]
+    }
 
 
 @router.get("/api/matters/{matter_id}/workflow-automation-events")
@@ -358,7 +364,10 @@ async def list_matter_automation_events(
         ).all()
         names = {rule_id: name for rule_id, name in rows}
     return {
-        "items": [
+        "items": await pending_activity(
+            db, user.tenant_id, matter_id=matter_id, limit=limit
+        )
+        + [
             {
                 **automation_event_response(event),
                 "rule_name": names.get(event.rule_id),

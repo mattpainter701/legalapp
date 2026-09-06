@@ -12,6 +12,7 @@ from app.models.workflow_automation import (
     MatterWorkflowAutomationEvent,
     MatterWorkflowAutomationRule,
 )
+from tests.test_durable_workflow_automations import drain
 from app.services import workflow_automations
 from tests.test_workflow_automation_rules import approved_template, grant
 
@@ -65,6 +66,7 @@ async def test_a_new_matter_is_planned_but_never_applied(
         json={"matter_name": "Vega v. Ash", "matter_type": "Litigation"},
     )
     assert created.status_code == 201, created.text
+    await drain(db_session)
     matter_id = uuid.UUID(created.json()["id"])
 
     run = await db_session.scalar(
@@ -166,6 +168,7 @@ async def test_conditions_and_draft_status_keep_a_rule_quiet(
         },
     )
     assert matching.status_code == 201
+    await drain(db_session)
     events = (
         (await db_session.execute(select(MatterWorkflowAutomationEvent)))
         .scalars()
@@ -205,6 +208,7 @@ async def test_a_stage_change_plans_once_and_only_for_the_named_stage(
         f"/api/matters/{matter_id}", json={"stage": "Discovery"}
     )
     assert entered.status_code == 200
+    await drain(db_session)
     assert await db_session.scalar(select(func.count(MatterWorkflowRun.id))) == 1
 
     # Leaving and re-entering the same stage does not plan a second run.
@@ -237,10 +241,11 @@ async def test_an_unplannable_rule_records_why_instead_of_going_silent(
     created = await client.post("/api/matters", json={"matter_name": "Orphaned rule"})
     assert created.status_code == 201
 
+    await drain(db_session)
     event = await db_session.scalar(select(MatterWorkflowAutomationEvent))
     assert event.outcome == "blocked"
     assert event.run_id is None
-    assert event.detail_json["failure_code"] == "template_not_approved"
+    assert event.detail_json["failure_code"] == "template_changed"
     assert await db_session.scalar(select(func.count(MatterWorkflowRun.id))) == 0
 
     listed = await client.get(f"/api/workflow-config/automations/{rule['id']}/events")
@@ -260,6 +265,7 @@ async def test_a_second_dispatch_of_the_same_event_adds_no_second_plan(
             await client.post("/api/matters", json={"matter_name": "Replayed matter"})
         ).json()["id"]
     )
+    await drain(db_session)
     matter = await db_session.get(Matter, matter_id)
 
     replayed = await workflow_automations.dispatch_matter_event_safely(
