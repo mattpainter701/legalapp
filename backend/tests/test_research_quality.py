@@ -264,3 +264,14 @@ def test_unknown_reviewer_cannot_approve():
     review(run)
     run["reviews"]["fixture-question"]["reviewer"] = "unknown"
     assert not evaluate_research(dataset, run)["cases"][0]["passed"]
+
+
+@pytest.mark.parametrize("field", ["question", "answer"])
+@pytest.mark.parametrize("value", [None, "", "   ", {"text": "not a capture"}])
+def test_review_cannot_replace_missing_question_or_answer(field, value):
+    dataset, run = evidence()
+    target = dataset["cases"][0] if field == "question" else run["observations"][0]
+    target[field] = value
+    review(run)
+    report = evaluate_research(dataset, run)
+    assert "missing_question_or_answer_capture" in report["cases"][0]["failures"]

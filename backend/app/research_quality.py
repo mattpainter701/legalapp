@@ -79,6 +79,11 @@ def evaluate_research(dataset: dict, run: dict) -> dict:
                 {"id": case["id"], "passed": False, "failures": ["missing_observation"]}
             )
             continue
+        if any(
+            not isinstance(value, str) or not value.strip()
+            for value in (case.get("question"), row.get("answer"))
+        ):
+            failures.append("missing_question_or_answer_capture")
         sources = row.get("sources", [])
         by_id = {source["id"]: source for source in sources}
         if len(by_id) != len(sources):
