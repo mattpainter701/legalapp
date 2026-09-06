@@ -353,7 +353,7 @@ class CourtListenerRepository:
         sql = f"""
             SELECT oc.chunk_id::text AS chunk_id, oc.opinion_id, oc.cluster_id, oc.chunk_index,
                    cl.case_name,
-                   cl.date_filed, oc.court_id, c.full_name AS court_name, oc.content,
+                   cl.date_filed, oc.court_id, c.full_name AS court_name, c.jurisdiction, oc.content,
                    COALESCE(NULLIF(o.source_url, ''), '/opinion/' || oc.opinion_id::text || '/') AS source_url,
                    COALESCE(cl.citations #>> '{{0,cite}}', cl.citations #>> '{{0}}', '') AS citation,
                    ts_rank_cd(oc.fts, websearch_to_tsquery('english', %s)) AS rank,
@@ -391,7 +391,7 @@ class CourtListenerRepository:
             WITH filtered AS (
                 SELECT oc.chunk_id::text AS chunk_id, oc.opinion_id, oc.cluster_id,
                        oc.chunk_index, cl.case_name, cl.date_filed, oc.court_id,
-                       c.full_name AS court_name, oc.content,
+                       c.full_name AS court_name, c.jurisdiction, oc.content,
                        COALESCE(NULLIF(o.source_url, ''), '/opinion/' || oc.opinion_id::text || '/') AS source_url,
                        COALESCE(cl.citations #>> '{{0,cite}}', cl.citations #>> '{{0}}', '') AS citation,
                        oc.fts, oc.embedding
@@ -432,7 +432,7 @@ class CourtListenerRepository:
                 SELECT * FROM fts
             )
             SELECT chunk_id, opinion_id, cluster_id, chunk_index, case_name, date_filed,
-                   court_id, court_name, content, source_url, citation,
+                   court_id, court_name, jurisdiction, content, source_url, citation,
                    COALESCE(MAX(similarity), 0.0) AS similarity,
                    COALESCE(MAX(keyword_rank), 0.0) AS keyword_rank,
                    (
@@ -446,7 +446,7 @@ class CourtListenerRepository:
                    END AS search_source
             FROM combined
             GROUP BY chunk_id, opinion_id, cluster_id, chunk_index, case_name,
-                     date_filed, court_id, court_name, content, source_url, citation
+                     date_filed, court_id, court_name, jurisdiction, content, source_url, citation
             ORDER BY rank DESC, similarity DESC, date_filed DESC NULLS LAST
             LIMIT %s
         """

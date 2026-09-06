@@ -48,6 +48,11 @@ class SourceCitation(BaseModel):
     source_label: Optional[str] = None
     locator: Optional[str] = None
     retrieval_jurisdiction: Optional[str] = None
+    source_jurisdiction: Optional[str] = None
+    document_status: Optional[str] = None
+    retrieved_at: Optional[str] = None
+    last_successful_sync_at: Optional[str] = None
+    termination_date: Optional[str] = None
     relevance_score: Optional[float] = None
     authority_tier: Optional[str] = None
     official_status: Optional[str] = None

@@ -28,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import exists, select, func, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
+from app.research_metadata import research_source_metadata as _research_source_metadata
 from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
@@ -316,8 +317,10 @@ def _source_dict_from_chunk(chunk: dict) -> dict:
         "cited": False,
     }
     retrieval_jurisdiction = _clean_source_text(chunk.get("retrieval_jurisdiction"), 20)
-    if is_public and retrieval_jurisdiction:
-        source_dict["retrieval_jurisdiction"] = retrieval_jurisdiction
+    if is_public:
+        source_dict.update(_research_source_metadata(chunk))
+        if retrieval_jurisdiction:
+            source_dict["retrieval_jurisdiction"] = retrieval_jurisdiction
     return source_dict
 
 
@@ -594,6 +597,11 @@ def _stream_source_previews(chunks: list[dict], cloud_hits: list) -> list[dict]:
                 "source_type",
                 "locator",
                 "retrieval_jurisdiction",
+                "source_jurisdiction",
+                "document_status",
+                "retrieved_at",
+                "last_successful_sync_at",
+                "termination_date",
                 "url",
             )
             if source.get(key)
@@ -1075,6 +1083,7 @@ def _message_to_response(
                     effective_date=(
                         _clean_source_text(s.get("effective_date"), 40) or None
                     ),
+                    **_research_source_metadata(s),
                     cited=bool(s.get("cited")),
                 )
             )

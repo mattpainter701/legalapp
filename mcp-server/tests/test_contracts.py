@@ -807,3 +807,24 @@ def test_existing_id_lookup_reads_only_supported_primary_keys():
 
     with pytest.raises(ValueError):
         _existing_ids(conn, "opinions", "source_url")
+
+def test_caselaw_search_returns_source_jurisdiction_in_keyword_and_hybrid_rows():
+    from types import SimpleNamespace
+
+    class SourceCursor(RecordingCursor):
+        description = [SimpleNamespace(name="court_id"), SimpleNamespace(name="jurisdiction")]
+
+        def __init__(self):
+            super().__init__()
+            self.description = type(self).description
+
+        def fetchall(self):
+            return [("scotus", "F")]
+
+    conn = RecordingConnection()
+    conn.cursor_obj = SourceCursor()
+    repo = CourtListenerRepository(conn)
+    assert repo._search_fts("notice", 8, "F", None, None) == [{"court_id": "scotus", "jurisdiction": "F"}]
+    assert "c.jurisdiction" in conn.cursor_obj.sql
+    assert repo._search_hybrid("notice", 8, "F", None, None, [0.1, 0.2]) == [{"court_id": "scotus", "jurisdiction": "F"}]
+    assert "court_id, court_name, jurisdiction, content" in conn.cursor_obj.sql

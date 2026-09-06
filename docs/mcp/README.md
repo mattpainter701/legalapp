@@ -301,3 +301,11 @@ production harvest, coverage claim, current-law claim, or deployment is implied.
 This backlog is documentation work, not a claim that the underlying capability is implemented or released.
 
 Firm Memory retrieval retains the same native permission boundary across MCP and portal calls. See [launch authorization and on-premises runtime requirements](../firm-memory-launch-readiness.md) for the fail-closed fallback, bounded result transfer, and remaining corpus/OCR acceptance limits.
+
+## Research answer acceptance
+
+The [research quality acceptance workflow](../research/launch-quality-acceptance.md)
+defines offline evaluation evidence, version/coverage capture, source metadata
+compatibility and attorney sign-off. Scoped public hits require verified source
+jurisdiction; old/malformed metadata leaves a coverage gap. Source capture dates
+and catalogue status do not establish current law or treatment.
