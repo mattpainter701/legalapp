@@ -175,11 +175,27 @@ async def test_search_node_startup_failure_closes_initialized_ledger(monkeypatch
 @pytest.mark.asyncio
 async def test_saas_client_construction_failure_closes_started_resources(monkeypatch):
     _patch_daemon(monkeypatch)
+    from clarity_agent import search_serving
+
+    class _ServingIndex:
+        available = True
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def init(self):
+            pass
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(search_serving, "OpenSearchServingIndex", _ServingIndex)
 
     class _SearchNodeInstance:
         def __init__(self):
             self.closed = False
             self.gateway = SimpleNamespace(host="127.0.0.1", port=8765)
+            self.engine = object()
 
         async def start(self):
             pass

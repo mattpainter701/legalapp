@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **Firm Memory native authorization and OpenSearch serving:** fail closed on generalized search fallback; recover document envelopes and explicit DENY filtering; connect scanner/extraction manifest to OpenSearch with isolated parsing, durable generations, query-time DACL revalidation and version fencing. Default-off pilot; see `docs/firm-memory-launch-readiness.md` for runtime provisioning and remaining acceptance limits.
 - **Firm Memory result links no longer fail silently:** a shared
   `/firm-memory?matter=…&file=…` link resolved only when its matter appeared in
   the picker's first page of matters, so links into large firms rendered an

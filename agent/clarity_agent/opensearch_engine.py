@@ -33,6 +33,11 @@ DEFAULT_MAX_OFFSET = 10_000
 DEFAULT_MAX_QUERY_CHARS = 1_000
 DEFAULT_MAX_BULK_DOCUMENTS = 500
 DEFAULT_MAX_BULK_BYTES = 8 * 1024 * 1024
+# One document is one atomic envelope, so a per-document ceiling cannot be the
+# batch ceiling. A 2,000-page PDF legitimately produces thousands of chunks, and
+# the extraction workers' own default output budget is 20 MiB per document.
+DEFAULT_MAX_DOCUMENT_CHUNKS = 5_000
+DEFAULT_MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 
 
 class RebuildReplayUncertain(RuntimeError):
@@ -69,6 +74,8 @@ class OpenSearchLimits:
     max_query_chars: int = DEFAULT_MAX_QUERY_CHARS
     max_bulk_documents: int = DEFAULT_MAX_BULK_DOCUMENTS
     max_bulk_bytes: int = DEFAULT_MAX_BULK_BYTES
+    max_document_chunks: int = DEFAULT_MAX_DOCUMENT_CHUNKS
+    max_document_bytes: int = DEFAULT_MAX_DOCUMENT_BYTES
     request_timeout_seconds: float = 10.0
     disk_watermark_low: str = "80%"
     disk_watermark_high: str = "90%"
@@ -180,6 +187,7 @@ class OpenSearchEngine(LocalSearchEngine):
                     "modified_at": {"type": "date"},
                     "matter_ids": {"type": "keyword"},
                     "acl_tokens": {"type": "keyword"},
+                    "deny_acl_tokens": {"type": "keyword"},
                     "mutation_digest": {"type": "keyword", "index": False},
                     "chunks": {
                         "type": "nested",
@@ -410,6 +418,7 @@ class OpenSearchEngine(LocalSearchEngine):
                 chunk.mutation_generation,
                 chunk.matter_ids,
                 chunk.acl_tokens,
+                chunk.deny_acl_tokens,
             )
             for chunk in chunks
         }
@@ -431,6 +440,7 @@ class OpenSearchEngine(LocalSearchEngine):
             "modified_at": first.modified_at.isoformat(),
             "matter_ids": list(first.matter_ids),
             "acl_tokens": list(first.acl_tokens),
+            "deny_acl_tokens": list(first.deny_acl_tokens),
             "chunks": nested,
             "schema_version": INDEX_SCHEMA_VERSION,
         }
@@ -445,34 +455,81 @@ class OpenSearchEngine(LocalSearchEngine):
     def _document_id(document_id: str) -> str:
         return hashlib.sha256(document_id.encode()).hexdigest()
 
-    async def _bulk_to(self, alias: str, chunks: Sequence[DocumentChunk]) -> BulkResult:
-        if len(chunks) > self.limits.max_bulk_documents:
-            raise ValueError("bulk request exceeds document limit")
+    @staticmethod
+    def _group_by_document(
+        chunks: Sequence[DocumentChunk],
+    ) -> dict[str, list[DocumentChunk]]:
         grouped: dict[str, list[DocumentChunk]] = {}
         for chunk in chunks:
             grouped.setdefault(chunk.document_id, []).append(chunk)
-        documents = [self._document_source(group) for group in grouped.values()]
-        lines: list[str] = []
-        for source in documents:
-            lines.append(
-                json.dumps(
-                    {
-                        "index": {
-                            "_index": alias,
-                            "_id": self._document_id(source["document_id"]),
-                            "version": source["mutation_generation"] * 2 + 1,
-                            "version_type": "external",
-                        }
-                    },
-                    separators=(",", ":"),
-                )
-            )
-            lines.append(json.dumps(source, separators=(",", ":"), ensure_ascii=False))
-        body = ("\n".join(lines) + "\n").encode()
-        if len(body) > self.limits.max_bulk_bytes:
-            raise ValueError("bulk request exceeds byte limit")
-        if not chunks:
-            return BulkResult(accepted=0)
+        return grouped
+
+    def _encode_document(self, chunks: Sequence[DocumentChunk]) -> tuple[dict, bytes]:
+        """Serialize one atomic document envelope.
+
+        Raises ValueError when the document itself is oversized. That is a
+        property of the document, not of the batch it happens to travel in, so
+        it must not be measured against the batch limits.
+        """
+        if len(chunks) > self.limits.max_document_chunks:
+            raise ValueError("document exceeds the configured chunk limit")
+        source = self._document_source(chunks)
+        encoded = json.dumps(source, separators=(",", ":"), ensure_ascii=False).encode()
+        if len(encoded) > self.limits.max_document_bytes:
+            raise ValueError("document exceeds the configured byte limit")
+        return source, encoded
+
+    def _index_action(self, alias: str, source: dict) -> bytes:
+        return json.dumps(
+            {
+                "index": {
+                    "_index": alias,
+                    "_id": self._document_id(source["document_id"]),
+                    "version": source["mutation_generation"] * 2 + 1,
+                    "version_type": "external",
+                }
+            },
+            separators=(",", ":"),
+        ).encode()
+
+    def _batches(
+        self, alias: str, documents: Sequence[tuple[dict, bytes]]
+    ) -> list[list[tuple[dict, bytes]]]:
+        """Pack encoded documents into requests under the batch limits.
+
+        A document that alone exceeds the batch byte budget still travels in a
+        batch of its own: it already passed the per-document ceiling, and
+        refusing it here would make an 8 MiB transport limit silently cap what
+        the 20 MiB extraction budget is allowed to produce.
+        """
+        batches: list[list[tuple[dict, bytes]]] = []
+        current: list[tuple[dict, bytes]] = []
+        size = 0
+        for entry in documents:
+            # Measure what actually goes on the wire: the action line and both
+            # newlines count against the request budget, not just the source.
+            payload = len(self._index_action(alias, entry[0])) + len(entry[1]) + 2
+            if current and (
+                len(current) >= self.limits.max_bulk_documents
+                or size + payload > self.limits.max_bulk_bytes
+            ):
+                batches.append(current)
+                current, size = [], 0
+            current.append(entry)
+            size += payload
+        if current:
+            batches.append(current)
+        return batches
+
+    async def _send_batch(
+        self, alias: str, batch: Sequence[tuple[dict, bytes]]
+    ) -> set[str]:
+        """Issue one bulk request; return the document ids that did not land."""
+        documents = [source for source, _ in batch]
+        body = b"".join(
+            self._index_action(alias, source) + b"\n" + encoded + b"\n"
+            for source, encoded in batch
+        )
         try:
             data = (
                 await self._request(
@@ -508,14 +565,35 @@ class OpenSearchEngine(LocalSearchEngine):
                     raise RuntimeError(
                         "OpenSearch document write outcome could not be verified"
                     ) from write_error
-            return BulkResult(accepted=len(chunks))
+            # Every document in the batch was verified present at this exact
+            # generation and digest, so the lost response hid a success.
+            return set()
         items = data.get("items", [])
-        failed_documents = {
+        return {
             source["document_id"]
             for position, source in enumerate(documents)
             if position >= len(items)
             or int(items[position].get("index", {}).get("status", 500)) >= 300
         }
+
+    async def _bulk_to(self, alias: str, chunks: Sequence[DocumentChunk]) -> BulkResult:
+        """Index whole documents, splitting into as many requests as needed."""
+        if not chunks:
+            return BulkResult(accepted=0)
+        grouped = self._group_by_document(chunks)
+        if len(grouped) > self.limits.max_bulk_documents:
+            raise ValueError("bulk request exceeds document limit")
+        encoded: list[tuple[dict, bytes]] = []
+        failed_documents: set[str] = set()
+        for document_id, document_chunks in grouped.items():
+            try:
+                encoded.append(self._encode_document(document_chunks))
+            except ValueError:
+                # One oversized document fails on its own; its neighbours in the
+                # batch are unaffected and still land.
+                failed_documents.add(document_id)
+        for batch in self._batches(alias, encoded):
+            failed_documents |= await self._send_batch(alias, batch)
         failed = tuple(
             chunk.chunk_id for chunk in chunks if chunk.document_id in failed_documents
         )
@@ -561,42 +639,135 @@ class OpenSearchEngine(LocalSearchEngine):
             raise RuntimeError("document mutation generation is stale")
         response.raise_for_status()
 
+    @staticmethod
+    def _tombstone_source(mutation: DocumentMutation) -> dict:
+        if mutation.generation < 1:
+            raise ValueError("document mutation generation must be positive")
+        return {
+            "record_type": "tombstone",
+            "document_id": mutation.document_id,
+            "mutation_generation": mutation.generation,
+            "schema_version": INDEX_SCHEMA_VERSION,
+        }
+
+    async def _write_tombstones(
+        self, alias: str, mutations: Sequence[DocumentMutation]
+    ) -> None:
+        """Write every tombstone in one refreshed request.
+
+        Refreshing here is an authorization property, not a performance choice:
+        a revoked document must stop being searchable before its replacement is
+        written. Doing it once per batch keeps that guarantee while removing the
+        per-document refresh that made ingest unusable at corpus scale.
+        """
+        if not mutations:
+            return
+        if len(mutations) == 1:
+            await self._write_tombstone(alias, mutations[0])
+            return
+        sources = [self._tombstone_source(mutation) for mutation in mutations]
+        lines: list[bytes] = []
+        for mutation, source in zip(mutations, sources):
+            lines.append(
+                json.dumps(
+                    {
+                        "index": {
+                            "_index": alias,
+                            "_id": self._document_id(mutation.document_id),
+                            "version": mutation.generation * 2,
+                            "version_type": "external",
+                        }
+                    },
+                    separators=(",", ":"),
+                ).encode()
+            )
+            lines.append(json.dumps(source, separators=(",", ":")).encode())
+        body = b"\n".join(lines) + b"\n"
+        try:
+            data = (
+                await self._request(
+                    "POST",
+                    "/_bulk",
+                    params={"refresh": "true"},
+                    content=body,
+                    headers={"Content-Type": "application/x-ndjson"},
+                )
+            ).json()
+        except httpx.HTTPError as write_error:
+            # A lost response may still have committed. Re-read each one rather
+            # than retrying a write that would now look stale to itself.
+            for mutation, source in zip(mutations, sources):
+                path = f"/{alias}/_doc/{self._document_id(mutation.document_id)}"
+                try:
+                    current = (
+                        (await self._request("GET", path)).json().get("_source", {})
+                    )
+                except Exception as read_error:
+                    raise RuntimeError(
+                        "OpenSearch tombstone outcome could not be verified"
+                    ) from read_error
+                if current == source:
+                    continue
+                if int(current.get("mutation_generation", 0)) > mutation.generation:
+                    raise RuntimeError(
+                        "document mutation generation is stale"
+                    ) from write_error
+                raise RuntimeError(
+                    "OpenSearch tombstone outcome could not be verified"
+                ) from write_error
+            return
+        items = data.get("items", [])
+        if len(items) != len(mutations):
+            raise RuntimeError("OpenSearch tombstone outcome could not be verified")
+        for item in items:
+            status = int(item.get("index", {}).get("status", 500))
+            if status == 409:
+                raise RuntimeError("document mutation generation is stale")
+            if status >= 300:
+                raise RuntimeError("OpenSearch tombstone outcome could not be verified")
+
     async def bulk_index(self, chunks: Sequence[DocumentChunk]) -> BulkResult:
         async with self._mutation_lock:
             await self.ensure_index()
-            if len(chunks) > self.limits.max_bulk_documents:
+            grouped = self._group_by_document(chunks)
+            if len(grouped) > self.limits.max_bulk_documents:
                 raise ValueError("bulk request exceeds document limit")
-            grouped: dict[str, list[DocumentChunk]] = {}
-            for chunk in chunks:
-                grouped.setdefault(chunk.document_id, []).append(chunk)
-            accepted = 0
+            writable: list[DocumentChunk] = []
+            mutations: list[DocumentMutation] = []
             failed: list[str] = []
             for document_id, document_chunks in grouped.items():
-                source = self._document_source(document_chunks)
-                mutation = DocumentMutation(
-                    document_id, int(source["mutation_generation"])
-                )
-                # Delete first: an ACL revocation may temporarily reduce availability,
-                # but old authorized content must never survive a failed replacement.
-                # The even-version tombstone and odd-version atomic document envelope
-                # make delayed lower-generation writes harmless across processes.
-                await self._write_tombstone(self.write_alias, mutation)
-                result = await self._bulk_to(self.write_alias, document_chunks)
-                if result.failed_ids:
-                    # One bulk action owns the whole document, so failure leaves the
-                    # already-acknowledged tombstone rather than a partial document.
+                try:
+                    # Size the envelope before tombstoning it. Deleting a
+                    # document we then cannot replace would destroy content.
+                    source, _ = self._encode_document(document_chunks)
+                except ValueError:
                     failed.extend(chunk.chunk_id for chunk in document_chunks)
-                else:
-                    accepted += len(document_chunks)
-            return BulkResult(accepted=accepted, failed_ids=tuple(failed))
+                    continue
+                writable.extend(document_chunks)
+                mutations.append(
+                    DocumentMutation(document_id, int(source["mutation_generation"]))
+                )
+            if not writable:
+                return BulkResult(accepted=0, failed_ids=tuple(failed))
+            # Delete first: an ACL revocation may temporarily reduce availability,
+            # but old authorized content must never survive a failed replacement.
+            # The even-version tombstone and odd-version atomic document envelope
+            # make delayed lower-generation writes harmless across processes.
+            await self._write_tombstones(self.write_alias, mutations)
+            # One bulk action owns the whole document, so a failure leaves the
+            # already-acknowledged tombstone rather than a partial document.
+            result = await self._bulk_to(self.write_alias, writable)
+            failed.extend(result.failed_ids)
+            return BulkResult(
+                accepted=len(chunks) - len(failed), failed_ids=tuple(failed)
+            )
 
     async def delete_documents(self, mutations: Sequence[DocumentMutation]) -> int:
         async with self._mutation_lock:
             await self.ensure_index()
             if len(mutations) > self.limits.max_bulk_documents:
                 raise ValueError("delete request exceeds document limit")
-            for mutation in mutations:
-                await self._write_tombstone(self.write_alias, mutation)
+            await self._write_tombstones(self.write_alias, list(mutations))
             return len(mutations)
 
     def _search_body(self, request: SearchRequest) -> dict:
@@ -617,6 +788,39 @@ class OpenSearchEngine(LocalSearchEngine):
             {"term": {"record_type": "document"}},
             {"terms": {"acl_tokens": list(request.acl_tokens)}},
         ]
+        if request.filters.path_scopes:
+            if len(request.filters.path_scopes) > 100:
+                raise ValueError("search path scopes exceed the configured bound")
+            filters.append(
+                {
+                    "bool": {
+                        "minimum_should_match": 1,
+                        "should": [
+                            {
+                                "bool": {
+                                    "filter": [
+                                        {"term": {"share_id": share_id}},
+                                        {
+                                            "prefix": {
+                                                "relative_path": {
+                                                    "value": root.rstrip("\\") + "\\",
+                                                    "case_insensitive": True,
+                                                }
+                                            }
+                                        },
+                                    ]
+                                }
+                            }
+                            for share_id, root in request.filters.path_scopes
+                        ],
+                    }
+                }
+            )
+        # Windows resolves an explicit DENY ahead of any allow, including one a
+        # user inherits through a group. Expressing that as must_not over the
+        # same principal set keeps a denied user from reading a document some
+        # other group grants them.
+        deny_filter = {"terms": {"deny_acl_tokens": list(request.acl_tokens)}}
         terms = {
             "share_id": request.filters.share_ids,
             "matter_ids": request.filters.matter_ids,
@@ -641,6 +845,7 @@ class OpenSearchEngine(LocalSearchEngine):
             "track_total_hits": True,
             "timeout": f"{max(50, min(request.timeout_ms, 10_000))}ms",
             "_source": [
+                "document_version",
                 "document_id",
                 "share_id",
                 "relative_path",
@@ -684,6 +889,7 @@ class OpenSearchEngine(LocalSearchEngine):
                         }
                     ],
                     "filter": filters,
+                    "must_not": [deny_filter],
                 }
             },
         }
@@ -735,6 +941,7 @@ class OpenSearchEngine(LocalSearchEngine):
             hits.append(
                 SearchHit(
                     document_id=str(source.get("document_id", "")),
+                    document_version=str(source.get("document_version", "")),
                     chunk_id=str(chunk.get("chunk_id", "")),
                     share_id=str(source.get("share_id", "")),
                     relative_path=str(source.get("relative_path", "")),
@@ -1037,21 +1244,25 @@ class OpenSearchEngine(LocalSearchEngine):
         current_generation: int | None = None
         prior_blocked = False
 
+        batched_documents = 0
+
         async def flush_document() -> None:
-            nonlocal batch, document_batch
+            nonlocal batch, document_batch, batched_documents
             if not document_batch:
                 return
-            if len(document_batch) > self.limits.max_bulk_documents:
+            if len(document_batch) > self.limits.max_document_chunks:
                 raise ValueError("one rebuild document exceeds the chunk limit")
-            if (
-                batch
-                and len(batch) + len(document_batch) > self.limits.max_bulk_documents
-            ):
+            # Bound the accumulator by whole documents. _bulk_to splits the
+            # batch again by byte budget, so a document is never rejected for
+            # the size of the batch it happened to arrive in.
+            if batch and batched_documents >= self.limits.max_bulk_documents:
                 result = await self._bulk_to(index, batch)
                 if result.failed_ids:
                     raise RuntimeError("OpenSearch rebuild bulk indexing failed")
                 batch = []
+                batched_documents = 0
             batch.extend(document_batch)
+            batched_documents += 1
             document_batch = []
 
         try:
@@ -1076,7 +1287,7 @@ class OpenSearchEngine(LocalSearchEngine):
                         "rebuild contains multiple versions or generations of one document"
                     )
                 document_batch.append(chunk)
-                if len(document_batch) > self.limits.max_bulk_documents:
+                if len(document_batch) > self.limits.max_document_chunks:
                     raise ValueError("one rebuild document exceeds the chunk limit")
             await flush_document()
             if batch:

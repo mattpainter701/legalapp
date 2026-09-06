@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.06.1",
+      "version": "2026.09.06.1",
+      "title": "Firm Memory keeps native file permissions intact",
+      "published_at": "2026-09-06",
+      "summary": "Firm Memory now withholds results when native file authorization cannot be established. An opt-in on-premises OpenSearch path connects document extraction and portal search with permission and freshness checks.",
+      "highlights": [
+        {
+          "title": "Unavailable authorization stays private",
+          "description": "An offline or unhealthy file-search agent no longer falls back to cloud filenames and snippets when native permissions are required."
+        },
+        {
+          "title": "A bounded on-premises search pilot",
+          "description": "Configured nodes use isolated extraction and OpenSearch, checking live file access before returning results. Customer-scale and OCR acceptance require a rehearsal."
+        }
+      ]
+    },
+    {
       "id": "2026.09.05.2",
       "version": "2026.09.05.2",
       "title": "Take a Word template all the way to signature",

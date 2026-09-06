@@ -310,6 +310,26 @@ class SqliteControlState(ControlState):
         async with self._transaction_lock:
             return await self._claim_unlocked(lease_seconds)
 
+    async def next_mutation_generation(self, document_id: str) -> int:
+        """Reserve a durable engine generation even when publication later fails."""
+        async with self._transaction_lock:
+            db = self._require_db()
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS engine_generations (document_id TEXT PRIMARY KEY, generation INTEGER NOT NULL)"
+            )
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "INSERT INTO engine_generations VALUES (?,1) ON CONFLICT(document_id) DO UPDATE SET generation=generation+1 RETURNING generation",
+                    (document_id,),
+                )
+                row = await cursor.fetchone()
+                await db.commit()
+                return int(row[0])
+            except Exception:
+                await db.rollback()
+                raise
+
     async def _claim_unlocked(self, lease_seconds: int) -> IndexJob | None:
         db = self._require_db()
         now = time.time()

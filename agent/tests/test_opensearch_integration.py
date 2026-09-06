@@ -136,7 +136,9 @@ async def test_real_opensearch_health_gate_reads_live_cluster_settings():
         await engine._request(
             "PUT",
             "/_cluster/settings",
-            json={"persistent": {"cluster.routing.allocation.disk.watermark.low": None}},
+            json={
+                "persistent": {"cluster.routing.allocation.disk.watermark.low": None}
+            },
         )
         stock = await engine.health()
         assert stock.status == "degraded"
@@ -184,3 +186,92 @@ async def test_real_opensearch_health_gate_reads_live_cluster_settings():
                     }
                 },
             )
+
+
+@pytest.mark.asyncio
+async def test_real_engine_portal_manifest_extraction_and_live_denial(tmp_path):
+    from types import SimpleNamespace
+    from search_node.config import Settings, Limits
+    from clarity_agent.native_acl import normalize_sddl
+    from clarity_agent.search_serving import OpenSearchServingIndex
+
+    prefix = f"lawhand-test-{uuid.uuid4().hex[:10]}"
+    engine = OpenSearchEngine(
+        URL,
+        index_prefix=prefix,
+        username=USERNAME,
+        password=PASSWORD,
+        ca_path=CA_PATH,
+        allow_insecure=(URL or "").startswith("http://"),
+    )
+    settings = Settings(
+        True,
+        True,
+        tmp_path / "temp",
+        tmp_path / "staging",
+        Limits(),
+        ("eng",),
+        20,
+        6,
+        0,
+    )
+    index = OpenSearchServingIndex(
+        str(tmp_path / "manifest.db"), engine, extractor_settings=settings
+    )
+    sid = "S-1-5-21-1"
+    authorization = SimpleNamespace(
+        principal_sids=frozenset({sid}), source_ids=frozenset({"share"})
+    )
+    root = r"\\server\firm"
+    path = root + r"\Matter\memo.txt"
+    acl = normalize_sddl(f"D:(A;;FA;;;{sid})")
+
+    async def fetch(job):
+        return b"The court granted summary judgment."
+
+    async def valid(job):
+        return True
+
+    try:
+        await index.init()
+        index.start(fetch, path_validator=valid, acl_loader=lambda job: acl)
+        await index.enqueue(
+            dict(
+                path=path,
+                share_id="share",
+                ext=".txt",
+                size_bytes=35,
+                modified_time="2026-09-06T00:00:00Z",
+                content_hash="v1",
+            )
+        )
+        await index.wait_until_idle()
+        await engine._request("POST", f"/{engine.write_alias}/_refresh")
+
+        async def search():
+            return await index.search(
+                "summary judgment",
+                [{"share_id": "share", "folder_path": "Matter"}],
+                [{"share_id": "share", "share_path": root}],
+                None,
+                10,
+                authorization=authorization,
+            )
+
+        assert (await search())["hits"][0]["filename"] == "memo.txt"
+        assert (await index.stats())["fts_rows"] == 0
+        acl = normalize_sddl(f"D:(D;;FA;;;{sid})(A;;FA;;;{sid})")
+        assert (await search())["hits"] == []
+        acl = normalize_sddl(f"D:(A;;FA;;;{sid})")
+        await index.delete([path])
+        assert (await search())["hits"] == []
+    finally:
+        await index.close()
+        await engine.close()
+        async with httpx.AsyncClient(
+            base_url=URL,
+            auth=(USERNAME, PASSWORD) if USERNAME else None,
+            verify=CA_PATH or True,
+            trust_env=False,
+        ) as client:
+            await client.delete(f"/{prefix}-*")

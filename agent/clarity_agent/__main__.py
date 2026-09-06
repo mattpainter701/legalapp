@@ -203,6 +203,7 @@ async def _scan_share(
     identity_backfill = [
         finfo for finfo in result.unchanged_files if not finfo.get("source_id")
     ]
+    index_error = None
     if local_index is not None:
         try:
             # Seed missing rows from unchanged ledger entries so an upgrade can
@@ -214,6 +215,7 @@ async def _scan_share(
         except Exception as exc:
             # This index is optional derived data. Its disk/SQLite failures must
             # never block the authoritative metadata synchronization path.
+            index_error = "local_index_update_failed:" + type(exc).__name__
             logger.error(
                 "Local index update for share %s failed: %s",
                 share_id,
@@ -308,7 +310,7 @@ async def _scan_share(
     # once rather than inflating the scan status during an upgrade.
     accepted_changes = max(0, synced_count - accepted_backfills)
     indexed = accepted_changes + len(result.unchanged_files)
-    error = sync_error or (result.errors[0] if result.errors else None)
+    error = sync_error or index_error or (result.errors[0] if result.errors else None)
     status = (
         "failed" if (error and not indexed) else ("partial" if error else "success")
     )
@@ -411,6 +413,17 @@ async def _initialize_daemon_resources(config: AgentConfig):
         )
         if search_node:
             await search_node.start()
+            from clarity_agent.search_serving import OpenSearchServingIndex
+
+            local_index = OpenSearchServingIndex(
+                str(Path(index_path).with_name("opensearch-manifest.db")),
+                search_node.engine,
+                max_file_bytes=index_max_bytes,
+                acl_refresh_seconds=getattr(config, "acl_max_age_seconds", 3600),
+            )
+            await local_index.init()
+            if not local_index.available:
+                raise RuntimeError("OpenSearch manifest initialization failed")
         return ledger, local_index, search_node
     except Exception:
         closers = [ledger.close()]
@@ -763,6 +776,18 @@ def cmd_register(args) -> None:
     print("Add shares and credentials in Administration → File Shares.")
 
 
+def cmd_search_preflight(args) -> None:
+    """Verify the installed parser runtime without contacting SaaS or indexing."""
+    from search_node.config import Settings
+    from search_node.extraction import IsolatedExtractor
+
+    try:
+        IsolatedExtractor(Settings.from_env()).preflight()
+    except (RuntimeError, OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from None
+    print("Search Node extraction runtime and process containment are ready")
+
+
 def cmd_start(args) -> None:
     config = AgentConfig.load()
     if not config.api_key or not config.agent_id:
@@ -947,6 +972,16 @@ def cmd_status(args) -> None:
             print("Index state:   not built or unreadable")
     else:
         print("Local index:   disabled")
+    if getattr(config, "search_node_enabled", False):
+        print("OpenSearch:    enabled (native authorization required)")
+        manifest = str(Path(index_path).with_name("opensearch-manifest.db"))
+        stats = asyncio.run(read_index_stats(manifest))
+        print(
+            "Manifest:      " + ("available" if stats["available"] else "unavailable")
+        )
+        for state, values in sorted(stats["statuses"].items()):
+            print(f"  {state}: {values['files']} file(s)")
+        print("Parser check:  lawhand-agent search-preflight")
 
     if not (config.api_key and config.agent_id):
         return
@@ -1037,6 +1072,12 @@ def main():
 
     start = sub.add_parser("start", help="Run the agent in the foreground")
     start.set_defaults(func=cmd_start)
+
+    preflight = sub.add_parser(
+        "search-preflight",
+        help="Verify isolated extraction prerequisites without indexing",
+    )
+    preflight.set_defaults(func=cmd_search_preflight)
 
     scan = sub.add_parser("scan", help="Scan now (all assigned shares, or one path)")
     scan.add_argument(

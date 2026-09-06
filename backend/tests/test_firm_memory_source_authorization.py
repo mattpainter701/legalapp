@@ -271,7 +271,10 @@ async def test_source_policy_modes_and_native_responses(monkeypatch):
         )
 
     denied = await firm_memory_authorization.authorize_source(
-        object(), user=user, source=source("firm", is_enabled=False), matter_decisions={}
+        object(),
+        user=user,
+        source=source("firm", is_enabled=False),
+        matter_decisions={},
     )
     firm = await firm_memory_authorization.authorize_source(
         object(), user=user, source=source("firm"), matter_decisions={}
@@ -313,7 +316,9 @@ async def test_source_policy_modes_and_native_responses(monkeypatch):
             return object()
 
     native = source("native", native_authorizer_key="native-ok")
-    monkeypatch.setitem(auth_module.native_authorizers._providers, "native-ok", Provider())
+    monkeypatch.setitem(
+        auth_module.native_authorizers._providers, "native-ok", Provider()
+    )
     native_allow = await firm_memory_authorization.authorize_source(
         object(), user=user, source=native, matter_decisions={}
     )
@@ -616,9 +621,7 @@ async def test_smb_adapter_keeps_search_coverage_truthful(
 
     async def matters(*_args, **_kwargs):
         return {
-            matter_id: AuthorizationDecision(
-                AuthorizationState.ALLOW, "matter_allowed"
-            )
+            matter_id: AuthorizationDecision(AuthorizationState.ALLOW, "matter_allowed")
         }
 
     async def allow(*_args, **_kwargs):
@@ -908,9 +911,7 @@ async def test_matterless_search_uses_the_actors_own_authorized_matters(monkeypa
         searched_with.update(kwargs)
         return _MatterBoundSmbSearchResult(hits=[])
 
-    monkeypatch.setattr(
-        firm_memory_authorization, "authorize_matter_scope", scope
-    )
+    monkeypatch.setattr(firm_memory_authorization, "authorize_matter_scope", scope)
     monkeypatch.setattr(service, "_search_matter_bound_smb", adapter)
 
     response = await service.search(
@@ -952,9 +953,7 @@ async def test_matterless_search_reports_an_unauthorized_share_instead_of_hiding
     async def adapter(*_args, **_kwargs):  # pragma: no cover - must not run
         raise AssertionError("an unauthorized share must never be searched")
 
-    monkeypatch.setattr(
-        firm_memory_authorization, "authorize_matter_scope", scope
-    )
+    monkeypatch.setattr(firm_memory_authorization, "authorize_matter_scope", scope)
     monkeypatch.setattr(service, "_search_matter_bound_smb", adapter)
 
     response = await service.search(
@@ -1150,9 +1149,7 @@ def _full_text_case(monkeypatch, relay, *, index_rows):
         matter_id=matter_id,
         folder_path="Acme",
     )
-    monkeypatch.setattr(
-        smb_module.smb_service, "search_local_files_for_matters", relay
-    )
+    monkeypatch.setattr(smb_module.smb_service, "search_local_files_for_matters", relay)
     db = _FullTextDb(
         share,
         [_ScalarRows([binding]), _ScalarRows(index_rows), _Rows([]), _Rows([])],
@@ -1250,7 +1247,12 @@ async def test_an_unreachable_node_falls_back_to_the_metadata_index(
         monkeypatch, relay, index_rows=[]
     )
     # The metadata query replaces the full-text row fetch in the replay order.
-    db.results = [_ScalarRows([db.results[0].values[0]]), _Rows([]), _Rows([]), _Rows([])]
+    db.results = [
+        _ScalarRows([db.results[0].values[0]]),
+        _Rows([]),
+        _Rows([]),
+        _Rows([]),
+    ]
 
     result = await FirmMemorySearchService()._search_matter_bound_smb(
         db,
@@ -1300,9 +1302,7 @@ async def test_full_text_search_is_not_attempted_without_a_relay(monkeypatch):
     async def relay(*_args, **_kwargs):  # pragma: no cover - must not run
         raise AssertionError("no relay is available without redis")
 
-    monkeypatch.setattr(
-        smb_module.smb_service, "search_local_files_for_matters", relay
-    )
+    monkeypatch.setattr(smb_module.smb_service, "search_local_files_for_matters", relay)
     assert (
         await FirmMemorySearchService()._full_text_records(
             object(),
@@ -1340,9 +1340,7 @@ async def test_coverage_states_which_index_actually_answered(
 
     async def matters(*_args, **_kwargs):
         return {
-            matter_id: AuthorizationDecision(
-                AuthorizationState.ALLOW, "matter_allowed"
-            )
+            matter_id: AuthorizationDecision(AuthorizationState.ALLOW, "matter_allowed")
         }
 
     async def allow(*_args, **_kwargs):
@@ -1381,21 +1379,15 @@ async def test_a_full_text_hit_outside_the_binding_is_dropped_locally(monkeypatc
     async def relay(*_args, **_kwargs):
         return _relay_response(
             [
-                SimpleNamespace(
-                    id=str(row.id), score=9.0, snippet="hit", page_number=1
-                )
+                SimpleNamespace(id=str(row.id), score=9.0, snippet="hit", page_number=1)
                 for row in holder["rows"]
             ]
         )
 
     tenant_id = uuid.uuid4()
     share_id = uuid.uuid4()
-    inside = _index_row(
-        tenant_id, share_id, path=r"\\server\matters\Acme\Motion.pdf"
-    )
-    outside = _index_row(
-        tenant_id, share_id, path=r"\\server\matters\Other\Secret.pdf"
-    )
+    inside = _index_row(tenant_id, share_id, path=r"\\server\matters\Acme\Motion.pdf")
+    outside = _index_row(tenant_id, share_id, path=r"\\server\matters\Other\Secret.pdf")
     holder["rows"] = [inside, outside]
 
     db, tenant_id, matter_id, source = _full_text_case(
@@ -1472,3 +1464,54 @@ async def test_a_share_without_a_matter_binding_is_never_searched(
     assert response.coverage[0].state == "unsupported"
     assert response.coverage[0].reason == expected_reason
     assert response.complete is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "acl_unhealthy",
+        "identity_missing",
+        "signing_missing",
+        "offline",
+        "redis_missing",
+        "revoked",
+    ],
+)
+@pytest.mark.parametrize("native_policy", ["global", "source"])
+async def test_native_search_never_falls_back_to_cloud_metadata(
+    monkeypatch, outcome, native_policy
+):
+    from app.services import firm_memory as module
+
+    monkeypatch.setattr(
+        module.settings, "FIRM_MEMORY_NATIVE_AUTHZ_ENABLED", native_policy == "global"
+    )
+
+    async def relay(*args, **kwargs):
+        if outcome == "revoked":
+            return _relay_response([])
+        if outcome == "offline":
+            return _relay_response([], agent_status="offline")
+        raise RuntimeError(outcome)
+
+    db, tenant, matter, source = _full_text_case(monkeypatch, relay, index_rows=[])
+    if native_policy == "source":
+        source.authorization_mode = "native"
+    # Any metadata/result hydration query would consume this sentinel.
+    db.results = [db.results[0]]
+    result = await FirmMemorySearchService()._search_matter_bound_smb(
+        db,
+        tenant_id=tenant,
+        requesting_user_id=uuid.uuid4(),
+        source=source,
+        matter_ids=(matter,),
+        request=FirmMemoryDocumentSearchRequest(query="restricted"),
+        collection_ids=[],
+        redis=None if outcome == "redis_missing" else object(),
+    )
+    assert result.hits == []
+    assert result.index_kind == "smb_local_fulltext"
+    if outcome != "revoked":
+        assert not result.searched
+        assert result.reason == "native_document_authorization_required"

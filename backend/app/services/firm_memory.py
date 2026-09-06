@@ -662,6 +662,19 @@ class FirmMemorySearchService:
             index_kind = SMB_FULL_TEXT_INDEX_KIND
 
         if full_text is None:
+            # Cloud metadata is not evidence of native file access. This guard
+            # applies to every unavailable/denied relay outcome, including a
+            # missing Redis connection and an offline agent.
+            if (
+                settings.FIRM_MEMORY_NATIVE_AUTHZ_ENABLED
+                or source.authorization_mode == "native"
+            ):
+                return _MatterBoundSmbSearchResult(
+                    hits=[],
+                    state="offline",
+                    reason="native_document_authorization_required",
+                    index_kind=SMB_FULL_TEXT_INDEX_KIND,
+                )
             ts_query = func.plainto_tsquery("english", request.query)
             stmt = select(
                 SmbFileIndex,
@@ -806,7 +819,7 @@ class FirmMemorySearchService:
             )
         except (ValueError, RuntimeError) as exc:
             logger.info(
-                "Firm Memory full-text search unavailable; using the metadata index",
+                "Firm Memory full-text search unavailable",
                 extra={
                     "firm_memory_tenant_id": str(tenant_id),
                     "firm_memory_share_id": str(share.id),

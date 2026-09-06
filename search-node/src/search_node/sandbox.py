@@ -224,7 +224,10 @@ class ProcessContainer:
         """
         if self._job is None or self._kernel32 is None:
             return
-        self._kernel32.AssignProcessToJobObject(self._job, int(proc._handle))
+        if not self._kernel32.AssignProcessToJobObject(self._job, int(proc._handle)):
+            proc.kill()
+            proc.communicate()
+            raise RuntimeError("Search Node could not contain the parser process")
 
     def terminate(self, proc: subprocess.Popen) -> None:
         """Kill the child and every process it spawned."""

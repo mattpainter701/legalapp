@@ -20,7 +20,11 @@ def test_search_node_is_default_off():
 
 
 def test_search_node_requires_gateway_secret_and_excludes_legacy_fts():
-    config = AgentConfig(search_node_enabled=True)
+    config = AgentConfig(
+        search_node_enabled=True,
+        native_authz_enabled=True,
+        search_identity_public_key="test-key",
+    )
     with pytest.raises(ValueError, match="gateway token"):
         SearchNode.from_config(config)
     config.search_gateway_token = "a" * 32
@@ -32,6 +36,8 @@ def test_search_node_requires_gateway_secret_and_excludes_legacy_fts():
 def test_search_node_rejects_nonlocal_opensearch():
     config = AgentConfig(
         search_node_enabled=True,
+        native_authz_enabled=True,
+        search_identity_public_key="test-key",
         search_gateway_token="a" * 32,
         opensearch_url="https://192.0.2.20:9200",
         opensearch_username="lawhand",
@@ -44,6 +50,8 @@ def test_search_node_rejects_nonlocal_opensearch():
 def test_enabled_search_node_requires_https_and_complete_opensearch_auth():
     config = AgentConfig(
         search_node_enabled=True,
+        native_authz_enabled=True,
+        search_identity_public_key="test-key",
         search_gateway_token="a" * 32,
         opensearch_url="http://127.0.0.1:9200",
         opensearch_username="lawhand",
@@ -60,6 +68,8 @@ def test_enabled_search_node_requires_https_and_complete_opensearch_auth():
 def test_search_node_validates_gateway_and_control_path_before_client_creation():
     config = AgentConfig(
         search_node_enabled=True,
+        native_authz_enabled=True,
+        search_identity_public_key="test-key",
         search_gateway_token="short",
         opensearch_url="https://127.0.0.1:9200",
         opensearch_username="lawhand",
@@ -216,4 +226,6 @@ def test_preflight_names_red_cluster_missing_index_and_threshold():
 
 
 def test_preflight_never_returns_an_empty_explanation():
-    assert search_node_module.preflight_reasons(_health()) == ["engine reported degraded"]
+    assert search_node_module.preflight_reasons(_health()) == [
+        "engine reported degraded"
+    ]
