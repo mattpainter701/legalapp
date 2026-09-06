@@ -626,6 +626,11 @@ jobs:
           echo "files=$files" >> "$GITHUB_OUTPUT"
           python scripts/shard_tests.py --shards 4 --index ${{ matrix.shard }} --summary
 
+      - name: Run focused Template Studio fact review PostgreSQL test
+        if: matrix.shard == 2
+        working-directory: backend
+        run: pytest tests/test_template_fact_review_postgres.py -v --tb=short --maxfail=1
+
       - name: Run tests
         working-directory: backend
         env:
