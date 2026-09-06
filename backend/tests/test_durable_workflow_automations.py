@@ -267,3 +267,32 @@ async def test_exhausted_crash_lease_is_reported_failed(
     await db_session.refresh(job)
     assert job.status == "failed"
     assert await db_session.scalar(select(func.count(MatterWorkflowRun.id))) == 0
+
+
+@pytest.mark.asyncio
+async def test_claim_replaced_before_planning_is_not_executed(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    await setup_rule(client, db_session, test_tenant, test_user)
+    await client.post("/api/matters", json={"matter_name": "Changed claim"})
+    job = await db_session.scalar(
+        select(DurableJob).where(DurableJob.kind == outbox.JOB_KIND)
+    )
+    job_id, tenant_id = job.id, job.tenant_id
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    original_claim = worker.claim_job
+
+    async def claim_then_successor(db, identifier):
+        original = await original_claim(db, identifier)
+        async with factory() as successor:
+            row = await successor.get(DurableJob, identifier)
+            row.attempts += 1
+            row.leased_at = datetime.now(timezone.utc)
+            await successor.commit()
+        return original
+
+    monkeypatch.setattr(worker, "claim_job", claim_then_successor)
+    with patch.object(worker, "async_session_maker", factory):
+        assert await worker.process_job(job_id, tenant_id) is False
+    assert await db_session.scalar(select(func.count(MatterWorkflowRun.id))) == 0

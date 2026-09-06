@@ -21,6 +21,20 @@ from app.services.durable_jobs import enqueue_job
 from app.services.rbac_service import get_user_capabilities
 
 JOB_KIND = "matter_workflow_plan"
+BLOCK_REASONS = {
+    "source_unavailable": "The original matter or rule is unavailable.",
+    "actor_unavailable": "The original user's account or license is unavailable.",
+    "actor_permission_changed": "The original user no longer has matter-management permission.",
+    "rule_changed": "The rule changed or was archived after this trigger.",
+    "matter_archived": "The matter was archived after this trigger.",
+    "matter_changed": "Workflow facts changed after this trigger.",
+    "template_changed": "The approved template changed or is no longer available.",
+    "inactive_tenant": "The firm's account is inactive.",
+}
+
+
+def blocked_message(code):
+    return f"{BLOCK_REASONS.get(code, 'The original context is unavailable.')} Review current facts and create a manual preview."
 
 
 async def enqueue_matter_event(db, *, matter, trigger_event, actor_user_id):
@@ -141,7 +155,7 @@ async def run_planning_job(db: AsyncSession, job: DurableJob) -> dict:
             trigger_rule_sha256=p["rule_sha256"],
             detail={
                 "failure_code": reason,
-                "message": "Context changed or is unavailable. Review current facts and create a new manual preview.",
+                "message": blocked_message(reason),
                 "trigger_rule_sha256": p["rule_sha256"],
                 "trigger_matter_sha256": p["matter_sha256"],
             },
@@ -189,7 +203,7 @@ async def pending_activity(db, tenant_id, *, matter_id=None, rule_id=None, limit
                 "message": (
                     "Planning failed. Review the matter and create a manual preview."
                     if row.status == "failed"
-                    else "Context unavailable. Review current facts and create a manual preview."
+                    else blocked_message((row.result or {}).get("failure_code"))
                     if row.status == "completed"
                     else "Planning is queued; no work has been applied."
                 ),
