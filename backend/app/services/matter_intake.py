@@ -222,7 +222,13 @@ async def close_task(db, packet, kind, reason):
             actor_user_id=packet.created_by,
             reason=reason,
         )
-        packet.config = {**packet.config, f"calendar_cleanup:{kind}": True}
+        from app.services.task_notifications import task_calendar_user_id
+
+        packet.config = {
+            **packet.config,
+            f"calendar_cleanup:{kind}": True,
+            f"calendar_owner:{kind}": task_calendar_user_id(task),
+        }
 
 
 async def start_packet(db, user, matter, body, filename, content):
@@ -840,7 +846,7 @@ async def process_packet(tenant_id, matter_id):
             if packet.config.get(cleanup):
                 task_id, owner_id = (
                     str(uuid.uuid5(packet.id, kind)),
-                    str(packet.owner_id),
+                    packet.config.get(f"calendar_owner:{kind}") or str(packet.owner_id),
                 )
                 await db.commit()
                 results = await remove_task_from_calendars_now(

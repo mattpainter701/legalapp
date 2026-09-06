@@ -660,6 +660,10 @@ async def test_worker_closes_calendar_and_notifies_scheduling_once(ctx, monkeypa
     c = ctx
     c.packet.sent_at = TIME
     await s.reconcile(c.db, c.packet)
+    reassigned_user = uuid.uuid4()
+    c.db.tasks[
+        uuid.uuid5(c.packet.id, "documents")
+    ].assigned_to_user_id = reassigned_user
     complete(c, "fee_agreement")
     complete(c, "questionnaire")
     monkeypatch.setattr(notifications, "notify_task_created", AsyncMock())
@@ -671,6 +675,9 @@ async def test_worker_closes_calendar_and_notifies_scheduling_once(ctx, monkeypa
     await s.process_packet(c.user.tenant_id, c.matter.id)
     await s.process_packet(c.user.tenant_id, c.matter.id)
     notifications.remove_task_from_calendars_now.assert_awaited_once()
+    assert notifications.remove_task_from_calendars_now.await_args.args[2] == str(
+        reassigned_user
+    )
     notifications.notify_task_created.assert_awaited_once()
     assert c.db.tasks[uuid.uuid5(c.packet.id, "documents")].status == "cancelled"
 
