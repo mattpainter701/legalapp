@@ -163,7 +163,7 @@ async def meeting(
             db, packet, "scheduling", "Initial client meeting scheduled"
         )
         matter = await db.get(Matter, matter_id)
-        matter.stage = "Intake / Initial Meeting Scheduled"
+        await service.set_intake_stage(db, matter, "Intake / Initial Meeting Scheduled")
         service.queue(packet, "meeting")
         service.event(
             db,

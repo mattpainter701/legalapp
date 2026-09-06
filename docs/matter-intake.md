@@ -12,6 +12,8 @@ Authorized staff with `manage_matters` and access to the matter use **Create Mat
 6. First successful invitation delivery records the sent timestamp and creates one document follow-up task due seven elapsed days later. At that deadline, outstanding documents queue one reminder per selected channel. Completing both requirements closes the document task and its calendar projections, creates a matter completion event, queues client confirmation, and creates a staff scheduling task immediately, due 24 elapsed hours after the later completion timestamp.
 7. Staff records the arranged conference call or in-person meeting, its time and call/location details. The scheduling task closes and the client receives a portal notification with meeting details inside the portal. This release uses the staff scheduling-task option; it does not automatically choose availability, send a calendar meeting invite, or create a meeting calendar event.
 
+An already-applied firm workflow keeps control of the matter stage. Intake continues to track its own document and meeting status and tasks without overwriting that configured stage.
+
 Existing matters imported from another firm do not send intake packets automatically. Review prior engagement status, then start this workflow only where appropriate.
 
 ## Microsoft 365, Google and SMS

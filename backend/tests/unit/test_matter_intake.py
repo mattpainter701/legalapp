@@ -769,3 +769,18 @@ async def test_new_followup_is_unassigned_when_owner_loses_matter_access(
     task = c.db.tasks[uuid.uuid5(c.packet.id, "documents")]
     assert task.assigned_to_user_id is None
     assert task.matter_id == c.matter.id
+
+
+@pytest.mark.asyncio
+async def test_intake_completion_preserves_an_applied_firm_workflow_stage(ctx):
+    c = ctx
+    c.db.rows[s.MatterWorkflowRun] = s.MatterWorkflowRun(
+        id=uuid.uuid4(), status="applied"
+    )
+    c.matter.stage = "Discovery"
+    complete(c, "fee_agreement")
+    complete(c, "questionnaire")
+    await s.reconcile(c.db, c.packet)
+    assert c.matter.stage == "Discovery"
+    assert c.packet.status == "documents_complete"
+    assert uuid.uuid5(c.packet.id, "scheduling") in c.db.tasks

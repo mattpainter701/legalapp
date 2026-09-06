@@ -19,6 +19,7 @@ from app.database import async_session_maker, set_tenant_context
 from app.models.client_portal import ClientPortalInvite
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact, Lead
+from app.models.configurable_workflow import MatterWorkflowRun
 from app.models.conversion_loop import LeadChannelConsent
 from app.models.matter_document import MatterDocument
 from app.models.matter_intake import MatterIntake
@@ -133,6 +134,21 @@ def event(db, packet, title, content):
             created_by=packet.created_by,
         )
     )
+
+
+async def set_intake_stage(db, matter, stage):
+    # An applied firm workflow owns its stage; intake still has independent state.
+    managed = await db.scalar(
+        select(MatterWorkflowRun.id)
+        .where(
+            MatterWorkflowRun.tenant_id == matter.tenant_id,
+            MatterWorkflowRun.matter_id == matter.id,
+            MatterWorkflowRun.status.in_(("applied", "compensation_required")),
+        )
+        .limit(1)
+    )
+    if managed is None:
+        matter.stage = stage
 
 
 async def ensure_task(db, packet, kind, title, due):
@@ -415,7 +431,7 @@ async def start_packet(db, user, matter, body, filename, content):
     queue(packet, "welcome")
     db.add(packet)
     matter.portal_enabled = True
-    matter.stage = "Intake / Awaiting Documents"
+    await set_intake_stage(db, matter, "Intake / Awaiting Documents")
     event(
         db,
         packet,
@@ -510,7 +526,7 @@ async def reconcile(db, packet):
         ]
         packet.completed_at = max(times)
         packet.status = "documents_complete"
-        matter.stage = "Intake / Schedule Initial Meeting"
+        await set_intake_stage(db, matter, "Intake / Schedule Initial Meeting")
         await close_task(db, packet, "documents", "Both intake requirements completed")
         await ensure_task(
             db,
