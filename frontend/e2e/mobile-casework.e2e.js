@@ -27,7 +27,7 @@ async function fixture(page, { denied = false } = {}) {
     if (path.endsWith('/document-folders')) return json(route, { items: [], root_document_count: 1 })
     if (path === `/api/matters/${matterId}/documents`) return json(route, { items: [{ id: 'doc-1', filename: 'Authorized case note.txt', file_size: 32, content_type: 'text/plain', storage_backend: 'local', created_at: '2026-09-06T12:00:00Z' }] })
     if (path.endsWith('/documents/doc-1/download')) return route.fulfill({ contentType: 'text/plain', body: 'Synthetic authorized case document.' })
-    if (path.endsWith('/dashboard-summary')) return json(route, { active_workers: [], upcoming_deadlines: [] })
+    if (path.endsWith('/dashboard-summary')) return json(route, { active_workers: [], upcoming_deadlines: [], open_tasks: 0, overdue_tasks: 0 })
     if (path.endsWith('/budget')) return json(route, {})
     if (path.endsWith('/cloud-files')) return json(route, { connected: false, files: [] })
     if (path.endsWith('/cloud-folder')) return json(route, null)
@@ -88,7 +88,7 @@ for (const width of [360, 390]) {
     await nav.getByRole('button', { name: 'Manage tasks' }).click()
     await expect(page).toHaveURL(new RegExp(`/tasks\\?matter_id=${matterId}`))
     await expect(page.getByLabel('Filter tasks by matter')).toHaveValue(matterId)
-    expect(state.taskQueries.slice(-2)).toEqual([matterId, matterId])
+    await expect.poll(() => state.taskQueries.slice(-2)).toEqual([matterId, matterId])
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   })
 }

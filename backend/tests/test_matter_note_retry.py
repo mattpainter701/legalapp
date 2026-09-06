@@ -1,4 +1,5 @@
 """Real PostgreSQL transaction tests for retryable matter notes (no providers)."""
+
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -19,33 +20,55 @@ from app.schemas.matter import MatterNoteCreate
 
 @pytest_asyncio.fixture
 async def note_store(db_session, test_engine, test_tenant, test_user, monkeypatch):
-    actor = SimpleNamespace(id=test_user.id, tenant_id=test_tenant.id, full_name=test_user.full_name)
-    matter = Matter(id=uuid4(), tenant_id=actor.tenant_id, user_id=actor.id, matter_name="Retry test", slug="retry-test")
+    actor = SimpleNamespace(
+        id=test_user.id, tenant_id=test_tenant.id, full_name=test_user.full_name
+    )
+    matter = Matter(
+        id=uuid4(),
+        tenant_id=actor.tenant_id,
+        user_id=actor.id,
+        matter_name="Retry test",
+        slug="retry-test",
+    )
     db_session.add(matter)
     await db_session.commit()
     matter_id = str(matter.id)
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     cache = AsyncMock()
     monkeypatch.setattr(matters, "_invalidate_matter_context_cache", cache)
+
     async def current_user(request, db):
         return db.info.get("actor", actor)
+
     monkeypatch.setattr(matters, "get_current_user", current_user)
+
     async def save(body, *, other_actor=None, fail_commit=False):
         async with factory() as db:
             db.info["actor"] = other_actor or actor
             await set_tenant_context(db, str(db.info["actor"].tenant_id))
             if fail_commit:
+
                 async def fail():
                     await db.flush()
                     raise RuntimeError("Synthetic connection loss before commit")
+
                 db.commit = fail
             return await matters.add_note(matter_id, body, SimpleNamespace(), db)
-    return SimpleNamespace(save=save, factory=factory, actor=actor, matter_id=matter.id, cache=cache)
+
+    return SimpleNamespace(
+        save=save, factory=factory, actor=actor, matter_id=matter.id, cache=cache
+    )
 
 
 @pytest.mark.asyncio
 async def test_note_concurrent_retry_creates_one_note_and_event(note_store):
-    body = MatterNoteCreate(request_id=uuid4(), title="Client call", content="Follow up", is_billable=True, hours="0.50")
+    body = MatterNoteCreate(
+        request_id=uuid4(),
+        title="Client call",
+        content="Follow up",
+        is_billable=True,
+        hours="0.50",
+    )
     first, second = await asyncio.gather(note_store.save(body), note_store.save(body))
     assert first.id == second.id
     assert first.id != str(body.request_id)
@@ -55,11 +78,22 @@ async def test_note_concurrent_retry_creates_one_note_and_event(note_store):
         assert await db.scalar(select(func.count()).select_from(MatterEvent)) == 1
     note_store.cache.assert_awaited_once()
     # Decimal-equivalent request serializations also replay.
-    assert (await note_store.save(body.model_copy(update={"hours": body.hours.normalize()}))).id == first.id
+    assert (
+        await note_store.save(body.model_copy(update={"hours": body.hours.normalize()}))
+    ).id == first.id
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", [{"content": "Different"}, {"is_billable": True}, {"hours": "1.00"}, {"title": "Other"}, {"note_type": "client"}])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"content": "Different"},
+        {"is_billable": True},
+        {"hours": "1.00"},
+        {"title": "Other"},
+        {"note_type": "client"},
+    ],
+)
 async def test_note_retry_rejects_changed_payload(note_store, change):
     body = MatterNoteCreate(request_id=uuid4(), title="Call", content="Original")
     await note_store.save(body)

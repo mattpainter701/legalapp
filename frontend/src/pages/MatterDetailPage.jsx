@@ -268,9 +268,9 @@ export default function MatterDetailPage() {
   const [showAddNote, setShowAddNote] = useState(false)
   const [newNote, setNewNote] = useState({ note_type: 'internal', title: '', content: '' })
   const [addingNote, setAddingNote] = useState(false)
-  const noteMatterId = useRef(id)
-  noteMatterId.current = id
+  const noteGeneration = useRef(0)
   useEffect(() => {
+    noteGeneration.current += 1
     noteRequest.current = null
     noteBusy.current = false
     setAddingNote(false)
@@ -439,26 +439,28 @@ export default function MatterDetailPage() {
   const handleAddNote = async () => {
     if (!newNote.title.trim() || noteBusy.current || noteConflict) return
     noteBusy.current = true
+    const generation = noteGeneration.current
     setAddingNote(true)
     setNoteNotice(null)
     // Retry the same payload and identity after an uncertain network response.
     noteRequest.current ||= { ...newNote, request_id: crypto.randomUUID() }
     try {
       await addMatterNote(id, noteRequest.current)
-      if (noteMatterId.current !== id) return
+      if (noteGeneration.current !== generation) return
       noteRequest.current = null
       setNewNote({ note_type: 'internal', title: '', content: '' })
       setShowAddNote(false)
       setNoteNotice({ success: true, text: 'Note saved.' })
       try {
         const tl = await getMatterTimeline(id)
-        if (noteMatterId.current !== id) return
+        if (noteGeneration.current !== generation) return
         setTimeline(Array.isArray(tl) ? tl : [])
       } catch {
+        if (noteGeneration.current !== generation) return
         setNoteNotice({ success: true, text: 'Note saved. Activity could not refresh; reopen Activity when connected.' })
       }
     } catch (error) {
-      if (noteMatterId.current !== id) return
+      if (noteGeneration.current !== generation) return
       const status = error?.response?.status
       if ([400, 403, 422].includes(status)) noteRequest.current = null
       setNoteConflict(status === 409)
@@ -470,7 +472,7 @@ export default function MatterDetailPage() {
           ? 'Save not confirmed. Your text is still here. Retry Save Note when connected; the same request will not create a duplicate.'
           : 'Note was not saved. Check your entry and try again. Your text is still here.' })
     } finally {
-      if (noteMatterId.current === id) {
+      if (noteGeneration.current === generation) {
         noteBusy.current = false
         setAddingNote(false)
       }
@@ -681,9 +683,9 @@ export default function MatterDetailPage() {
 
       <div className="max-w-[1200px] mx-auto px-4 md:px-8 py-6 md:py-10">
         {/* Hero */}
-        <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8">
+        <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-4 md:mb-8">
           <div className="flex-1 min-w-0">
-            <h1 className="font-serif text-2xl md:text-4xl break-words font-bold text-brand-ink tracking-tight mb-3 leading-tight">{matter.matter_name}</h1>
+            <h1 className="sr-only md:not-sr-only md:font-serif md:text-4xl md:break-words md:font-bold md:text-brand-ink md:tracking-tight md:mb-3 md:leading-tight">{matter.matter_name}</h1>
             {matter.description && (
               <p className="text-brand-ink-2 font-sans text-[15px] mb-4 leading-relaxed max-w-2xl">{matter.description}</p>
             )}
@@ -768,7 +770,7 @@ export default function MatterDetailPage() {
           {activeTab === 'dashboard' && <div className="mb-3 text-sm">
             {tasksLoading ? 'Loading open tasks…' : tasksError ? 'Open tasks could not load. Use Manage tasks to retry.' : tasks.length
               ? <Link className="flex min-h-11 items-center font-semibold text-brand-accent break-words" to={`/tasks/${tasks[0].id}`}>Open task: {tasks[0].title}</Link>
-              : 'No pending tasks. Manage tasks also includes reviews and waiting work.'}
+              : 'No pending tasks. Open Manage tasks to see reviews and waiting work.'}
           </div>}
           <label htmlFor="mobile-matter-section" className="block text-sm font-semibold mb-2">Matter section</label>
           <select id="mobile-matter-section" value={activeTab} onChange={event => setActiveTab(event.target.value)} className="w-full min-h-11 rounded-lg border border-brand-line bg-brand-surface px-3 text-base">
