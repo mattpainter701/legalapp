@@ -54,7 +54,7 @@ export default function TemplateStudioWorkspace({
         <Link to="/templates" className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand-muted hover:text-brand-ink">
           <ArrowLeft size={16} aria-hidden="true" /> Template Studio
         </Link>
-        <header className="mt-4 rounded-2xl bg-brand-ink p-5 text-white shadow-lg md:p-7">
+        <header className="mt-3 rounded-2xl bg-brand-ink p-4 text-white shadow-lg">
           <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
             <div className="min-w-0">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/60">Template workspace</p>
@@ -78,15 +78,15 @@ export default function TemplateStudioWorkspace({
           </div>
         </header>
 
-        <aside aria-label="Template setup checklist" className="mt-4 rounded-xl border border-brand-line bg-brand-surface-2 p-4 text-sm">
-          <p className="font-semibold">Finish setup beside your document</p>
+        <details aria-label="Template setup checklist" className="mt-3 rounded-lg border border-brand-line bg-brand-surface-2 px-4 py-2 text-sm">
+          <summary className="cursor-pointer font-semibold">Help with setup</summary>
           <ol className="mt-2 list-decimal space-y-1 pl-5 text-brand-muted">
             <li>Review highlighted details. Select text or place a box to add a field; labels and data sources can be changed below.</li>
             <li>Choose what each field fills from, and use “When to use this template” for a scenario such as divorce with children.</li>
             <li>Open Test, choose a matter for Smart Fill, review missing details and source evidence, then inspect every output page.</li>
             <li>Publish the tested version when the wording and values are correct.{template.is_active && template.published_version_no ? ` Version ${template.published_version_no} remains available to your team while you edit.` : ''}</li>
           </ol>
-        </aside>
+        </details>
 
         <nav aria-label="Template Studio workspace sections" className="mt-4 flex gap-1 overflow-x-auto rounded-xl border border-brand-line bg-brand-surface-2 p-1">
           {tabs.map(({ key, label, suffix, icon: Icon }) => (
@@ -99,20 +99,13 @@ export default function TemplateStudioWorkspace({
         {statusMessage && <div ref={statusRef} role="status" aria-label="Workspace status" tabIndex={-1} className="mt-4 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">{statusMessage}</div>}
 
         {section === 'workspace' ? (
-          <section className="mt-4 grid gap-4 md:grid-cols-3" aria-label="Template workspace summary">
-            <div className="rounded-xl border border-brand-line bg-brand-surface-2 p-5 md:col-span-2">
-              <h2 className="font-semibold text-brand-ink">Current template</h2>
-              <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
-                <div><dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Format</dt><dd className="mt-1 text-brand-ink">{template.format || 'markdown'}</dd></div>
-                <div><dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Status</dt><dd className="mt-1 text-brand-ink">{lifecycleLabel}</dd></div>
-                <div><dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Source</dt><dd className="mt-1 break-words text-brand-ink">{template.source_filename || 'No retained source filename'}</dd></div>
-                <div><dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Fields</dt><dd className="mt-1 text-brand-ink">{template.variable_schema?.fields?.filter((field) => field.included !== false).length || 0}</dd></div>
-              </dl>
+          <section className="mt-4 space-y-3" aria-label="Template workspace summary">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-brand-line bg-brand-surface-2 px-4 py-2 text-xs text-brand-muted">
+              <h2 className="sr-only">Current template</h2>
+              <span className="font-semibold text-brand-ink">{lifecycleLabel}</span>
+              <span className="break-all">{template.source_filename || template.format || 'Document'}</span>
+              <span>{template.variable_schema?.fields?.filter((field) => field.included !== false).length || 0} fields</span>
             </div>
-            <aside className="rounded-xl border border-brand-line bg-brand-surface-2 p-5">
-              <h2 className="font-semibold text-brand-ink">Field placement</h2>
-              <p className="mt-2 text-sm leading-6 text-brand-muted">{template.format === 'docx' ? 'Select text to create a field, or select paragraph ranges for conditional and repeating regions.' : 'Drag a field onto the page to set where its value is written. Positions are stored and reused every time it generates.'}</p>
-            </aside>
             {sourceMissing && (
               <div role="alert" className="flex gap-3 rounded-xl border border-brand-amber/40 bg-brand-amber/10 p-4 md:col-span-3">
                 <AlertTriangle className="mt-0.5 shrink-0 text-brand-amber" size={18} aria-hidden="true" />

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import TemplateFactReview from './TemplateFactReview'
 import { getMatterDocuments, proposeTemplateFact, acceptTemplateFact } from '../../api'
@@ -42,4 +42,21 @@ it('does not expose review for manually entered or client-only fields', () => {
   const { container } = render(<TemplateFactReview matterId="matter" fields={[{ name: 'x', binding: 'manual' }]} />)
   expect(container).toBeEmptyDOMElement()
   expect(getMatterDocuments).not.toHaveBeenCalled()
+})
+
+it('discards a pending source proposal when the selected matter changes', async () => {
+  let complete
+  proposeTemplateFact.mockImplementation(() => new Promise(resolve => { complete = resolve }))
+  const view = render(<TemplateFactReview matterId="first-matter" fields={fields} />)
+  fireEvent.click(screen.getByText('Review a detail from a matter document'))
+  await screen.findByText('Intake.docx')
+  fireEvent.change(screen.getByLabelText('Fact source document'), { target: { value: 'source' } })
+  fireEvent.change(screen.getByLabelText('Fact to review'), { target: { value: 'field-id' } })
+  fireEvent.click(screen.getByText('Read source for review'))
+  view.rerender(<TemplateFactReview matterId="second-matter" fields={fields} />)
+  await act(async () => { complete({ status: 'suggested', source_filename: 'Old client source.docx', candidates: [{ value: 'Private old value', line: 1 }] }); await Promise.resolve() })
+  expect(screen.queryByText('Old client source.docx')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Reviewed fact value')).not.toBeInTheDocument()
+  expect(screen.getByLabelText('Fact to review').value).toBe('')
+  expect(acceptTemplateFact).not.toHaveBeenCalled()
 })

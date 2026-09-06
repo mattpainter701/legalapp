@@ -19,13 +19,16 @@ export default function TemplateFactReview({ matterId, fields, onAccepted }) {
     setProposal(null)
     setDocuments([])
     setDocumentId('')
+    setFieldId('')
+    setValue('')
+    setMessage('')
     if (matterId && eligible.length) getMatterDocuments(matterId).then(result => {
       if (current) setDocuments((result.items || result.documents || result || []).filter(doc => /\.(pdf|docx|txt)$/i.test(doc.filename)))
     }).catch(() => { if (current) setMessage('Matter source documents could not be loaded.') })
-    return () => { current = false }
+    return () => { current = false; requestVersion.current += 1 }
   }, [matterId, eligible.length])
   if (!matterId || !eligible.length) return null
-  const reset = () => { setProposal(null); setReplace(false); setMessage('') }
+  const reset = () => { setProposal(null); setValue(''); setReplace(false); setMessage('') }
   const readProposal = async () => {
     const version = ++requestVersion.current
     setBusy(true); reset()
