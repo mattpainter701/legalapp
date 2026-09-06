@@ -651,6 +651,16 @@ jobs:
           RLS_TEST_DATABASE_URL: postgresql+asyncpg://clarity_app:clarity-ci-runtime-password@localhost:5432/legalapp_studio_fact_review_test
         run: pytest tests/test_template_fact_review_postgres.py -v --tb=short --maxfail=1
 
+      - name: Verify durable workflow planning and recovery
+        if: matrix.shard == 1
+        working-directory: backend
+        run: >-
+          pytest tests/test_durable_workflow_automations.py
+          tests/test_workflow_automation_dispatch.py
+          tests/test_workflow_automation_edges.py
+          tests/test_durable_workflow_planning_unit.py
+          -v --tb=short --maxfail=0
+
       - name: Run tests
         working-directory: backend
         env:

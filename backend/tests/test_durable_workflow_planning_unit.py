@@ -104,6 +104,15 @@ async def test_planning_uses_original_date_and_infrastructure_rejections_retry(
     original = outbox.planning._plan_for_rule
     monkeypatch.setattr(outbox.planning, "_plan_for_rule", plan)
     assert (await outbox.run_planning_job(db, job))["outcome"] == "planned"
+    # Matter has an eager nullable partner-attorney join. The emitted Postgres
+    # lock must target matters, never the nullable joined user relation.
+    from sqlalchemy.dialects import postgresql
+
+    matter_sql = str(
+        db.scalar.call_args_list[1].args[0].compile(dialect=postgresql.dialect())
+    )
+    assert "LEFT OUTER JOIN users" in matter_sql
+    assert matter_sql.endswith("FOR UPDATE OF matters")
     assert plan.call_args.kwargs["as_of"] == date(2026, 9, 6)
     assert plan.call_args.kwargs["actor_user_id"] == actor.id
     monkeypatch.setattr(outbox.planning, "dedupe_key", lambda *a, **k: "key")

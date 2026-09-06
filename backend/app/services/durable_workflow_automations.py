@@ -96,7 +96,7 @@ async def run_planning_job(db: AsyncSession, job: DurableJob) -> dict:
             MatterWorkflowAutomationRule.id == uuid.UUID(p["rule_id"]),
             MatterWorkflowAutomationRule.tenant_id == job.tenant_id,
         )
-        .with_for_update()
+        .with_for_update(of=MatterWorkflowAutomationRule)
     )
     matter = await db.scalar(
         select(Matter)
@@ -104,7 +104,9 @@ async def run_planning_job(db: AsyncSession, job: DurableJob) -> dict:
             Matter.id == uuid.UUID(p["matter_id"]),
             Matter.tenant_id == job.tenant_id,
         )
-        .with_for_update()
+        # Matter eagerly joins its optional partner attorney. PostgreSQL cannot
+        # lock the nullable side of that join; only the source matter is ours.
+        .with_for_update(of=Matter)
     )
     if rule is None or matter is None:
         return {"outcome": "blocked", "failure_code": "source_unavailable"}
@@ -118,7 +120,7 @@ async def run_planning_job(db: AsyncSession, job: DurableJob) -> dict:
             User.id == actor_id,
             User.tenant_id == job.tenant_id,
         )
-        .with_for_update(read=True)
+        .with_for_update(of=User, read=True)
     )
     reason = None
     if actor is None:
