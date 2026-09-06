@@ -80,7 +80,7 @@ async def context(
         Matter.tenant_id == user.tenant_id, Matter.id == matter_id
     )
     if lock:
-        matter_query = matter_query.with_for_update()
+        matter_query = matter_query.with_for_update(of=Matter)
     matter = await db.scalar(matter_query.execution_options(populate_existing=True))
     document_query = select(MatterDocument).where(
         MatterDocument.tenant_id == user.tenant_id,
@@ -88,7 +88,7 @@ async def context(
         MatterDocument.id == document_id,
     )
     if lock:
-        document_query = document_query.with_for_update()
+        document_query = document_query.with_for_update(of=MatterDocument)
     document = await db.scalar(document_query.execution_options(populate_existing=True))
     field_query = select(CustomFieldDefinition).where(
         CustomFieldDefinition.tenant_id == user.tenant_id,
@@ -101,7 +101,7 @@ async def context(
         ),
     )
     if lock:
-        field_query = field_query.with_for_update()
+        field_query = field_query.with_for_update(of=CustomFieldDefinition)
     field = await db.scalar(field_query.execution_options(populate_existing=True))
     if matter is None or document is None or field is None:
         raise HTTPException(
@@ -167,7 +167,7 @@ async def context(
         MatterCustomFieldValue.field_definition_id == field_id,
     )
     if lock:
-        value_query = value_query.with_for_update()
+        value_query = value_query.with_for_update(of=MatterCustomFieldValue)
     value = await db.scalar(value_query.execution_options(populate_existing=True))
     contract = {
         "tenant": str(user.tenant_id),

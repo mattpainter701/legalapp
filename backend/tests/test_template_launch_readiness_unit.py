@@ -286,6 +286,18 @@ async def test_context_scopes_every_query_and_rechecks_bytes(monkeypatch):
     for call in db.scalar.call_args_list:
         assert user.tenant_id in call.args[0].compile().params.values()
         assert "FOR UPDATE" in str(call.args[0])
+    from sqlalchemy.dialects import postgresql
+
+    expected_tables = [
+        "matters",
+        "matter_documents",
+        "custom_field_definitions",
+        "matter_custom_field_values",
+    ]
+    for call, table in zip(db.scalar.call_args_list, expected_tables):
+        assert f"FOR UPDATE OF {table}" in str(
+            call.args[0].compile(dialect=postgresql.dialect())
+        )
     store.read_matter_file_bytes.assert_not_called()
 
 
