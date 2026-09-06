@@ -620,7 +620,9 @@ async def health_readiness(request: Request):
                     await session.execute(
                         text(
                             "SELECT id FROM tenants "
-                            "WHERE is_active AND billing_tier <> 'demo' ORDER BY id"
+                            "WHERE is_active "
+                            "AND billing_tier NOT IN ('demo', 'fixture') "
+                            "ORDER BY id"
                         )
                     )
                 ).scalars()

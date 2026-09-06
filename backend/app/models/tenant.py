@@ -17,6 +17,14 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from app.database import Base
 
+# Synthetic tenants never own customer work: the demo tour tier and the
+# fixture tier seeded by scripts/seed_demo_fixture.py. Scheduler population
+# and every gate that asks "did the scheduler run for this tenant?" must use
+# this one boundary. When they drift, a deployment that deliberately runs no
+# scheduler -- dev1 -- is marked permanently unready for a tenant that was
+# never going to have a heartbeat.
+SYNTHETIC_BILLING_TIERS = ("demo", "fixture")
+
 
 class Tenant(Base):
     __tablename__ = "tenants"

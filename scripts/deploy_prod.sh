@@ -320,7 +320,7 @@ for _ in $(seq 1 60); do
   release_heartbeat_counts="$(
     "${compose[@]}" exec -T postgres \
       psql -U "$postgres_user" -d "$postgres_db" -Atq -v ON_ERROR_STOP=1 \
-        -c "SELECT (SELECT count(*) FROM tenants WHERE is_active AND billing_tier <> 'demo')::text || ':' || (SELECT count(*) FROM tenants t WHERE t.is_active AND t.billing_tier <> 'demo' AND EXISTS (SELECT 1 FROM scheduler_logs s WHERE s.tenant_id=t.id AND s.agent_name='scheduler-heartbeat' AND s.status='completed' AND s.run_at >= to_timestamp(${scheduler_release_not_before})))::text" \
+        -c "SELECT (SELECT count(*) FROM tenants WHERE is_active AND billing_tier NOT IN ('demo', 'fixture'))::text || ':' || (SELECT count(*) FROM tenants t WHERE t.is_active AND t.billing_tier NOT IN ('demo', 'fixture') AND EXISTS (SELECT 1 FROM scheduler_logs s WHERE s.tenant_id=t.id AND s.agent_name='scheduler-heartbeat' AND s.status='completed' AND s.run_at >= to_timestamp(${scheduler_release_not_before})))::text" \
         2>/dev/null || true
   )"
   if [[ "$release_heartbeat_counts" =~ ^[0-9]+:[0-9]+$ ]]; then
