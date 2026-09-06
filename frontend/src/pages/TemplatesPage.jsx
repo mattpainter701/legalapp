@@ -9,11 +9,13 @@ import {
   getTemplate,
   getTemplateSource,
   getTemplates,
+  getTemplateQueues,
   analyzeTemplateUpload,
   proposeTemplateFieldsWithAi,
   createTemplate,
   createTemplateFromUpload,
   updateTemplate,
+  publishTemplate,
   deleteTemplate,
   renderTemplate,
   renderTemplateFile,
@@ -1173,6 +1175,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const [filePreviewUrl, setFilePreviewUrl] = useState('')
   const [previewId, setPreviewId] = useState('')
   const [previewPurpose, setPreviewPurpose] = useState('')
+  const [convertDocxToPdf, setConvertDocxToPdf] = useState(false)
   const [rendering, setRendering] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -1192,6 +1195,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const isPdfTemplate = String(template?.format || '').toLowerCase() === 'pdf'
   const isDocxTemplate = String(template?.format || '').toLowerCase() === 'docx' && Boolean(template?.source_sha256)
   const isFileTemplate = isPdfTemplate || isDocxTemplate
+  const isPdfOutput = isPdfTemplate || (isDocxTemplate && convertDocxToPdf)
   const canSaveToMatter = Boolean(template?.is_active)
   const fillableNames = useMemo(
     () => names.filter((name) => fieldDefinitions[name]?.field_type !== 'signature'),
@@ -1336,30 +1340,27 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   }
 
   const handleRender = async (requestedPdfPurpose = null) => {
-    const pdfPurpose = isPdfTemplate
-      ? (requestedPdfPurpose || (canSaveToMatter ? 'generation' : 'draft'))
-      : null
-    if (isPdfTemplate && canSaveToMatter && !matterId.trim()) {
+    const previewPurpose = requestedPdfPurpose || (canSaveToMatter ? 'generation' : 'draft')
+    if (isPdfOutput && canSaveToMatter && !matterId.trim()) {
       setError('Choose the destination matter before previewing the exact PDF values for save.')
       return
     }
-    if (pdfPurpose === 'activation' && activationUnresolvedNames.length > 0) {
+    if (isPdfTemplate && previewPurpose === 'activation' && activationUnresolvedNames.length > 0) {
       setError(`Enter representative values for every non-signature PDF field before the activation preview. Missing: ${activationUnresolvedNames.join(', ')}.`)
       return
     }
     const requestGeneration = previewRequestGenerationRef.current + 1
     previewRequestGenerationRef.current = requestGeneration
     const requestVariables = { ...variables }
-    const requestMatterId = isPdfTemplate && canSaveToMatter ? matterId.trim() : null
+    const requestMatterId = isPdfOutput && canSaveToMatter ? matterId.trim() : null
     setRendering(true)
     setError(null)
     try {
       const payload = {
         variables: requestVariables,
         matter_id: requestMatterId,
-        ...(isPdfTemplate
-          ? { preview_purpose: pdfPurpose }
-          : {}),
+        preview_purpose: previewPurpose,
+        ...(isDocxTemplate ? { convert_to_pdf: convertDocxToPdf } : {}),
       }
       if (isFileTemplate) {
         const result = await renderTemplateFile(template.id, payload)
@@ -1368,11 +1369,11 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           URL.revokeObjectURL(nextUrl)
           return
         }
-        if (isPdfTemplate && !result.previewId) {
+        if (isPdfOutput && !result.previewId) {
           URL.revokeObjectURL(nextUrl)
           throw new Error('The server did not return PDF preview evidence. Preview again before saving or activating.')
         }
-        if (isPdfTemplate && result.previewPurpose !== pdfPurpose) {
+        if (isPdfOutput && result.previewPurpose !== previewPurpose) {
           URL.revokeObjectURL(nextUrl)
           throw new Error('The server returned preview evidence for a different review purpose. Preview again.')
         }
@@ -1381,7 +1382,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         setPreviewId(result.previewId)
         setPreviewPurpose(result.previewPurpose)
         setOutputFilename(result.filename)
-        setOutputFormat(isPdfTemplate ? 'pdf' : 'docx')
+        setOutputFormat(isPdfOutput ? 'pdf' : 'docx')
         setRendered(null)
       } else {
         const res = await renderTemplate(template.id, payload)
@@ -1413,7 +1414,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       setError(`Complete ${requiredUnresolvedNames.length} required field${requiredUnresolvedNames.length === 1 ? '' : 's'} before saving.`)
       return
     }
-    if (isPdfTemplate && !previewId) {
+    if (isPdfOutput && !previewId) {
       setError('Preview the exact current PDF values for this matter before saving.')
       return
     }
@@ -1437,17 +1438,18 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       const res = await renderTemplate(template.id, {
         variables: saveVariables,
         matter_id: saveMatterId,
-        ...(isPdfTemplate ? { preview_id: savePreviewId } : {}),
+        ...(isDocxTemplate ? { convert_to_pdf: convertDocxToPdf } : {}),
+        ...(isPdfOutput ? { preview_id: savePreviewId } : {}),
       })
       if (formRevisionRef.current !== saveRevision) {
         setError('The form changed while the save was in flight, so this response was not marked Saved. Review the matter document before continuing.')
         return
       }
       setError(null)
-      if (!isPdfTemplate) setRendered(res.rendered || rendered)
+      if (!isPdfOutput) setRendered(res.rendered || rendered)
       setSavedDownloadUrl(res.download_url || '')
       setOutputFilename(res.output_filename || res.filename || outputFilename || '')
-      setOutputFormat(res.output_format || res.format || (isPdfTemplate ? 'pdf' : 'markdown'))
+      setOutputFormat(res.output_format || res.format || (isPdfOutput ? 'pdf' : 'markdown'))
       setStorageBackend(res.storage_backend || '')
       setStorageWarning(res.storage_warning || '')
       if (res.matter_document_id) {
@@ -1472,7 +1474,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   }
 
   return (
-    <Modal title={`${canSaveToMatter ? (isPdfTemplate ? 'Generate PDF' : isDocxTemplate ? 'Generate Word Document' : 'Generate Document') : 'Preview Draft'}: ${template.title}`} onClose={handleClose}>
+    <Modal title={`${canSaveToMatter ? (isPdfOutput ? 'Generate PDF' : isDocxTemplate ? 'Generate Word Document' : 'Generate Document') : 'Preview Draft'}: ${template.title}`} onClose={handleClose}>
       <div className="space-y-4">
         {error && (
           <div className="text-sm text-brand-rose bg-brand-rose/10 border border-brand-rose/30 px-3 py-2">
@@ -1493,6 +1495,26 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           loading={matterLoading}
           disabled={saving}
         />
+
+        {isDocxTemplate && (
+          <fieldset className="rounded border border-brand-line bg-brand-bg px-3 py-3">
+            <legend className="px-1 text-sm font-medium text-brand-ink">Output format</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className={`cursor-pointer rounded border px-3 py-2 ${convertDocxToPdf ? 'border-brand-accent bg-brand-accent/5' : 'border-brand-line bg-brand-surface'}`}>
+                <span className="flex items-start gap-2">
+                  <input type="radio" name="template-output-format" checked={convertDocxToPdf} onChange={() => { setConvertDocxToPdf(true); setSaved(false); invalidatePreview() }} disabled={saving} className="mt-1" />
+                  <span><span className="block text-sm font-semibold text-brand-ink">PDF for signature</span><span className="block text-xs text-brand-muted">Preserves the Word layout in a review-bound PDF ready for the e-signing workflow.</span></span>
+                </span>
+              </label>
+              <label className={`cursor-pointer rounded border px-3 py-2 ${!convertDocxToPdf ? 'border-brand-accent bg-brand-accent/5' : 'border-brand-line bg-brand-surface'}`}>
+                <span className="flex items-start gap-2">
+                  <input type="radio" name="template-output-format" checked={!convertDocxToPdf} onChange={() => { setConvertDocxToPdf(false); setSaved(false); invalidatePreview() }} disabled={saving} className="mt-1" />
+                  <span><span className="block text-sm font-semibold text-brand-ink">Editable Word document</span><span className="block text-xs text-brand-muted">Keep DOCX output when another editing pass is still required.</span></span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+        )}
 
         <div>
           <label htmlFor="templatespage-matter-uuid-fallback" className="block text-xs font-medium text-brand-muted mb-0.5">
@@ -1649,7 +1671,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         )}
 
         <div className="flex flex-col sm:flex-row gap-3">
-          {isPdfTemplate && !canSaveToMatter ? (
+          {!canSaveToMatter ? (
             <>
               <button
                 onClick={() => handleRender('draft')}
@@ -1665,7 +1687,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                 className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
               >
                 <Check size={16} />
-                {rendering ? 'Recording...' : 'Record activation preview'}
+                {rendering ? 'Testing...' : 'Test this draft'}
               </button>
             </>
           ) : (
@@ -1680,10 +1702,10 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           )}
           <button
             onClick={handleSave}
-            disabled={saving || smartFillState === 'loading' || saved || !matterId.trim() || !canSaveToMatter || (isPdfTemplate && !previewId) || (isDocxTemplate && !filePreview)}
+            disabled={saving || smartFillState === 'loading' || saved || !matterId.trim() || !canSaveToMatter || (isPdfOutput && !previewId) || (isDocxTemplate && !filePreview)}
             title={!canSaveToMatter
               ? 'Activate this verified template before saving to a matter'
-              : (isPdfTemplate && !previewId)
+              : (isPdfOutput && !previewId)
                 ? 'Preview the exact current PDF values before saving'
                 : (isDocxTemplate && !filePreview)
                   ? 'Download and review the current Word preview before saving'
@@ -1723,14 +1745,14 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           <div>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h3 className="text-sm font-medium text-brand-ink">{isPdfTemplate ? 'PDF Preview' : 'Generated Word Preview'}</h3>
+                <h3 className="text-sm font-medium text-brand-ink">{isPdfOutput ? 'PDF Preview' : 'Generated Word Preview'}</h3>
                 <p className="text-xs text-brand-muted">{filePreview.filename}</p>
               </div>
               <button type="button" onClick={() => triggerBlobDownload(filePreview.blob, filePreview.filename)} className="inline-flex items-center gap-1.5 rounded border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-surface-2">
                 <Download size={14} /> Download preview
               </button>
             </div>
-            {isPdfTemplate ? (
+            {isPdfOutput ? (
               <>
                 <object title={`Preview of ${template.title}`} data={filePreviewUrl} type="application/pdf" className="h-[65vh] min-h-[480px] w-full rounded border border-brand-line bg-white">
                   <p className="p-4 text-sm text-brand-muted">This browser cannot display the PDF inline. Use Download preview instead.</p>
@@ -1779,6 +1801,7 @@ export default function TemplatesPage() {
   const [templates, setTemplates] = useState([])
   const [matters, setMatters] = useState([])
   const [generationTemplates, setGenerationTemplates] = useState([])
+  const [studioQueues, setStudioQueues] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [generationLoading, setGenerationLoading] = useState(false)
@@ -1847,6 +1870,11 @@ export default function TemplatesPage() {
         hasMore: res.has_more ?? false,
         summary: { ...fallbackSummary, ...(res.summary || {}) },
       })
+      try {
+        setStudioQueues(await getTemplateQueues())
+      } catch {
+        setStudioQueues(null)
+      }
     } catch (err) {
       if (requestId !== requestIdRef.current) return
       setError(getErrorMessage(err, 'Failed to load templates.'))
@@ -2013,6 +2041,28 @@ export default function TemplatesPage() {
     await load()
   }, [load])
 
+  const handlePublishWorkspace = useCallback(async () => {
+    try {
+      const published = await publishTemplate(canonicalWorkspaceTemplateId)
+      setWorkspaceTemplate(published)
+      setRouteStatus(`Version ${published.published_version_no} is published and ready to generate.`)
+      await load()
+    } catch (err) {
+      setRouteStatus(getErrorMessage(err, 'The tested version could not be published.'))
+    }
+  }, [canonicalWorkspaceTemplateId, load])
+
+  const closeWorkspacePreview = useCallback(async () => {
+    setRenderTarget(null)
+    try {
+      const refreshed = await getTemplate(canonicalWorkspaceTemplateId)
+      setWorkspaceTemplate(refreshed)
+      await load()
+    } catch {
+      // The existing workspace error handling remains authoritative on reload.
+    }
+  }, [canonicalWorkspaceTemplateId, load])
+
   useEffect(() => {
     const handleOpenStudio = (event) => {
       const target = buildOpenStudioTarget(event?.detail)
@@ -2066,10 +2116,14 @@ export default function TemplatesPage() {
 
   const toggleActive = async (tpl) => {
     try {
-      await updateTemplate(tpl.id, { is_active: !tpl.is_active })
+      if (tpl.is_active) {
+        await updateTemplate(tpl.id, { is_active: false })
+      } else {
+        await publishTemplate(tpl.id)
+      }
       await load()
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to toggle template status.'))
+      setError(getErrorMessage(err, 'Failed to change the template publication status.'))
     }
   }
 
@@ -2192,9 +2246,15 @@ export default function TemplatesPage() {
               const sourceMissing = isSourceBackedTemplateMissing(tpl)
               const status = sourceMissing
                 ? { label: 'Needs source', className: 'bg-brand-amber/10 text-brand-amber' }
-                : tpl.is_active
-                  ? { label: 'Ready', className: 'bg-brand-green/10 text-brand-green' }
-                  : { label: 'Draft', className: 'bg-brand-muted/10 text-brand-muted' }
+                : tpl.is_active && tpl.status === 'published'
+                  ? { label: `Published v${tpl.published_version_no}`, className: 'bg-brand-green/10 text-brand-green' }
+                  : tpl.status === 'ready_to_publish'
+                    ? { label: 'Tested · awaiting publish', className: 'bg-brand-accent/10 text-brand-accent-2' }
+                    : tpl.status === 'test_failed'
+                      ? { label: 'Test failed', className: 'bg-brand-rose/10 text-brand-rose' }
+                    : tpl.status === 'paused'
+                      ? { label: 'Paused', className: 'bg-brand-muted/10 text-brand-muted' }
+                      : { label: 'Draft', className: 'bg-brand-muted/10 text-brand-muted' }
               return (
                 <article
                   key={tpl.id}
@@ -2285,13 +2345,13 @@ export default function TemplatesPage() {
                     </div>
 
                     <div className="mt-3 flex items-center justify-between border-t border-brand-line/70 pt-3">
-                      <span className="text-xs text-brand-muted">{tpl.is_active ? 'Available to your team' : 'Not available for generation'}</span>
+                      <span className="text-xs text-brand-muted">{tpl.is_active ? `Published version ${tpl.published_version_no}` : tpl.status === 'ready_to_publish' ? 'Test passed · ready to publish' : 'Test before publishing'}</span>
                       <button
                         onClick={() => toggleActive(tpl)}
-                        disabled={sourceMissing}
-                        title={sourceMissing ? 'Recreate the source document before activating' : undefined}
+                        disabled={sourceMissing || (!tpl.is_active && !(tpl.current_version_no > 0 && tpl.tested_version_no === tpl.current_version_no))}
+                        title={sourceMissing ? 'Recreate the source document before publishing' : (!tpl.is_active && tpl.tested_version_no !== tpl.current_version_no) ? 'Test this exact draft in Studio before publishing' : undefined}
                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${tpl.is_active ? 'bg-brand-green' : 'bg-brand-muted/30'}`}
-                        aria-label={tpl.is_active ? 'Deactivate template' : 'Activate template'}
+                        aria-label={tpl.is_active ? 'Pause published template' : 'Publish tested template'}
                       >
                         <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${tpl.is_active ? 'translate-x-6' : 'translate-x-1'}`} />
                       </button>
@@ -2432,6 +2492,7 @@ export default function TemplatesPage() {
           statusMessage={routeStatus}
           onEdit={() => setEditTemplate(workspaceTemplate)}
           onGenerate={() => setRenderTarget(workspaceTemplate)}
+          onPublish={handlePublishWorkspace}
           source={workspaceSource}
           sourceLoading={workspaceSourceLoading}
           sourceError={workspaceSourceError}
@@ -2444,7 +2505,7 @@ export default function TemplatesPage() {
           </Modal>
         )}
         {renderTarget && (
-          <RenderModal template={renderTarget} matters={matters} matterLoading={matterLoading} onClose={() => setRenderTarget(null)} />
+          <RenderModal template={renderTarget} matters={matters} matterLoading={matterLoading} onClose={closeWorkspacePreview} />
         )}
       </>
     )
@@ -2530,7 +2591,7 @@ export default function TemplatesPage() {
       </div>
 
       {routeStatus && <div role="status" className="mt-5 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">{routeStatus}</div>}
-      <TemplateStudioHome templates={templates} summary={libraryMeta.summary} />
+      <TemplateStudioHome templates={templates} summary={libraryMeta.summary} queues={studioQueues} />
 
       <div className="my-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div role="tablist" aria-label="Template Studio views" className="inline-flex w-fit rounded-xl border border-brand-line bg-brand-surface-2 p-1 shadow-sm">

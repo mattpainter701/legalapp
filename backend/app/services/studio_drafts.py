@@ -37,6 +37,7 @@ from app.schemas.studio_draft import (
 from app.services.automation_capabilities import CapabilityError
 from app.services.docx_templates import TemplateDocxError, validate_docx_package
 from app.services.document_template_workspace import verified_template_source
+from app.services.document_template_versions import record_version
 from app.services.pdf_templates import TemplatePdfError, pdf_page_metadata
 from app.services.template_intake import _docx_has_tracked_changes
 
@@ -1762,8 +1763,23 @@ class StudioDraftService:
         template.variable_schema = _bounded_redacted(
             self.variable_schema(fields, placements)
         )
-        template.status = request.status
+        # Promotion updates the authoring draft; it never silently changes the
+        # version used by generation. The resulting state receives its own
+        # immutable version and must pass the ordinary test/publish gate.
+        template.status = "draft"
+        template.is_active = False
+        template.tested_version_no = None
+        template.last_test_rendered_at = None
+        template.approved_at = None
+        template.approved_by_user_id = None
         template.updated_at = datetime.now(timezone.utc)
+        await record_version(
+            self.db,
+            template=template,
+            tenant_id=self.tenant_id,
+            user_id=self.actor_user_id,
+            change_summary="Updated from Template Studio draft",
+        )
         draft.published_base_sha256 = _published_template_base(template)
         base = draft.revision
         draft.revision += 1
@@ -1778,7 +1794,7 @@ class StudioDraftService:
             base,
             {
                 "template_id": str(template.id),
-                "published_status": request.status,
+                "published_status": "draft",
             },
         )
         await self.db.flush()

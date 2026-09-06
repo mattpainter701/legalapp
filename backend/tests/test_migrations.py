@@ -12,7 +12,46 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["156_document_template_versions"]
+    assert heads == ["157_template_pub_lifecycle"]
+
+
+def test_alembic_revision_ids_fit_the_version_table_column():
+    """Alembic stores the head in alembic_version.version_num, a varchar(32).
+
+    A longer revision id passes every offline graph check and only fails once a
+    migration actually runs against PostgreSQL, so guard the width here.
+    """
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_dir / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_dir / "migrations"))
+    script = ScriptDirectory.from_config(config)
+
+    too_long = {
+        revision.revision: len(revision.revision)
+        for revision in script.walk_revisions()
+        if len(revision.revision) > 32
+    }
+
+    assert too_long == {}
+
+
+def test_template_publication_migration_repairs_exact_version_identity():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir
+        / "migrations"
+        / "versions"
+        / "157_template_publication_lifecycle.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'down_revision = "156_document_template_versions"' in source
+    assert "tested_version_no" in source
+    assert "published_version_no" in source
+    assert "Lifecycle migration: exact live snapshot" in source
+    assert "current_version_no = current_version_no + 1" in source
+    assert "NO FORCE ROW LEVEL SECURITY" in source
+    assert "FORCE ROW LEVEL SECURITY" in source
 
 
 def test_configurable_workflow_migration_is_tenant_safe_and_immutable():
@@ -612,10 +651,7 @@ def test_studio_model_and_migration_table_column_parity():
 def test_workflow_automation_migration_is_tenant_safe_and_approval_gated():
     backend_dir = Path(__file__).resolve().parents[1]
     source = (
-        backend_dir
-        / "migrations"
-        / "versions"
-        / "155_matter_workflow_automations.py"
+        backend_dir / "migrations" / "versions" / "155_matter_workflow_automations.py"
     ).read_text(encoding="utf-8")
 
     assert 'revision = "155_matter_workflow_automations"' in source
@@ -664,7 +700,9 @@ def test_workflow_automation_migration_is_tenant_safe_and_approval_gated():
     downgrade = source.split("def downgrade()", 1)[1]
     assert "DROP TABLE IF EXISTS matter_workflow_automation_events" in downgrade
     assert "DROP TABLE IF EXISTS matter_workflow_automation_rules" in downgrade
-    assert "DROP FUNCTION IF EXISTS prevent_workflow_automation_rule_tamper" in downgrade
+    assert (
+        "DROP FUNCTION IF EXISTS prevent_workflow_automation_rule_tamper" in downgrade
+    )
     # The shared COMP-09 helpers belong to migration 148 and must survive.
     assert "DROP FUNCTION IF EXISTS prevent_config_workflow_immutable" not in downgrade
     assert "config_workflow_demo_purge_authorized()" not in downgrade
@@ -678,10 +716,7 @@ def test_workflow_automation_model_and_migration_column_parity():
 
     backend_dir = Path(__file__).resolve().parents[1]
     source = (
-        backend_dir
-        / "migrations"
-        / "versions"
-        / "155_matter_workflow_automations.py"
+        backend_dir / "migrations" / "versions" / "155_matter_workflow_automations.py"
     ).read_text(encoding="utf-8")
     for model in (MatterWorkflowAutomationRule, MatterWorkflowAutomationEvent):
         assert model.__tablename__ in source

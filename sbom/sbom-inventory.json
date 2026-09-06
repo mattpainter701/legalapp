@@ -188,14 +188,14 @@
     },
     {
       "image": "base",
-      "line": 17,
+      "line": 19,
       "pinned_by_digest": false,
       "source": "backend/Dockerfile",
       "stage_reference": true
     },
     {
       "image": "base",
-      "line": 23,
+      "line": 25,
       "pinned_by_digest": false,
       "source": "backend/Dockerfile",
       "stage_reference": true

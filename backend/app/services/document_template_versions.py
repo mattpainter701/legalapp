@@ -1,9 +1,8 @@
 """Recording and reading immutable document-template versions.
 
-A template is edited in place so generation always has exactly one current
-definition. This module captures the state a template had *before* each edit,
-so the firm keeps a defensible history of what its documents were produced
-from — and can put an earlier wording back without retyping it.
+Every version number names the exact state stored in its immutable row.  The
+mutable template row is an authoring convenience; ``current_version_no`` is
+only advanced after that resulting state has been snapshotted here.
 """
 
 from __future__ import annotations
@@ -54,9 +53,8 @@ async def record_version(
 ) -> DocumentTemplateVersion:
     """Append the template's current state as the next version.
 
-    Call this *before* applying an edit: the row captures what the template
-    said up to this point, which is the state any document generated so far
-    was produced from.
+    Call this *after* applying an edit (but before committing): the immutable
+    row and ``current_version_no`` then identify the same exact state.
 
     The next number is read from the stored counter rather than counted, so
     concurrent edits under the row lock the caller already holds cannot mint

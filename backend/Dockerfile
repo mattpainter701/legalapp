@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     fonts-nanum \
+    fonts-liberation \
+    libreoffice-writer \
     wget \
     && rm -rf /var/lib/apt/lists/*
 

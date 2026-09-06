@@ -2073,6 +2073,9 @@ export const deleteScheduledEvent = (id) =>
 export const getTemplates = (params = {}) =>
   api.get('/templates', { params }).then(r => r.data)
 
+export const getTemplateQueues = () =>
+  api.get('/templates/queues').then(r => r.data)
+
 export const createTemplate = (data) =>
   api.post('/templates', data).then(r => r.data)
 
@@ -2108,6 +2111,9 @@ export const getTemplate = (id) =>
 
 export const updateTemplate = (id, data) =>
   api.patch(`/templates/${id}`, data).then(r => r.data)
+
+export const publishTemplate = (id, data = {}) =>
+  api.post(`/templates/${id}/publish`, data).then(r => r.data)
 
 // The retained source bytes for a saved template, so Template Studio can reopen
 // the original document in the visual editor. Returned as a File because pdf.js

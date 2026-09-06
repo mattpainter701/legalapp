@@ -34,7 +34,6 @@ class DocumentTemplateUpdate(BaseModel):
     description: Optional[str] = None
     visibility: Optional[str] = None
     layer: Optional[str] = None
-    status: Optional[str] = None
     format: Optional[str] = None
     module: Optional[str] = None
     stage: Optional[str] = None
@@ -72,6 +71,8 @@ class DocumentTemplateVersionDetail(DocumentTemplateVersionSummary):
 class DocumentTemplateVersionListResponse(BaseModel):
     template_id: str
     current_version_no: int
+    tested_version_no: Optional[int] = None
+    published_version_no: Optional[int] = None
     total: int
     versions: list[DocumentTemplateVersionSummary]
 
@@ -103,6 +104,8 @@ class DocumentTemplateResponse(BaseModel):
     approved_by_user_id: Optional[str] = None
     is_active: bool
     current_version_no: int = 0
+    tested_version_no: Optional[int] = None
+    published_version_no: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
@@ -132,6 +135,18 @@ class DocumentTemplateListResponse(BaseModel):
     summary: DocumentTemplateLibrarySummary
 
 
+class DocumentTemplateQueue(BaseModel):
+    total: int
+    items: list[DocumentTemplateResponse]
+
+
+class DocumentTemplateQueueResponse(BaseModel):
+    needs_attention: DocumentTemplateQueue
+    continue_setup: DocumentTemplateQueue
+    awaiting_publish: DocumentTemplateQueue
+    published: DocumentTemplateQueue
+
+
 class DocumentTemplateRenderRequest(BaseModel):
     variables: dict[str, str] = Field(default_factory=dict, max_length=200)
     matter_id: Optional[str] = None
@@ -144,6 +159,9 @@ class DocumentTemplateRenderRequest(BaseModel):
     # Matter-ready output is non-editable by default. The renderer fails rather
     # than clipping or substituting unsupported glyphs.
     flatten_pdf: bool = True
+    # DOCX templates may produce a review-bound PDF suitable for e-signature.
+    # The retained template source remains DOCX and is never overwritten.
+    convert_to_pdf: bool = False
 
     @field_validator("variables")
     @classmethod
@@ -158,6 +176,10 @@ class DocumentTemplateRenderRequest(BaseModel):
         if total > 250_000:
             raise ValueError("Combined variable values exceed 250,000 characters")
         return value
+
+
+class DocumentTemplatePublishRequest(BaseModel):
+    change_summary: Optional[str] = Field(None, max_length=500)
 
 
 class DocumentTemplateVariableSuggestion(BaseModel):

@@ -1,10 +1,8 @@
 """An immutable record of one published state of a document template.
 
-``DocumentTemplate`` is mutated in place by the edit endpoints, which is what a
-generation flow needs: there is exactly one current template and it renders
-today's documents. A version row is the opposite — it is written once, never
-updated, and exists so a firm can answer "what did this template say when it
-produced that document?" long after the template has moved on.
+``DocumentTemplate`` is the mutable authoring row. A version row is written
+once, never updated, and gives testing, publication, and generation an exact
+content identity even after the authoring draft moves on.
 """
 
 import uuid

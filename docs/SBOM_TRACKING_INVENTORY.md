@@ -149,8 +149,8 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |Image|Source|Line|Pinned by digest|Internal stage reference|
 |-|-|-|-|-|
 |python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3|backend/Dockerfile|1|yes|no|
-|base|backend/Dockerfile|17|no|yes|
-|base|backend/Dockerfile|23|no|yes|
+|base|backend/Dockerfile|19|no|yes|
+|base|backend/Dockerfile|25|no|yes|
 |node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|1|yes|no|
 |node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|28|yes|no|
 |nginx:alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa|nginx/Dockerfile|1|yes|no|
