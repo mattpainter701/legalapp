@@ -113,7 +113,7 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
       setContacts(prev => [...prev, created])
       set('client_contact_id', created.id)
       setShowCreateContact(false)
-      setNewContact({ first_name: '', last_name: '', email: '' })
+      setNewContact({ first_name: '', last_name: '', email: '', phone: '' })
     } catch {
       setContactError('Failed to create contact.')
     } finally {
@@ -164,6 +164,9 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
       }
       onCreated?.(created)
       setSavedMatter(null)
+      setIntakeEnabled(false)
+      setIntakeSetup(defaultIntakeSetup)
+      setAgreement(null)
       setForm({
         matter_name: '', description: '', practice_area: '', matter_type: '',
         client_contact_id: '', attorney_of_record_id: '', partner_attorney_id: '',

@@ -23,10 +23,10 @@ export default function MatterIntakePanel({ matterId, documents = [] }) {
   const input = 'block w-full border border-brand-line rounded-lg p-2 bg-white text-brand-ink'
   const load = useCallback(async () => {
     try { setPacket((await api.get(`/matters/${matterId}/intake`)).data); setError('') }
-    catch (e) { if (e.response?.status !== 404) setError(errorText(e)) }
+    catch (e) { if (e.response?.status === 404) setPacket(null); else setError(errorText(e)) }
     finally { setLoading(false) }
   }, [matterId])
-  useEffect(() => { load(); const timer = setInterval(load, 30000); return () => clearInterval(timer) }, [load])
+  useEffect(() => { setPacket(null); setLoading(true); load(); const timer = setInterval(load, 30000); return () => clearInterval(timer) }, [load])
   async function action(path, body) {
     setBusy(true); setError('')
     try { setPacket((await api.post(`/matters/${matterId}/intake/${path}`, body)).data) }

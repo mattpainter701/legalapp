@@ -91,4 +91,14 @@ it('retries intake without creating a duplicate matter after setup failure', asy
   await user.click(screen.getByRole('button', { name: 'Retry intake packet' }))
   await waitFor(() => expect(onCreated).toHaveBeenCalledOnce())
   expect(createMatterV2).toHaveBeenCalledOnce()
+  expect(screen.getByLabelText('Start client intake with this matter')).not.toBeChecked()
+})
+
+it('clears the previous intake when switching to a matter without a packet', async () => {
+  const { rerender } = render(<MatterIntakePanel matterId="first" />)
+  await screen.findByText('Initial packet sent: Not yet')
+  api.get.mockRejectedValue({ response: { status: 404 } })
+  rerender(<MatterIntakePanel matterId="second" />)
+  await screen.findByRole('button', { name: 'Start intake & send portal invitation' })
+  expect(screen.queryByText('Initial packet sent: Not yet')).not.toBeInTheDocument()
 })
