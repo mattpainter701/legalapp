@@ -707,14 +707,19 @@ async def test_worker_projects_sms_callback_and_delivery_attention(
 
 
 @pytest.mark.asyncio
-async def test_renewal_revokes_old_portal_invite_and_preserves_deadlines(ctx):
+@pytest.mark.parametrize("signature_status", ["sent", "expired"])
+async def test_renewal_revokes_old_portal_invite_and_preserves_deadlines(
+    ctx, signature_status
+):
     c = ctx
+    c.signature.status = signature_status
     c.packet.sent_at = TIME - timedelta(days=8)
     old = c.packet.invite_id
     await r.renew_invitation(c.matter.id, c.db, c.user)
     assert c.invite.revoked and c.packet.invite_id != old
     assert c.packet.sent_at == TIME - timedelta(days=8)
     assert c.packet.delivery["welcome:email"]["state"] == "queued"
+    assert c.signature.status == "sent"
     assert c.signature.expires_at == TIME + timedelta(days=30)
     c.packet.delivery = {"welcome:email": {"state": "sending"}}
     with pytest.raises(HTTPException):

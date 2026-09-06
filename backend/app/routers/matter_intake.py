@@ -241,7 +241,8 @@ async def renew_invitation(
     packet.invite_id = invitation.id
     packet.encrypted_invite = service.encrypt_token(token)
     signature = await db.get(service.SignatureRequest, packet.signature_id)
-    if signature and signature.status == "sent":
+    if signature and signature.status in ("sent", "expired"):
+        signature.status = "sent"
         signature.expires_at = invitation.expires_at
     kind = (
         "meeting"
