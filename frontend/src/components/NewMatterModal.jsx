@@ -450,7 +450,7 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
         </form>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-brand-line bg-brand-bg-soft/30 flex items-center justify-end gap-3">
+        <div style={importMode ? { display: 'none' } : undefined} className="px-6 py-4 border-t border-brand-line bg-brand-bg-soft/30 flex items-center justify-end gap-3">
           <button
             type="button"
             onClick={onClose}

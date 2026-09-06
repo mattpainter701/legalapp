@@ -2,6 +2,7 @@
 
 import io
 import uuid
+from contextlib import asynccontextmanager
 import zipfile
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -245,6 +246,11 @@ async def test_invalid_approval_groups_and_contact(ctx, monkeypatch):
 async def test_ingest_routes_files_and_emails_without_sending(
     ctx, monkeypatch, provider, email
 ):
+    @asynccontextmanager
+    async def storage_session():
+        yield AsyncMock()
+
+    monkeypatch.setattr(r, "async_session_maker", storage_session)
     db, user = ctx
     path, content = ("Smith/mail.eml", EML) if email else ("Smith/case.txt", b"case")
     run = run_for(user, path, content)

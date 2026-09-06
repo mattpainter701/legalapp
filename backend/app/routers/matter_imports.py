@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db, set_tenant_context
+from app.database import async_session_maker, get_db, set_tenant_context
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact
 from app.models.external_import import (
@@ -385,17 +385,20 @@ async def ingest(db, user, run_id, path, content):
                 if email
                 else mimetypes.guess_type(filename)[0] or "application/octet-stream"
             )
-            stored = await MatterFileStore().store_matter_file_result(
-                db=db,
-                tenant_id=str(user.tenant_id),
-                matter_slug=matter.slug,
-                category=category or ("correspondence" if email else "general"),
-                filename=f"{entry['sha256'][:16]}_{filename}",
-                content=content,
-                content_type=mime,
-                matter_cloud_folder=matter.cloud_folder,
-                folder_path=segments,
-            )
+            # Provider token refresh can commit; keep import locks on the original session.
+            async with async_session_maker() as storage_db:
+                await set_tenant_context(storage_db, str(user.tenant_id))
+                stored = await MatterFileStore().store_matter_file_result(
+                    db=storage_db,
+                    tenant_id=str(user.tenant_id),
+                    matter_slug=matter.slug,
+                    category=category or ("correspondence" if email else "general"),
+                    filename=f"{entry['sha256'][:16]}_{filename}",
+                    content=content,
+                    content_type=mime,
+                    matter_cloud_folder=matter.cloud_folder,
+                    folder_path=segments,
+                )
             if not stored.succeeded:
                 raise HTTPException(503, "File storage failed; retry this file.")
             doc = MatterDocument(
