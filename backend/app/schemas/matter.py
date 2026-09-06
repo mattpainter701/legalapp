@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -286,7 +287,9 @@ class MatterAssignmentCreate(BaseModel):
 
 
 class MatterNoteCreate(BaseModel):
-    """Create a note on a matter."""
+    """Create a note on a matter; reuse request_id for safe network retries."""
+
+    request_id: UUID | None = None
 
     note_type: str = "internal"
     title: str = Field(..., max_length=500)

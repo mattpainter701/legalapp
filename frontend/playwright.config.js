@@ -33,7 +33,7 @@ export default defineConfig({
     video: 'retain-on-failure',
   },
   webServer: [
-    {
+    ...(process.env.E2E_API_FIXTURES_ONLY === 'true' ? [] : [{
       command: `${python} -m uvicorn app.main:app --host 127.0.0.1 --port ${backendPort}`,
       cwd: backendDir,
       env: {
@@ -46,7 +46,7 @@ export default defineConfig({
       url: `${backendOrigin}/health`,
       reuseExistingServer: reuseExistingServers,
       timeout: 120_000,
-    },
+    }]),
     {
       command: `npm run dev -- --host 127.0.0.1 --port ${frontendPort} --strictPort`,
       cwd: frontendDir,
@@ -60,6 +60,11 @@ export default defineConfig({
     },
   ],
   projects: [
+    {
+      name: 'mobile-webkit',
+      testMatch: '**/mobile-casework.e2e.js',
+      use: { ...devices['iPhone 13'] },
+    },
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },

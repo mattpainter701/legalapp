@@ -1,3 +1,4 @@
+import { supportsWindowsFileOpener, FILE_OPENER_LIMITATION } from '../../utils/fileOpenerPlatform'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
@@ -135,6 +136,7 @@ function SearchResult({ result, copied, copy }) {
         {result.score != null && <span>Match {Number(result.score).toFixed(2)}</span>}
       </div>
 
+      {kind === 'on_prem' && !supportsWindowsFileOpener() && <p className="mt-3 text-sm text-brand-muted">{FILE_OPENER_LIMITATION}</p>}
       <div className="mt-4 border-t border-brand-line pt-3">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
           <span className="inline-flex items-center gap-1 font-medium text-brand-muted"><Link2 size={13} /> Linked matters</span>
@@ -143,7 +145,7 @@ function SearchResult({ result, copied, copy }) {
             : <span className="text-brand-muted">None</span>}
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs">
-          {kind === 'on_prem' && (localOpenHref
+          {kind === 'on_prem' && (localOpenHref && supportsWindowsFileOpener()
             ? <a href={localOpenHref} className="inline-flex items-center gap-1.5 font-semibold text-brand-accent hover:underline"><ExternalLink size={14} /> Open on this computer</a>
             : <button type="button" disabled title={result.actions.openOnComputerReason || 'Requires the LawHand File Opener on this computer'} className="inline-flex items-center gap-1.5 font-semibold text-brand-muted opacity-60"><ExternalLink size={14} /> Open on this computer</button>)}
           {kind === 'on_prem' && pathValue && <button type="button" onClick={() => copy(pathValue, `path-${result.id}`)} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">{copied === `path-${result.id}` ? <Check size={14} /> : <Clipboard size={14} />} {copied === `path-${result.id}` ? `Copied ${pathIsAbsolute ? 'path' : 'location'}` : copyLabel}</button>}

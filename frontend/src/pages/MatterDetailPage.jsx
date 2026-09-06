@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../App'
 import { format, parseISO, differenceInDays } from 'date-fns'
@@ -172,7 +172,7 @@ function CloudStorageLinks({ cloudFolder, compact = false }) {
     </div>
   )
 }
-const inputCls = "w-full border border-brand-line rounded-lg px-3 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface transition-all"
+const inputCls = "w-full border border-brand-line rounded-lg px-3 py-2.5 text-base md:text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface transition-all"
 const labelCls = "block text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1.5"
 
 const RISK_OPTIONS = ['critical', 'high', 'medium', 'low']
@@ -234,6 +234,10 @@ export default function MatterDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [activeTab, setActiveTab] = useState('dashboard')
+  const noteRequest = useRef(null)
+  const noteBusy = useRef(false)
+  const [noteNotice, setNoteNotice] = useState(null)
+  const [noteConflict, setNoteConflict] = useState(false)
 
   // Edit state
   const [editing, setEditing] = useState(false)
@@ -251,6 +255,7 @@ export default function MatterDetailPage() {
   const [dashboard, setDashboard] = useState(null)
   const [tasks, setTasks] = useState([])
   const [tasksLoading, setTasksLoading] = useState(false)
+  const [tasksError, setTasksError] = useState(false)
   const [showDetailsPanel, setShowDetailsPanel] = useState(false)
   const [showAddTask, setShowAddTask] = useState(false)
   const [showCompose, setShowCompose] = useState(false)
@@ -263,6 +268,17 @@ export default function MatterDetailPage() {
   const [showAddNote, setShowAddNote] = useState(false)
   const [newNote, setNewNote] = useState({ note_type: 'internal', title: '', content: '' })
   const [addingNote, setAddingNote] = useState(false)
+  const noteMatterId = useRef(id)
+  noteMatterId.current = id
+  useEffect(() => {
+    noteRequest.current = null
+    noteBusy.current = false
+    setAddingNote(false)
+    setNoteConflict(false)
+    setNoteNotice(null)
+    setShowAddNote(false)
+    setNewNote({ note_type: 'internal', title: '', content: '' })
+  }, [id])
   const [showLogComm, setShowLogComm] = useState(false)
   const [newComm, setNewComm] = useState({ direction: 'outbound', channel: 'email', subject: '', body: '' })
   const [loggingComm, setLoggingComm] = useState(false)
@@ -321,7 +337,7 @@ export default function MatterDetailPage() {
     try {
       const [dashData, taskData] = await Promise.all([
         getMatterDashboard(id).catch(() => null),
-        getTasks({ matter_id: id, status: 'pending' }).catch(() => ({ items: [] })),
+        getTasks({ matter_id: id, status: 'pending' }).then(data => { setTasksError(false); return data }).catch(() => { setTasksError(true); return { items: [] } }),
       ])
       setDashboard(dashData)
       const taskList = Array.isArray(taskData) ? taskData : taskData.items || []
@@ -421,16 +437,44 @@ export default function MatterDetailPage() {
   }
 
   const handleAddNote = async () => {
-    if (!newNote.title.trim()) return
+    if (!newNote.title.trim() || noteBusy.current || noteConflict) return
+    noteBusy.current = true
     setAddingNote(true)
+    setNoteNotice(null)
+    // Retry the same payload and identity after an uncertain network response.
+    noteRequest.current ||= { ...newNote, request_id: crypto.randomUUID() }
     try {
-      await addMatterNote(id, newNote)
+      await addMatterNote(id, noteRequest.current)
+      if (noteMatterId.current !== id) return
+      noteRequest.current = null
       setNewNote({ note_type: 'internal', title: '', content: '' })
       setShowAddNote(false)
-      const tl = await getMatterTimeline(id).catch(() => [])
-      setTimeline(Array.isArray(tl) ? tl : [])
-    } catch { /* silent */ }
-    finally { setAddingNote(false) }
+      setNoteNotice({ success: true, text: 'Note saved.' })
+      try {
+        const tl = await getMatterTimeline(id)
+        if (noteMatterId.current !== id) return
+        setTimeline(Array.isArray(tl) ? tl : [])
+      } catch {
+        setNoteNotice({ success: true, text: 'Note saved. Activity could not refresh; reopen Activity when connected.' })
+      }
+    } catch (error) {
+      if (noteMatterId.current !== id) return
+      const status = error?.response?.status
+      if ([400, 403, 422].includes(status)) noteRequest.current = null
+      setNoteConflict(status === 409)
+      setNoteNotice({ success: false, text: status === 409
+        ? 'This request refers to a saved note that changed or was deleted. Check Activity before deliberately starting a new note.'
+        : status === 403
+        ? 'You do not have permission to save this note. Your text is still here.'
+        : noteRequest.current
+          ? 'Save not confirmed. Your text is still here. Retry Save Note when connected; the same request will not create a duplicate.'
+          : 'Note was not saved. Check your entry and try again. Your text is still here.' })
+    } finally {
+      if (noteMatterId.current === id) {
+        noteBusy.current = false
+        setAddingNote(false)
+      }
+    }
   }
 
   const handleSavePeople = async () => {
@@ -611,7 +655,7 @@ export default function MatterDetailPage() {
       {/* Topbar */}
       <div className="bg-brand-surface border-b border-brand-line px-4 md:px-8 py-4 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-2 md:gap-4 min-w-0 flex-1">
-          <button onClick={() => navigate('/matters')} className="flex items-center gap-2 text-brand-ink-2 hover:text-brand-ink text-sm font-sans font-medium transition-colors flex-shrink-0">
+          <button aria-label="Matter Portfolio" onClick={() => navigate('/matters')} className="min-h-11 min-w-11 flex items-center gap-2 text-brand-ink-2 hover:text-brand-ink text-sm font-sans font-medium transition-colors flex-shrink-0">
             <Icon d={Icons.back} size={16} /> <span className="hidden sm:inline">Matter Portfolio</span>
           </button>
           <div className="h-4 w-px bg-brand-line flex-shrink-0" />
@@ -639,7 +683,7 @@ export default function MatterDetailPage() {
         {/* Hero */}
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8">
           <div className="flex-1 min-w-0">
-            <h1 className="font-serif text-4xl font-bold text-brand-ink tracking-tight mb-3 leading-tight">{matter.matter_name}</h1>
+            <h1 className="font-serif text-2xl md:text-4xl break-words font-bold text-brand-ink tracking-tight mb-3 leading-tight">{matter.matter_name}</h1>
             {matter.description && (
               <p className="text-brand-ink-2 font-sans text-[15px] mb-4 leading-relaxed max-w-2xl">{matter.description}</p>
             )}
@@ -662,7 +706,7 @@ export default function MatterDetailPage() {
           </div>
 
           {/* Trust Balance card */}
-          <div className="bg-brand-surface border border-brand-line rounded-2xl p-5 text-right min-w-[180px] shadow-sm">
+          <div className="hidden md:block bg-brand-surface border border-brand-line rounded-2xl p-5 text-right min-w-[180px] shadow-sm">
             <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">Trust Balance</div>
             {trustAccounts.length > 0 ? (
               <>
@@ -683,7 +727,7 @@ export default function MatterDetailPage() {
 
           {/* Budget card */}
           {budget && (
-            <div className="bg-brand-surface border border-brand-line rounded-2xl p-5 text-right min-w-[180px] shadow-sm">
+            <div className="hidden md:block bg-brand-surface border border-brand-line rounded-2xl p-5 text-right min-w-[180px] shadow-sm">
               <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">Budget used</div>
               {budget.budget_amount ? (
                 <>
@@ -719,8 +763,32 @@ export default function MatterDetailPage() {
 
         {saveError && <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4 mb-6 text-brand-rose text-sm font-sans">{saveError}</div>}
 
+        <nav aria-label="Mobile matter casework" className="md:hidden mb-6 rounded-2xl border border-brand-line bg-brand-surface p-3">
+          <p className="mb-2 text-sm text-brand-muted">Stage: {matter.stage || 'Not set'}</p>
+          {activeTab === 'dashboard' && <div className="mb-3 text-sm">
+            {tasksLoading ? 'Loading open tasks…' : tasksError ? 'Open tasks could not load. Use Manage tasks to retry.' : tasks.length
+              ? <Link className="flex min-h-11 items-center font-semibold text-brand-accent break-words" to={`/tasks/${tasks[0].id}`}>Open task: {tasks[0].title}</Link>
+              : 'No pending tasks. Manage tasks also includes reviews and waiting work.'}
+          </div>}
+          <label htmlFor="mobile-matter-section" className="block text-sm font-semibold mb-2">Matter section</label>
+          <select id="mobile-matter-section" value={activeTab} onChange={event => setActiveTab(event.target.value)} className="w-full min-h-11 rounded-lg border border-brand-line bg-brand-surface px-3 text-base">
+            {tabs.map(tab => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
+          </select>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {[
+              ['Quick note', () => { setActiveTab('activity'); setShowAddNote(true) }],
+              ['Read documents', () => setActiveTab('documents')],
+              ['Manage tasks', () => navigate(`/tasks?matter_id=${id}`)],
+              ['Review work', () => setActiveTab('workflow')],
+              ['Contact client', () => setShowCompose(true)],
+              ['Recent activity', () => setActiveTab('activity')],
+            ].map(([label, action]) => <button key={label} type="button" onClick={action} className="min-h-11 rounded-lg border border-brand-line px-2 py-2 text-sm font-semibold text-brand-ink">{label}</button>)}
+          </div>
+        </nav>
+        {noteNotice && <p role={noteNotice.success ? 'status' : 'alert'} className={`mb-4 rounded-xl border p-4 text-sm ${noteNotice.success ? 'border-brand-green text-brand-ink' : 'border-brand-rose text-brand-rose'}`}>{noteNotice.text}</p>}
+        {noteConflict && <button type="button" className="min-h-11 mb-4 rounded-lg border border-brand-line px-4 text-sm" onClick={() => { noteRequest.current = null; setNoteConflict(false); setNoteNotice(null); setNewNote({ note_type: 'internal', title: '', content: '' }); setActiveTab('activity'); setShowAddNote(true) }}>Start a new blank note</button>}
         {/* Tabs */}
-        <div className="flex gap-1 mb-8 border-b border-brand-line overflow-x-auto scrollbar-none pb-px">
+        <div className="hidden md:flex gap-1 mb-8 border-b border-brand-line overflow-x-auto scrollbar-none pb-px">
           {tabs.map(({ key, label, icon }) => (
             <button
               key={key}
@@ -1049,22 +1117,22 @@ export default function MatterDetailPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                   <div>
                     <label htmlFor="matterdetailpage-note-type" className={labelCls}>Note Type</label>
-                    <select id="matterdetailpage-note-type" value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
+                    <select id="matterdetailpage-note-type" disabled={addingNote || !!noteRequest.current} value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
                       {NOTE_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                     </select>
                   </div>
                   <div>
                     <label htmlFor="matterdetailpage-title" className={labelCls}>Title</label>
-                    <input id="matterdetailpage-title" type="text" value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} placeholder="Note title..." className={inputCls} />
+                    <input id="matterdetailpage-title" type="text" disabled={addingNote || !!noteRequest.current} value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} placeholder="Note title..." className={inputCls} />
                   </div>
                   <div className="md:col-span-2">
                     <label htmlFor="matterdetailpage-content" className={labelCls}>Content</label>
-                    <textarea id="matterdetailpage-content" value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={3} placeholder="Note content..." className={`${inputCls} resize-none`} />
+                    <textarea id="matterdetailpage-content" disabled={addingNote || !!noteRequest.current} value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={3} placeholder="Note content..." className={`${inputCls} resize-none`} />
                   </div>
                 </div>
                 <div className="flex gap-3 justify-end">
                   <button onClick={() => setShowAddNote(false)} className="px-4 py-2 text-brand-muted text-sm font-sans hover:text-brand-ink">Cancel</button>
-                  <button onClick={handleAddNote} disabled={addingNote || !newNote.title.trim()} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
+                  <button onClick={handleAddNote} disabled={addingNote || noteConflict || !newNote.title.trim()} className="min-h-11 px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
                     {addingNote ? 'Saving…' : 'Save Note'}
                   </button>
                 </div>
@@ -1101,7 +1169,7 @@ export default function MatterDetailPage() {
                 </div>
                 <div className="flex gap-3 justify-end">
                   <button onClick={() => setShowLogComm(false)} className="px-4 py-2 text-brand-muted text-sm font-sans hover:text-brand-ink">Cancel</button>
-                  <button onClick={handleLogComm} disabled={loggingComm || !newComm.subject.trim()} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
+                  <button onClick={handleLogComm} disabled={loggingComm || !newComm.subject.trim()} className="min-h-11 px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
                     {loggingComm ? 'Saving…' : 'Log Communication'}
                   </button>
                 </div>
@@ -1448,7 +1516,7 @@ export default function MatterDetailPage() {
                   <Icon d={Icons.messageSquare} size={32} className="mx-auto text-brand-line-2 mb-3" />
                   <p className="text-brand-ink font-serif text-lg font-bold mb-1">No conversations yet</p>
                   <p className="text-brand-muted text-sm font-sans mb-4">Start an AI chat with this matter loaded as context.</p>
-                  <button onClick={handleStartChat} disabled={startingConv} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
+                  <button onClick={handleStartChat} disabled={startingConv} className="min-h-11 px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
                     {startingConv ? 'Starting…' : 'Start Chat About This Matter'}
                   </button>
                 </div>
@@ -1925,18 +1993,18 @@ export default function MatterDetailPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                 <div>
                   <label htmlFor="matterdetailpage-note-type-2" className={labelCls}>Note Type</label>
-                  <select id="matterdetailpage-note-type-2" value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
+                  <select id="matterdetailpage-note-type-2" disabled={addingNote || !!noteRequest.current} value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
                     {NOTE_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                   </select>
                 </div>
                 <div>
                   <label htmlFor="matterdetailpage-title-3" className={labelCls}>Title</label>
-                  <input id="matterdetailpage-title-3" type="text" value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} className={inputCls} placeholder="Note title" />
+                  <input id="matterdetailpage-title-3" type="text" disabled={addingNote || !!noteRequest.current} value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} className={inputCls} placeholder="Note title" />
                 </div>
               </div>
               <div className="mb-4">
                 <label htmlFor="matterdetailpage-content-2" className={labelCls}>Content</label>
-                <textarea id="matterdetailpage-content-2" value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={4} className={`${inputCls} resize-y`} placeholder="Note content..." />
+                <textarea id="matterdetailpage-content-2" disabled={addingNote || !!noteRequest.current} value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={4} className={`${inputCls} resize-y`} placeholder="Note content..." />
               </div>
               <div className="flex gap-3 justify-end">
                 <button onClick={() => { setShowAddNote(false); setNewNote({ note_type: 'note', title: '', content: '' }) }} className="px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft">Cancel</button>

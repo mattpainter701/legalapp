@@ -309,3 +309,7 @@ defines offline evaluation evidence, version/coverage capture, source metadata
 compatibility and attorney sign-off. Scoped public hits require verified source
 jurisdiction; old/malformed metadata leaves a coverage gap. Source capture dates
 and catalogue status do not establish current law or treatment.
+
+## Mobile workspace clients
+
+The browser casework paths reuse existing matter/task/document authorization and review actions; they add no MCP tool or autonomous action. The optional HTTP note request identity and replay boundary are documented in [Phone casework](../mobile-casework.md#note-api-retry-contract). The Windows opener remains a Windows network/VPN client; phone compatibility guidance is not an authorization check.

@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.06.5",
+      "version": "2026.09.06.5",
+      "title": "Keep everyday casework within reach on your phone",
+      "published_at": "2026-09-06",
+      "summary": "Matter pages now put notes, documents, tasks, workflow review and client contact together on small screens, with visible note-save recovery.",
+      "highlights": [
+        {
+          "title": "Reach your matter work quickly",
+          "description": "Choose any matter section from a phone-friendly picker, see the current stage and open tasks, or jump directly to documents, review and client contact."
+        },
+        {
+          "title": "Retry a note without duplicating it",
+          "description": "Interrupted note saves keep text on the open page. Confirmed saves show a receipt; retrying the same request creates one note and activity event."
+        },
+        {
+          "title": "Know where a file can open",
+          "description": "Phone users see the Windows network-file opener limitation and can use existing permitted document or provider links. Email forms fit shorter screens."
+        }
+      ]
+    },
+    {
       "id": "2026.09.06.4",
       "version": "2026.09.06.4",
       "title": "Keep workflow preparation visible and recoverable",
@@ -128,7 +149,7 @@
       "highlights": [
         {
           "title": "Tell a field where its value comes from",
-          "description": "Pick a data source for each field — case number, client address, plaintiff, attorney — and it fills from the matter every time, whatever you named it."
+          "description": "Pick a data source for each field \u2014 case number, client address, plaintiff, attorney \u2014 and it fills from the matter every time, whatever you named it."
         },
         {
           "title": "One template instead of near-identical copies",
@@ -136,7 +157,7 @@
         },
         {
           "title": "Repeating sections that follow the matter",
-          "description": "Wrap a block in {{#each parties}} and it renders once per party on the matter — a signature block each — with no editing afterwards."
+          "description": "Wrap a block in {{#each parties}} and it renders once per party on the matter \u2014 a signature block each \u2014 with no editing afterwards."
         },
         {
           "title": "Version history with restore",
@@ -194,7 +215,7 @@
         },
         {
           "title": "Know what a search did not cover",
-          "description": "Every incomplete response states in one sentence why, so “no matches” is only ever said about a search that actually covered its sources."
+          "description": "Every incomplete response states in one sentence why, so \u201cno matches\u201d is only ever said about a search that actually covered its sources."
         }
       ]
     },
@@ -211,7 +232,7 @@
         },
         {
           "title": "Label documents across matters",
-          "description": "Firm-wide tags apply to any case document and filter the list conjunctively, so “Signed” plus “Filed” narrows to documents carrying both."
+          "description": "Firm-wide tags apply to any case document and filter the list conjunctively, so \u201cSigned\u201d plus \u201cFiled\u201d narrows to documents carrying both."
         },
         {
           "title": "Find a document without scrolling",
@@ -779,7 +800,7 @@
           "description": "Independent scans and tenant background work can progress within bounded capacity instead of waiting behind one unrelated long-running job."
         },
         {
-          "title": "Save the reviewed PDFΓÇönot a surprise",
+          "title": "Save the reviewed PDF\u0393\u00c7\u00f6not a surprise",
           "description": "Final PDF saves recheck the exact reviewed output and clean up or quarantine staged files when storage and database results cannot be proven consistent."
         }
       ]
@@ -1091,7 +1112,7 @@
         },
         {
           "title": "Connected assistants are yours to review",
-          "description": "The guide explains the Workspace MCP list in your profile ΓÇö what each connection holds, when it was last used, and how revoking one takes effect immediately."
+          "description": "The guide explains the Workspace MCP list in your profile \u0393\u00c7\u00f6 what each connection holds, when it was last used, and how revoking one takes effect immediately."
         },
         {
           "title": "Administrators can see who may connect",
@@ -1102,13 +1123,13 @@
     {
       "id": "2026.08.25.1",
       "version": "2026.08.25.1",
-      "title": "Workspace MCP connections respect your firmΓÇÖs access settings",
+      "title": "Workspace MCP connections respect your firm\u0393\u00c7\u00d6s access settings",
       "published_at": "2026-08-25",
       "summary": "Claude, ChatGPT, Codex, and other compatible assistants can connect when your firm administrator enables Workspace MCP for your account and Privacy Mode is off.",
       "highlights": [
         {
           "title": "Firm access settings take effect directly",
-          "description": "Admin ΓåÆ Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client."
+          "description": "Admin \u0393\u00e5\u00c6 Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client."
         },
         {
           "title": "Your privacy choice remains independent",

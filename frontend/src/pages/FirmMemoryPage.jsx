@@ -1,3 +1,4 @@
+import { supportsWindowsFileOpener, FILE_OPENER_LIMITATION } from '../utils/fileOpenerPlatform'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, Clipboard, ExternalLink, FileText, FolderOpen, Search, SlidersHorizontal, Sparkles } from 'lucide-react'
 import { createFirmMemoryOpenIntent, getFirmMemoryFile, getMattersV2, searchFirmMemory } from '../api'
@@ -148,7 +149,7 @@ export function MatterFirmMemoryPage() {
 
   const openLocalFile = async (hit, action) => {
     const id = String(hit?.id || hit?.file_id || '')
-    if (!id) return
+    if (!id || !supportsWindowsFileOpener()) return
     setOpenState((current) => ({ ...current, [id]: { status: 'starting', action } }))
     try {
       const intent = await createFirmMemoryOpenIntent(id, { matterId, action })
@@ -217,12 +218,13 @@ export function MatterFirmMemoryPage() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><h2 className="truncate text-base font-semibold text-brand-ink"><HighlightedText text={hit.filename || hit.name || 'Untitled document'} query={query} /></h2><p className="mt-1 break-all font-mono text-xs text-brand-muted"><HighlightedText text={path} query={query} /></p></div><span className="shrink-0 rounded-full bg-brand-bg-soft px-2.5 py-1 text-xs font-semibold uppercase text-brand-muted">{String(hit.ext || 'file').replace('.', '')}</span></div>
               {hit.snippet && <p className="mt-4 text-sm leading-6 text-brand-ink-2"><HighlightedText text={hit.snippet} query={query} /></p>}
               <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-brand-line pt-3 text-xs text-brand-muted"><span>{hit.page_number ? `Page ${hit.page_number}` : 'Document match'}</span>{hit.owner && <span>{hit.owner}</span>}{formatBytes(hit.size_bytes ?? hit.size) && <span>{formatBytes(hit.size_bytes ?? hit.size)}</span>}{formatDate(hit.modified_time || hit.modified_at || hit.updated_at) && <span>Modified {formatDate(hit.modified_time || hit.modified_at || hit.updated_at)}</span>}{hit.score != null && <span>Match {Number(hit.score).toFixed(2)}</span>}<span className="flex-1" />
-                {FILE_OPENER_ENABLED && hit.source_id && hit.file_revision && <button type="button" disabled={openState[id]?.status === 'starting'} onClick={() => openLocalFile(hit, 'open')} className="inline-flex items-center gap-1.5 font-medium text-brand-accent hover:text-brand-ink disabled:opacity-50"><ExternalLink size={14} /> {openState[id]?.status === 'starting' && openState[id]?.action === 'open' ? 'Opening…' : 'Open on this computer'}</button>}
-                {FILE_OPENER_ENABLED && hit.source_id && hit.file_revision && <button type="button" disabled={openState[id]?.status === 'starting'} onClick={() => openLocalFile(hit, 'show')} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent disabled:opacity-50"><FolderOpen size={14} /> {openState[id]?.status === 'starting' && openState[id]?.action === 'show' ? 'Finding…' : 'Show in folder'}</button>}
+                {FILE_OPENER_ENABLED && hit.source_id && hit.file_revision && <button type="button" disabled={!supportsWindowsFileOpener() || openState[id]?.status === 'starting'} onClick={() => openLocalFile(hit, 'open')} className="inline-flex items-center gap-1.5 font-medium text-brand-accent hover:text-brand-ink disabled:opacity-50"><ExternalLink size={14} /> {openState[id]?.status === 'starting' && openState[id]?.action === 'open' ? 'Opening…' : 'Open on this computer'}</button>}
+                {FILE_OPENER_ENABLED && hit.source_id && hit.file_revision && <button type="button" disabled={!supportsWindowsFileOpener() || openState[id]?.status === 'starting'} onClick={() => openLocalFile(hit, 'show')} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent disabled:opacity-50"><FolderOpen size={14} /> {openState[id]?.status === 'starting' && openState[id]?.action === 'show' ? 'Finding…' : 'Show in folder'}</button>}
                 {path && <button type="button" onClick={() => copy(path, `path-${id}`)} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">{copied === `path-${id}` ? <Check size={14} /> : <Clipboard size={14} />} {copied === `path-${id}` ? 'Copied path' : 'Copy UNC path'}</button>}
                 {relativeLink && <a href={relativeLink} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">View result</a>}
                 {link && <button type="button" onClick={() => copy(link, `link-${id}`)} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">{copied === `link-${id}` ? <Check size={14} /> : <Clipboard size={14} />} {copied === `link-${id}` ? 'Copied link' : 'Copy result link'}</button>}
               </div>
+              {!supportsWindowsFileOpener() && <p className="mt-3 text-sm text-brand-muted">{FILE_OPENER_LIMITATION}</p>}
               {FILE_OPENER_ENABLED && openState[id]?.status === 'launched' && <p className="mt-3 rounded-lg bg-brand-bg-soft px-3 py-2 text-xs text-brand-muted">If nothing opened, install or repair the LawHand File Opener, confirm this computer is on the firm network or VPN, and try again. Copy network path remains available as a fallback.</p>}
               {FILE_OPENER_ENABLED && openState[id]?.status === 'error' && <p role="alert" className="mt-3 rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900">{openState[id].message} Copy network path remains available as a fallback.</p>}
             </article>

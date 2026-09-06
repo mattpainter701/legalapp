@@ -16,6 +16,12 @@
 
 ## [Unreleased]
 
+### Mobile casework — 2026.09.06.5
+- Add a phone matter section picker, six touch-sized casework shortcuts, visible stage/open-task context and matter-filtered task list/board links.
+- Retain interrupted note input and replay an optional request UUID under a matter row lock. Tenant/actor/matter-derived IDs and an event digest prevent duplicate notes/events, changed-payload replay and recreation after deletion; no migration.
+- Fit email composition into a short visual viewport and explain unsupported Windows network-file opening on phones.
+- Add synthetic Chromium/WebKit casework journeys and real PostgreSQL note concurrency/rollback/tenant regressions. These do not establish physical-phone or customer-provider acceptance.
+
 ### Research readiness (2026.09.06.3)
 - Verify source jurisdiction before counting scoped public research coverage; preserve corpus metadata through prompts, streaming previews, stored citations and source cards.
 - Add an offline, configurable acceptance evaluator with digest-bound attorney review, authority recall, jurisdiction, quotation, abstention, currentness disclosure, latency and cost gates. Synthetic fixtures are never customer acceptance or a parity benchmark.

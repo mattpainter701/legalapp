@@ -1,6 +1,8 @@
 """Matter/case management router — firm-wide matters with assignments, notes, retainers, billing."""
 
 import asyncio
+import hashlib
+import json
 import logging
 import uuid
 from datetime import date, datetime, timezone
@@ -1526,7 +1528,38 @@ async def add_note(
     user = await get_current_user(request, db)
     matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
 
+    # Serialize note requests on this authorized matter. The event persists the
+    # receipt even if the note is later deleted, preventing retry resurrection.
+    note_id = uuid.uuid4()
+    event_id = uuid.uuid4()
+    digest = None
+    if body.request_id:
+        await db.execute(select(Matter.id).where(
+            Matter.id == matter.id, Matter.tenant_id == user.tenant_id,
+        ).with_for_update())
+        identity = f"lawhand:note:{user.tenant_id}:{user.id}:{matter.id}:{body.request_id}"
+        note_id = uuid.uuid5(uuid.NAMESPACE_URL, identity)
+        event_id = uuid.uuid5(uuid.NAMESPACE_URL, identity + ":event")
+        payload = body.model_dump(mode="json", exclude={"request_id", "hours"})
+        payload["hours"] = str(body.hours.normalize()) if body.hours is not None else None
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        receipt = (await db.execute(select(MatterEvent).where(
+            MatterEvent.id == event_id, MatterEvent.tenant_id == user.tenant_id,
+            MatterEvent.matter_id == matter.id, MatterEvent.created_by == user.id,
+        ))).scalar_one_or_none()
+        if receipt:
+            if (receipt.metadata_json or {}).get("note_request_digest") != digest:
+                raise HTTPException(409, "This note request was already used for different content.")
+            note = (await db.execute(select(MatterNote).where(
+                MatterNote.id == note_id, MatterNote.tenant_id == user.tenant_id,
+                MatterNote.matter_id == matter.id, MatterNote.author_id == user.id,
+            ))).scalar_one_or_none()
+            if note is None:
+                raise HTTPException(409, "This note was saved and later deleted. Start a new note.")
+            return _note_response(note, user.full_name)
+
     note = MatterNote(
+        id=note_id,
         tenant_id=user.tenant_id,
         matter_id=matter.id,
         author_id=user.id,
@@ -1540,32 +1573,34 @@ async def add_note(
 
     # Also create a timeline event for the note
     event = MatterEvent(
+        id=event_id,
+        metadata_json={"note_request_digest": digest} if digest else None,
         tenant_id=user.tenant_id,
         matter_id=matter.id,
         event_type="note",
-        title=f"Note: {body.title}",
+        title=f"Note: {body.title}"[:500],
         content=body.content,
         note_type=body.note_type,
         created_by=user.id,
     )
     db.add(event)
 
+    # Snapshot identities before commit; transaction-local RLS must be rebound.
+    tenant_id, saved_matter_id, author_name = user.tenant_id, matter.id, user.full_name
     await db.commit()
+    await set_tenant_context(db, str(tenant_id))
     await db.refresh(note)
-    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
+    await _invalidate_matter_context_cache(tenant_id, saved_matter_id)
+    return _note_response(note, author_name)
 
+
+def _note_response(note: MatterNote, author_name: str) -> MatterNoteResponse:
     return MatterNoteResponse(
-        id=str(note.id),
-        matter_id=str(note.matter_id),
+        id=str(note.id), matter_id=str(note.matter_id),
         author_id=str(note.author_id) if note.author_id else None,
-        author_name=user.full_name,
-        note_type=note.note_type,
-        title=note.title,
-        content=note.content,
-        is_billable=note.is_billable,
-        hours=note.hours,
-        created_at=note.created_at,
-        updated_at=note.updated_at,
+        author_name=author_name, note_type=note.note_type, title=note.title,
+        content=note.content, is_billable=note.is_billable, hours=note.hours,
+        created_at=note.created_at, updated_at=note.updated_at,
     )
 
 
