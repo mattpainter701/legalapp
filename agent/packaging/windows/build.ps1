@@ -59,7 +59,9 @@ Write-Host "Version: $Version (MSI $MsiVersion)"
 # ── Python build environment ────────────────────────────────────────────────
 python -m pip install --upgrade pip | Out-Null
 python -m pip install --upgrade pyinstaller pywin32 | Out-Null
-python -m pip install "$AgentRoot" | Out-Null
+$SearchNodeRoot = Resolve-Path (Join-Path $AgentRoot "..\search-node")
+python -m pip install "$AgentRoot" "$SearchNodeRoot" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Agent build dependencies failed to install" }
 
 $ExePath = Join-Path $DistDir "lawhand-agent.exe"
 $OpenerExePath = Join-Path $DistDir "lawhand-file-opener.exe"

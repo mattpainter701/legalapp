@@ -23,7 +23,7 @@ echo "== LawHand agent Linux build (v${VERSION}, ${ARCH}) =="
 
 python3 -m pip install --upgrade pip >/dev/null
 python3 -m pip install --upgrade pyinstaller >/dev/null
-python3 -m pip install "${AGENT_ROOT}" >/dev/null
+python3 -m pip install "${AGENT_ROOT}" "${AGENT_ROOT}/../search-node" >/dev/null
 
 cd "${AGENT_ROOT}"
 python3 -m PyInstaller --noconfirm --clean \
