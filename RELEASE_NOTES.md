@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.06.4 — Keep workflow preparation visible and recoverable
+
+Released September 6, 2026.
+
+Matter workflow rules now queue preparation reliably with the matter save and show progress through review.
+
+- **Recover interrupted planning.** Queued workflow preparation retries temporary failures without duplicating a reviewed run.
+- **Review prepared work from the matter.** See pending, retrying, planned, blocked and failed activity, then open a prepared run before explicitly approving it.
+- **Recheck changed facts and permissions.** Changed matter facts, rules, templates or actor permissions require a fresh manual review instead of silently replaying old events.
+
 ## 2026.09.06.3 — See the limits of research evidence
 
 Released September 6, 2026.

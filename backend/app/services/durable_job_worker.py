@@ -622,10 +622,53 @@ async def _run_teams_voice_reconcile(row: DurableJob) -> dict:
 async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
     async with async_session_maker() as db:
         await set_tenant_context(db, str(tenant_id))
+        exhausted = await db.scalar(
+            select(DurableJob)
+            .where(
+                DurableJob.id == job_id,
+                DurableJob.tenant_id == tenant_id,
+                DurableJob.kind == "matter_workflow_plan",
+                DurableJob.status == "running",
+                DurableJob.attempts >= DurableJob.max_attempts,
+                DurableJob.leased_at
+                < datetime.now(timezone.utc) - timedelta(minutes=15),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        if exhausted:
+            await fail_job(
+                db,
+                exhausted,
+                RuntimeError("Workflow planning retry limit reached"),
+                retryable=False,
+            )
+            return True
         row = await claim_job(db, job_id)
         if not row:
             return False
+        workflow_planning_job = row.kind == "matter_workflow_plan"
+        claim_token = (row.attempts, row.leased_at)
         try:
+            # claim_job commits; restore transaction-local tenant context.
+            await set_tenant_context(db, str(tenant_id))
+            if row.kind == "matter_workflow_plan":
+                # Hold through completion so lease recovery cannot overlap a
+                # still-running planner, and completion commits the plan too.
+                row = await db.scalar(
+                    select(DurableJob)
+                    .where(
+                        DurableJob.id == job_id,
+                        DurableJob.tenant_id == tenant_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if (
+                    row is None
+                    or row.status != "running"
+                    or (row.attempts, row.leased_at) != claim_token
+                ):
+                    return False
             tenant_active = bool(
                 await db.scalar(
                     select(Tenant.is_active).where(Tenant.id == row.tenant_id)
@@ -635,7 +678,15 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                 "mcp_stripe_meter",
                 *VOICE_JOB_KINDS,
             }:
-                result = {"ignored": "inactive_tenant"}
+                result = (
+                    {"outcome": "blocked", "failure_code": "inactive_tenant"}
+                    if row.kind == "matter_workflow_plan"
+                    else {"ignored": "inactive_tenant"}
+                )
+            elif row.kind == "matter_workflow_plan":
+                from app.services.durable_workflow_automations import run_planning_job
+
+                result = await run_planning_job(db, row)
             elif row.kind == "document_ingest":
                 result = await _run_document_ingest(row)
             elif row.kind == "cloud_sync":
@@ -664,6 +715,13 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
             row = await db.get(DurableJob, job_id)
             await finish_job(db, row, result=result)
         except Exception as exc:
+            failure = exc
+            if workflow_planning_job:
+                # Never persist SQL parameters or source content in job errors.
+                await db.rollback()
+                failure = RuntimeError(
+                    "Workflow planning temporarily unavailable; retry scheduled"
+                )
             from app.services.teams_voice import (
                 TeamsVoiceNotConfigured,
                 TeamsVoicePermanentError,
@@ -674,13 +732,30 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
             )
 
             await set_tenant_context(db, str(tenant_id))
-            row = await db.get(DurableJob, job_id)
+            if workflow_planning_job:
+                row = await db.scalar(
+                    select(DurableJob)
+                    .where(
+                        DurableJob.id == job_id,
+                        DurableJob.tenant_id == tenant_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if (
+                    row is None
+                    or row.status != "running"
+                    or (row.attempts, row.leased_at) != claim_token
+                ):
+                    return False
+            else:
+                row = await db.get(DurableJob, job_id)
             await fail_job(
                 db,
                 row,
-                exc,
+                failure,
                 retryable=not isinstance(
-                    exc,
+                    failure,
                     (
                         ZoomPhonePermanentError,
                         ZoomPhoneReauthorizationRequired,

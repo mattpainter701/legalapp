@@ -1,3 +1,9 @@
+# 2026.09.06.4 - Durable workflow preparation
+
+- Queue matching workflow triggers in the matter-save transaction; atomically commit prepared runs and worker receipts, recover leases, retry transient failures, and preserve ever-per-condition deduplication.
+- Revalidate actor/tenant, original fact fingerprint, rule and approved version; block changed context with a manual-review path. Payloads/errors omit source content. No automatic task application or provider calls.
+- Extend existing activity APIs and workflow panels with pending/retry/failure states and review of stored previews. Add transaction/recovery/permission and UI approval tests.
+
 # Changelog
 
 ## 2026.09.06.2 — Template Studio launch preparation

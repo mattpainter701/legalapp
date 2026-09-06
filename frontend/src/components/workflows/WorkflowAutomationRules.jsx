@@ -1,3 +1,4 @@
+import { automationStatus } from "./automationStatus";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   listWorkflowAutomations,
@@ -149,9 +150,7 @@ export default function WorkflowAutomationRules({ user, templates = [] }) {
               value={form.name}
               required
               maxLength={120}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, name: e.target.value }))
-              }
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
           </label>
           <label htmlFor="automation-trigger" className="grid gap-1 text-sm">
@@ -184,7 +183,10 @@ export default function WorkflowAutomationRules({ user, templates = [] }) {
               />
             </label>
           )}
-          <label htmlFor="automation-matter-type" className="grid gap-1 text-sm">
+          <label
+            htmlFor="automation-matter-type"
+            className="grid gap-1 text-sm"
+          >
             <span>Only for matter type (optional)</span>
             <input
               id="automation-matter-type"
@@ -245,6 +247,12 @@ export default function WorkflowAutomationRules({ user, templates = [] }) {
           </div>
         </form>
       )}
+      <p className="text-sm">
+        Each rule plans once per matter and triggering condition, including
+        blocked attempts. Re-entering a stage does not repeat work. Open the
+        matter to review a prepared run or create a fresh manual preview after
+        correcting a block.
+      </p>
       {rules.length === 0 ? (
         <p>No automation rules yet.</p>
       ) : (
@@ -330,10 +338,7 @@ export default function WorkflowAutomationRules({ user, templates = [] }) {
                 ) : (
                   events[rule.id].map((event) => (
                     <li key={event.id}>
-                      {event.outcome === "planned"
-                        ? "Planned a run"
-                        : `Blocked: ${event.detail?.message || event.detail?.failure_code || "see evidence"}`}{" "}
-                      · {event.created_at}
+                      {automationStatus(event)} · {event.created_at}
                     </li>
                   ))
                 )}

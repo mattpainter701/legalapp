@@ -289,3 +289,13 @@ per user.
    binding and integrity evidence, not a fallback copy.
 9. A cloud edit is adopted only as a new exact-byte revision and invalidates
    prior review. Approval never uploads or silently substitutes bytes.
+
+
+### Durable matter workflow trigger planning
+
+The application matter endpoints now transactionally queue reviewed workflow
+planning; existing activity responses also report queue/retry/failure states.
+The original actor and tenant are revalidated by the worker, and stale context
+requires a manual preview. This adds no MCP tool or autonomous effect. See the
+canonical [workflow automation contract](workflow-automations.md) for idempotency,
+recovery and the explicit approve/apply boundary.

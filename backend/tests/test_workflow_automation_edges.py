@@ -16,6 +16,7 @@ from app.schemas.workflow_automation import (
     WorkflowAutomationActivateRequest,
     WorkflowAutomationRuleInput,
 )
+from tests.test_durable_workflow_automations import drain
 from app.services import workflow_automations
 from tests.test_workflow_automation_dispatch import (
     active_rule,
@@ -84,12 +85,13 @@ async def test_a_rejected_preview_is_recorded_as_blocked_not_planned(
     monkeypatch.setattr(workflow_automations, "build_preview", rejected)
     created = await client.post("/api/matters", json={"matter_name": "Stale template"})
     assert created.status_code == 201
+    await drain(db_session)
 
     event = await db_session.scalar(select(MatterWorkflowAutomationEvent))
     assert event.outcome == "blocked"
     assert event.detail_json["failure_code"] == "preview_rejected"
     assert event.detail_json["status_code"] == 409
-    assert "no longer matches its approval" in event.detail_json["message"]
+    assert "cannot be previewed" in event.detail_json["message"]
     assert await db_session.scalar(select(func.count(MatterWorkflowRun.id))) == 0
 
 
@@ -117,6 +119,7 @@ async def test_one_failing_rule_does_not_cost_the_firm_the_others(
     monkeypatch.setattr(workflow_automations, "_plan_for_rule", flaky)
     created = await client.post("/api/matters", json={"matter_name": "Two rules"})
     assert created.status_code == 201
+    await drain(db_session)
     assert len(seen) == 2
 
     events = (

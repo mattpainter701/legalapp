@@ -6,8 +6,8 @@ a task, changes a stage, or sends anything outward: the reviewed
 ``approve_legal_work`` apply path remains the only way automation reaches a
 matter.
 
-Dispatch is called after the caller has committed the change that produced the
-event, and it never raises into that caller. A rule that cannot plan records an
+Matter routes enqueue durable_workflow_automations jobs in their save transaction.
+The legacy immediate dispatch helpers below remain for internal compatibility. A rule that cannot plan records an
 immutable ``blocked`` outcome instead, so a firm can see why its automation did
 nothing rather than discovering silence.
 """
@@ -227,7 +227,9 @@ def _record_dispatch(
     run_id: uuid.UUID | None,
     actor_user_id: uuid.UUID,
     detail: dict[str, Any],
+    trigger_rule_sha256: str | None = None,
 ) -> MatterWorkflowAutomationEvent:
+    evidence_rule_sha256 = trigger_rule_sha256 or rule.definition_sha256
     payload = {
         "rule_id": str(rule.id),
         "matter_id": str(matter.id),
@@ -235,7 +237,7 @@ def _record_dispatch(
         "dedupe_key": key,
         "outcome": outcome,
         "run_id": str(run_id) if run_id else None,
-        "rule_sha256": rule.definition_sha256,
+        "rule_sha256": evidence_rule_sha256,
         "actor_user_id": str(actor_user_id),
         "detail": detail,
     }
@@ -247,7 +249,7 @@ def _record_dispatch(
         dedupe_key=key,
         outcome=outcome,
         run_id=run_id,
-        rule_sha256=rule.definition_sha256,
+        rule_sha256=evidence_rule_sha256,
         actor_user_id=actor_user_id,
         detail_json=detail,
         evidence_sha256=digest_payload(payload),
@@ -298,6 +300,8 @@ async def _plan_for_rule(
             lock_dependencies=True,
         )
     except HTTPException as exc:
+        if exc.status_code >= 500:
+            raise
         return _record_dispatch(
             db,
             rule,
@@ -310,7 +314,7 @@ async def _plan_for_rule(
             detail={
                 "failure_code": "preview_rejected",
                 "status_code": exc.status_code,
-                "message": str(exc.detail),
+                "message": "The approved template cannot be previewed. Review its current configuration.",
             },
         )
 

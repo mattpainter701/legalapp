@@ -23,7 +23,7 @@ matter a person has not already opened.
 | --- | --- |
 | Trigger | `matter_created`, or `matter_stage_changed` with one named stage |
 | Conditions | optional matter type and/or practice area, compared case- and whitespace-insensitively |
-| Action | plan the newest approved version of one active workflow template |
+| Action | plan the approved version captured when the trigger was queued |
 
 Every declared condition must match. A rule with no conditions matches every
 matter of its trigger. The rule's name is a label for humans and is
@@ -40,8 +40,9 @@ require a fresh legal approval while changing what it does always does.
 | Read a matter's automation activity | `manage_matters` |
 | Apply a planned run | `approve_legal_work` **and** `manage_matters` (unchanged) |
 
-Authoring and approval stay separate, as they do for template versions: an
-author cannot activate their own rule. No new capability is introduced, so no
+Authoring and approval stay separate, as they do for template versions: a
+solo attorney with both capabilities may author and explicitly approve their own rule.
+A staff author without `approve_legal_work` cannot activate it. No new capability is introduced, so no
 role changes on deploy and no firm silently gains automation authority.
 
 ## Lifecycle
@@ -69,21 +70,28 @@ identical runs. A firm may keep at most 50 unarchived rules.
 
 ## Dispatch
 
-Dispatch runs inside the request that caused the event, **after** that change
-has been committed:
+The matter save and each matched rule's `matter_workflow_plan` durable job are
+written in one transaction. If enqueue fails, the save rolls back; the request
+must be retried rather than silently losing its trigger. The worker plans later:
 
-- `POST /api/matters` dispatches `matter_created`;
-- `PATCH /api/matters/{id}` dispatches `matter_stage_changed`, and only when
-  the stage actually changed.
+- `POST /api/matters` queues `matter_created`;
+- `PATCH /api/matters/{id}` queues `matter_stage_changed` only when stage changes.
 
-The acting user is recorded as the run's `planned_by_user_id`. That is honest
-attribution: the automation planned this because of something that person did,
-and there is no background actor to blame.
+The job stores the original actor, trigger date, rule fingerprint, approved
+version identifier, and matter/custom-field evidence fingerprint. It stores no
+document text, custom-field values, credentials, or raw exception detail. The
+worker restores tenant context after claiming, locks the job/configuration/matter,
+and rechecks active licensed actor, `manage_matters`, rule approval, template
+version and matter facts. Archived, changed or unavailable context produces a
+blocked receipt requiring a manual preview of current facts. It never substitutes
+new facts or a newly approved version for the original event.
 
-Automation must never be the reason a matter fails to save, so dispatch owns
-its own transaction and never raises into the caller. Each matching rule is
-attempted in its own savepoint, so one unplannable rule does not cost the firm
-the others.
+Infrastructure failures roll back the plan and retry with queue backoff (up to
+five attempts). A rule's failed job does not prevent other matched jobs from
+running. Completion and plan evidence commit atomically; expired leases recover
+crashed workers, and duplicate deliveries reuse the original receipt. Final
+failure remains visible with a manual preview recovery path. There is no
+user-triggered replay endpoint that can silently re-authorize stale events.
 
 **One plan per rule, matter, and triggering condition — ever.** The dedupe key
 is a hash of the matter, the trigger, and the rule's stage, and it is unique
@@ -105,7 +113,7 @@ false and the same missing-field list the manual preview shows.
 
 `matter_workflow_automation_events` is append-only. It carries the rule, the
 matter, the trigger, the dedupe key, the outcome, the planned run, the rule's
-definition hash at dispatch time, the acting user, and a SHA-256 of the whole
+original trigger definition hash, the acting user, and a SHA-256 of the whole
 record. `BEFORE UPDATE OR DELETE` reuses migration 148's
 `prevent_config_workflow_immutable` trigger, so the verified expired-demo purge
 remains the only authorized delete path. The rules table has its own trigger
@@ -142,10 +150,8 @@ Outside this slice, and not to be inferred from it:
   document generation, field writes, or status changes;
 - conditions beyond matter type and practice area equality — no expressions,
   ranges, custom-field predicates, or boolean composition;
-- schedules, delays, retries, webhooks, or any background worker; dispatch is
-  synchronous with the request that caused the event, so an event produced
-  outside those two endpoints (an import, a script, a direct database write)
-  plans nothing;
+- new business schedules or webhooks; events produced outside the two matter
+  endpoints (imports, scripts, direct writes) do not queue these rules;
 - automatic application of a planned run, under any configuration; and
 - re-planning after a stage is re-entered, or automatic cleanup of planned runs
   a firm chose not to apply.
@@ -163,5 +169,25 @@ active rules cannot coexist.
 Backend behavior is covered by `backend/tests/test_workflow_automation_rules.py`
 (authoring, approval, conflicts, archive, tenant boundaries) and
 `backend/tests/test_workflow_automation_dispatch.py` (planning, conditions,
-dedupe, blocked outcomes, and the guarantee that a broken automation still
-leaves the matter saved).
+dedupe and blocked outcomes). `test_durable_workflow_automations.py` covers
+transaction rollback, retry/crash recovery, duplicate delivery, actor revocation,
+changed/archived sources and tenant isolation with PostgreSQL.
+
+## Operator and customer review path
+
+Both existing activity endpoints include pending, running, retrying and failed
+job entries alongside planned/blocked immutable receipts. `attempts` and
+`max_attempts` explain retries; raw worker errors are never returned. Refresh
+workflow activity on the matter to see the latest state. A planned run has a
+**Review prepared run** action opening its original task/due-date preview and
+fingerprint. **Approve and apply** remains an explicit authorized action. The
+run history retains actual apply/rollback receipts; planning is never called done.
+For blocked or exhausted jobs, correct the current facts and use the approved
+workflow template's manual **Preview workflow** path. Once-per-condition dedupe
+also applies to blocked attempts; stage reentry does not retry business work.
+
+An intake/call can be captured into a matter, whose approved opening rule prepares
+a checklist such as review intake, prepare follow-up, and prepare a document.
+The attorney reviews/applies that checklist and uses the existing communication
+and Studio approval flows for the later outreach/document. This queue performs
+none of those provider actions and does not imply their completion.
