@@ -178,10 +178,92 @@ async def test_wrong_tenant_payload_cannot_plan(
     job = await db_session.scalar(
         select(DurableJob).where(DurableJob.kind == outbox.JOB_KIND)
     )
-    # The requested source is not in this tenant (unknown and foreign are identical).
-    job.payload = {**job.payload, "matter_id": str(uuid.uuid4())}
+    from app.models.tenant import Tenant
+    from app.models.user import User
+
+    foreign_tenant = Tenant(name="Other", domain="other.example")
+    db_session.add(foreign_tenant)
+    await db_session.flush()
+    foreign_user = User(tenant_id=foreign_tenant.id, email="other@example.test")
+    db_session.add(foreign_user)
+    await db_session.flush()
+    foreign_matter = Matter(
+        tenant_id=foreign_tenant.id,
+        user_id=foreign_user.id,
+        slug="foreign",
+        matter_name="Foreign",
+    )
+    db_session.add(foreign_matter)
+    await db_session.flush()
+    job.payload = {**job.payload, "matter_id": str(foreign_matter.id)}
     await db_session.commit()
     await drain(db_session)
     await db_session.refresh(job)
     assert job.result == {"outcome": "blocked", "failure_code": "source_unavailable"}
+    assert await db_session.scalar(select(func.count(MatterWorkflowRun.id))) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("successor_status", ["running", "completed"])
+async def test_stale_failure_cannot_overwrite_successor_claim(
+    client, db_session, test_tenant, test_user, monkeypatch, successor_status
+):
+    """Successor claims between rollback and failure persistence: stale writer loses."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    await setup_rule(client, db_session, test_tenant, test_user)
+    await client.post("/api/matters", json={"matter_name": "Fence"})
+    job = await db_session.scalar(
+        select(DurableJob).where(DurableJob.kind == outbox.JOB_KIND)
+    )
+    job_id, tenant_id = job.id, job.tenant_id
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    async def crash(*args, **kwargs):
+        raise RuntimeError("failure")
+
+    original_rollback = AsyncSession.rollback
+
+    async def rollback_then_successor(session):
+        await original_rollback(session)
+        async with factory() as successor:
+            row = await successor.get(DurableJob, job_id)
+            row.attempts += 1
+            row.leased_at = datetime.now(timezone.utc)
+            row.status = successor_status
+            row.result = {"successor": True}
+            await successor.commit()
+
+    monkeypatch.setattr(outbox, "run_planning_job", crash)
+    monkeypatch.setattr(AsyncSession, "rollback", rollback_then_successor)
+    with patch.object(worker, "async_session_maker", factory):
+        assert await worker.process_job(job_id, tenant_id) is False
+    await db_session.refresh(job)
+    assert job.status == successor_status
+    assert job.attempts == 2
+    assert job.result == {"successor": True}
+    assert job.last_error is None
+    monkeypatch.setattr(AsyncSession, "rollback", original_rollback)
+
+
+@pytest.mark.asyncio
+async def test_exhausted_crash_lease_is_reported_failed(
+    client, db_session, test_tenant, test_user
+):
+    await setup_rule(client, db_session, test_tenant, test_user)
+    await client.post("/api/matters", json={"matter_name": "Exhausted"})
+    job = await db_session.scalar(
+        select(DurableJob).where(DurableJob.kind == outbox.JOB_KIND)
+    )
+    job_id, tenant_id = job.id, job.tenant_id
+    job.status = "running"
+    job.attempts = job.max_attempts
+    job.leased_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    with patch.object(worker, "async_session_maker", factory):
+        assert await worker.process_job(job_id, tenant_id) is True
+    await db_session.refresh(job)
+    assert job.status == "failed"
     assert await db_session.scalar(select(func.count(MatterWorkflowRun.id))) == 0

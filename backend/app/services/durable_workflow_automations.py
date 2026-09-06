@@ -189,6 +189,8 @@ async def pending_activity(db, tenant_id, *, matter_id=None, rule_id=None, limit
                 "message": (
                     "Planning failed. Review the matter and create a manual preview."
                     if row.status == "failed"
+                    else "Context unavailable. Review current facts and create a manual preview."
+                    if row.status == "completed"
                     else "Planning is queued; no work has been applied."
                 ),
                 "failure_code": (row.result or {}).get("failure_code"),
