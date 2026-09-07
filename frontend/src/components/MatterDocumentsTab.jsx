@@ -651,7 +651,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
       )}
 
       <button type="button" className="border border-brand-line rounded-lg px-4 py-2" disabled={explorer.listing} onClick={async () => {
-        try { await Promise.all([refreshDocuments(), refreshFolders()]) } catch { explorer.setError('Could not refresh documents. Please retry.') }
+        try { await Promise.all([refreshDocuments(), refreshFolders()]) } catch { toast.error('Could not refresh documents', { message: 'Please retry.' }) }
       }}>Refresh document list</button>
       <details className="border border-brand-line rounded-lg p-3">
         <summary className="cursor-pointer font-semibold">Portal upload-folder link</summary>
