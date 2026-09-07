@@ -24,6 +24,24 @@ The provenance record is server-owned and contains:
 * each replacement's field name, original source text, source-review ID, and
   original anchor.
 
+Template Studio exposes this workflow from the Word editor. The editor sends
+the complete current field schema, including unsaved field names, bindings,
+regions, applicability and review decisions, to
+`POST /api/templates/{id}/derive-word-draft`. The outline endpoint computes a
+reviewable prose/form suggestion from the retained source; choosing `form` is
+an explicit author decision and does not silently flatten or reflow the DOCX.
+The new draft is the only row changed, and the editor refreshes and navigates
+to it after creation. The original evidence can be downloaded through the
+tenant-authorized `original-source` endpoint.
+
+From the source view, an author may select one exact paragraph span and edit
+surrounding wording through `cleanup-word-draft`. The endpoint verifies the
+active source digest and exact original text, rejects removal or reordering of
+literal placeholder tokens, rejects stale anchored schemas pending re-review,
+and creates another draft while copying evidence from the oldest retained
+original. A failed evidence check occurs before persistence; previous masters
+and published releases remain unchanged.
+
 Persist original evidence and derived active source as separate source-version
 artifacts under the tenant-scoped template source directory. The active
 template/version points at the derived artifact and digest; the evidence row
@@ -34,8 +52,8 @@ publication. Save the provenance, active schema, and version pointers in one
 transaction. A new upload, source replacement, or digest mismatch invalidates
 the derived artifact and all test/publication evidence.
 
-Preview and download routes must accept an explicit source kind (`original` or
-`active`), authorize the tenant, and independently verify the selected bytes
+Preview and download routes accept an explicit source kind (`original` or
+`active`) where supported, authorize the tenant, and independently verify the selected bytes
 against their stored digest. The active outline is regenerated from the
 derived bytes, so its review IDs are new; original review decisions are reset
 unless a future implementation proves an exact offset translation. This
