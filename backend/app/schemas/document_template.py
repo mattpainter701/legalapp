@@ -279,6 +279,17 @@ class DocumentTemplateOutlineParagraph(BaseModel):
     container: str
     runs: list[DocumentTemplateOutlineRun] = Field(default_factory=list)
     marker: Optional[DocumentTemplateOutlineMarker] = None
+    alignment: str = "left"
+    numbering: Optional[str] = None
+    dynamic_field: bool = False
+
+
+class DocumentTemplateSourceReviewCandidate(BaseModel):
+    id: str
+    source_text: str
+    docx_anchor: dict[str, int]
+    kind: str
+    context: str
 
 
 class DocumentTemplateOutlineResponse(BaseModel):
@@ -292,3 +303,8 @@ class DocumentTemplateOutlineResponse(BaseModel):
     paragraphs: list[DocumentTemplateOutlineParagraph]
     paragraph_count: int
     truncated: bool = False
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    review_candidates: list[DocumentTemplateSourceReviewCandidate] = Field(
+        default_factory=list
+    )
+    review_truncated: bool = False

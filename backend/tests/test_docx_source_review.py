@@ -446,6 +446,36 @@ def test_source_review_ignores_headings_and_invalid_calendar_dates():
     assert [item["source_text"] for item in candidates] == ["12/25/26"]
 
 
+@pytest.mark.asyncio
+async def test_outline_route_serializes_source_order_review_and_formatting(monkeypatch):
+    from app.routers import document_templates as router
+
+    def build(doc):
+        doc.add_paragraph("Retainer: $500", style="List Number")
+        doc.add_table(rows=1, cols=1).cell(0, 0).text = "Signature: ___"
+
+    content = source(build=build)
+    template = SimpleNamespace(id=uuid.uuid4(), format="docx")
+    user = SimpleNamespace(tenant_id=uuid.uuid4())
+    db = AsyncMock()
+    db.scalar.return_value = template
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        router, "_verified_template_source", AsyncMock(return_value=content)
+    )
+    response = await router.get_template_outline(template.id, current_user=user, db=db)
+    payload = response.model_dump(mode="json")
+    assert [block["kind"] for block in payload["blocks"]] == ["paragraph", "table"]
+    assert payload["paragraphs"][0]["numbering"] == "1."
+    assert payload["paragraphs"][0]["alignment"] == "left"
+    assert payload["paragraphs"][0]["dynamic_field"] is False
+    assert [item["source_text"] for item in payload["review_candidates"]] == [
+        "$500",
+        "___",
+    ]
+    assert payload["review_truncated"] is False
+
+
 def test_intake_review_metadata_and_choice_authority_cannot_be_removed():
     from app.routers.document_templates import _reviewed_variable_schema
 
