@@ -98,6 +98,8 @@ class DocumentTemplateResponse(BaseModel):
     source_content_type: Optional[str] = None
     source_sha256: Optional[str] = None
     source_file_size: Optional[int] = None
+    source_evidence_sha256: Optional[str] = None
+    source_provenance: Optional[dict[str, Any]] = None
     source_ready: bool = True
     last_test_rendered_at: Optional[datetime] = None
     approved_at: Optional[datetime] = None
@@ -180,6 +182,23 @@ class DocumentTemplateRenderRequest(BaseModel):
 
 class DocumentTemplatePublishRequest(BaseModel):
     change_summary: Optional[str] = Field(None, max_length=500)
+
+
+class DocumentTemplateWordDeriveRequest(BaseModel):
+    """Explicit Word span selections used to create a fresh draft source."""
+
+    fields: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+    source_review: dict[str, str] = Field(default_factory=dict, max_length=500)
+    source_mode: Literal["prose", "form"] | None = None
+    reviewed_schema: dict[str, Any] | None = None
+
+
+class DocumentTemplateWordCleanupRequest(BaseModel):
+    paragraph_ordinal: int = Field(ge=0, le=2000)
+    start: int = Field(ge=0, le=20000)
+    end: int = Field(gt=0, le=20000)
+    original_text: str = Field(min_length=1, max_length=10000)
+    replacement_text: str = Field(max_length=10000)
 
 
 class DocumentTemplateVariableSuggestion(BaseModel):
@@ -338,3 +357,4 @@ class DocumentTemplateOutlineResponse(BaseModel):
         default_factory=list
     )
     review_truncated: bool = False
+    source_mode_suggestion: Optional[dict[str, Any]] = None

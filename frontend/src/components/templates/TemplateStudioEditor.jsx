@@ -25,6 +25,8 @@ import {
 import { getTemplateBindings } from '../../api'
 import DocxDocumentView from './DocxDocumentView'
 import WordDocumentPreview from './WordDocumentPreview'
+import WordDeriveDraftAction from './WordDeriveDraftAction'
+import WordCleanupAction from './WordCleanupAction'
 import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocumentCanvas'
 import {
   MIN_FIELD_SIZE,
@@ -150,12 +152,16 @@ function useBindingCatalogue() {
 }
 
 
-export default function TemplateStudioEditor({ template, source, sourceError, onSave }) {
+export default function TemplateStudioEditor({ template, source, sourceError, onSave, onDerived }) {
   const [fields, setFields] = useState(() => schemaFields(template))
   const [applicability, setApplicability] = useState(template.variable_schema?.applicability || null)
   const [regions, setRegions] = useState(() => schemaRegions(template))
   const [coverRegions, setCoverRegions] = useState(() => schemaCoverRegions(template))
   const [sourceReview, setSourceReview] = useState(template.variable_schema?.source_review || {})
+  const [cleanupSelection, setCleanupSelection] = useState(null)
+  const [sourceModeSuggestion, setSourceModeSuggestion] = useState(
+    template.variable_schema?.source_mode_suggestion || null,
+  )
   const [selectedIdentity, setSelectedIdentity] = useState(
     () => fieldIdentity(schemaFields(template)[0], 0),
   )
@@ -446,9 +452,26 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   ))
 
   const previewProblem = sourceError || pdfError || renderError
+  const deriveSchema = {
+    ...mergedVariableSchema(template, fields, regions),
+    ...(isDocx && template.variable_schema?.source_review_version === 1 ? { source_review: sourceReview } : {}),
+    ...(applicability || template.variable_schema?.applicability ? { applicability } : {}),
+  }
 
   return (
     <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-surface-2">
+      {isDocx && template.variable_schema?.source_review_version === 1 && (
+        <div className="border-b border-brand-line p-3">
+          <WordDeriveDraftAction
+            templateId={template.id}
+            fields={deriveSchema.fields}
+            sourceReview={deriveSchema.source_review || {}}
+            reviewedSchema={deriveSchema}
+            suggestedMode={sourceModeSuggestion?.suggested_mode || 'prose'}
+            onCreated={onDerived}
+          />
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2 border-b border-brand-line px-3 py-2">
         {/* Placement tools need page geometry, so they are PDF-only. Everything
             else about a field — its name, what it fills from, when it applies —
@@ -536,12 +559,14 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
       <div className={`grid gap-0 ${pdfSource ? 'lg:grid-cols-[168px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
         {!pdfSource && isDocx && (
-          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256}>
+          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256} fields={fields} selectedIdentity={selectedIdentity} onSelectField={setSelectedIdentity}>
           <DocxDocumentView
             templateId={template.id}
             fields={fields}
             regions={regions}
             sourceReview={sourceReview}
+            onSelectText={(selection) => setCleanupSelection({ paragraph_ordinal: selection.ordinal, start: selection.start, end: selection.end, original_text: selection.text })}
+            onModeSuggestion={setSourceModeSuggestion}
             onReviewChange={template.variable_schema?.source_review_version === 1 ? (next) => {
               undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
               redoStack.current = []
@@ -563,6 +588,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           />
           </WordDocumentPreview>
         )}
+        {isDocx && <WordCleanupAction templateId={template.id} selection={cleanupSelection} onCreated={onDerived} />}
         {!pdfSource && !isDocx && (
           <div className="max-h-[70vh] overflow-y-auto p-5">
             <h2 className="font-semibold text-brand-ink">Markdown template</h2>

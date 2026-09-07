@@ -5,6 +5,18 @@ letterhead, tables, headers and footers. Use page thumbnails, Previous/Next,
 zoom, and Fit document width to inspect the page. Select **Fields** to map text;
 switching views preserves the page and zoom. Mapping state stays in the editor.
 
+Literal `{{field_name}}` placeholders in the saved source are highlighted in
+Document view. Select a highlight with a click or the keyboard to edit that
+field in the existing inspector. Repeated occurrences select the same field;
+pdf.js text runs split by font changes are joined only when their measured
+rectangles are contiguous on one line. Zoom and page changes rebuild the text
+layer against the current page. Changing sources discards old highlights.
+
+Unknown tokens, conflicting field definitions, disconnected fragments and
+tokens spanning lines remain available in Fields. A missing text layer never
+blocks the source preview. These positions are authoring aids for the saved
+source, and are not signing coordinates for a filled document.
+
 This is the retained **source**, before values are filled. A long value or a
 repeating clause can change pagination. Review the generated PDF before saving
 or sending it; viewing the source does not test, approve, or publish a master.

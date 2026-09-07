@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.9 — Turn reviewed Word spans into safe placeholders
+
+Released September 7, 2026.
+
+Reviewed Word source spans can become selectable placeholders while the original upload remains available as evidence.
+
+- **Keep the original upload as evidence.** Studio records separate original and derived source digests so a changed upload invalidates older review and test evidence.
+- **Preserve Word formatting.** Confirmed spans become literal placeholders across split runs, tables, headers, and footers without rebuilding the document as plain text.
+- **Review prose and forms explicitly.** Studio suggests a source mode while allowing a deliberate override; ambiguous or inferred text stays available for review.
+
 ## 2026.09.07.8 — Place signature fields on generated PDFs
 
 Released September 7, 2026.

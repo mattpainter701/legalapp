@@ -2253,6 +2253,18 @@ export const getTemplateFieldUsage = (params) =>
 export const getTemplateOutline = (id) =>
   api.get(`/templates/${id}/outline`).then(r => r.data)
 
+export const deriveWordTemplateDraft = (id, data) =>
+  api.post(`/templates/${id}/derive-word-draft`, data).then(r => r.data)
+
+export const getTemplateOriginalSource = (id, filename = 'original-template.docx') =>
+  api.get(`/templates/${id}/original-source`, { responseType: 'blob' }).then((r) => {
+    const type = r.data?.type || r.headers?.['content-type'] || 'application/octet-stream'
+    return new File([r.data], filename, { type: String(type).split(';')[0].trim() })
+  })
+
+export const cleanupWordTemplateDraft = (id, data) =>
+  api.post(`/templates/${id}/cleanup-word-draft`, data).then(r => r.data)
+
 export const listTemplateVersions = (id, params = {}) =>
   api.get(`/templates/${id}/versions`, { params }).then(r => r.data)
 export const getTemplateVersion = (id, versionNo) =>

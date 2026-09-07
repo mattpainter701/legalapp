@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.9",
+      "version": "2026.09.07.9",
+      "title": "Turn reviewed Word spans into safe placeholders",
+      "published_at": "2026-09-07",
+      "summary": "Reviewed Word source spans can become selectable placeholders while the original upload remains available as evidence.",
+      "highlights": [
+        {
+          "title": "Keep the original upload as evidence",
+          "description": "Studio records separate original and derived source digests so a changed upload invalidates older review and test evidence."
+        },
+        {
+          "title": "Preserve Word formatting",
+          "description": "Confirmed spans become literal placeholders across split runs, tables, headers, and footers without rebuilding the document as plain text."
+        },
+        {
+          "title": "Review prose and forms explicitly",
+          "description": "Studio suggests a source mode while allowing a deliberate override; ambiguous or inferred text stays available for review."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.8",
       "version": "2026.09.07.8",
       "title": "Place signature fields on generated PDFs",

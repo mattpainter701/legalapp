@@ -25,6 +25,7 @@ export default function TemplateStudioWorkspace({
   sourceError = '',
   onSaveFields,
   onRestored,
+  onDerived,
 }) {
   const base = `/templates/${encodeURIComponent(String(template.id).toLowerCase())}/studio`
   const statusRef = useRef(null)
@@ -124,6 +125,7 @@ export default function TemplateStudioWorkspace({
                   source={source}
                   sourceError={sourceError}
                   onSave={onSaveFields}
+                  onDerived={onDerived}
                 />
               )}
             </div>

@@ -60,6 +60,18 @@ class DocumentTemplate(Base):
     source_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Immutable intake evidence retained when a reviewed DOCX gets a derived
+    # active source. These are server-owned and never part of update payloads.
+    source_evidence_storage_path: Mapped[str | None] = mapped_column(
+        String(1000), nullable=True
+    )
+    source_evidence_filename: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    source_evidence_sha256: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    source_provenance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_test_rendered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
