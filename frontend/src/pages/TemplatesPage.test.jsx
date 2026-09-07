@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import TemplatesPage from './TemplatesPage'
 import {
   analyzeTemplateUpload,
+  previewWordUpload,
   proposeTemplateFieldsWithAi,
   createTemplate,
   createTemplateFromUpload,
@@ -31,6 +32,8 @@ vi.mock('../api', () => ({
   getTemplateFieldUsage: vi.fn(),
   getMattersV2: vi.fn().mockResolvedValue({ items: [{ id: 'matter-1', matter_name: 'Smith Matter', client_name: 'Smith' }] }),
   analyzeTemplateUpload: vi.fn(),
+  previewWordUpload: vi.fn().mockRejectedValue(new Error('preview unavailable in test')),
+  getTemplateSourcePreview: vi.fn().mockRejectedValue(new Error('preview unavailable in test')),
   proposeTemplateFieldsWithAi: vi.fn(),
   createTemplate: vi.fn().mockResolvedValue({}),
   createTemplateFromUpload: vi.fn().mockResolvedValue({}),
@@ -598,6 +601,24 @@ describe('document template workflow', () => {
     expect(createTemplate).not.toHaveBeenCalled()
   })
 
+  it('starts Word page rendering as soon as a file is selected, before analysis or saving', async () => {
+    let finishAnalysis
+    analyzeTemplateUpload.mockReturnValueOnce(new Promise(resolve => { finishAnalysis = resolve }))
+    previewWordUpload.mockReturnValueOnce(new Promise(() => {}))
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    const file = new File(['word'], 'immediate.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    fireEvent.change(screen.getByLabelText('Sample document'), { target: { files: [file] } })
+    await waitFor(() => expect(previewWordUpload).toHaveBeenCalledWith(file))
+    expect(screen.getByText(/Preparing document pages/)).toBeVisible()
+    expect(createTemplateFromUpload).not.toHaveBeenCalled()
+    await act(async () => { finishAnalysis({ title: 'Immediate', format: 'docx', body: 'Dear Ada', extracted_text: 'Dear Ada', suggested_variable_schema: { fields: [] }, warnings: [] }) })
+    expect(screen.queryByLabelText('Select source text')).not.toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Add field from text' }))
+    expect(screen.getByLabelText('Select source text')).toBeVisible()
+  })
+
   it('ignores an older analysis response after the selected source changes', async () => {
     let resolveFirst
     let resolveSecond
@@ -762,12 +783,17 @@ describe('document template workflow', () => {
     const file = new File(['word'], 'application.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
     fireEvent.change(screen.getByLabelText('Sample document'), { target: { files: [file] } })
     await screen.findByDisplayValue('Application')
-    await user.click(screen.getByRole('button', { name: 'Add replacement field' }))
-    const variableName = screen.getByLabelText('Automation key')
-    fireEvent.change(variableName, { target: { value: 'client_name' } })
-    fireEvent.change(screen.getByLabelText('Exact text in the source'), { target: { value: 'Ada Lovelace' } })
-    await user.click(screen.getByRole('button', { name: 'Mark' }))
-    expect(screen.getByLabelText('Extracted template body')).toHaveValue('Applicant: {{client_name}}')
+    await user.click(screen.getByRole('button', { name: 'Add field from text' }))
+    const source = screen.getByLabelText('Select source text')
+    const range = document.createRange()
+    range.setStart(source.firstChild, 11)
+    range.setEnd(source.firstChild, 23)
+    window.getSelection().removeAllRanges()
+    window.getSelection().addRange(range)
+    fireEvent.mouseUp(source)
+    await user.click(screen.getByRole('button', { name: 'Make selection a field' }))
+    await user.click(screen.getByText('Advanced field name'))
+    fireEvent.change(screen.getByLabelText('Automation key'), { target: { value: 'client_name' } })
     await user.click(screen.getByRole('checkbox', { name: 'Confirm source comparison' }))
     await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
 

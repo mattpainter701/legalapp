@@ -25,6 +25,32 @@ If conversion is busy or unavailable, the text mapping view stays available
 with Retry document preview. Source-integrity and access failures have distinct
 notices and never return a cached preview instead of an error.
 
+Word uploads now start a rendered page preview immediately when a file is
+selected, in parallel with field detection and before creating a template.
+The Document view remains selected while conversion runs; choose Fields to
+start mapping early or use the explicit fallback if conversion fails.
+
+The import sidebar lists detected and added fields with source text, inclusion,
+type and review status. Select **Add field from text**, highlight the exact words,
+and choose **Make selection a field**. Edit its label/type, compare it with the
+source and save the reviewed draft. No upload is persisted just to show a preview.
+Literal tokens and unambiguous source-text replacements highlight on the page;
+Word paragraph anchors remain in Fields when page location cannot be established
+reliably. No guessed PDF positions are stored as Word anchors.
+
+Test results separate source availability, field definitions, missing sample
+values, generation errors/success and human visual review. A successful render
+is not visual approval; a stale version or diagnostic PDF is not publication
+evidence. Review every generated page before publishing.
+
+`POST /api/templates/intake/preview-render` accepts multipart `file` and returns
+PDF bytes for an unsaved DOCX. It requires `manage_documents`, applies the existing
+upload limit and bounded conversion/cache settings, keys private cached output
+by tenant and source digest, and returns no-store/nosniff headers. It does not
+create a template, a saved source, or testing/publication evidence. Invalid types
+return 422, invalid/empty uploads 400, oversized inputs 413 and unavailable
+conversion 503. Existing saved-source integrity checks remain unchanged.
+
 ## API and operations
 
 `GET /api/templates/{template_id}/preview-render` returns a PDF for a DOCX source.

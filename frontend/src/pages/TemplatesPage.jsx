@@ -4,6 +4,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import PrepareFormWorkspace from '../components/templates/PrepareFormWorkspace'
 import TemplateStudioHome from '../components/templates/TemplateStudioHome'
 import TemplateStudioWorkspace from '../components/templates/TemplateStudioWorkspace'
+import WordImportWorkspace from '../components/templates/WordImportWorkspace'
+import TemplateTestSummary from '../components/templates/TemplateTestSummary'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
 import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
@@ -439,6 +441,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const analysisRequestRef = useRef(0)
 
   const fileKey = file ? `${file.name}:${file.size}:${file.lastModified}` : ''
+  const isWordUpload = /\.docx$/i.test(file?.name || '')
 
   useEffect(() => () => {
     if (sourcePreviewUrl) URL.revokeObjectURL(sourcePreviewUrl)
@@ -730,6 +733,26 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     ])
   }
 
+  const addWordSelection = (sourceText) => {
+    if (!(analysis?.extracted_text || analysis?.body || '').includes(sourceText)) {
+      setError('Select the exact source text again before adding a field.')
+      return
+    }
+    if (fields.some(field => field.included !== false && field.source_text === sourceText)) {
+      setError('That text is already mapped. Select its existing field in the list to edit it.')
+      return
+    }
+    const normalized = normalizeVariableName(sourceText).slice(0, 48) || 'new_field'
+    const base = /^[a-z]/i.test(normalized) ? normalized : `field_${normalized}`
+    let name = base
+    for (let suffix = 2; fields.some(field => field.name === name); suffix += 1) name = `${base}_${suffix}`
+    const field = { name, label: sourceText.slice(0, 60), field_type: 'text', source_text: sourceText, example: sourceText, included: true, confidence: 1, review_required: true, _bodyName: name }
+    setMappedFields(current => [...current, field])
+    setDraftBody(current => current.split(sourceText).join(`{{${name}}}`))
+    setReviewConfirmed(false)
+    setError(null)
+  }
+
   const updateSourceText = (index, sourceText) => {
     setReviewConfirmed(false)
     setMappedFields((current) => current.map((field, fieldIndex) => (
@@ -907,6 +930,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
         </button>
       </div>
 
+      {isWordUpload && <WordImportWorkspace key={fileKey} file={file} analysis={analysisReady ? analysis : null} fields={fields} reviewConfirmed={reviewConfirmed} onFieldsChange={handleWorkspaceFieldsChange} onAddField={addWordSelection} />}
+
       {analysis && (
         <div className="space-y-4 pt-2">
           <div className={`rounded border p-4 ${fields.length ? 'border-brand-green/30 bg-brand-green/10' : 'border-brand-amber/40 bg-brand-amber/10'}`} role="status">
@@ -987,7 +1012,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
           )}
           {isPdfAnalysis ? (
             <PrepareFormWorkspace file={file} analysis={analysis} fields={fields} previewUrl={sourcePreviewUrl} reviewConfirmed={reviewConfirmed} onReviewConfirmed={setReviewConfirmed} onSourceReviewReadyChange={setSourceReviewReady} onFieldsChange={handleWorkspaceFieldsChange} />
-          ) : (
+          ) : isWordUpload ? null : (
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4">
           <div className="border border-brand-line rounded bg-brand-bg p-4">
             <div className="flex items-center justify-between gap-3 mb-3">
@@ -1500,7 +1525,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       <div className="space-y-4">
         {error && (
           <div className="text-sm text-brand-rose bg-brand-rose/10 border border-brand-rose/30 px-3 py-2">
-            {error}
+            {canSaveToMatter ? error : 'The test needs attention. See the results below for the exact issue.'}
           </div>
         )}
 
@@ -1749,6 +1774,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             )}
           </button>
         </div>
+
+        {!canSaveToMatter && <TemplateTestSummary template={template} error={error} rendering={rendering} outputReady={Boolean(filePreview || rendered)} missing={requiredUnresolvedNames} diagnostic={isPdfTemplate && previewPurpose !== 'activation'} />}
 
         {rendered && (
           <div>
