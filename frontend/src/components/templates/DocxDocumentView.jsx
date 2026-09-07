@@ -285,6 +285,7 @@ export default function DocxDocumentView({
   collections = [],
   conditionFields = [],
   onSelectField,
+  onSelectText,
   onCreateField,
   onCreateRegion,
   onRemoveRegion,
@@ -399,7 +400,7 @@ export default function DocxDocumentView({
               opensRegion={openerByOrdinal.get(paragraph.ordinal)}
               selectedName={selectedName}
               onSelectField={onSelectField}
-              onSelectText={(selection) => { setRange(null); setPending(selection) }}
+              onSelectText={(selection) => { setRange(null); setPending(selection); onSelectText?.(selection) }}
               onPickParagraph={extendRange}
               onRemoveRegion={onRemoveRegion}
             />

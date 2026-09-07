@@ -61,6 +61,8 @@ from app.schemas.document_template import (
     DocumentTemplateRenderRequest,
     DocumentTemplateRenderResponse,
     DocumentTemplatePublishRequest,
+    DocumentTemplateWordDeriveRequest,
+    DocumentTemplateWordCleanupRequest,
     DocumentTemplateResponse,
     DocumentTemplateSmartFillRequest,
     DocumentTemplateSmartFillResponse,
@@ -3058,7 +3060,12 @@ async def get_template_outline(
     source = await _verified_template_source(template)
     try:
         outline = await asyncio.to_thread(docx_outline, source)
-    except TemplateDocxError a@router.post(
+    except TemplateDocxError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return DocumentTemplateOutlineResponse(template_id=str(template.id), **outline)
+
+
+@router.post(
     "/{template_id}/derive-word-draft",
     response_model=DocumentTemplateResponse,
 )
@@ -3275,6 +3282,47 @@ async def cleanup_word_draft(
     return _template_response(draft)
 
 
+@router.get("/{template_id}/original-source")
+async def download_original_template_source(
+    template_id: uuid.UUID,
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download retained original evidence for a derived Word draft."""
+
+    tenant_id = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_id))
+    template = await db.scalar(
+        select(DocumentTemplate).where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == tenant_id,
+        )
+    )
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    path = Path(template.source_evidence_storage_path or "").resolve()
+    expected_root = Path(_template_source_dir(str(tenant_id), template.id)).resolve()
+    if (
+        not template.source_evidence_sha256
+        or not path.is_relative_to(expected_root)
+        or not path.is_file()
+    ):
+        raise HTTPException(
+            status_code=409, detail="The original template evidence is unavailable"
+        )
+    content = await asyncio.to_thread(path.read_bytes)
+    if hashlib.sha256(content).hexdigest() != template.source_evidence_sha256:
+        raise HTTPException(
+            status_code=409,
+            detail="The original template evidence failed its integrity check",
+        )
+    return Response(
+        content=content,
+        media_type=template.source_content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_safe_upload_filename(template.source_evidence_filename or "original.docx")}"'
+        },
+    )
 
 
 @router.get("/{template_id}/preview-render")
