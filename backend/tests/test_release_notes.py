@@ -18,9 +18,7 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["version"] == LATEST_RELEASE_ID
     assert latest["is_recent"] is True
     assert len(latest["highlights"]) == 2
-    assert (
-        latest["highlights"][-1]["title"] == "Preserve provider placement"
-    )
+    assert latest["highlights"][-1]["title"] == "Preserve provider placement"
     assert catalog["release_notes"][0] == latest
 
 

@@ -3223,6 +3223,88 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
 
 
 @pytest.mark.asyncio
+async def test_cover_only_pdf_completes_intake_activation_publish_generation(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    """A reviewed value-less cover is a complete PDF template contract."""
+
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from app.models.matter_document import MatterDocument
+    from app.models.plugin import Matter
+
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    schema = {
+        "fields": [],
+        "cover_regions": [
+            {
+                "page": 1,
+                "rect": [72, 690, 300, 730],
+                "source_kind": "manual",
+                "erase_source": True,
+            }
+        ],
+    }
+    created = await client.post(
+        "/api/templates/intake/create",
+        files={"file": ("cover-only.pdf", _blank_pdf_bytes(), "application/pdf")},
+        data={"title": "Cover only", "variable_schema": json.dumps(schema)},
+    )
+    assert created.status_code == 201, created.text
+    template_id = created.json()["id"]
+    assert created.json()["variable_schema"]["fields"] == []
+    assert created.json()["variable_schema"]["cover_regions"]
+
+    activation = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={"variables": {}, "preview_purpose": "activation"},
+    )
+    assert activation.status_code == 200, activation.text
+    activated = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert activated.status_code == 200, activated.text
+    published = await client.post(f"/api/templates/{template_id}/publish", json={})
+    assert published.status_code == 200, published.text
+
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug="cover-only-lifecycle",
+        matter_name="Cover only lifecycle",
+        matter_type="general",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+    generated = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": {},
+            "matter_id": str(matter.id),
+            "preview_purpose": "generation",
+        },
+    )
+    assert generated.status_code == 200, generated.text
+    assert generated.headers["content-type"].startswith("application/pdf")
+    preview_id = generated.headers["x-clarity-preview-id"]
+    saved = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={"variables": {}, "matter_id": str(matter.id), "preview_id": preview_id},
+    )
+    assert saved.status_code == 200, saved.text
+    document = await db_session.scalar(
+        select(MatterDocument).where(
+            MatterDocument.id == uuid.UUID(saved.json()["matter_document_id"])
+        )
+    )
+    assert document is not None
+    assert Path(document.storage_path).read_bytes().startswith(b"%PDF-")
+
+@pytest.mark.asyncio
 async def test_pdf_creation_rejects_unmapped_reviewed_body_and_json_shortcut(
     client, db_session, test_tenant, test_user, tmp_path, monkeypatch
 ):

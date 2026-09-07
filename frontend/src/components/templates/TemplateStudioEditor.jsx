@@ -9,6 +9,7 @@ import {
   AlignLeft,
   CalendarDays,
   CheckSquare,
+  Eraser,
   Loader2,
   Maximize2,
   Minus,
@@ -28,8 +29,10 @@ import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocume
 import {
   MIN_FIELD_SIZE,
   VARIABLE_NAME_PATTERN,
+  canvasToOverlayRect,
   clamp,
   createManualField,
+  createCoverRegion,
   fieldIdentity,
   geometryToOverlays,
   isPdfFile,
@@ -61,10 +64,14 @@ export const schemaRegions = (template) => {
   const regions = template?.variable_schema?.regions
   return Array.isArray(regions) ? regions : []
 }
+export const schemaCoverRegions = (template) => {
+  const regions = template?.variable_schema?.cover_regions
+  return Array.isArray(regions) ? regions : []
+}
 
 /** Merge edited fields back into the template's schema without dropping
  *  server-owned keys such as page geometry, detection metadata, or version. */
-export const mergedVariableSchema = (template, fields, regions) => ({
+export const mergedVariableSchema = (template, fields, regions, coverRegions = []) => ({
   ...(template?.variable_schema && typeof template.variable_schema === 'object'
     ? template.variable_schema
     : {}),
@@ -72,6 +79,9 @@ export const mergedVariableSchema = (template, fields, regions) => ({
   // Regions are authored metadata like fields, so an editor save carries both;
   // omitting the key entirely keeps a template that has none unchanged.
   ...(regions && regions.length ? { regions } : {}),
+  ...((coverRegions.length || template?.variable_schema?.cover_regions)
+    ? { cover_regions: coverRegions }
+    : {}),
 })
 
 function ToolbarButton({ icon: Icon, label, onClick, disabled, active }) {
@@ -144,6 +154,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [fields, setFields] = useState(() => schemaFields(template))
   const [applicability, setApplicability] = useState(template.variable_schema?.applicability || null)
   const [regions, setRegions] = useState(() => schemaRegions(template))
+  const [coverRegions, setCoverRegions] = useState(() => schemaCoverRegions(template))
   const [sourceReview, setSourceReview] = useState(template.variable_schema?.source_review || {})
   const [selectedIdentity, setSelectedIdentity] = useState(
     () => fieldIdentity(schemaFields(template)[0], 0),
@@ -179,6 +190,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     const next = schemaFields(template)
     setFields(next)
     setRegions(schemaRegions(template))
+    setCoverRegions(schemaCoverRegions(template))
     setSourceReview(template.variable_schema?.source_review || {})
     setApplicability(template.variable_schema?.applicability || null)
     setSelectedIdentity(fieldIdentity(next[0], 0))
@@ -225,22 +237,23 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     || (Number(page.rotation || 0) % 180 ? Number(page.width) : Number(page.height)) * zoom
 
   const commitFields = useCallback((nextFields) => {
-    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
+    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, coverRegions, sourceReview }]
     redoStack.current = []
     setHistoryVersion((value) => value + 1)
     setFields(nextFields)
     setDirty(true)
     setSaveError('')
-  }, [fields, regions, sourceReview])
+  }, [fields, regions, coverRegions, sourceReview])
 
   const undo = () => {
     const previous = undoStack.current.at(-1)
     if (!previous) return
     undoStack.current = undoStack.current.slice(0, -1)
-    redoStack.current = [...redoStack.current.slice(-49), { fields, regions, sourceReview }]
+    redoStack.current = [...redoStack.current.slice(-49), { fields, regions, coverRegions, sourceReview }]
     setHistoryVersion((value) => value + 1)
     setFields(previous.fields)
     setRegions(previous.regions)
+    setCoverRegions(previous.coverRegions || [])
     setSourceReview(previous.sourceReview || {})
     setDirty(true)
   }
@@ -249,10 +262,11 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     const next = redoStack.current.at(-1)
     if (!next) return
     redoStack.current = redoStack.current.slice(0, -1)
-    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
+    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, coverRegions, sourceReview }]
     setHistoryVersion((value) => value + 1)
     setFields(next.fields)
     setRegions(next.regions)
+    setCoverRegions(next.coverRegions || [])
     setSourceReview(next.sourceReview || {})
     setDirty(true)
   }
@@ -267,6 +281,37 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     const field = createManualField(kind, { page, pageNumber, fields })
     commitFields([...fields, field])
     setSelectedIdentity(field.pdf_source_key)
+  }
+
+  const setCoverSource = (entry, enabled) => updateField(entry.identity, {
+    erase_source: enabled,
+    pdf_overlay: entry.field.pdf_overlay ? { ...entry.field.pdf_overlay, erase_source: enabled } : entry.field.pdf_overlay,
+    pdf_overlays: Array.isArray(entry.field.pdf_overlays)
+      ? entry.field.pdf_overlays.map((overlay) => ({ ...overlay, erase_source: enabled }))
+      : entry.field.pdf_overlays,
+  })
+
+  const addCoverRegion = () => {
+    const region = { ...createCoverRegion({ page, pageNumber }), id: globalThis.crypto?.randomUUID?.() }
+    commitCoverRegions([...coverRegions, region])
+  }
+
+  const updateCoverRegion = (index, geometry) => {
+    const rect = canvasToOverlayRect(geometry, page, pdfSource ? viewport : null, pdfSource ? 1 : zoom)
+    commitCoverRegions(coverRegions.map((item, itemIndex) => itemIndex === index ? { ...item, page: pageNumber, rect } : item))
+  }
+
+  const removeCoverRegion = (index) => {
+    commitCoverRegions(coverRegions.filter((_, itemIndex) => itemIndex !== index))
+  }
+
+  const commitCoverRegions = (nextCoverRegions) => {
+    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, coverRegions, sourceReview }]
+    redoStack.current = []
+    setHistoryVersion((value) => value + 1)
+    setCoverRegions(nextCoverRegions)
+    setDirty(true)
+    setSaveError('')
   }
 
   // A Word field is created from a text selection rather than a drawn box: the
@@ -372,7 +417,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     setSaving(true)
     setSaveError('')
     try {
-      await onSave({ ...mergedVariableSchema(template, fields, regions), ...(isDocx && template.variable_schema?.source_review_version === 1 ? { source_review: sourceReview } : {}), ...(applicability || template.variable_schema?.applicability ? { applicability } : {}) })
+      await onSave({ ...mergedVariableSchema(template, fields, regions, coverRegions), ...(isDocx && template.variable_schema?.source_review_version === 1 ? { source_review: sourceReview } : {}), ...(applicability || template.variable_schema?.applicability ? { applicability } : {}) })
       setDirty(false)
       setSavedAt(new Date())
     } catch (error) {
@@ -419,6 +464,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 onClick={() => addField(tool.kind)}
               />
             ))}
+            <ToolbarButton icon={Eraser} label="Cover" onClick={addCoverRegion} />
             <span className="mx-1 hidden h-5 w-px bg-brand-line sm:block" aria-hidden="true" />
             <ToolbarButton icon={Undo2} label="Undo" onClick={undo} disabled={!undoStack.current.length} />
             <ToolbarButton icon={Redo2} label="Redo" onClick={redo} disabled={!redoStack.current.length} />
@@ -575,6 +621,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 `Page ${pageNumber} could not be rendered. (${error?.message || 'Preview unavailable'})`,
               )}
             />
+            {coverRegions.map((region, index) => Number(region.page) === pageNumber ? (() => {
+              const geometry = overlayToCanvasRect(region, page, pdfSource ? viewport : null, pdfSource ? 1 : zoom)
+              return <Rnd key={`cover:${index}`} bounds="parent" size={{ width: geometry.width, height: geometry.height }} position={{ x: geometry.x, y: geometry.y }} minWidth={MIN_FIELD_SIZE} minHeight={MIN_FIELD_SIZE} onDragStop={(_, data) => updateCoverRegion(index, { ...geometry, x: data.x, y: data.y })} onResizeStop={(_, __, ref, ___, position) => updateCoverRegion(index, { x: position.x, y: position.y, width: ref.offsetWidth, height: ref.offsetHeight })} className="rounded-sm border-2 border-slate-700 bg-white/90 cursor-move"><span className="pointer-events-none text-[10px] font-semibold text-slate-700">Cover</span><button type="button" aria-label="Remove cover region" onClick={(event) => { event.stopPropagation(); removeCoverRegion(index) }} className="absolute right-0 top-0 bg-slate-700 px-1 text-[10px] text-white">×</button></Rnd>
+            })() : null)}
             {visiblePlacements.map(({ entry, overlay, index }) => {
               const rect = overlayToCanvasRect(
                 overlay,
@@ -760,6 +810,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 />
                 Required
               </label>
+              {placementsFor(selected).length > 0 && <label className="flex items-start gap-2 text-sm text-brand-ink"><input type="checkbox" aria-label="Cover what is underneath" checked={Boolean(selected.erase_source ?? placementsFor(selected)[0]?.overlay?.erase_source)} onChange={(event) => setCoverSource(selectedEntry, event.target.checked)} className="mt-0.5" /><span>Cover what is underneath<p className="text-[11px] text-brand-muted">Paints white over the source when generated.</p></span></label>}
               <p className="text-[11px] text-brand-muted">
                 Page {Number(placementsFor(selected)[0]?.overlay?.page || selected.page || 1)}
                 {selected.pdf_field_name ? ' · AcroForm field (position fixed by the document)' : ''}

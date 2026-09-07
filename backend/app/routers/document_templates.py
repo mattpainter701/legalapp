@@ -1520,6 +1520,50 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         except TemplateRegionError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # PDF white-out rectangles are value-less authoring metadata.  Keep them
+    # outside ``fields`` so they can never become caller-supplied variables.
+    cover_regions = schema.get("cover_regions")
+    if cover_regions is not None:
+        if not isinstance(cover_regions, list) or len(cover_regions) > 200:
+            raise HTTPException(
+                status_code=422,
+                detail="variable_schema.cover_regions must be an array of at most 200 regions",
+            )
+        reviewed_covers: list[dict] = []
+        for index, region in enumerate(cover_regions):
+            if not isinstance(region, dict):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"PDF cover region {index + 1} must be an object",
+                )
+            raw_page = region.get("page")
+            try:
+                page_number = int(raw_page)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"PDF cover region {index + 1} page must be an integer",
+                ) from exc
+            if isinstance(raw_page, bool) or float(raw_page) != page_number:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"PDF cover region {index + 1} page must be an integer",
+                )
+            rect = _safe_rect(
+                region.get("rect"),
+                page_number=page_number,
+                label="PDF cover region rectangle",
+            )
+            reviewed_covers.append(
+                {
+                    "page": page_number,
+                    "rect": rect,
+                    "source_kind": "manual",
+                    "erase_source": True,
+                }
+            )
+        schema["cover_regions"] = reviewed_covers
+
     # Conditions are checked once the full name set is known, so logic that
     # references a field the template does not define is rejected at save time
     # rather than silently dropping a clause at generation time.
@@ -2761,15 +2805,22 @@ async def create_template_from_sample(
     # canvas can still add valid manual overlays. Validate the final reviewed
     # contract, rather than rejecting the source before the user's edits are
     # considered.
-    if analysis.format == "pdf" and not any(
-        isinstance(field, dict)
-        and field.get("included", True) is True
-        and (
-            field.get("pdf_field_name")
-            or field.get("pdf_overlay")
-            or field.get("pdf_overlays")
+    if (
+        analysis.format == "pdf"
+        and not (
+            isinstance(reviewed_schema.get("cover_regions"), list)
+            and reviewed_schema.get("cover_regions")
         )
-        for field in (reviewed_schema.get("fields") or [])
+        and not any(
+            isinstance(field, dict)
+            and field.get("included", True) is True
+            and (
+                field.get("pdf_field_name")
+                or field.get("pdf_overlay")
+                or field.get("pdf_overlays")
+            )
+            for field in (reviewed_schema.get("fields") or [])
+        )
     ):
         raise HTTPException(
             status_code=422,
@@ -3553,7 +3604,10 @@ async def update_template(
                 or field.get("pdf_overlays")
             )
         }
-        if not mapped_variables:
+        if not mapped_variables and not (
+            isinstance(updates["variable_schema"].get("cover_regions"), list)
+            and updates["variable_schema"].get("cover_regions")
+        ):
             raise HTTPException(
                 status_code=422,
                 detail=(
