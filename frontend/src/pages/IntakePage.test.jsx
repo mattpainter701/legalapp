@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import IntakePage from './IntakePage'
-import { convertLead, getMatterFieldOptions } from '../api'
+import { convertLead, getLeads, getMatterFieldOptions, updateLead } from '../api'
 
 vi.mock('../App', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }))
 
@@ -65,5 +65,30 @@ describe('IntakePage matter conversion', () => {
       jurisdiction: 'North Dakota',
       counterparty: 'John Doe',
     })))
+  })
+
+  it('shows a retry action when loading leads fails', async () => {
+    getLeads.mockRejectedValueOnce({ response: { data: { detail: 'Intake service unavailable' } } })
+    getLeads.mockResolvedValueOnce([])
+    const user = userEvent.setup()
+    render(<MemoryRouter><IntakePage /></MemoryRouter>)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Intake service unavailable')
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(getLeads).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('No leads yet. Add your first intake inquiry.')).toBeInTheDocument()
+  })
+
+  it('surfaces a failed lead stage update', async () => {
+    getLeads.mockResolvedValueOnce([{
+      id: 'lead-2', status: 'new', created_at: '2026-07-20T12:00:00Z', contact_id: 'contact-2',
+      contact: { display_name: 'Alex Smith' },
+    }])
+    updateLead.mockRejectedValueOnce({ response: { data: { detail: 'Lead is locked' } } })
+    const user = userEvent.setup()
+    render(<MemoryRouter><IntakePage /></MemoryRouter>)
+
+    await user.click(await screen.findByRole('button', { name: 'Advance →' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Lead is locked')
   })
 })

@@ -125,6 +125,57 @@ async def test_ms_sync_creates_free_tier_user_and_records_state(
 
 
 @pytest.mark.asyncio
+async def test_ms_sync_loads_existing_users_and_workspace_default_once(
+    db_session, test_tenant
+):
+    db_session.add(
+        TenantCredential(
+            tenant_id=test_tenant.id,
+            provider="microsoft",
+            encrypted_access_token="enc",
+            scopes="User.Read.All",
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+    payload = {
+        "value": [
+            {"id": "ms-1", "mail": "first@testfirm.com", "displayName": "First"},
+            {"id": "ms-2", "mail": "second@testfirm.com", "displayName": "Second"},
+        ]
+    }
+    default = AsyncMock(return_value=False)
+    with (
+        patch("app.services.user_sync.get_fresh_token", new=AsyncMock(return_value="tok")),
+        patch("app.services.user_sync.httpx.AsyncClient", return_value=_FakeClient(payload)),
+        patch(
+            "app.services.workspace_mcp_access.tenant_workspace_mcp_default",
+            new=default,
+        ),
+    ):
+        result = await UserSyncService().sync_microsoft_users(
+            db_session, str(test_tenant.id)
+        )
+
+    assert result["created"] == 2
+    assert default.await_count == 1
+    users = (
+        await db_session.execute(
+            select(User)
+            .where(
+                User.tenant_id == test_tenant.id,
+                User.email.in_(["first@testfirm.com", "second@testfirm.com"]),
+            )
+            .order_by(User.email)
+        )
+    ).scalars().all()
+    assert [(user.email, user.workspace_mcp_enabled) for user in users] == [
+        ("first@testfirm.com", False),
+        ("second@testfirm.com", False),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_sync_does_not_relicense_existing_user(db_session, test_tenant):
     # Existing licensed user (e.g. firm owner) already in the directory result
     db_session.add(

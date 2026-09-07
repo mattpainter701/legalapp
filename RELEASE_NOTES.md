@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.06.8 — Correct everyday work and keep your place
+
+Released September 6, 2026.
+
+Edit task details, return to the right matter section, and recover from estate-entry errors while reducing unnecessary background work.
+
+- **Keep the selected work in view.** Return to the right matter section with bookmarks and browser Back. Document review returns to Documents, and new tasks inherit the selected matter.
+- **Correct work and recover from interruptions.** Correct task details and clear dates without recreating work. Estate forms explain errors and retain failed drafts. Intake recovery and Studio Undo are more reliable.
+- **Use fewer resources.** Assistant lists load where they are used, portal message polling waits for pending reads, directory sync reuses user lookups, and oversized chat attachment reads are bounded.
+
 ## 2026.09.06.7 — Keep new-client intake moving from paperwork to meeting
 
 Released September 6, 2026.

@@ -1,7 +1,7 @@
 """Task assignment notes, closure reasons, and customer-history documentation."""
 
 import uuid
-from datetime import date
+from datetime import date, time
 
 import pytest
 from sqlalchemy import event, func, select
@@ -136,6 +136,44 @@ async def test_cancel_requires_reason_and_documents_history(
     assert resp.status_code == 200
     assert resp.json()["closed_reason"] is None
     assert resp.json()["closed_by_user_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_task_patch_explicitly_clears_nullable_edit_fields_but_omission_preserves(
+    client, db_session, test_tenant, test_user
+):
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Review filing",
+        description="Keep this note until cleared",
+        status="pending",
+        priority="medium",
+        due_date=date.today(),
+        due_time=time(14, 30),
+        assigned_to_user_id=test_user.id,
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    # Omitting nullable fields leaves the existing values intact.
+    response = await client.patch(
+        f"/api/tasks/{task.id}",
+        json={"title": "Updated filing title"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["description"] == "Keep this note until cleared"
+    assert response.json()["due_date"] == date.today().isoformat()
+    assert response.json()["due_time"] == "14:30:00"
+
+    response = await client.patch(
+        f"/api/tasks/{task.id}",
+        json={"description": None, "due_date": None, "due_time": None},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["description"] is None
+    assert response.json()["due_date"] is None
+    assert response.json()["due_time"] is None
 
 
 @pytest.mark.asyncio

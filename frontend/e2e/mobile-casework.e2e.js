@@ -106,6 +106,22 @@ test('denied note retains text and never reports saved', async ({ page }) => {
   expect(state.sends).toEqual([])
 })
 
+test('matter documents remain reachable after a task detour, browser back, and refresh', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await fixture(page)
+  const nav = page.getByRole('navigation', { name: 'Mobile matter casework' })
+  await nav.getByRole('button', { name: 'Read documents' }).click()
+  await expect(page).toHaveURL(new RegExp(`/matters/${matterId}\\?tab=documents`))
+  await expect(page.getByText('Authorized case note.txt', { exact: true }).first()).toBeVisible()
+  await nav.getByRole('button', { name: 'Manage tasks' }).click()
+  await expect(page.getByLabel('Filter tasks by matter')).toHaveValue(matterId)
+  await page.goBack()
+  await expect(page.getByText('Authorized case note.txt', { exact: true }).first()).toBeVisible()
+  await page.reload()
+  await expect(page.getByLabel('Matter section')).toHaveValue('documents')
+  await expect(page.getByText('Authorized case note.txt', { exact: true }).first()).toBeVisible()
+})
+
 const taskId = '00000000-0000-4000-8000-0000000000d1'
 const conversationId = '00000000-0000-4000-8000-0000000000c2'
 const source = {

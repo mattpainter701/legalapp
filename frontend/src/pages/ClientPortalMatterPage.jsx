@@ -640,7 +640,7 @@ function Field({ label, value }) {
 
 // ── Messages ────────────────────────────────────────────────────────────────
 
-function MessagesTab({ onSessionError, onChanged }) {
+export function MessagesTab({ onSessionError, onChanged }) {
   const [messages, setMessages] = useState([])
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
@@ -648,11 +648,16 @@ function MessagesTab({ onSessionError, onChanged }) {
   const [err, setErr] = useState('')
   const scrollRef = useRef(null)
   const markedRef = useRef(false)
+  const loadInFlightRef = useRef(null)
 
   const load = useCallback(
-    ({ quiet = false } = {}) => {
+    async ({ quiet = false, force = false } = {}) => {
+      if (loadInFlightRef.current) {
+        if (!force) return loadInFlightRef.current
+        await loadInFlightRef.current
+      }
       if (!quiet) setLoading(true)
-      return listClientPortalMessages()
+      const request = listClientPortalMessages()
         .then((data) => {
           setMessages(data?.messages || [])
           setErr('')
@@ -664,7 +669,12 @@ function MessagesTab({ onSessionError, onChanged }) {
           }
           return null
         })
-        .finally(() => setLoading(false))
+        .finally(() => {
+          setLoading(false)
+          loadInFlightRef.current = null
+        })
+      loadInFlightRef.current = request
+      return request
     },
     [onSessionError],
   )
@@ -673,8 +683,24 @@ function MessagesTab({ onSessionError, onChanged }) {
 
   // Keep the thread live while the client is reading it.
   useEffect(() => {
-    const id = setInterval(() => load({ quiet: true }), MESSAGE_POLL_MS)
-    return () => clearInterval(id)
+    let stopped = false
+    let timer
+    const schedule = () => {
+      if (!stopped) timer = setTimeout(poll, MESSAGE_POLL_MS)
+    }
+    const poll = () => {
+      if (stopped) return
+      if (document.visibilityState !== 'visible') {
+        schedule()
+        return
+      }
+      load({ quiet: true }).finally(schedule)
+    }
+    poll()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+    }
   }, [load])
 
   // Opening the tab is the read receipt; only clear the badge once.
@@ -701,7 +727,7 @@ function MessagesTab({ onSessionError, onChanged }) {
     try {
       await sendClientPortalMessage({ body: trimmed })
       setBody('')
-      await load({ quiet: true })
+      await load({ quiet: true, force: true })
       onChanged()
     } catch (e2) {
       if (!onSessionError(e2)) {

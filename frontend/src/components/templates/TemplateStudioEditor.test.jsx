@@ -166,6 +166,40 @@ describe('TemplateStudioEditor', () => {
     await waitFor(() => expect(screen.getByText('0 regions')).toBeInTheDocument())
   })
 
+  it('undoes a region edit without changing fields', async () => {
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [{ name: 'a' }] } }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Mark repeating' }))
+    await waitFor(() => expect(screen.getByText('1 regions')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(screen.getByText('0 regions')).toBeInTheDocument()
+    expect(screen.getByText('1 mapped')).toBeInTheDocument()
+  })
+
+  it('redoes mixed field and region edits in the original order', async () => {
+    render(
+      <TemplateStudioEditor
+        template={{ id: 'x', format: 'docx', variable_schema: { fields: [] } }}
+        source={null}
+        onSave={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Mark repeating' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Select text' }))
+    await waitFor(() => expect(screen.getByText('1 mapped')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(screen.getByText('0 mapped')).toBeInTheDocument()
+    expect(screen.getByText('1 regions')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Redo' }))
+    expect(screen.getByText('1 mapped')).toBeInTheDocument()
+    expect(screen.getByText('1 regions')).toBeInTheDocument()
+  })
+
   it('omits the regions key entirely for a template that has none', async () => {
     // A template with no regions must serialise exactly as it did before
     // regions existed.

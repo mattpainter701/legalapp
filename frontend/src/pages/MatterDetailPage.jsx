@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../App'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
@@ -224,16 +224,30 @@ function DueDateLabel({ dueDate }) {
 }
 
 const KEY_DATE_TYPES = new Set(['hearing', 'filing', 'deposition', 'deadline'])
+const MATTER_SECTIONS = new Set(['dashboard', 'activity', 'team', 'workflow', 'documents', 'correspondence', 'portal', 'billing', 'chat', 'settings'])
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function MatterDetailPage() {
   const { id } = useParams()
+  return <MatterWorkspace key={id} />
+}
+
+function MatterWorkspace() {
+  const { id } = useParams()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
   const [matter, setMatter] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [activeTab, setActiveTab] = useState('dashboard')
+  const requestedTab = searchParams.get('tab')
+  const activeTab = MATTER_SECTIONS.has(requestedTab) ? requestedTab : 'dashboard'
+  const setActiveTab = (tab) => setSearchParams(previous => {
+    const next = new URLSearchParams(previous)
+    if (tab === 'dashboard') next.delete('tab')
+    else next.set('tab', tab)
+    return next
+  })
   const noteRequest = useRef(null)
   const noteBusy = useRef(false)
   const [noteNotice, setNoteNotice] = useState(null)
@@ -256,6 +270,10 @@ export default function MatterDetailPage() {
   const [tasks, setTasks] = useState([])
   const [tasksLoading, setTasksLoading] = useState(false)
   const [tasksError, setTasksError] = useState(false)
+  const [taskActionError, setTaskActionError] = useState(null)
+  const [completingTasks, setCompletingTasks] = useState(new Set())
+  const taskBusy = useRef(new Set())
+  const dashboardRequest = useRef(0)
   const [showDetailsPanel, setShowDetailsPanel] = useState(false)
   const [showAddTask, setShowAddTask] = useState(false)
   const [showCompose, setShowCompose] = useState(false)
@@ -278,6 +296,7 @@ export default function MatterDetailPage() {
     setNoteNotice(null)
     setShowAddNote(false)
     setNewNote({ note_type: 'internal', title: '', content: '' })
+    return () => { noteGeneration.current += 1 }
   }, [id])
   const [showLogComm, setShowLogComm] = useState(false)
   const [newComm, setNewComm] = useState({ direction: 'outbound', channel: 'email', subject: '', body: '' })
@@ -333,17 +352,20 @@ export default function MatterDetailPage() {
   }, [id])
 
   const loadDashboard = useCallback(async () => {
+    const request = ++dashboardRequest.current
     setTasksLoading(true)
     try {
       const [dashData, taskData] = await Promise.all([
         getMatterDashboard(id).catch(() => null),
-        getTasks({ matter_id: id, status: 'pending' }).then(data => { setTasksError(false); return data }).catch(() => { setTasksError(true); return { items: [] } }),
+        getTasks({ matter_id: id, status: 'pending' }).catch(() => null),
       ])
+      if (request !== dashboardRequest.current) return
+      setTasksError(taskData === null)
       setDashboard(dashData)
-      const taskList = Array.isArray(taskData) ? taskData : taskData.items || []
+      const taskList = Array.isArray(taskData) ? taskData : taskData?.items || []
       setTasks(taskList)
     } finally {
-      setTasksLoading(false)
+      if (request === dashboardRequest.current) setTasksLoading(false)
     }
   }, [id])
 
@@ -577,11 +599,21 @@ export default function MatterDetailPage() {
   }
 
   const handleTaskComplete = async (taskId) => {
+    if (taskBusy.current.has(taskId)) return
+    taskBusy.current.add(taskId)
+    setCompletingTasks(new Set(taskBusy.current))
+    setTaskActionError(null)
     try {
       await updateTask(taskId, { status: 'completed' })
       setTasks(prev => prev.filter(t => t.id !== taskId))
       setDashboard(prev => prev ? { ...prev, open_tasks: Math.max(0, prev.open_tasks - 1) } : prev)
-    } catch { /* silent */ }
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+      setTaskActionError(typeof detail === 'string' ? detail : 'Could not complete this task. Open the task to review its current status or try again.')
+    } finally {
+      taskBusy.current.delete(taskId)
+      setCompletingTasks(new Set(taskBusy.current))
+    }
   }
 
   if (loading) {
@@ -877,6 +909,11 @@ export default function MatterDetailPage() {
             </div>
 
             {/* Key Dates + To-Do */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <Link to={`/tasks?matter_id=${id}`} className="text-sm font-semibold text-brand-accent hover:underline">Manage matter tasks</Link>
+              {tasksError && <div role="alert" className="text-sm text-brand-rose">Open tasks could not load. <button onClick={loadDashboard} className="font-semibold underline">Retry tasks</button></div>}
+              {taskActionError && <p role="alert" className="text-sm text-brand-rose">{taskActionError}</p>}
+            </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Key Dates (left, 2/3) */}
               <div className="lg:col-span-2 bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
@@ -889,7 +926,7 @@ export default function MatterDetailPage() {
                 <div className="p-4">
                   {tasksLoading ? (
                     <div className="flex justify-center py-8"><div className="w-5 h-5 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
-                  ) : keyDateTasks.length === 0 ? (
+                  ) : tasksError ? null : keyDateTasks.length === 0 ? (
                     <div className="text-center py-10">
                       <Icon d={Icons.clock} size={28} className="mx-auto text-brand-line-2 mb-2" />
                       <p className="text-brand-muted text-sm font-sans">No hearings, filings, or deadlines in the next 30 days.</p>
@@ -901,12 +938,14 @@ export default function MatterDetailPage() {
                         <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl border border-brand-line hover:border-brand-line-2 bg-brand-bg-soft/40 group transition-colors">
                           <button
                             onClick={() => handleTaskComplete(t.id)}
+                            disabled={completingTasks.has(t.id)}
+                            aria-label={`Complete task: ${t.title}`}
                             className="shrink-0 w-5 h-5 rounded-full border-2 border-brand-line group-hover:border-brand-accent hover:bg-brand-accent/10 transition-colors"
                             title="Mark complete"
                           />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-[14px] font-semibold text-brand-ink font-sans truncate">{t.title}</span>
+                              <Link to={`/tasks/${t.id}?matter_id=${id}`} className="text-[14px] font-semibold text-brand-ink font-sans break-words hover:underline">{t.title}</Link>
                               <TaskTypeBadge type={t.task_type} />
                             </div>
                             <div className="flex items-center gap-3 mt-0.5">
@@ -930,10 +969,10 @@ export default function MatterDetailPage() {
                   </button>
                 </div>
                 <div className="p-4">
-                  {todoTasks.length === 0 ? (
+                  {tasksLoading ? <p className="text-sm text-brand-muted">Loading tasks…</p> : tasksError ? null : todoTasks.length === 0 ? (
                     <div className="text-center py-8">
                       <Icon d={Icons.checkCircle} size={28} className="mx-auto text-brand-green mb-2" />
-                      <p className="text-brand-muted text-sm font-sans">All caught up.</p>
+                      <p className="text-brand-muted text-sm font-sans">No pending to-dos. Manage matter tasks to see work in progress, waiting, or review.</p>
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -941,17 +980,19 @@ export default function MatterDetailPage() {
                         <div key={t.id} className="flex items-start gap-2 p-2.5 rounded-lg hover:bg-brand-bg-soft group transition-colors">
                           <button
                             onClick={() => handleTaskComplete(t.id)}
+                            disabled={completingTasks.has(t.id)}
+                            aria-label={`Complete task: ${t.title}`}
                             className="shrink-0 mt-0.5 w-4 h-4 rounded border border-brand-line group-hover:border-brand-accent transition-colors"
                             title="Mark complete"
                           />
                           <div className="flex-1 min-w-0">
-                            <div className="text-[13px] font-sans text-brand-ink truncate">{t.title}</div>
+                            <Link to={`/tasks/${t.id}?matter_id=${id}`} className="text-[13px] font-sans text-brand-ink break-words hover:underline">{t.title}</Link>
                             {t.due_date && <DueDateLabel dueDate={t.due_date} />}
                           </div>
                         </div>
                       ))}
                       {todoTasks.length > 8 && (
-                        <p className="text-[12px] text-brand-muted font-sans text-center pt-1">+{todoTasks.length - 8} more</p>
+                        <Link to={`/tasks?matter_id=${id}`} className="block text-[12px] text-brand-accent font-sans text-center pt-1 hover:underline">View all tasks (+{todoTasks.length - 8} more pending)</Link>
                       )}
                     </div>
                   )}

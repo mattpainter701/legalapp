@@ -1,10 +1,10 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { Link, MemoryRouter } from 'react-router-dom'
 import { axe } from 'jest-axe'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TasksPage from './TasksPage'
-import { getOverdueTasks, getTaskBoard, getTaskBoardConfig, getTasks, sendTaskReminder } from '../api'
+import { createTask, getOverdueTasks, getTaskBoard, getTaskBoardConfig, getTasks, sendTaskReminder, updateTask } from '../api'
 
 vi.mock('../App', () => ({
   useAuth: () => ({
@@ -52,6 +52,7 @@ const task = {
   contact_id: null,
   source: null,
   external_ref: null,
+  version: 7,
 }
 
 describe('TasksPage accessibility', () => {
@@ -187,5 +188,91 @@ describe('TasksPage accessibility', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Board' })).not.toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true')
     expect(getTaskBoard).not.toHaveBeenCalled()
+  })
+
+  it('carries a matter deep-link into newly created tasks', async () => {
+    const user = userEvent.setup()
+    createTask.mockResolvedValueOnce({ ...task, id: 'task-2', matter_id: 'matter-7' })
+    render(<MemoryRouter initialEntries={['/tasks?matter_id=matter-7']}><TasksPage /></MemoryRouter>)
+    await screen.findByText('Return intake call')
+    await user.click(screen.getByRole('button', { name: 'New Task' }))
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'File status report')
+    await user.click(screen.getByRole('button', { name: 'Create Task' }))
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'File status report', matter_id: 'matter-7',
+    })))
+  })
+
+  it('edits task details and clears a due date explicitly', async () => {
+    const user = userEvent.setup()
+    getTasks.mockResolvedValueOnce({ items: [{ ...task, due_date: '2099-01-02', due_time: '14:00:00' }] })
+    updateTask.mockResolvedValueOnce({ ...task, title: 'Updated task', due_date: null })
+    render(<MemoryRouter><TasksPage /></MemoryRouter>)
+    await screen.findByText('Return intake call')
+    await user.click(screen.getByRole('button', { name: 'Edit task: Return intake call' }))
+    const title = screen.getByRole('textbox', { name: 'Task title' })
+    await user.clear(title)
+    await user.type(title, 'Updated task')
+    fireEvent.change(screen.getByLabelText('Task due date'), { target: { value: '' } })
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ title: 'Updated task', due_date: null, due_time: null })))
+  })
+
+  it('keeps edit inputs and shows the API error when correction fails', async () => {
+    const user = userEvent.setup()
+    updateTask.mockRejectedValueOnce({ response: { data: { detail: 'Task is locked' } } })
+    render(<MemoryRouter><TasksPage /></MemoryRouter>)
+    await screen.findByText('Return intake call')
+    await user.click(screen.getByRole('button', { name: 'Edit task: Return intake call' }))
+    const title = screen.getByRole('textbox', { name: 'Task title' })
+    await user.clear(title)
+    await user.type(title, 'Corrected title')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Task is locked')
+    expect(screen.getByRole('textbox', { name: 'Task title' })).toHaveValue('Corrected title')
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+  })
+
+  it('keeps the editor open during a pending save and sends the task version once', async () => {
+    const user = userEvent.setup()
+    let resolveSave
+    updateTask.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve }))
+    render(<MemoryRouter><TasksPage /></MemoryRouter>)
+    await screen.findByText('Return intake call')
+    await user.click(screen.getByRole('button', { name: 'Edit task: Return intake call' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Saving…' }))
+    await user.keyboard('{Escape}')
+    expect(updateTask).toHaveBeenCalledTimes(1)
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ expected_version: 7 }))
+    expect(screen.getByRole('dialog', { name: 'Edit Task' })).toBeInTheDocument()
+    await act(async () => resolveSave({ ...task, title: task.title }))
+  })
+
+  it('does not crash when the edit API returns an object error detail', async () => {
+    const user = userEvent.setup()
+    updateTask.mockRejectedValueOnce({ response: { data: { detail: { message: 'Task locked' } } } })
+    render(<MemoryRouter><TasksPage /></MemoryRouter>)
+    await screen.findByText('Return intake call')
+    await user.click(screen.getByRole('button', { name: 'Edit task: Return intake call' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Task locked')
+  })
+
+  it.each(['resolve', 'reject'])('keeps the current matter list after an earlier request %s', async (outcome) => {
+    let settleA
+    getTasks.mockImplementation(({ matter_id }) => matter_id === 'A'
+      ? new Promise((resolve, reject) => { settleA = outcome === 'resolve' ? resolve : reject })
+      : Promise.resolve({ items: [{ ...task, id: 'B-task', title: 'Current B task' }] }))
+    render(<MemoryRouter initialEntries={['/tasks?matter_id=A']}><Link to="/tasks?matter_id=B">Switch matter</Link><TasksPage /></MemoryRouter>)
+    await waitFor(() => expect(getTasks).toHaveBeenCalledWith(expect.objectContaining({ matter_id: 'A' })))
+    fireEvent.click(screen.getByRole('link', { name: 'Switch matter' }))
+    await screen.findByText('Current B task')
+    expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ matter_id: 'B' }))
+    expect(screen.getByLabelText('Filter tasks by matter')).toHaveValue('B')
+    await act(async () => settleA(outcome === 'resolve' ? { items: [{ ...task, title: 'Old A task' }] } : new Error('old failure')))
+    expect(screen.getByText('Current B task')).toBeInTheDocument()
+    expect(screen.queryByText('Old A task')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useToast } from '../components/toast/useToast'
 import { useNavigate } from 'react-router-dom'
@@ -418,8 +418,10 @@ export default function CommunicationsPage() {
   const [editEntry, setEditEntry] = useState(null)
   const [emailSyncing, setEmailSyncing] = useState(null)
   const [emailSyncResult, setEmailSyncResult] = useState(null)
+  const fetchSequenceRef = useRef(0)
 
   const fetchLogs = useCallback(async () => {
+    const requestSequence = ++fetchSequenceRef.current
     setLoading(true)
     setError(null)
     try {
@@ -429,12 +431,14 @@ export default function CommunicationsPage() {
       if (filterMatterId.trim()) params.matter_id = filterMatterId.trim()
       if (filterContactId.trim()) params.contact_id = filterContactId.trim()
       const data = await getCommunications(params)
+      if (requestSequence !== fetchSequenceRef.current) return
       setItems(data.items || [])
       setTotal(data.total || 0)
     } catch (err) {
+      if (requestSequence !== fetchSequenceRef.current) return
       setError(err?.response?.data?.detail || 'Failed to load communications.')
     } finally {
-      setLoading(false)
+      if (requestSequence === fetchSequenceRef.current) setLoading(false)
     }
   }, [filterChannel, filterDirection, filterMatterId, filterContactId, offset])
 
@@ -442,10 +446,12 @@ export default function CommunicationsPage() {
     fetchLogs()
   }, [fetchLogs])
 
-  // Reset offset when filters change
-  useEffect(() => {
+  useEffect(() => () => { fetchSequenceRef.current += 1 }, [])
+
+  const changeFilter = (setter, value) => {
     setOffset(0)
-  }, [filterChannel, filterDirection, filterMatterId, filterContactId])
+    setter(value)
+  }
 
   const handleSaved = (saved) => {
     setShowModal(false)
@@ -507,7 +513,7 @@ export default function CommunicationsPage() {
               {CHANNELS.map((c) => (
                 <button
                   key={c.value}
-                  onClick={() => setFilterChannel(c.value)}
+                  onClick={() => changeFilter(setFilterChannel, c.value)}
                   className={`text-left px-3 py-1.5 text-sm rounded transition-colors ${
                     filterChannel === c.value
                       ? 'bg-brand-ink text-white'
@@ -528,7 +534,7 @@ export default function CommunicationsPage() {
               {DIRECTIONS.map((d) => (
                 <button
                   key={d.value}
-                  onClick={() => setFilterDirection(d.value)}
+                  onClick={() => changeFilter(setFilterDirection, d.value)}
                   className={`text-left px-3 py-1.5 text-sm rounded transition-colors ${
                     filterDirection === d.value
                       ? 'bg-brand-ink text-white'
@@ -548,7 +554,7 @@ export default function CommunicationsPage() {
             <input id="communicationspage-matter-id"
               type="text"
               value={filterMatterId}
-              onChange={(e) => setFilterMatterId(e.target.value)}
+              onChange={(e) => changeFilter(setFilterMatterId, e.target.value)}
               placeholder="Paste UUID…"
               className="w-full bg-brand-bg border border-brand-line px-2 py-1.5 text-xs font-mono text-brand-ink placeholder-brand-muted focus:outline-none focus:ring-1 focus:ring-brand-accent"
             />
@@ -561,7 +567,7 @@ export default function CommunicationsPage() {
             <input id="communicationspage-contact-id"
               type="text"
               value={filterContactId}
-              onChange={(e) => setFilterContactId(e.target.value)}
+              onChange={(e) => changeFilter(setFilterContactId, e.target.value)}
               placeholder="Paste UUID…"
               className="w-full bg-brand-bg border border-brand-line px-2 py-1.5 text-xs font-mono text-brand-ink placeholder-brand-muted focus:outline-none focus:ring-1 focus:ring-brand-accent"
             />
@@ -574,6 +580,7 @@ export default function CommunicationsPage() {
                 setFilterDirection('')
                 setFilterMatterId('')
                 setFilterContactId('')
+                setOffset(0)
               }}
               className="text-xs text-brand-muted hover:text-brand-rose transition-colors text-left flex items-center gap-1"
             >

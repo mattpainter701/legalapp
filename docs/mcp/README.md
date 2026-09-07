@@ -26,6 +26,12 @@ Keep the detailed source documents in the repository so behavior, security bound
 
 The two products may share internal capability or retrieval components, but they must not share public identity, hostname, authorization, billing, or release-state assumptions.
 
+Both hosted consent screens bind displayed details and decision controls to the
+current authorization request ID. Changing consent links resets the review;
+previous requests cannot overwrite the new application details or redirect the
+new screen when an earlier decision finishes. This is browser state isolation;
+the server's consent, entitlement, and scope checks still apply independently.
+
 ### Research MCP authority coverage contract
 
 The Research MCP exposes an internal, authenticated `authority_coverage` tool

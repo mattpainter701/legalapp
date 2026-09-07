@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   decideWorkspaceMcpAuthorizationRequest,
@@ -11,18 +11,27 @@ function Shell({ children }) {
 
 export default function WorkspaceMcpAuthorizePage() {
   const [search] = useSearchParams()
-  const navigate = useNavigate()
   const requestId = search.get('request_id')
+  return <WorkspaceConsent key={requestId || ''} requestId={requestId} />
+}
+
+function WorkspaceConsent({ requestId }) {
+  const navigate = useNavigate()
+  const mounted = useRef(false)
   const [request, setRequest] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [decision, setDecision] = useState(null)
 
   useEffect(() => {
-    if (!requestId) { setError('This authorization link is missing its request ID.'); return }
+    let active = true
+    mounted.current = true
+    const cleanup = () => { active = false; mounted.current = false }
+    if (!requestId) { setError('This authorization link is missing its request ID.'); return cleanup }
     getWorkspaceMcpAuthorizationRequest(requestId)
-      .then(setRequest)
-      .catch((err) => setError(err?.response?.data?.detail || 'This authorization request is unavailable or has expired.'))
+      .then((data) => { if (active) setRequest(data) })
+      .catch((err) => { if (active) setError(err?.response?.data?.detail || 'This authorization request is unavailable or has expired.') })
+    return cleanup
   }, [requestId])
 
   const scopes = useMemo(() => normalizeWorkspaceMcpScopes(request?.scopes || request?.requested_scopes || request?.scope), [request])
@@ -32,13 +41,15 @@ export default function WorkspaceMcpAuthorizePage() {
     else navigate('/matters', { replace: true })
   }
   const handleDecision = async (approved) => {
-    if (!requestId) return
+    if (!requestId || !request || busy) return
     setBusy(true); setError(null)
     try {
       const result = await decideWorkspaceMcpAuthorizationRequest(requestId, approved)
+      if (!mounted.current) return
       setDecision(approved ? 'approved' : 'denied')
       complete(result)
     } catch (err) {
+      if (!mounted.current) return
       setError(err?.response?.data?.detail || 'We could not record your decision. Please try again.')
       setBusy(false)
     }

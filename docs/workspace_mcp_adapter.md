@@ -251,6 +251,10 @@ The production metadata advertises these bounded scopes:
   `documents:propose`
 
 The consent screen identifies the user, tenant, client, and requested scopes.
+Each authorization request has its own screen state. Following another consent
+link clears the prior application's details and approval controls until the new
+request loads. Late responses or completed decisions from a previous screen
+cannot replace or redirect the current review.
 Access and refresh tokens are revocable; disconnecting the grant invalidates
 future workspace access.
 

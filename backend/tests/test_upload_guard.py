@@ -15,6 +15,7 @@ from app.services.upload_guard import (
     MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     reject_oversized_request,
 )
+from app.routers.chat import _read_bounded_upload
 
 MAX_MB = 50
 MAX_BYTES = MAX_MB * 1024 * 1024
@@ -88,3 +89,31 @@ async def test_document_upload_accepts_a_body_within_the_allowance(client):
         files={"file": ("small.pdf", b"%PDF-1.4 tiny", "application/pdf")},
     )
     assert response.status_code != 413
+
+
+@pytest.mark.asyncio
+async def test_chat_upload_rejects_declared_oversize_before_reading():
+    class Upload:
+        async def read(self, size=-1):
+            raise AssertionError("oversized upload should be rejected first")
+
+    with pytest.raises(HTTPException) as excinfo:
+        await _read_bounded_upload(
+            _request(str(MAX_BYTES * 4)), Upload(), MAX_BYTES, MAX_MB
+        )
+    assert excinfo.value.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_chat_upload_caps_chunked_read_at_limit_plus_one():
+    class Upload:
+        read_size = None
+
+        async def read(self, size=-1):
+            self.read_size = size
+            return b"payload"
+
+    upload = Upload()
+    result = await _read_bounded_upload(_request(None), upload, MAX_BYTES, MAX_MB)
+    assert result == b"payload"
+    assert upload.read_size == MAX_BYTES + 1

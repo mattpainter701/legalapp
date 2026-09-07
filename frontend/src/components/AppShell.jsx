@@ -71,11 +71,13 @@ export default function AppShell({ children, title }) {
   const [activeConvId, setActiveConvId] = useState(null)
   const resizeStateRef = useRef(null)
   const sidebarWidthRef = useRef(desktopSidebarWidth)
-  const enabledModules = Array.isArray(user?.enabled_modules) ? user.enabled_modules : []
+  const sidebarRequestSequence = useRef(0)
+  const enabledModules = user?.enabled_modules
   const canSeeModule = useCallback((module) => (
     canAccessModuleList(enabledModules, module)
   ), [enabledModules])
   const hasFinanceAccess = user?.role === 'admin' || user?.role === 'accountant'
+  const shouldLoadChatData = pathname === '/chat' && canSeeModule('chat')
 
   const isActiveRoute = useCallback((path) => (
     pathname === path || pathname.startsWith(path + '/')
@@ -171,23 +173,30 @@ export default function AppShell({ children, title }) {
   }, [desktopSidebarWidth])
 
   const loadSidebarData = useCallback(async () => {
-    if (!canSeeModule('chat')) {
+    const sequence = ++sidebarRequestSequence.current
+    if (!shouldLoadChatData) {
       setConversations([])
       setDocuments([])
       return
     }
-    try {
-      const [convs, docs] = await Promise.all([getConversations(), getDocuments()])
-      setConversations(convs || [])
-      setDocuments(Array.isArray(docs) ? docs : docs?.documents || [])
-    } catch {
-      // silent — sidebar data is non-critical
-    }
-  }, [canSeeModule])
+    // Only the Assistant rail consumes these lists. Load them independently so
+    // a document-service failure cannot hide otherwise available conversations.
+    await Promise.allSettled([
+      getConversations().then((convs) => {
+        if (sequence === sidebarRequestSequence.current) setConversations(convs || [])
+      }),
+      getDocuments().then((docs) => {
+        if (sequence === sidebarRequestSequence.current) {
+          setDocuments(Array.isArray(docs) ? docs : docs?.documents || [])
+        }
+      }),
+    ])
+  }, [shouldLoadChatData])
 
   useEffect(() => {
     loadSidebarData()
-  }, [loadSidebarData])
+    return () => { sidebarRequestSequence.current += 1 }
+  }, [loadSidebarData, user?.id, user?.tenant_id])
 
   const handleSelectConversation = useCallback((id) => {
     setActiveConvId(id)

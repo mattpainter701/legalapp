@@ -113,6 +113,7 @@ _CALENDAR_RELEVANT_FIELDS = {
     "description",
     "task_type",
     "due_date",
+    "due_time",
     "status",
     "assigned_to_user_id",
 }
@@ -2177,6 +2178,23 @@ async def sync_pending_action_from_cloud(
     )
 
 
+def _task_update_values(payload: TaskUpdate) -> dict:
+    """Preserve explicit nulls for nullable PATCH fields while ignoring omission."""
+    updates = payload.model_dump(exclude_none=True)
+    nullable_fields = {
+        "matter_id",
+        "contact_id",
+        "assigned_to_user_id",
+        "reviewer_user_id",
+        "description",
+        "due_date",
+        "due_time",
+    }
+    for field in nullable_fields & payload.model_fields_set:
+        updates[field] = getattr(payload, field)
+    return updates
+
+
 @router.patch("/{task_id}", response_model=TaskResponse)
 async def update_task(
     task_id: uuid.UUID,
@@ -2214,18 +2232,13 @@ async def update_task(
     previous_calendar_user_id = task_calendar_user_id(task)
     previous_assignee_id = task.assigned_to_user_id
     previous_status = task.status
-    updates = payload.model_dump(exclude_none=True)
+    updates = _task_update_values(payload)
     reference_fields = {
         "matter_id",
         "contact_id",
         "assigned_to_user_id",
         "reviewer_user_id",
     }
-    for field in reference_fields & payload.model_fields_set:
-        # PATCH distinguishes omission (leave unchanged) from an explicit null
-        # (remove the optional link). Other nullable-looking fields retain the
-        # endpoint's existing exclude-none behavior.
-        updates[field] = getattr(payload, field)
     expected_version = updates.pop("expected_version", None)
     acknowledge_prior_delivery_risk = updates.pop(
         "acknowledge_prior_delivery_risk", False

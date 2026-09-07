@@ -24,21 +24,49 @@ export default function ResearchWorkspacePage() {
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
   const [workspaceTitle, setWorkspaceTitle] = useState(''); const [record, setRecord] = useState({ record_type: 'issue', title: '', body: '', evidence_class: 'model', source_url: '', source_version: '', pinpoint: '', quote: '', exclusion_reason: '' })
   const workspaceAttemptKey = useRef(null); const snapshotAttemptKey = useRef(null)
+  const workspaceLoadSequence = useRef(0)
+  const matterLoadSequence = useRef(0)
+  const snapshotAttemptWorkspaceId = useRef(null)
 
   const loadWorkspace = async (workspace) => {
+    const sequence = ++workspaceLoadSequence.current
     setActive(workspace); setError('')
+    setRecords([]); setSnapshots([]); setHistory([])
+    if (snapshotAttemptWorkspaceId.current !== workspace.id) {
+      snapshotAttemptKey.current = null
+      snapshotAttemptWorkspaceId.current = workspace.id
+    }
     try {
       const [recordData, snapshotData, historyData] = await Promise.all([listResearchRecords(matterId, workspace.id), listResearchSnapshots(matterId, workspace.id), listResearchWorkspaceHistory(matterId, workspace.id)])
+      if (sequence !== workspaceLoadSequence.current) return
       setRecords(recordData.items || []); setSnapshots(snapshotData.items || []); setHistory(historyData.items || [])
-    } catch { setError('This research workspace is unavailable, stale, or your membership was revoked.') }
+    } catch {
+      if (sequence === workspaceLoadSequence.current) setError('This research workspace is unavailable, stale, or your membership was revoked.')
+    }
   }
-  const load = async () => {
-    try { const data = await listResearchWorkspaces(matterId); setWorkspaces(data.items || []); if (data.items?.[0]) await loadWorkspace(data.items[0]) } catch { setError('Unable to load research workspaces.') }
-  }
-  useEffect(() => { load() }, [matterId])
-  const makeWorkspace = async (event) => { event.preventDefault(); if (!workspaceTitle.trim()) return; setBusy(true); const key = workspaceAttemptKey.current || (workspaceAttemptKey.current = newIdempotencyKey()); try { const created = await createResearchWorkspace(matterId, { title: workspaceTitle }, key); workspaceAttemptKey.current = null; setWorkspaces((items) => [created, ...items]); setWorkspaceTitle(''); await loadWorkspace(created) } catch (err) { setError(err?.response?.data?.detail || 'Workspace could not be created.') } finally { setBusy(false) } }
-  const addRecord = async (event) => { event.preventDefault(); if (!active || !record.title.trim()) return; setBusy(true); try { const payload = { ...record, source_url: record.source_url || null, source_version: record.source_version || null, pinpoint: record.pinpoint || null, quote: record.quote || null, exclusion_reason: record.exclusion_reason || null }; const created = await createResearchRecord(matterId, active.id, payload); setRecords((items) => [...items, created]); setRecord({ record_type: 'issue', title: '', body: '', evidence_class: 'model', source_url: '', source_version: '', pinpoint: '', quote: '', exclusion_reason: '' }) } catch (err) { setError(err?.response?.data?.detail || 'Research record could not be saved.') } finally { setBusy(false) } }
-  const snapshot = async () => { if (!active) return; setBusy(true); const key = snapshotAttemptKey.current || (snapshotAttemptKey.current = newIdempotencyKey()); try { const created = await createResearchSnapshot(matterId, active.id, {}, key); snapshotAttemptKey.current = null; setSnapshots((items) => [created, ...items]); const trail = await listResearchWorkspaceHistory(matterId, active.id); setHistory(trail.items || []) } catch { setError('Snapshot could not be created.') } finally { setBusy(false) } }
+  useEffect(() => {
+    const sequence = ++matterLoadSequence.current
+    workspaceLoadSequence.current += 1
+    setWorkspaces([]); setActive(null); setRecords([]); setSnapshots([]); setHistory([])
+    setWorkspaceTitle(''); setRecord({ record_type: 'issue', title: '', body: '', evidence_class: 'model', source_url: '', source_version: '', pinpoint: '', quote: '', exclusion_reason: '' })
+    setError(''); setBusy(false); workspaceAttemptKey.current = null; snapshotAttemptKey.current = null; snapshotAttemptWorkspaceId.current = null
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await listResearchWorkspaces(matterId)
+        if (cancelled || sequence !== matterLoadSequence.current) return
+        const nextWorkspaces = data.items || []
+        setWorkspaces(nextWorkspaces)
+        if (nextWorkspaces[0]) await loadWorkspace(nextWorkspaces[0])
+      } catch {
+        if (!cancelled && sequence === matterLoadSequence.current) setError('Unable to load research workspaces.')
+      }
+    })()
+    return () => { cancelled = true; matterLoadSequence.current += 1; workspaceLoadSequence.current += 1 }
+  }, [matterId])
+  const makeWorkspace = async (event) => { event.preventDefault(); if (!workspaceTitle.trim()) return; const matterSequence = matterLoadSequence.current; setBusy(true); const key = workspaceAttemptKey.current || (workspaceAttemptKey.current = newIdempotencyKey()); try { const created = await createResearchWorkspace(matterId, { title: workspaceTitle }, key); if (matterSequence !== matterLoadSequence.current) return; workspaceAttemptKey.current = null; setWorkspaces((items) => [created, ...items]); setWorkspaceTitle(''); await loadWorkspace(created) } catch (err) { if (matterSequence === matterLoadSequence.current) setError(err?.response?.data?.detail || 'Workspace could not be created.') } finally { setBusy(false) } }
+  const addRecord = async (event) => { event.preventDefault(); if (!active || !record.title.trim()) return; const workspaceId = active.id; const sequence = workspaceLoadSequence.current; setBusy(true); try { const payload = { ...record, source_url: record.source_url || null, source_version: record.source_version || null, pinpoint: record.pinpoint || null, quote: record.quote || null, exclusion_reason: record.exclusion_reason || null }; const created = await createResearchRecord(matterId, workspaceId, payload); if (sequence !== workspaceLoadSequence.current) return; setRecords((items) => [...items, created]); setRecord({ record_type: 'issue', title: '', body: '', evidence_class: 'model', source_url: '', source_version: '', pinpoint: '', quote: '', exclusion_reason: '' }) } catch (err) { if (sequence === workspaceLoadSequence.current) setError(err?.response?.data?.detail || 'Research record could not be saved.') } finally { setBusy(false) } }
+  const snapshot = async () => { if (!active) return; const workspaceId = active.id; const sequence = workspaceLoadSequence.current; setBusy(true); snapshotAttemptWorkspaceId.current = workspaceId; const key = snapshotAttemptKey.current || (snapshotAttemptKey.current = newIdempotencyKey()); try { const created = await createResearchSnapshot(matterId, workspaceId, {}, key); snapshotAttemptKey.current = null; if (sequence !== workspaceLoadSequence.current) return; setSnapshots((items) => [created, ...items]); const trail = await listResearchWorkspaceHistory(matterId, workspaceId); if (sequence === workspaceLoadSequence.current) setHistory(trail.items || []) } catch { if (sequence === workspaceLoadSequence.current) setError('Snapshot could not be created.') } finally { setBusy(false) } }
   const canWrite = active && active.role !== 'viewer'
   return <WorkspacePage width="wide"><WorkspacePageHeader title="Research Workspace" description="Shared, matter-scoped research trails with preserved source links and evidence class. Authority currentness, treatment, and citation format still require attorney review." />
     {error && <AlertBanner variant="error">{error}</AlertBanner>}

@@ -19,6 +19,19 @@ GOOGLE_DIRECTORY_BASE = "https://admin.googleapis.com/admin/directory/v1"
 
 
 class UserSyncService:
+    async def _existing_users_by_email(
+        self, db: AsyncSession, tenant_id: str
+    ) -> dict[str, User]:
+        """Load the tenant directory once so sync does not issue one query/user."""
+        result = await db.execute(
+            select(User).where(User.tenant_id == uuid.UUID(tenant_id))
+        )
+        return {
+            (user.email or "").lower().strip(): user
+            for user in result.scalars().all()
+            if user.email
+        }
+
     async def _save_sync_state(
         self,
         db: AsyncSession,
@@ -98,6 +111,8 @@ class UserSyncService:
                 url = data.get("@odata.nextLink", None)
 
             await set_tenant_context(db, tenant_id)
+            users_by_email = await self._existing_users_by_email(db, tenant_id)
+            workspace_mcp_default: bool | None = None
 
             for ms_user in all_users:
                 if ms_user.get("accountEnabled") is False:
@@ -119,10 +134,7 @@ class UserSyncService:
                     last = ms_user.get("surname", "")
                     full_name = f"{first} {last}".strip()
 
-                existing = await db.execute(
-                    select(User).where(User.email == email, User.tenant_id == tenant_id)
-                )
-                user_row = existing.scalar_one_or_none()
+                user_row = users_by_email.get(email)
 
                 if user_row:
                     if not user_row.full_name:
@@ -134,6 +146,10 @@ class UserSyncService:
                         tenant_workspace_mcp_default,
                     )
 
+                    if workspace_mcp_default is None:
+                        workspace_mcp_default = await tenant_workspace_mcp_default(
+                            db, tenant_id
+                        )
                     new_user = User(
                         id=uuid.uuid4(),
                         tenant_id=uuid.UUID(tenant_id),
@@ -144,11 +160,10 @@ class UserSyncService:
                         oauth_subject=ms_user.get("id"),
                         is_active=True,
                         license_active=True,
-                        workspace_mcp_enabled=await tenant_workspace_mcp_default(
-                            db, tenant_id
-                        ),
+                        workspace_mcp_enabled=workspace_mcp_default,
                     )
                     db.add(new_user)
+                    users_by_email[email] = new_user
                     created += 1
 
             await db.commit()
@@ -243,6 +258,8 @@ class UserSyncService:
                     break
 
             await set_tenant_context(db, tenant_id)
+            users_by_email = await self._existing_users_by_email(db, tenant_id)
+            workspace_mcp_default: bool | None = None
 
             for g_user in all_users:
                 if g_user.get("suspended") is True:
@@ -260,10 +277,7 @@ class UserSyncService:
                     family = g_user.get("name", {}).get("familyName", "")
                     full_name = f"{given} {family}".strip()
 
-                existing = await db.execute(
-                    select(User).where(User.email == email, User.tenant_id == tenant_id)
-                )
-                user_row = existing.scalar_one_or_none()
+                user_row = users_by_email.get(email)
 
                 if user_row:
                     if not user_row.full_name:
@@ -275,6 +289,10 @@ class UserSyncService:
                         tenant_workspace_mcp_default,
                     )
 
+                    if workspace_mcp_default is None:
+                        workspace_mcp_default = await tenant_workspace_mcp_default(
+                            db, tenant_id
+                        )
                     new_user = User(
                         id=uuid.uuid4(),
                         tenant_id=uuid.UUID(tenant_id),
@@ -285,11 +303,10 @@ class UserSyncService:
                         oauth_subject=g_user.get("id"),
                         is_active=True,
                         license_active=True,
-                        workspace_mcp_enabled=await tenant_workspace_mcp_default(
-                            db, tenant_id
-                        ),
+                        workspace_mcp_enabled=workspace_mcp_default,
                     )
                     db.add(new_user)
+                    users_by_email[email] = new_user
                     created += 1
 
             await db.commit()

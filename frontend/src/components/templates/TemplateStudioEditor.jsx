@@ -222,21 +222,22 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     || (Number(page.rotation || 0) % 180 ? Number(page.width) : Number(page.height)) * zoom
 
   const commitFields = useCallback((nextFields) => {
-    undoStack.current = [...undoStack.current.slice(-49), fields]
+    undoStack.current = [...undoStack.current.slice(-49), { fields, regions }]
     redoStack.current = []
     setHistoryVersion((value) => value + 1)
     setFields(nextFields)
     setDirty(true)
     setSaveError('')
-  }, [fields])
+  }, [fields, regions])
 
   const undo = () => {
     const previous = undoStack.current.at(-1)
     if (!previous) return
     undoStack.current = undoStack.current.slice(0, -1)
-    redoStack.current = [...redoStack.current.slice(-49), fields]
+    redoStack.current = [...redoStack.current.slice(-49), { fields, regions }]
     setHistoryVersion((value) => value + 1)
-    setFields(previous)
+    setFields(previous.fields)
+    setRegions(previous.regions)
     setDirty(true)
   }
 
@@ -244,9 +245,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     const next = redoStack.current.at(-1)
     if (!next) return
     redoStack.current = redoStack.current.slice(0, -1)
-    undoStack.current = [...undoStack.current.slice(-49), fields]
+    undoStack.current = [...undoStack.current.slice(-49), { fields, regions }]
     setHistoryVersion((value) => value + 1)
-    setFields(next)
+    setFields(next.fields)
+    setRegions(next.regions)
     setDirty(true)
   }
 
@@ -288,7 +290,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   }
 
   const commitRegions = (nextRegions) => {
-    undoStack.current = [...undoStack.current.slice(-49), fields]
+    undoStack.current = [...undoStack.current.slice(-49), { fields, regions }]
     redoStack.current = []
     setHistoryVersion((value) => value + 1)
     setRegions(nextRegions)

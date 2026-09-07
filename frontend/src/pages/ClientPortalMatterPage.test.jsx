@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import ClientPortalMatterPage from './ClientPortalMatterPage'
+import ClientPortalMatterPage, { MessagesTab } from './ClientPortalMatterPage'
 import {
   getClientPortalSession,
   getClientPortalMatter,
@@ -84,6 +84,21 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('ClientPortalMatterPage', () => {
+  it('serializes message refreshes while a previous read is pending', async () => {
+    let resolveRead
+    listClientPortalMessages.mockReturnValueOnce(new Promise((resolve) => { resolveRead = resolve }))
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    render(<MessagesTab onSessionError={() => false} onChanged={vi.fn()} />)
+
+    await waitFor(() => expect(listClientPortalMessages).toHaveBeenCalledTimes(1))
+    resolveRead({ messages: [], unread_count: 0, total: 0, has_more: false })
+    await waitFor(() => expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30_000))
+    const poll = timeoutSpy.mock.calls.find(([, delay]) => delay === 30_000)?.[0]
+    poll()
+    await waitFor(() => expect(listClientPortalMessages).toHaveBeenCalledTimes(2))
+    timeoutSpy.mockRestore()
+  })
+
   it('shows the optional read-only mediation overlay without changing the base portal', async () => {
     getClientPortalMediation.mockResolvedValue({
       mediation: { case_name: 'Rivera mediation', status: 'active', mediation_stage: 'proposal' },

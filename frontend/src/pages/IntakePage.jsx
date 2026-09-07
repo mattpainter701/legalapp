@@ -220,6 +220,8 @@ export default function IntakePage() {
   const navigate = useNavigate()
   const [leads, setLeads] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  const [actionError, setActionError] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
   const [convertingLead, setConvertingLead] = useState(null)
   const [filterStatus, setFilterStatus] = useState('')
@@ -227,12 +229,15 @@ export default function IntakePage() {
 
   const load = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
       const params = {}
       if (filterStatus) params.status = filterStatus
       const data = await getLeads(params)
       setLeads(data || [])
-    } catch {} finally {
+    } catch (error) {
+      setLoadError(error?.response?.data?.detail || 'Failed to load intake leads.')
+    } finally {
       setLoading(false)
     }
   }, [filterStatus])
@@ -241,6 +246,7 @@ export default function IntakePage() {
 
   const handleAdvance = async (lead, e) => {
     e.stopPropagation()
+    setActionError(null)
     const stageOrder = ['new','contacted','qualified','conflict_checked','engaged']
     const idx = stageOrder.indexOf(lead.status)
     if (idx === -1 || idx >= stageOrder.length - 1) return
@@ -248,7 +254,9 @@ export default function IntakePage() {
     try {
       await updateLead(lead.id, { status: nextStatus })
       load()
-    } catch {}
+    } catch (error) {
+      setActionError(error?.response?.data?.detail || 'The lead stage could not be updated. Please try again.')
+    }
   }
 
   const activeLeads = leads.filter(l => !['matter_opened','declined'].includes(l.status))
@@ -271,6 +279,16 @@ export default function IntakePage() {
         <SmsReconciliationQueue />
         <SmsReviewQueue />
 
+        {loadError && (
+          <div role="alert" className="mb-5 flex items-center justify-between gap-4 rounded-lg border border-brand-rose/30 bg-brand-rose/5 px-4 py-3 text-sm text-brand-rose">
+            <span>{loadError}</span>
+            <button type="button" onClick={load} className="shrink-0 font-semibold underline">Retry</button>
+          </div>
+        )}
+        {actionError && (
+          <div role="alert" className="mb-5 rounded-lg border border-brand-rose/30 bg-brand-rose/5 px-4 py-3 text-sm text-brand-rose">{actionError}</div>
+        )}
+
         {/* Pipeline header */}
         <div className="grid grid-cols-5 gap-2 mb-6">
           {STAGES.map(s => {
@@ -291,7 +309,7 @@ export default function IntakePage() {
 
         {loading ? (
           <div className="text-center py-16 text-brand-muted">Loading…</div>
-        ) : leads.length === 0 ? (
+        ) : loadError ? null : leads.length === 0 ? (
           <div className="text-center py-16">
             <Filter size={40} className="mx-auto text-brand-line mb-4" />
             <p className="text-brand-muted">No leads yet. Add your first intake inquiry.</p>
