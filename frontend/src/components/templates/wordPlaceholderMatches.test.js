@@ -54,6 +54,12 @@ describe('literal Word placeholder matching', () => {
     expect(wordPlaceholderMatches(['Fee: ___'], fields, paragraphs)).toEqual([])
   })
 
+  it('does not mark a different page whose paragraph contains the target paragraph', () => {
+    const fields = [{ name: 'fee', source_text: '___', docx_anchor: { paragraph_ordinal: 0, start: 5, end: 8 } }]
+    const paragraphs = [{ ordinal: 0, text: 'Fee: ___' }, { ordinal: 1, text: 'Annual Fee: ___' }]
+    expect(wordPlaceholderMatches(['Annual Fee: ___'], fields, paragraphs)).toEqual([])
+  })
+
   it('refuses ambiguous paragraph context and invalid or cross-paragraph anchors', () => {
     const paragraphs = [{ ordinal: 2, text: 'Fee: ___' }, { ordinal: 3, text: 'Fee: ___' }]
     expect(resolveWordPageSelection('Fee: ___', paragraphs)).toBeNull()

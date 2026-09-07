@@ -106,6 +106,8 @@ function resolveWordPageParagraph(text, paragraph) {
 
 export function wordPlaceholderMatches(strings, fields, paragraphs = []) {
   const definitions = new Map()
+  const outline = paragraphs || []
+  const outlineText = outline.map(item => typeof item?.text === 'string' ? item.text.replace(/\s+/gu, ' ').trim() : '').join(' ')
   fields.forEach((field, index) => {
     if (!field || field.included === false || !VARIABLE_NAME_PATTERN.test(field.name || '')) return
     const entries = definitions.get(field.name) || []
@@ -124,10 +126,12 @@ export function wordPlaceholderMatches(strings, fields, paragraphs = []) {
     const entry = entries[0]
     const anchor = entry.field.docx_anchor
     if (!anchor) continue
-    const outline = paragraphs || []
     const paragraph = outline.find(item => Number(item?.ordinal) === Number(anchor.paragraph_ordinal))
     const normalized = paragraph?.text?.replace(/\s+/gu, ' ').trim()
-    if (!paragraph || outline.some(item => item !== paragraph && item?.text?.replace(/\s+/gu, ' ').trim() === normalized)) continue
+    const firstContext = normalized ? outlineText.indexOf(normalized) : -1
+    // A paragraph can also occur inside another paragraph or across a pair of
+    // paragraphs. Such context cannot identify the correct rendered page.
+    if (!paragraph || firstContext < 0 || outlineText.indexOf(normalized, firstContext + 1) >= 0) continue
     const anchorStart = Number(anchor.start)
     const anchorEnd = Number(anchor.end)
     const paragraphText = typeof paragraph.text === 'string' ? asCodepoints(paragraph.text) : []
