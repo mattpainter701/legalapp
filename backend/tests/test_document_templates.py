@@ -1083,6 +1083,50 @@ def test_docx_source_render_preserves_structure_and_replaces_split_run_values():
     assert len(reopened.tables) == 1
 
 
+def test_docx_analysis_exposes_bounded_source_paragraphs_aligned_with_anchors():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Client name: ___")
+    document.add_paragraph("Answer: ___ yes")
+    source = BytesIO()
+    document.save(source)
+
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(),
+        filename="anchored.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    paragraphs = analysis.as_dict()["source_paragraphs"]
+    fields = analysis.variable_schema["fields"]
+    assert len([field for field in fields if field.get("docx_anchor")]) == 2
+    assert paragraphs[:2] == [
+        {"ordinal": 0, "text": "Client name: ___"},
+        {"ordinal": 1, "text": "Answer: ___ yes"},
+    ]
+    for field in fields:
+        anchor = field.get("docx_anchor")
+        if anchor:
+            paragraph = next(item for item in paragraphs if item["ordinal"] == anchor["paragraph_ordinal"])
+            assert paragraph["text"][anchor["start"] : anchor["end"]] == field["source_text"]
+
+
+@pytest.mark.parametrize("outline", [
+    {"truncated": True, "paragraphs": [{"ordinal": 0, "text": "Client name: ___"}]},
+    {"truncated": False, "paragraphs": [{"ordinal": 0, "text": "x" * 20_001}]},
+])
+def test_docx_analysis_refuses_partial_or_oversized_page_context(monkeypatch, outline):
+    from docx import Document
+    document = Document()
+    document.add_paragraph("Client name: ___")
+    source = BytesIO()
+    document.save(source)
+    monkeypatch.setattr("app.services.template_intake.docx_outline", lambda _: outline)
+    analysis = analyze_template_upload(file_bytes=source.getvalue(), filename="sample.docx", content_type=None)
+    assert analysis.as_dict()["source_paragraphs"] == []
+    assert any("preview limit" in warning for warning in analysis.warnings)
+
+
 def test_docx_intake_recognizes_bracket_placeholders_and_ignores_static_brackets():
     from docx import Document
 

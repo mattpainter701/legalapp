@@ -2123,6 +2123,14 @@ export const analyzeTemplateUpload = (formData) =>
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then(r => r.data)
 
+export const previewWordUpload = (file) => {
+  const form = new FormData()
+  form.append('file', file)
+  return api.post('/templates/intake/preview-render', form, {
+    headers: { 'Content-Type': 'multipart/form-data' }, responseType: 'blob',
+  }).then(r => r.data)
+}
+
 export const proposeTemplateFieldsWithAi = (formData) =>
   api.post('/templates/intake/ai-propose', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 
 import TemplateStudioEditor from './TemplateStudioEditor'
 import TemplateVersionHistory from './TemplateVersionHistory'
+import TemplateTestSummary from './TemplateTestSummary'
 
 const tabs = [
   { key: 'workspace', label: 'Workspace', suffix: '', icon: FileText },
@@ -133,6 +134,7 @@ export default function TemplateStudioWorkspace({
         ) : section === 'test' ? (
           <section className="mt-4 rounded-xl border border-brand-line bg-brand-surface-2 p-6" aria-labelledby="studio-test-title">
             <h2 id="studio-test-title" className="text-lg font-semibold text-brand-ink">Test this exact draft</h2>
+            <TemplateTestSummary template={template} />
             <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-muted">Generate with representative values and inspect the result. A successful test is tied to version {template.current_version_no || 'the first saved snapshot'}; any field, content, or logic edit invalidates it.</p>
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <button type="button" onClick={onTest || onGenerate} disabled={sourceMissing} className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">

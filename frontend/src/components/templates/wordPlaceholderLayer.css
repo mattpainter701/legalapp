@@ -29,3 +29,4 @@
   transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
 }
 .word-placeholder-text .markedContent { display: contents; }
+.word-placeholder-text ::selection { background: rgb(59 130 246 / 35%); }

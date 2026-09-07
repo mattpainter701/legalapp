@@ -25,6 +25,7 @@ import {
 import { getTemplateBindings } from '../../api'
 import DocxDocumentView from './DocxDocumentView'
 import WordDocumentPreview from './WordDocumentPreview'
+import { resolveWordPageSelection } from './wordPlaceholderMatches'
 import WordDeriveDraftAction from './WordDeriveDraftAction'
 import WordCleanupAction from './WordCleanupAction'
 import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocumentCanvas'
@@ -159,6 +160,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [coverRegions, setCoverRegions] = useState(() => schemaCoverRegions(template))
   const [sourceReview, setSourceReview] = useState(template.variable_schema?.source_review || {})
   const [cleanupSelection, setCleanupSelection] = useState(null)
+  const [wordParagraphs, setWordParagraphs] = useState([])
   const [sourceModeSuggestion, setSourceModeSuggestion] = useState(
     template.variable_schema?.source_mode_suggestion || null,
   )
@@ -171,6 +173,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [fieldSearch, setFieldSearch] = useState('')
   const [savedAt, setSavedAt] = useState(null)
   const [renderError, setRenderError] = useState('')
   const undoStack = useRef([])
@@ -228,7 +231,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
   useEffect(() => setViewport(null), [pageNumber, zoom])
 
-  const indexedFields = fields.map((field, index) => ({ field, identity: fieldIdentity(field, index) }))
+  const indexedFields = fields.map((field, index) => ({ field, index, identity: fieldIdentity(field, index) }))
   const selectedEntry = indexedFields.find((entry) => entry.identity === selectedIdentity)
   const selected = selectedEntry?.field || null
 
@@ -323,18 +326,19 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   // A Word field is created from a text selection rather than a drawn box: the
   // span the user highlighted *is* the anchor, and the exact text it covers is
   // what the renderer re-checks before replacing it.
-  const addDocxField = ({ ordinal, start, end, text }) => {
+  const addDocxField = ({ ordinal, start, end, text, label, field_type = 'text', name: requestedName }) => {
     const taken = new Set(fields.map((entry) => entry.name))
-    let name = docxFieldName(text)
+    if (requestedName && taken.has(requestedName)) return 'That automation key is already used. Choose another.'
+    let name = requestedName || docxFieldName(label || text)
     let suffix = 1
     while (taken.has(name)) {
       suffix += 1
-      name = `${docxFieldName(text)}_${suffix}`
+      name = `${docxFieldName(label || text)}_${suffix}`
     }
     const field = {
       name,
-      label: text.trim().slice(0, 60) || name,
-      field_type: 'text',
+      label: label || text.trim().slice(0, 60) || name,
+      field_type,
       required: false,
       included: true,
       source_text: text,
@@ -460,6 +464,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
   return (
     <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-surface-2">
+      <div className="border-b border-brand-line p-3 text-sm">
+        <p className="font-semibold">{fields.filter(field => field.included !== false).length} included fields · {fields.filter(field => field.included !== false && (field.review_required || field.ai_suggested || Number(field.confidence ?? 1) < 0.75)).length} need review</p>
+        <p className="mt-1 text-xs text-brand-muted">Select a named box or a field in the list to edit it. {isDocx ? 'Drag across the words that should change to create a field directly on the page.' : 'Choose a field type in the toolbar to add a box, then move and resize it on the page.'}</p>
+      </div>
       {isDocx && template.variable_schema?.source_review_version === 1 && (
         <div className="border-b border-brand-line p-3">
           <WordDeriveDraftAction
@@ -559,7 +567,21 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
       <div className={`grid gap-0 ${pdfSource ? 'lg:grid-cols-[168px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
         {!pdfSource && isDocx && (
-          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256} fields={fields} selectedIdentity={selectedIdentity} onSelectField={setSelectedIdentity}>
+          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256} fields={fields} paragraphs={wordParagraphs} selectedIdentity={selectedIdentity} onSelectField={setSelectedIdentity}
+            onCreateField={({ text, ...options }) => {
+              const selection = resolveWordPageSelection(text, wordParagraphs)
+              if (!selection) return 'This text occurs more than once or cannot be matched to the Word source. Use Fields to select its exact paragraph.'
+              if (fields.some(field => field.included !== false && field.docx_anchor?.paragraph_ordinal === selection.ordinal && field.docx_anchor.start < selection.end && selection.start < field.docx_anchor.end)) return 'This selection overlaps an existing field. Click its box to edit it.'
+              return addDocxField({ ...selection, ...options })
+            }}
+            onUpdateField={(identity, changes) => {
+              const entry = indexedFields.find(item => item.identity === identity)
+              if (!entry) return 'This field has changed. Select it again.'
+              if (changes.name && indexedFields.some(item => item.identity !== identity && item.field.name === changes.name)) return 'That automation key is already used. Choose another.'
+              const next = fields.map((field, index) => index === entry.index ? { ...field, ...changes } : field)
+              commitFields(next)
+              setSelectedIdentity(fieldIdentity(next[entry.index], entry.index))
+            }}>
           <DocxDocumentView
             templateId={template.id}
             fields={fields}
@@ -567,6 +589,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
             sourceReview={sourceReview}
             onSelectText={(selection) => setCleanupSelection({ paragraph_ordinal: selection.ordinal, start: selection.start, end: selection.end, original_text: selection.text })}
             onModeSuggestion={setSourceModeSuggestion}
+            onParagraphs={setWordParagraphs}
             onReviewChange={template.variable_schema?.source_review_version === 1 ? (next) => {
               undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
               redoStack.current = []
@@ -588,7 +611,6 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           />
           </WordDocumentPreview>
         )}
-        {isDocx && <WordCleanupAction templateId={template.id} selection={cleanupSelection} onCreated={onDerived} />}
         {!pdfSource && !isDocx && (
           <div className="max-h-[70vh] overflow-y-auto p-5">
             <h2 className="font-semibold text-brand-ink">Markdown template</h2>
@@ -680,7 +702,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                   onMouseDown={() => setSelectedIdentity(entry.identity)}
                   className={`group rounded-sm border-2 ${active ? 'border-brand-accent bg-brand-accent/20' : 'border-brand-accent-2/70 bg-brand-accent-2/10'} ${locked ? 'cursor-not-allowed' : 'cursor-move'}`}
                 >
-                  <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-brand-ink px-1.5 py-0.5 text-[10px] font-semibold text-white opacity-0 group-hover:opacity-100">
+                  <span className="pointer-events-none block max-w-full truncate rounded-sm bg-brand-ink px-1.5 py-0.5 text-[10px] font-semibold text-white">
                     {entry.field.label || entry.field.name}
                   </span>
                 </Rnd>
@@ -696,11 +718,13 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           <h2 className="text-sm font-semibold text-brand-ink">
             Fields <span className="font-normal text-brand-muted">({fields.filter((field) => field.included !== false).length})</span>
           </h2>
+          <input type="search" aria-label="Find a field" placeholder="Find a field…" value={fieldSearch} onChange={event => setFieldSearch(event.target.value)} className="mt-2 w-full rounded border border-brand-line bg-brand-bg p-2 text-sm" />
           <ul className="mt-2 max-h-52 space-y-1 overflow-y-auto">
-            {indexedFields.map((entry) => (
+            {indexedFields.filter(entry => `${entry.field.label || ''} ${entry.field.name || ''} ${entry.field.source_text || ''}`.toLowerCase().includes(fieldSearch.toLowerCase())).map((entry) => (
               <li key={entry.identity}>
                 <button
                   type="button"
+                  aria-label={entry.field.label || entry.field.name}
                   onClick={() => {
                     setSelectedIdentity(entry.identity)
                     const first = placementsFor(entry.field)[0]?.overlay?.page || entry.field.page
@@ -710,6 +734,8 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                   className={`w-full truncate rounded-md px-2 py-1.5 text-left text-xs ${entry.identity === selectedIdentity ? 'bg-brand-accent/15 font-semibold text-brand-ink' : 'text-brand-muted hover:bg-brand-bg'} ${entry.field.included === false ? 'line-through opacity-60' : ''}`}
                 >
                   {entry.field.label || entry.field.name}
+                  <span className="block truncate text-[11px] font-normal">{entry.field.included === false ? 'Excluded' : entry.field.review_required || entry.field.ai_suggested || Number(entry.field.confidence ?? 1) < 0.75 ? 'Needs review' : 'Included'} · {entry.field.field_type || 'text'}</span>
+                  {entry.field.source_text && <span className="block truncate text-[11px] font-normal">Replaces: {entry.field.source_text}</span>}
                 </button>
               </li>
             ))}
@@ -858,6 +884,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           <span className="sr-only" aria-live="polite">History step {historyVersion}</span>
         </aside>
       </div>
+      {isDocx && <WordCleanupAction templateId={template.id} selection={cleanupSelection} onCreated={onDerived} />}
     </div>
   )
 }

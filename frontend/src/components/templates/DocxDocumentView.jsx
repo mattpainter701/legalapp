@@ -287,6 +287,7 @@ export default function DocxDocumentView({
   onSelectField,
   onSelectText,
   onModeSuggestion,
+  onParagraphs,
   onCreateField,
   onCreateRegion,
   onRemoveRegion,
@@ -299,6 +300,7 @@ export default function DocxDocumentView({
   useEffect(() => {
     let cancelled = false
     setState({ status: 'loading', paragraphs: [], truncated: false })
+    onParagraphs?.([])
     getTemplateOutline(templateId)
       .then((outline) => {
         if (cancelled) return
@@ -312,6 +314,7 @@ export default function DocxDocumentView({
           sourceModeSuggestion: outline?.source_mode_suggestion || null,
         })
         onModeSuggestion?.(outline?.source_mode_suggestion || null)
+        onParagraphs?.(outline?.truncated ? [] : outline?.paragraphs || [])
       })
       .catch((error) => {
         if (cancelled) return

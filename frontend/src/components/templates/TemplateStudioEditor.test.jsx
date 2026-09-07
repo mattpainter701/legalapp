@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import TemplateStudioEditor, { mergedVariableSchema, schemaFields } from './TemplateStudioEditor'
 
+vi.mock('./WordDocumentPreview', () => ({ default: ({ children, onCreateField, onUpdateField, fields }) => <>{children}<button onClick={() => onCreateField({ text: 'Ada Lovelace', label: 'Client name' })}>Create from document page</button><button onClick={() => onUpdateField(`${fields[0].name}:0`, { label: 'Edited on page' })}>Edit document box</button></> }))
+
 // pdf.js cannot rasterize in jsdom, so the shared canvas module is stubbed with
 // deterministic page geometry. Everything under test here is placement state,
 // not rasterization.
@@ -24,11 +26,12 @@ vi.mock('./PdfDocumentCanvas', () => ({
 // The binding catalogue is static server-owned vocabulary; the editor only
 // needs it to populate the picker.
 vi.mock('./DocxDocumentView', () => ({
-  default: ({ fields, regions, onCreateField, onCreateRegion, onRemoveRegion, sourceReview, onReviewChange }) => (
+  default: ({ fields, regions, onCreateField, onCreateRegion, onRemoveRegion, sourceReview, onReviewChange, onParagraphs }) => (
     <div data-testid="docx-view">
       <span>{fields.length} mapped</span>
       <span>{(regions || []).length} regions</span>
       <span>{Object.keys(sourceReview || {}).length} reviewed</span>
+      <button onClick={() => onParagraphs([{ ordinal: 2, text: 'Dear Ada Lovelace,' }])}>Load source outline</button>
       {onReviewChange && <button onClick={() => onReviewChange({ synthetic: 'fixed' })}>Keep sample fixed</button>}
       <button
         type="button"
@@ -296,6 +299,17 @@ describe('TemplateStudioEditor', () => {
       />,
     )
     expect(screen.getByTestId('docx-view')).toBeInTheDocument()
+  })
+
+  it('creates a named field from the rendered page, edits it and saves its exact Word anchor', async () => {
+    const save = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={{ id: 'word', format: 'docx', variable_schema: { fields: [] } }} onSave={save} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Load source outline' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create from document page' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit document box' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save fields' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+    expect(save.mock.calls[0][0].fields).toEqual([expect.objectContaining({ name: 'client_name', label: 'Edited on page', source_text: 'Ada Lovelace', docx_anchor: { paragraph_ordinal: 2, start: 5, end: 17 } })])
   })
 
   it('keeps fields editable for a non-PDF template instead of dead-ending', () => {

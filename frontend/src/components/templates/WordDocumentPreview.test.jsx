@@ -18,6 +18,16 @@ beforeEach(() => { pdfState.error = ''; getTemplateSourcePreview.mockReset() })
 afterEach(cleanup)
 
 describe('Word document preview', () => {
+  it('keeps Add field on the document and explains direct selection', async () => {
+    getTemplateSourcePreview.mockResolvedValue(new Blob(['pdf']))
+    render(<WordDocumentPreview templateId="one" onCreateField={vi.fn()}><p>Text tools</p></WordDocumentPreview>)
+    await screen.findByTestId('page')
+    fireEvent.click(screen.getByRole('button', { name: 'Fields', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add field', exact: true }))
+    expect(screen.getByTestId('page')).toBeVisible()
+    expect(screen.getByText('Text tools')).not.toBeVisible()
+    expect(screen.getByText(/A field name box will open/)).toBeVisible()
+  })
   it('connects page highlights to field selection and remounts them after the Fields view', async () => {
     getTemplateSourcePreview.mockResolvedValue(new Blob(['pdf']))
     const select = vi.fn()
@@ -54,7 +64,7 @@ describe('Word document preview', () => {
   it('keeps fields available during conversion and after failure, and allows retry', async () => {
     getTemplateSourcePreview.mockRejectedValueOnce(new Error('private converter path')).mockResolvedValueOnce(new Blob(['pdf']))
     render(component())
-    expect(screen.getByText('Editable source fields')).toBeVisible()
+    expect(screen.getByText('Editable source fields')).not.toBeVisible()
     expect(await screen.findByText(/Document preview is unavailable/)).toBeVisible()
     expect(screen.queryByText(/private converter path/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Retry document preview' }))
@@ -105,9 +115,25 @@ describe('Word document preview', () => {
     let finish
     getTemplateSourcePreview.mockReturnValue(new Promise(resolve => { finish = resolve }))
     render(component())
+    fireEvent.click(screen.getByRole('button', { name: 'Add field from text' }))
     fireEvent.pointerDown(screen.getByText('Editable source fields'))
     await act(async () => { finish(new Blob(['pdf'])) })
     expect(screen.getByText('Editable source fields')).toBeVisible()
     expect(screen.getByTestId('page')).not.toBeVisible()
+  })
+
+  it('renders an upload without a saved template and ignores stale file responses', async () => {
+    let finishOld
+    const load = vi.fn().mockReturnValueOnce(new Promise(resolve => { finishOld = resolve })).mockResolvedValue(new Blob(['new pdf']))
+    const first = new File(['old'], 'sample.docx')
+    const second = new File(['new'], 'sample.docx')
+    const { rerender } = render(<WordDocumentPreview file={first} loadUploadPreview={load}><p>Upload text</p></WordDocumentPreview>)
+    expect(screen.getByText('Upload text')).not.toBeVisible()
+    rerender(<WordDocumentPreview file={second} loadUploadPreview={load}><p>Upload text</p></WordDocumentPreview>)
+    await screen.findByTestId('page')
+    await act(async () => { finishOld(new Blob(['old pdf'])) })
+    expect(load.mock.calls.map(call => call[0])).toEqual([first, second])
+    expect(getTemplateSourcePreview).not.toHaveBeenCalled()
+    expect(screen.getByTestId('page')).toBeVisible()
   })
 })

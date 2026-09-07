@@ -25,6 +25,45 @@ If conversion is busy or unavailable, the text mapping view stays available
 with Retry document preview. Source-integrity and access failures have distinct
 notices and never return a cached preview instead of an error.
 
+Word uploads now start a rendered page preview immediately when a file is
+selected, in parallel with field detection and before creating a template.
+The Document view remains selected while conversion runs; choose Fields to
+start mapping early or use the explicit fallback if conversion fails.
+
+The import sidebar lists detected and added fields with source text, inclusion,
+type and review status. Drag across words directly on the rendered page, enter
+a field name and type, and choose **Create field**. Named boxes stay visible;
+click one to edit its name, type or automation key beside the document. Matching
+occurrences in an upload share the same replacement value, as disclosed in the
+selection editor. No upload is persisted just to show a preview.
+
+DOCX analysis includes ephemeral `source_paragraphs` (Word ordinal and text),
+so detected blanks and choices can be boxed before the first save. The metadata
+uses the existing bounded outline and is omitted if truncated or over 20,000
+characters. Local paragraph context survives the optional AI proposal response;
+it is not added to the saved variable schema.
+
+For saved Word documents, selections resolve to an exact, unique source paragraph
+and Unicode character span. Anchored field boxes require unique paragraph context
+and matching source text. Repeated/ambiguous text, incomplete outlines and fields
+whose page location cannot be established remain available in **Fields**; no
+guessed PDF positions are stored as Word anchors. The Fields view also supports
+longer selections, source review and conditional/repeating paragraphs. Saved PDF
+boxes keep their names visible while preserving drag/resize placement.
+
+Test results separate source availability, field definitions, missing sample
+values, generation errors/success and human visual review. A successful render
+is not visual approval; a stale version or diagnostic PDF is not publication
+evidence. Review every generated page before publishing.
+
+`POST /api/templates/intake/preview-render` accepts multipart `file` and returns
+PDF bytes for an unsaved DOCX. It requires `manage_documents`, applies the existing
+upload limit and bounded conversion/cache settings, keys private cached output
+by tenant and source digest, and returns no-store/nosniff headers. It does not
+create a template, a saved source, or testing/publication evidence. Invalid types
+return 422, invalid/empty uploads 400, oversized inputs 413 and unavailable
+conversion 503. Existing saved-source integrity checks remain unchanged.
+
 ## API and operations
 
 `GET /api/templates/{template_id}/preview-render` returns a PDF for a DOCX source.
