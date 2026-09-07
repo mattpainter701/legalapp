@@ -11,6 +11,11 @@
 
 # Changelog
 
+## 2026.09.07.12 - Cloud folder retry isolation
+
+- Resolve cloud provider tokens before each retry pass, then isolate every matter-folder initialization in its own database savepoint. A lock failure now rolls back only that matter's work and leaves the next matter eligible to proceed.
+- Commit each successful matter binding before the next one to release locks promptly. Report partial setup accurately through `matters_failed` and a `partial` status, and show the retry count in Integrations.
+
 ## 2026.09.07.11 - Template Studio AI proposal handoff
 
 - Reuse the short-lived, signed local-analysis snapshot when Template Studio requests an explicitly consented Premium AI field proposal. The snapshot remains bound to the exact tenant, user, file name, and source bytes; stale or changed inputs require a new local analysis.

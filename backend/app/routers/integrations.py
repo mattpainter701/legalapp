@@ -2211,6 +2211,7 @@ async def cloud_init_retry(
     from app.models.plugin import Matter
     from app.models.tenant import Tenant
     from app.services.cloud_init import (
+        get_matter_provisioning_tokens,
         initialize_cloud_root_folder,
         initialize_matter_folders,
     )
@@ -2257,37 +2258,69 @@ async def cloud_init_retry(
     )
     matters = matters_result.scalars().all()
 
+    # Token refresh can commit its credential update, so do it before opening a
+    # savepoint for any matter. Snapshot scalar values now: a failed savepoint
+    # expires ORM state by design and the retry must still continue safely.
+    matter_attempts = [
+        (
+            matter.id,
+            getattr(matter, "slug", None) or str(matter.id),
+            matter.matter_name,
+        )
+        for matter in matters
+    ]
+    tokens = await get_matter_provisioning_tokens(db, str(tenant_id), cloud_root)
+    # Fresh credentials are selected under a row lock. Release that lock before
+    # the provider work for the first matter, then each matter rebinds tenant
+    # context inside initialize_matter_folders.
+    await db.commit()
+
     initialized = 0
     failed = 0
-    for matter in matters:
-        slug = getattr(matter, "slug", None) or str(matter.id)
+    for matter_id, slug, matter_name in matter_attempts:
         try:
-            folder = await initialize_matter_folders(
-                db=db,
-                tenant_id=str(tenant_id),
-                matter_slug=slug,
-                cloud_root=cloud_root,
-                matter_id=matter.id,
-                folder_name=matter.matter_name,
-                existing_folder=matter.cloud_folder,
-            )
-            if folder:
-                matter.cloud_folder = {**(matter.cloud_folder or {}), **folder}
-                initialized += 1
-            elif not matter.cloud_folder:
+            # A lock timeout (or any database error) marks the active
+            # transaction as failed in Postgres. A savepoint contains that
+            # failure, so later matters remain eligible for this idempotent
+            # retry instead of failing with InFailedSQLTransaction.
+            async with db.begin_nested():
+                folder = await initialize_matter_folders(
+                    db=db,
+                    tenant_id=str(tenant_id),
+                    matter_slug=slug,
+                    cloud_root=cloud_root,
+                    matter_id=matter_id,
+                    folder_name=matter_name,
+                    tokens=tokens,
+                )
+            if not folder:
+                # initialize_matter_folders can return no binding when a
+                # provider is unavailable. It still acquires its tenant/matter
+                # locks while checking the saved state, so release them before
+                # checking the next matter.
+                await db.commit()
                 failed += 1
+                logger.warning(
+                    "cloud_init_retry: matter %s folder init returned no binding",
+                    matter_id,
+                )
+                continue
+
+            # Release row locks before processing the next matter. Each success
+            # is already durable, preserving idempotence if a later matter fails.
+            await db.commit()
+            initialized += 1
         except Exception as exc:
             logger.warning(
-                "cloud_init_retry: matter %s folder init failed: %s", matter.id, exc
+                "cloud_init_retry: matter %s folder init failed: %s", matter_id, exc
             )
             failed += 1
-
-    await db.commit()
 
     return {
         "root": cloud_root,
         "root_providers": sorted(cloud_root.keys()),
-        "matters_checked": len(matters),
+        "matters_checked": len(matter_attempts),
         "matters_initialized": initialized,
         "matters_failed": failed,
+        "status": "ready" if failed == 0 else "partial",
     }

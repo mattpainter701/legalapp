@@ -388,11 +388,7 @@ export default function IntegrationsPanel() {
               </>
             )}
           </button>
-          {retryResult && !retryResult.error && (
-            <span className="text-xs text-green-700 font-medium">
-              Cloud folders ready · {retryResult.matters_initialized} matter{retryResult.matters_initialized !== 1 ? 's' : ''} set up
-            </span>
-          )}
+          <CloudRetryStatus result={retryResult} />
           {retryResult?.error && (
             <span className="text-xs text-red-600 font-medium">{retryResult.error}</span>
           )}
@@ -711,6 +707,26 @@ function SharePointBindingCard({ binding, onSaved, flash, onFlashClear }) {
         )}
       </div>
     </div>
+  )
+}
+
+export function CloudRetryStatus({ result }) {
+  if (!result || result.error) return null
+
+  const initialized = result.matters_initialized || 0
+  const failed = result.matters_failed || 0
+  if (failed) {
+    return (
+      <span className="text-xs text-amber-700 font-medium">
+        Cloud folders partially ready · {initialized} matter{initialized !== 1 ? 's' : ''} set up · {failed} need{failed === 1 ? 's' : ''} retry
+      </span>
+    )
+  }
+
+  return (
+    <span className="text-xs text-green-700 font-medium">
+      Cloud folders ready · {initialized} matter{initialized !== 1 ? 's' : ''} set up
+    </span>
   )
 }
 

@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.12 — Reliable cloud folder recovery
+
+Released September 7, 2026.
+
+Cloud setup can finish the rest of a firm's matters when one folder is temporarily busy.
+
+- **Retry the matters that need it.** A temporary lock on one matter no longer stops setup for every other matter in the firm. Retry later to finish only the affected matter.
+- **See partial results clearly.** The integrations page now reports how many matter folders were set up and how many still need another retry.
+
 ## 2026.09.07.11 — More reliable Template Studio AI proposals
 
 Released September 7, 2026.
