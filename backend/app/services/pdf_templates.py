@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 import json
 import re
 import unicodedata
@@ -1335,7 +1336,11 @@ def _flatten_with_overlays(
         if not isinstance(region, dict):
             raise TemplatePdfError("The stored PDF cover region is invalid.")
         try:
-            page_index = int(region.get("page")) - 1
+            raw_page = region.get("page")
+            page_number = int(raw_page)
+            if isinstance(raw_page, bool) or float(raw_page) != page_number:
+                raise ValueError
+            page_index = page_number - 1
             rect = region.get("rect")
             x1, y1, x2, y2 = (float(item) for item in rect)
         except (TypeError, ValueError):
@@ -1344,6 +1349,9 @@ def _flatten_with_overlays(
                 or page_index < 0 or page_index >= len(reader.pages)
                 or x2 <= x1 or y2 <= y1):
             raise TemplatePdfError("The stored PDF cover region is invalid.")
+        media = reader.pages[page_index].mediabox
+        if float(media.left) != 0 or float(media.bottom) != 0:
+            raise TemplatePdfError("The stored PDF cover region uses an unsupported page origin.")
         covers_by_page.setdefault(page_index, []).append({"rect": [x1, y1, x2, y2]})
 
     has_ocr_overlays = any(
