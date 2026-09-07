@@ -194,9 +194,6 @@ async def test_onedrive_upload_result_captures_graph_item_metadata(monkeypatch):
     async def fake_token(db, tenant_id, provider):
         return "token"
 
-    async def fake_ensure_path(token, folders):
-        return "parent-123"
-
     graph_payload = {
         "id": "item-123",
         "webUrl": "https://contoso-my.sharepoint.com/doc.pdf",
@@ -204,9 +201,6 @@ async def test_onedrive_upload_result_captures_graph_item_metadata(monkeypatch):
     }
 
     monkeypatch.setattr(matter_file_store_module, "get_fresh_token", fake_token)
-    monkeypatch.setattr(
-        matter_file_store_module, "_ensure_onedrive_path", fake_ensure_path
-    )
     monkeypatch.setattr(
         matter_file_store_module.httpx,
         "AsyncClient",
@@ -224,6 +218,7 @@ async def test_onedrive_upload_result_captures_graph_item_metadata(monkeypatch):
         filename="doc.pdf",
         content=b"pdf",
         content_type="application/pdf",
+        folder_id="parent-123",
     )
 
     assert result.succeeded
@@ -281,9 +276,6 @@ async def test_google_drive_upload_result_captures_file_id_and_parent(monkeypatc
     async def fake_token(db, tenant_id, provider):
         return "token"
 
-    async def fake_ensure_path(token, folders):
-        return "gparent-123"
-
     async def fake_find_file(self, token, parent_id, filename):
         return None
 
@@ -293,9 +285,6 @@ async def test_google_drive_upload_result_captures_file_id_and_parent(monkeypatc
     }
 
     monkeypatch.setattr(matter_file_store_module, "get_fresh_token", fake_token)
-    monkeypatch.setattr(
-        matter_file_store_module, "_ensure_gdrive_path", fake_ensure_path
-    )
     monkeypatch.setattr(MatterFileStore, "_find_gdrive_file", fake_find_file)
     monkeypatch.setattr(
         matter_file_store_module.httpx,
@@ -314,6 +303,7 @@ async def test_google_drive_upload_result_captures_file_id_and_parent(monkeypatc
         filename="doc.pdf",
         content=b"pdf",
         content_type="application/pdf",
+        folder_id="gparent-123",
     )
 
     assert result.succeeded
