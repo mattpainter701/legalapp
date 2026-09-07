@@ -3,11 +3,12 @@ import { reportError } from '../utils/reportError'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
 import Sidebar from './Sidebar'
+import { visibleNavigation, mobileNavigation, isNavigationActive } from '../navigation'
 import BillingStatusBanner from './BillingStatusBanner'
-import { getConversations, createConversation, deleteConversation, getDocuments, deleteDocument, logout } from '../api'
+import { getConversations, createConversation, deleteConversation, getDocuments, deleteDocument, logout, updateMe } from '../api'
 import { canAccessModuleList } from '../moduleAccess'
 import { useConfirm } from './dialog/ConfirmProvider'
-import { Briefcase, CalendarDays, CheckSquare, GripVertical, Menu, MessageSquare, PhoneCall, Shield } from 'lucide-react'
+import { Briefcase, GripVertical, Menu, Shield } from 'lucide-react'
 
 const AppShellContext = createContext(null)
 
@@ -43,13 +44,6 @@ function readStoredSidebarCollapsed() {
   }
 }
 
-const MOBILE_NAV_ITEMS = [
-  { path: '/intake/dashboard', label: 'Call Intake', icon: PhoneCall, module: 'intake-dashboard' },
-  { path: '/matters', label: 'Matters', icon: Briefcase },
-  { path: '/chat', label: 'Assistant', icon: MessageSquare },
-  { path: '/calendar', label: 'Calendar', icon: CalendarDays },
-  { path: '/tasks', label: 'Tasks', icon: CheckSquare },
-]
 
 export function useAppShell() {
   const ctx = useContext(AppShellContext)
@@ -80,7 +74,7 @@ export default function AppShell({ children, title }) {
   const shouldLoadChatData = pathname === '/chat' && canSeeModule('chat')
 
   const isActiveRoute = useCallback((path) => (
-    pathname === path || pathname.startsWith(path + '/')
+    isNavigationActive(path, pathname)
   ), [pathname])
 
   const handleShellNavigate = useCallback((path) => {
@@ -272,14 +266,12 @@ export default function AppShell({ children, title }) {
     return () => window.removeEventListener('keydown', handler)
   }, [canSeeModule, handleNewConversation])
 
-  const visibleMobileNavItems = MOBILE_NAV_ITEMS.filter(({ path, module }) => {
-    if (module) return canSeeModule(module)
-    if (path === '/matters') return canSeeModule('matters')
-    if (path === '/tasks') return canSeeModule('tasks')
-    if (path === '/chat') return canSeeModule('chat')
-    if (path === '/calendar') return canSeeModule('calendar')
-    return true
-  })
+  const navigationItems = visibleNavigation(user)
+  const visibleMobileNavItems = mobileNavigation(user)
+  const saveNavigation = async (preferences) => {
+    await updateMe({ navigation_preferences: preferences })
+    await refreshUser()
+  }
 
   const ctxValue = {
     conversations,
@@ -300,6 +292,7 @@ export default function AppShell({ children, title }) {
       <div className={`flex h-screen [height:100dvh] bg-brand-bg overflow-hidden ${isResizingSidebar ? 'select-none cursor-col-resize' : ''}`}>
         <Sidebar
           user={user}
+          onSaveNavigation={saveNavigation}
           onLogout={handleLogout}
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
@@ -349,7 +342,7 @@ export default function AppShell({ children, title }) {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-              {canSeeModule('matters') && (
+              {navigationItems.some((item) => item.path === '/matters') && (
                 <button
                   onClick={() => handleShellNavigate('/matters')}
                   title="My Matters"

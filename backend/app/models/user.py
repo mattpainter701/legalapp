@@ -90,6 +90,7 @@ class User(Base):
     )
     # Verified, user-managed professional profile.  This is intentionally
     # separate from role (authorization) and from learned memory.
+    navigation_preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     professional_role: Mapped[str | None] = mapped_column(String(120), nullable=True)
     job_title: Mapped[str | None] = mapped_column(String(160), nullable=True)
     office_location: Mapped[str | None] = mapped_column(String(255), nullable=True)

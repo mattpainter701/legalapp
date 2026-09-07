@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.1 — A workspace view for every role
+
+Released September 7, 2026.
+
+Give staff a focused workspace and let each person arrange their own navigation.
+
+- **Choose functions by role.** Administrators can configure role view profiles using Receptionist, Finance, Secretary, Paralegal, Attorney, and Partner starting points, then assign those roles to staff.
+- **Make navigation your own.** Use the navigation gear to hide and reorder available functions or restore role defaults. Your saved layout follows your account on desktop and phone.
+
 ## 2026.09.06.8 — Correct everyday work and keep your place
 
 Released September 6, 2026.

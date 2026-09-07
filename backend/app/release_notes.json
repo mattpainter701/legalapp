@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.1",
+      "version": "2026.09.07.1",
+      "title": "A workspace view for every role",
+      "published_at": "2026-09-07",
+      "summary": "Give staff a focused workspace and let each person arrange their own navigation.",
+      "highlights": [
+        {
+          "title": "Choose functions by role",
+          "description": "Administrators can configure role view profiles using Receptionist, Finance, Secretary, Paralegal, Attorney, and Partner starting points, then assign those roles to staff."
+        },
+        {
+          "title": "Make navigation your own",
+          "description": "Use the navigation gear to hide and reorder available functions or restore role defaults. Your saved layout follows your account on desktop and phone."
+        }
+      ]
+    },
+    {
       "id": "2026.09.06.8",
       "version": "2026.09.06.8",
       "title": "Correct everyday work and keep your place",

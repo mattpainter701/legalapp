@@ -1,63 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import {
-  Blocks, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
-  Briefcase, Clock, Receipt, User, Landmark, CheckSquare, Users, ClipboardList,
-  Mail, Shield, ShieldCheck, Rocket, PhoneCall, Lock, LogOut, PanelLeftClose, PanelLeftOpen, Search,
-} from 'lucide-react'
+import { X, User, Lock, LogOut, PanelLeftClose, PanelLeftOpen, Settings } from 'lucide-react'
+import { NAV_GROUPS, visibleNavigation, availableNavigation, isNavigationActive } from '../navigation'
+import NavigationEditor from './NavigationEditor'
 import UpgradeModal from './UpgradeModal'
-import { canAccessModuleList } from '../moduleAccess'
 import LawHandLogo from './LawHandLogo'
 
-const NAV_GROUPS = [
-  {
-    items: [
-      { path: '/matters', label: 'My Matters', icon: Briefcase, primary: true, module: 'matters' },
-      { path: '/chat',    label: 'Assistant',  icon: MessageSquare, module: 'chat' },
-      { path: '/firm-memory', label: 'Firm Memory', icon: Search, module: 'matters' },
-    ],
-  },
-  {
-    label: 'Workspace',
-    items: [
-      { path: '/calendar',       label: 'Calendar',       icon: CalendarDays, module: 'calendar' },
-      { path: '/time-tracking',  label: 'Time Tracking',  icon: Clock, module: 'time-tracking' },
-      { path: '/tasks',          label: 'Tasks',          icon: CheckSquare, module: 'tasks' },
-      { path: '/communications', label: 'Communications', icon: Mail, module: 'communications' },
-      { path: '/clients',        label: 'Clients & CRM',  icon: Users, module: 'contacts' },
-      { path: '/conflicts',      label: 'Conflict Search', icon: ShieldCheck, module: 'contacts' },
-      { path: '/intake/dashboard', label: 'Call Intake',   icon: PhoneCall, module: 'intake-dashboard' },
-      { path: '/intake',         label: 'Intake',         icon: ClipboardList, module: 'intake' },
-      { path: '/templates',      label: 'Template Studio', icon: FileSignature, module: 'templates' },
-    ],
-  },
-  {
-    label: 'Accounting',
-    items: [
-      { path: '/invoices',      label: 'Invoices',         icon: Receipt, module: 'invoices' },
-      { path: '/trust',         label: 'Trust Accounting', icon: Landmark, module: 'trust' },
-      { path: '/reports',       label: 'Reports',          icon: BarChart2, module: 'reports' },
-    ],
-  },
-  {
-    label: 'Firm',
-    items: [
-      { path: '/plugins', label: 'Add-on Modules', icon: Blocks, module: 'plugins' },
-    ],
-  },
-  {
-    label: 'Administration',
-    financeOnly: true,
-    items: [
-      { path: '/admin',      label: 'Administration', icon: Shield, module: 'admin' },
-      { path: '/onboarding', label: 'Onboarding',     icon: Rocket, module: 'onboarding', adminOnly: true },
-    ],
-  },
-]
 
 export default function Sidebar({
   user,
   onLogout,
+  onSaveNavigation,
   isOpen = true,
   onClose,
   desktopWidth = 288,
@@ -67,9 +20,11 @@ export default function Sidebar({
 }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
+  const [customizing, setCustomizing] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const isLimited = Boolean(user?.upsell_target)
   const panelRef = useRef(null)
+  const customizeRef = useRef(null)
   const closeRef = useRef(null)
   const previousFocusRef = useRef(null)
   const onCloseRef = useRef(onClose)
@@ -106,7 +61,7 @@ export default function Sidebar({
       }
       if (event.key !== 'Tab') return
       const focusable = Array.from(panelRef.current?.querySelectorAll(
-        'button:not([disabled]):not([tabindex="-1"]), [href]:not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
+        'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), [href]:not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
       ) || [])
       if (!focusable.length) return
       const first = focusable[0]
@@ -129,29 +84,17 @@ export default function Sidebar({
   }, [isMobile, isOpen])
 
 
-  const isActive = (path) => {
-    if (path === '/intake') return pathname === '/intake'
-    return pathname === path || pathname.startsWith(path + '/')
-  }
+  const isActive = (path) => isNavigationActive(path, pathname)
 
   const handleNavAndClose = (path) => {
     navigate(path)
     onClose?.()
   }
 
-  const hasFinanceAccess = user?.role === 'admin' || user?.role === 'accountant'
-  const visibleGroups = NAV_GROUPS.filter(
-    (g) => (!g.adminOnly || user?.role === 'admin') && (!g.financeOnly || hasFinanceAccess)
-  ).map((group) => {
-    const enabled = user?.enabled_modules
-    const items = group.items.map((item) => {
-      if (item.adminOnly && user?.role !== 'admin') return null
-      const moduleOk = canAccessModuleList(enabled, item.module)
-      if (moduleOk) return item
-      return null
-    }).filter(Boolean)
-    return { ...group, items }
-  }).filter((group) => group.items.length > 0)
+  const visibleItems = visibleNavigation(user)
+  const visibleGroups = user?.navigation_preferences?.order?.length
+    ? [{ label: 'My workspace', items: visibleItems }]
+    : NAV_GROUPS.map((group) => ({ ...group, items: group.items.filter((item) => visibleItems.some((visible) => visible.path === item.path)) })).filter((group) => group.items.length)
 
   return (
     <>
@@ -188,7 +131,7 @@ export default function Sidebar({
           <button
             type="button"
             className="hidden lg:inline-flex tap-target rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink"
-            onClick={onToggleDesktopCollapsed}
+            onClick={() => { setCustomizing(false); onToggleDesktopCollapsed?.() }}
             aria-label={desktopCollapsed ? 'Expand navigation' : 'Collapse navigation'}
             title={desktopCollapsed ? 'Expand navigation' : 'Collapse navigation'}
             tabIndex={isMobile ? -1 : 0}
@@ -207,7 +150,14 @@ export default function Sidebar({
 
         {/* Navigation */}
         <nav className={`flex-1 overflow-y-auto p-3 ${desktopCollapsed ? 'lg:px-2' : ''}`}>
-          {visibleGroups.map((group, gi) => (
+          {customizing && <NavigationEditor
+            items={availableNavigation(user).filter((item) => !['/admin', '/onboarding'].includes(item.path))}
+            preferences={user?.navigation_preferences}
+            onSave={onSaveNavigation}
+            onClose={() => { setCustomizing(false); customizeRef.current?.focus() }}
+          />}
+          {!customizing && visibleGroups.length === 0 && <p className="px-3 py-4 text-sm text-brand-muted">No functions shown. Use Customize navigation to restore your available functions.</p>}
+          {!customizing && visibleGroups.map((group, gi) => (
             <div key={group.label || `group-${gi}`} className={gi > 0 ? 'mt-1' : ''}>
               {group.label && (
                 <div className={`px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-wider text-brand-muted ${desktopCollapsed ? 'lg:sr-only' : ''}`}>
@@ -279,6 +229,11 @@ export default function Sidebar({
               {user?.billing_tier || 'Free Tier'}
             </p>
           </div>
+          <button ref={customizeRef} type="button" onClick={() => { setCustomizing((value) => !value); if (desktopCollapsed) onToggleDesktopCollapsed?.() }}
+            aria-label="Customize navigation" title="Customize navigation" aria-expanded={customizing}
+            className="tap-target rounded-xl text-brand-muted hover:bg-brand-bg-soft shrink-0">
+            <Settings className="w-4 h-4" />
+          </button>
           <button
             onClick={() => handleNavAndClose('/profile')}
             className="tap-target rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink transition-colors shrink-0"

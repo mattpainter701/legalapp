@@ -1,5 +1,10 @@
 # 2026.09.06.4 - Durable workflow preparation
 
+## 2026-09-07 - Role navigation profiles
+
+- Added tenant role view allowlists and account-synced personal navigation hiding/order (migration 159).
+- Added six role view starting points, role editing, navigation gear, consistent mobile/header visibility, and focused API/UI/browser tests. Visibility is independent of existing authorization.
+
 - Queue matching workflow triggers in the matter-save transaction; atomically commit prepared runs and worker receipts, recover leases, retry transient failures, and preserve ever-per-condition deduplication.
 - Revalidate actor/tenant, original fact fingerprint, rule and approved version; block changed context with a manual-review path. Payloads/errors omit source content. No automatic task application or provider calls.
 - Extend existing activity APIs and workflow panels with pending/retry/failure states and review of stored previews. Add transaction/recovery/permission and UI approval tests.

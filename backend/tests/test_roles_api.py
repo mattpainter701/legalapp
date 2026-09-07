@@ -130,3 +130,111 @@ async def test_users_list_includes_role_ids(db_session, test_tenant):
     me = next(u for u in users if u["email"] == "admin@testfirm.com")
     assert "role_ids" in me
     assert len(me["role_ids"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_role_views_and_personal_layout_round_trip(db_session, test_tenant):
+    client, admin = await _admin_client(db_session, test_tenant)
+    async with client:
+        created = await client.post(
+            "/api/admin/roles",
+            json={
+                "name": "Receptionist",
+                "navigation_paths": ["/intake", "/tasks"],
+            },
+        )
+        assert created.status_code == 201
+        role_id = created.json()["id"]
+        db_session.add(
+            UserRole(
+                user_id=admin.id,
+                role_id=uuid.UUID(role_id),
+                tenant_id=test_tenant.id,
+                source="manual",
+            )
+        )
+        await db_session.commit()
+        me = await client.get("/api/auth/me")
+        assert me.status_code == 200
+        assert me.json()["navigation_paths"] == ["/intake", "/tasks"]
+        saved = await client.patch(
+            "/api/auth/me",
+            json={
+                "navigation_preferences": {"hidden": ["/tasks"], "order": ["/intake"]}
+            },
+        )
+        assert saved.status_code == 200
+        assert saved.json()["default_route"] == "/intake"
+        assert (await client.get("/api/auth/me")).json()["navigation_preferences"] == {
+            "hidden": ["/tasks"],
+            "order": ["/intake"],
+        }
+        # Old clients that omit the new field must preserve the view profile.
+        preserved = await client.put(
+            f"/api/admin/roles/{role_id}", json={"name": "Receptionist"}
+        )
+        assert preserved.json()["navigation_paths"] == ["/intake", "/tasks"]
+        changed = await client.put(
+            f"/api/admin/roles/{role_id}",
+            json={"name": "Receptionist", "navigation_paths": []},
+        )
+        assert changed.json()["navigation_paths"] == []
+        assert (await client.get("/api/auth/me")).json()["default_route"] == "/profile"
+        reset = await client.put(
+            f"/api/admin/roles/{role_id}",
+            json={"name": "Receptionist", "navigation_paths": None},
+        )
+        assert reset.json()["navigation_paths"] is None
+        assert (
+            await client.patch("/api/auth/me", json={"navigation_preferences": None})
+        ).json()["navigation_preferences"] == {"hidden": [], "order": []}
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_view_updates_require_role_management_and_tenant_ownership(
+    client, db_session, test_user
+):
+    from app.models.tenant import Tenant
+
+    other = Tenant(name="Other", domain="other-navigation.test")
+    db_session.add(other)
+    await db_session.flush()
+    role = Role(
+        tenant_id=other.id, name="Other receptionist", navigation_paths=["/tasks"]
+    )
+    db_session.add(role)
+    await db_session.commit()
+    role_id = role.id
+    manager = Role(
+        tenant_id=test_user.tenant_id,
+        name="View manager",
+        capabilities=["manage_roles"],
+    )
+    db_session.add(manager)
+    await db_session.flush()
+    db_session.add(
+        UserRole(
+            user_id=test_user.id,
+            role_id=manager.id,
+            tenant_id=test_user.tenant_id,
+            source="manual",
+        )
+    )
+    await db_session.commit()
+    assert (
+        await client.put(
+            f"/api/admin/roles/{role_id}",
+            json={"name": "Other", "navigation_paths": []},
+        )
+    ).status_code == 404
+    manager.capabilities = []
+    await db_session.commit()
+    assert (
+        await client.post(
+            "/api/admin/roles", json={"name": "Forbidden", "navigation_paths": []}
+        )
+    ).status_code == 403
+    assert (
+        await client.patch("/api/auth/me", json={"navigation_paths": ["/invoices"]})
+    ).status_code == 422

@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["158_matter_intakes"]
+    assert heads == ["159_navigation_profiles"]
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():
