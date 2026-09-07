@@ -174,7 +174,6 @@ function ParagraphRow({
   selectedName,
   onSelectField,
   onSelectText,
-  onModeSuggestion,
   onPickParagraph,
   onRemoveRegion,
 }) {
@@ -287,6 +286,7 @@ export default function DocxDocumentView({
   conditionFields = [],
   onSelectField,
   onSelectText,
+  onModeSuggestion,
   onCreateField,
   onCreateRegion,
   onRemoveRegion,
