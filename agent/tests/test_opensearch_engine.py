@@ -166,7 +166,10 @@ def test_query_preserves_phrase_boolean_syntax_and_applies_acl_and_fields():
     nested = body["query"]["bool"]["must"][0]["nested"]
     query = nested["query"]["query_string"]
     assert query["query"] == '"summary judgment" AND granted'
-    assert query["default_operator"] == "AND"
+    # The reader's own operators still bind; only the default between bare
+    # words changed, so an explicit AND is not silently loosened.
+    assert query["default_operator"] == "OR"
+    assert query["minimum_should_match"] == "2<70%"
     assert query["allow_leading_wildcard"] is False
     assert query["max_determinized_states"] == 1_000
     assert query["fuzzy_max_expansions"] == 20
@@ -179,6 +182,122 @@ def test_query_preserves_phrase_boolean_syntax_and_applies_acl_and_fields():
     assert highlight["encoder"] == "html"
     assert highlight["max_analyzer_offset"] == 1_000_000
     assert "max_analyzed_offset" not in highlight
+
+
+def test_a_research_question_does_not_require_every_word_in_one_chunk():
+    """A firm's old records are found by half-remembered wording, not recall."""
+    engine = _engine()
+    body = engine._search_body(
+        SearchRequest(
+            query="indemnification carve out for vendor negligence",
+            acl_tokens=("sid:S-1-5-21",),
+        )
+    )
+    query = body["query"]["bool"]["must"][0]["nested"]["query"]["query_string"]
+    # Under AND this matched only a chunk holding all six words, which is what
+    # made a decade-old archive read as empty.
+    assert query["default_operator"] == "OR"
+    assert query["minimum_should_match"] == engine.limits.min_should_match
+    # Broad recall is still bounded: the ACL filter and deny clause are
+    # unchanged, so widening the operator widens no one's access.
+    assert {"terms": {"acl_tokens": ["sid:S-1-5-21"]}} in body["query"]["bool"][
+        "filter"
+    ]
+    assert body["query"]["bool"]["must_not"] == [
+        {"terms": {"deny_acl_tokens": ["sid:S-1-5-21"]}}
+    ]
+
+
+def test_minimum_should_match_is_configurable_per_deployment():
+    engine = _engine(limits=OpenSearchLimits(min_should_match="3<50%"))
+    body = engine._search_body(SearchRequest(query="a b c d", acl_tokens=("acl",)))
+    nested = body["query"]["bool"]["must"][0]["nested"]
+    assert nested["query"]["query_string"]["minimum_should_match"] == "3<50%"
+
+
+@pytest.mark.asyncio
+async def test_a_stray_operator_is_retried_as_literal_text_not_reported_offline():
+    """A search box takes typos. A 400 here would be read as an offline node."""
+    engine = _engine()
+    sent: list[str] = []
+
+    async def ensure_index():
+        return ACTIVE_INDEX
+
+    async def request(_method, _path, **kwargs):
+        sent.append(
+            kwargs["json"]["query"]["bool"]["must"][0]["nested"]["query"][
+                "query_string"
+            ]["query"]
+        )
+        if len(sent) == 1:
+            raise httpx.HTTPStatusError(
+                "parse failure",
+                request=httpx.Request("POST", "http://127.0.0.1"),
+                response=httpx.Response(400, json={"error": "parse_exception"}),
+            )
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", "http://127.0.0.1"),
+            json={
+                "_shards": {"failed": 0},
+                "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []},
+                "took": 3,
+            },
+        )
+
+    async def lease_state():
+        return None
+
+    async def write_blocked(_index):
+        return False
+
+    engine.ensure_index = ensure_index
+    engine._request = request
+    engine._rebuild_lease_state = lease_state
+    engine._index_write_blocked = write_blocked
+
+    response = await engine.search(
+        SearchRequest(query="notice of breach !! (2019", acl_tokens=("acl",))
+    )
+    assert response.total == 0
+    assert sent[0] == "notice of breach !! (2019"
+    assert sent[1] == "notice of breach \\!\\! \\(2019"
+    await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_a_real_search_failure_is_not_swallowed_by_the_retry():
+    engine = _engine()
+    attempts = 0
+
+    async def ensure_index():
+        return ACTIVE_INDEX
+
+    async def request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise httpx.HTTPStatusError(
+            "unavailable",
+            request=httpx.Request("POST", "http://127.0.0.1"),
+            response=httpx.Response(503),
+        )
+
+    async def lease_state():
+        return None
+
+    async def write_blocked(_index):
+        return False
+
+    engine.ensure_index = ensure_index
+    engine._request = request
+    engine._rebuild_lease_state = lease_state
+    engine._index_write_blocked = write_blocked
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await engine.search(SearchRequest(query="notice", acl_tokens=("acl",)))
+    assert attempts == 1
+    await engine.close()
 
 
 @pytest.mark.asyncio

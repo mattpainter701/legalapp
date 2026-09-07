@@ -11,7 +11,7 @@ import ssl
 import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlparse
 
 import httpx
@@ -38,6 +38,21 @@ DEFAULT_MAX_BULK_BYTES = 8 * 1024 * 1024
 # the extraction workers' own default output budget is 20 MiB per document.
 DEFAULT_MAX_DOCUMENT_CHUNKS = 5_000
 DEFAULT_MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
+# Firm Memory is a research box over an archive nobody wrote for search, so a
+# natural-language question must not be read as "every one of these words is in
+# one chunk". Short queries still require every term; longer ones require most
+# of them and let BM25 rank the rest, which is what makes a half-remembered
+# phrase find a document that was filed years ago.
+DEFAULT_MIN_SHOULD_MATCH = "2<70%"
+
+# Lucene's reserved set. A lawyer typing "Smith v. Jones (2019) ~ notice" is
+# making a search box query, not a Lucene expression, and a stray operator must
+# not turn into a 400 that the caller reports as an unreachable node.
+_LUCENE_RESERVED = frozenset('+-=&|><!(){}[]^"~*?:\\/')
+
+
+def _escape_lucene(value: str) -> str:
+    return "".join(f"\\{char}" if char in _LUCENE_RESERVED else char for char in value)
 
 
 class RebuildReplayUncertain(RuntimeError):
@@ -72,6 +87,7 @@ class OpenSearchLimits:
     max_results: int = DEFAULT_MAX_RESULTS
     max_offset: int = DEFAULT_MAX_OFFSET
     max_query_chars: int = DEFAULT_MAX_QUERY_CHARS
+    min_should_match: str = DEFAULT_MIN_SHOULD_MATCH
     max_bulk_documents: int = DEFAULT_MAX_BULK_DOCUMENTS
     max_bulk_bytes: int = DEFAULT_MAX_BULK_BYTES
     max_document_chunks: int = DEFAULT_MAX_DOCUMENT_CHUNKS
@@ -867,7 +883,16 @@ class OpenSearchEngine(LocalSearchEngine):
                                             "chunks.filename^2",
                                             "chunks.section_text^2",
                                         ],
-                                        "default_operator": "AND",
+                                        # AND here meant a five-word research
+                                        # question only matched a chunk holding
+                                        # all five words, which is why old
+                                        # records read as absent. OR plus a
+                                        # minimum keeps precision without
+                                        # demanding a verbatim recollection.
+                                        "default_operator": "OR",
+                                        "minimum_should_match": (
+                                            self.limits.min_should_match
+                                        ),
                                         "allow_leading_wildcard": False,
                                         "analyze_wildcard": False,
                                         "lenient": False,
@@ -917,11 +942,26 @@ class OpenSearchEngine(LocalSearchEngine):
             raise SearchUnavailableError(
                 "OpenSearch search is unavailable during rebuild quarantine"
             )
-        data = (
-            await self._request(
+        try:
+            response = await self._request(
                 "POST", f"/{self.read_alias}/_search", json=self._search_body(request)
             )
-        ).json()
+        except httpx.HTTPStatusError as exc:
+            # A parse error is a typo in a search box, not an unreachable node.
+            # Retrying the same text as literal terms is what a search box is
+            # expected to do; anything else is still a real failure.
+            escaped = _escape_lucene(request.query)
+            if (
+                exc.response.status_code != 400
+                or len(escaped) > self.limits.max_query_chars
+            ):
+                raise
+            response = await self._request(
+                "POST",
+                f"/{self.read_alias}/_search",
+                json=self._search_body(replace(request, query=escaped)),
+            )
+        data = response.json()
         shards = data.get("_shards", {})
         if int(shards.get("failed", 0)):
             raise RuntimeError("OpenSearch search was incomplete")
