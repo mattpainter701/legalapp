@@ -1771,9 +1771,9 @@ def test_production_feature_flags_are_explicitly_mapped_and_rollback_images_rema
         prod_services["frontend"]["build"]["args"]["VITE_PUBLIC_SIGNUP_ENABLED"]
         == "${VITE_PUBLIC_SIGNUP_ENABLED:-false}"
     )
-    assert "SMB_ENABLED=true" in (ROOT / ".env.prod.example").read_text(
-        encoding="utf-8"
-    )
+    env_example = (ROOT / ".env.prod.example").read_text(encoding="utf-8")
+    assert "SMB_ENABLED=true" in env_example
+    assert "TEMPLATE_STUDIO_RENDER_ENABLED=false" in env_example
 
     deploy = (ROOT / "scripts" / "deploy_prod.sh").read_text(encoding="utf-8")
     assert "docker image prune" not in deploy
