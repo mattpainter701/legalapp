@@ -4,6 +4,16 @@ from pydantic import BaseModel, field_validator
 from datetime import date, datetime
 from typing import Optional
 import uuid
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+def _validate_timezone_name(value: str | None) -> str:
+    timezone_name = value or "UTC"
+    try:
+        ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("timezone must be a valid IANA timezone") from exc
+    return timezone_name
 
 
 class CalendarEvent(BaseModel):
@@ -61,6 +71,11 @@ class ScheduledEventCreate(BaseModel):
     calendar_provider: str | None = None
     meeting_provider: str = "none"
 
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        return _validate_timezone_name(value)
+
     @field_validator("calendar_provider")
     @classmethod
     def validate_calendar_provider(cls, value: str | None) -> str | None:
@@ -89,6 +104,11 @@ class ScheduledEventUpdate(BaseModel):
     matter_id: uuid.UUID | None = None
     calendar_provider: str | None = None
     meeting_provider: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_timezone_name(value)
 
     @field_validator("calendar_provider")
     @classmethod

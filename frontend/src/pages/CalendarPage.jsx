@@ -10,6 +10,7 @@ import {
   connectZoomIntegration,
   createScheduledEvent,
   updateScheduledEvent,
+  deleteScheduledEvent,
   getMattersV2,
 } from '../api'
 import {
@@ -26,6 +27,7 @@ import {
   List,
   Clock3,
   GripVertical,
+  Trash2,
 } from 'lucide-react'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -137,6 +139,12 @@ function mapProviderEvents(provider, rows) {
 
 function toTimeInput(d) {
   return d.toTimeString().slice(0, 5)
+}
+
+export function localDateTimeToIso(dateValue, timeValue) {
+  const [year, month, day] = dateValue.split('-').map(Number)
+  const [hour, minute] = timeValue.split(':').map(Number)
+  return new Date(year, month - 1, day, hour, minute, 0, 0).toISOString()
 }
 
 function formatEventTime(raw) {
@@ -361,6 +369,8 @@ export default function CalendarPage() {
   const [matters, setMatters] = useState([])
   const [showEventModal, setShowEventModal] = useState(false)
   const [eventSaving, setEventSaving] = useState(false)
+  const [selectedScheduledEvent, setSelectedScheduledEvent] = useState(null)
+  const [eventDeleting, setEventDeleting] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -449,6 +459,10 @@ export default function CalendarPage() {
   const sortedDates = Object.keys(grouped).sort()
 
   const handleEventClick = (event) => {
+    if (event.event_type === 'scheduled_event') {
+      setSelectedScheduledEvent(event)
+      return
+    }
     if (event.join_url) {
       window.open(event.join_url, '_blank', 'noopener,noreferrer')
       return
@@ -522,8 +536,8 @@ export default function CalendarPage() {
       await createScheduledEvent({
         title: form.title,
         description: form.description || null,
-        start_at: `${form.date}T${form.start_time}:00`,
-        end_at: `${form.date}T${form.end_time}:00`,
+        start_at: localDateTimeToIso(form.date, form.start_time),
+        end_at: localDateTimeToIso(form.date, form.end_time),
         timezone: form.timezone || 'UTC',
         attendees: form.attendees
           .split(',')
@@ -543,6 +557,26 @@ export default function CalendarPage() {
       })
     } finally {
       setEventSaving(false)
+    }
+  }
+
+  const handleDeleteScheduledEvent = async () => {
+    if (!selectedScheduledEvent) return
+    setEventDeleting(true)
+    setSyncMessage(null)
+    try {
+      await deleteScheduledEvent(selectedScheduledEvent.id.replace('scheduled-', ''))
+      setEvents((current) => current.filter((event) => event.id !== selectedScheduledEvent.id))
+      setTotal((current) => Math.max(0, current - 1))
+      setSelectedScheduledEvent(null)
+      setSyncMessage({ type: 'success', text: 'Event deleted from LawHand and its connected calendar.' })
+    } catch (err) {
+      setSyncMessage({
+        type: 'error',
+        text: err?.response?.data?.detail || 'Failed to delete the event.',
+      })
+    } finally {
+      setEventDeleting(false)
     }
   }
 
@@ -723,6 +757,44 @@ export default function CalendarPage() {
           onConnectZoom={() => connectZoomIntegration('user')}
         />
       )}
+      {selectedScheduledEvent && (
+        <ScheduledEventDetailsModal
+          event={selectedScheduledEvent}
+          deleting={eventDeleting}
+          onClose={() => setSelectedScheduledEvent(null)}
+          onDelete={handleDeleteScheduledEvent}
+        />
+      )}
+    </div>
+  )
+}
+
+function ScheduledEventDetailsModal({ event, deleting, onClose, onDelete }) {
+  const provider = event.calendar_provider ? providerLabel(event.calendar_provider) : 'LawHand calendar'
+  return (
+    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center px-4">
+      <section aria-modal="true" aria-labelledby="scheduled-event-title" role="dialog" className="w-full max-w-md bg-brand-surface border border-brand-line rounded-xl shadow-xl overflow-hidden">
+        <div className="h-14 px-5 border-b border-brand-line flex items-center gap-3">
+          <Video className="w-4 h-4 text-brand-accent" />
+          <h2 id="scheduled-event-title" className="font-serif font-semibold text-base text-brand-ink">{event.title}</h2>
+          <button type="button" onClick={onClose} className="ml-auto p-1.5 rounded hover:bg-brand-line text-brand-muted hover:text-brand-ink" aria-label="Close event details">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="p-5 space-y-3 text-sm text-brand-ink">
+          <p className="flex items-center gap-2"><Clock3 className="w-4 h-4 text-brand-muted" />{formatDisplayDate(event.date)}{event.start && ` at ${formatEventTime(event.start)}`}</p>
+          <p className="text-brand-muted">{provider}</p>
+          {event.matter_name && <p className="text-brand-muted">Matter: {event.matter_name}</p>}
+          {event.url?.startsWith('http') && <a href={event.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-ink border border-brand-line rounded-lg px-3 py-1.5 hover:bg-brand-bg"><ExternalLink className="w-3 h-3" />Open in calendar</a>}
+          {event.join_url && <a href={event.join_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-ink border border-brand-line rounded-lg px-3 py-1.5 hover:bg-brand-bg"><ExternalLink className="w-3 h-3" />Join meeting</a>}
+        </div>
+        <div className="px-5 py-4 border-t border-brand-line flex justify-between gap-2 bg-brand-bg">
+          <button type="button" onClick={onDelete} disabled={deleting} className="inline-flex items-center gap-1.5 px-3 py-2 border border-red-200 text-red-700 text-xs font-medium rounded-lg hover:bg-red-50 disabled:opacity-50">
+            <Trash2 className="w-3.5 h-3.5" />{deleting ? 'Deleting...' : 'Delete event'}
+          </button>
+          <button type="button" onClick={onClose} className="px-4 py-2 border border-brand-line text-brand-ink text-xs font-medium rounded-lg hover:bg-brand-line/40">Close</button>
+        </div>
+      </section>
     </div>
   )
 }

@@ -7,6 +7,7 @@ import logging
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from html import escape
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, func, and_
@@ -25,7 +26,12 @@ from app.models.retainer import Retainer, RetainerTransaction
 from app.models.task import Task
 from app.models.user import User
 from app.models.tenant import Tenant
-from app.services.email import EmailService, email_delivery_http_error
+from app.services.email import (
+    EmailService,
+    EmailDeliveryResult,
+    email_delivery_http_error,
+)
+from app.services.connected_mail import send_client_email, DELIVERY_OUTCOME_UNKNOWN
 from app.services.cloud_init import (
     ROOT_FOLDER_NAME,
     canonical_matter_folder_name,
@@ -2348,42 +2354,68 @@ async def email_matter_client(
     # Build simple HTML body
     html_body = f"""
     <div style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6;">
-      <p>{email_body.replace(chr(10), "<br>")}</p>
+      <p>{escape(email_body).replace(chr(10), "<br>")}</p>
       <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
       <p style="font-size:12px;color:#999;">
-        Re: {matter.matter_name}
-        {(" — " + matter.case_number) if matter.case_number else ""}
+        Re: {escape(matter.matter_name)}
+        {(" — " + escape(matter.case_number)) if matter.case_number else ""}
       </p>
     </div>
     """
 
-    svc = EmailService()
-    sent = await svc.send_email(
+    # Token refresh may commit and expire ORM objects. Snapshot the authorized
+    # identifiers before selecting the actor's or firm's connected mailbox.
+    tenant_id, actor_id = user.tenant_id, user.id
+    authorized_matter_id, contact_id = matter.id, matter.client_contact_id
+    delivery = await send_client_email(
+        db,
+        tenant_id=tenant_id,
+        actor_user_id=actor_id,
         to=[to_email],
         subject=subject,
         html_body=html_body,
         text_body=email_body,
+        smtp_service=EmailService(),
     )
+    sent = delivery.result == EmailDeliveryResult.SENT
+    uncertain = delivery.delivery_certainty == DELIVERY_OUTCOME_UNKNOWN
+    await set_tenant_context(db, str(tenant_id))
 
     # Log regardless of send outcome (outbound attempt is recorded)
     log = CommunicationLog(
-        tenant_id=user.tenant_id,
+        tenant_id=tenant_id,
         direction="outbound",
         channel="email",
-        status="sent" if sent else "failed",
+        status="sent" if sent else "delivery_unknown" if uncertain else "failed",
         subject=subject,
         body=email_body,
-        matter_id=matter.id,
-        contact_id=matter.client_contact_id,
-        created_by_user_id=user.id,
+        matter_id=authorized_matter_id,
+        contact_id=contact_id,
+        created_by_user_id=actor_id,
+        participants={"to": [to_email], "provider": delivery.provider},
     )
     db.add(log)
     await db.commit()
+    await set_tenant_context(db, str(tenant_id))
     await db.refresh(log)
-    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
+    await _invalidate_matter_context_cache(tenant_id, authorized_matter_id)
 
     if not sent:
-        status_code, detail = email_delivery_http_error(sent, action="Client email")
+        if uncertain:
+            raise HTTPException(
+                status_code=409,
+                detail="Delivery is unconfirmed. Check the sending mailbox's Sent Items "
+                "before sending again; the provider may have accepted this message. "
+                "The attempt was recorded on the matter.",
+            )
+        status_code, detail = email_delivery_http_error(
+            delivery.result, action="Client email"
+        )
+        if (
+            delivery.provider
+            or delivery.result == EmailDeliveryResult.REAUTHORIZATION_REQUIRED
+        ):
+            detail = delivery.detail
         raise HTTPException(
             status_code=status_code,
             detail=f"{detail} The failed outbound attempt was recorded on the matter.",
@@ -2394,7 +2426,8 @@ async def email_matter_client(
         "sent": bool(sent),
         "to": to_email,
         "subject": subject,
-        "matter_id": str(matter.id),
+        "matter_id": str(authorized_matter_id),
+        "provider": delivery.provider,
         "logged_at": log.occurred_at.isoformat(),
     }
 
@@ -2917,6 +2950,7 @@ async def sync_matter_cloud_folder(
         tenant_id_str,
         matter.cloud_folder,
         user_id=str(current_user.id),
+        matter_id=str(matter.id),
     )
     files = await _build_matter_cloud_files_response(
         db, tenant_id, current_user.id, matter

@@ -18,6 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import set_tenant_context
 from app.models.cloud_metadata import CloudMetadata
+from app.services.matter_cloud_scope import (
+    MatterCloudDocumentScope,
+    load_matter_document_cloud_scope,
+)
 from app.services.token_vault import get_fresh_token, get_fresh_user_token
 
 # Map index (provider, object_type) → CloudHit.source used by fetch_content.
@@ -81,6 +85,7 @@ class CloudSearchService:
         tenant_id: str,
         user_id: str | None = None,
         matter_cloud_folder: dict | None = None,
+        matter_id: str | None = None,
     ) -> list[CloudHit]:
         """Execute search plan across all connected providers.
 
@@ -88,7 +93,7 @@ class CloudSearchService:
         is called independently; failures are logged and swallowed per source.
 
         When matter_cloud_folder is provided, Drive/OneDrive searches are scoped
-        to the matter's pre-provisioned folder IDs instead of searching the full tenant.
+        to the matter's provisioned folders and durable uploaded-document references.
         """
         max_hits = plan.get("max_hits", settings.CLOUD_SEARCH_MAX_HITS)
         keywords = plan.get("keywords", [])
@@ -229,6 +234,7 @@ class CloudSearchService:
                 plan,
                 tenant_id,
                 matter_cloud_folder=matter_cloud_folder,
+                matter_id=matter_id,
             )
         )
 
@@ -258,6 +264,7 @@ class CloudSearchService:
         plan: dict,
         tenant_id: str,
         matter_cloud_folder: dict | None = None,
+        matter_id: str | None = None,
     ) -> list[CloudHit]:
         """Search the locally-synced ``cloud_metadata_index`` for matching items.
 
@@ -271,6 +278,7 @@ class CloudSearchService:
                 plan,
                 tenant_id,
                 matter_cloud_folder=matter_cloud_folder,
+                matter_id=matter_id,
             )
         except Exception:
             logger.exception("search_index failed for tenant %s", tenant_id)
@@ -282,6 +290,7 @@ class CloudSearchService:
         plan: dict,
         tenant_id: str,
         matter_cloud_folder: dict | None = None,
+        matter_id: str | None = None,
     ) -> list[CloudHit]:
         keywords = [k for k in plan.get("keywords", []) if k]
         date_after = plan.get("date_after") or ""
@@ -298,7 +307,13 @@ class CloudSearchService:
 
         await set_tenant_context(db, tenant_id)
 
-        matter_folder_ids = _cloud_metadata_scope_folder_ids(matter_cloud_folder)
+        document_scope = (
+            await load_matter_document_cloud_scope(
+                db, tenant_id=tenant_id, matter_id=matter_id
+            )
+            if matter_cloud_folder is not None
+            else MatterCloudDocumentScope()
+        )
 
         stmt = select(CloudMetadata).where(CloudMetadata.tenant_id == tenant_id)
         stmt = stmt.where(
@@ -310,12 +325,19 @@ class CloudSearchService:
             )
         )
         if matter_cloud_folder is not None:
-            if not matter_folder_ids:
-                return []
-            stmt = stmt.where(
-                CloudMetadata.object_type == "file",
-                CloudMetadata.parent_id.in_(matter_folder_ids),
+            matter_scope = _matter_metadata_scope_condition(
+                matter_cloud_folder, document_scope
             )
+            if matter_scope is None:
+                return []
+            stmt = stmt.where(matter_scope)
+        if date_after:
+            parsed = _parse_index_date(date_after)
+            if parsed:
+                stmt = stmt.where(CloudMetadata.modified_time >= parsed)
+
+        scoped_metadata_stmt = stmt
+
         if keywords:
             kw_clauses = []
             for kw in keywords:
@@ -323,16 +345,26 @@ class CloudSearchService:
                 kw_clauses.append(CloudMetadata.title.ilike(like))
                 kw_clauses.append(CloudMetadata.snippet.ilike(like))
             stmt = stmt.where(or_(*kw_clauses))
-        if date_after:
-            parsed = _parse_index_date(date_after)
-            if parsed:
-                stmt = stmt.where(CloudMetadata.modified_time >= parsed)
 
         stmt = stmt.order_by(CloudMetadata.modified_time.desc().nullslast()).limit(
             max_hits * 3
         )
 
         rows = (await db.execute(stmt)).scalars().all()
+
+        # The metadata index deliberately contains no document bodies.  A
+        # matter-scoped question such as "what is the project number in the
+        # uploaded file?" therefore cannot match title-only metadata before
+        # the provider content has been fetched.  Fall back to a bounded set
+        # of files that are already authorized by this matter's folder scope,
+        # so the normal live-content fetch can answer such questions.  This
+        # is intentionally unavailable for tenant-wide searches.
+        if not rows and keywords and matter_cloud_folder is not None:
+            fallback_limit = min(max_hits, 3)
+            fallback_stmt = scoped_metadata_stmt.order_by(
+                CloudMetadata.modified_time.desc().nullslast()
+            ).limit(fallback_limit)
+            rows = (await db.execute(fallback_stmt)).scalars().all()
 
         hits: list[CloudHit] = []
         for row in rows:
@@ -346,6 +378,11 @@ class CloudSearchService:
                 for kw in keywords
             )
             score = 0.5 + min(matches, 10) * 0.05  # 0.5–1.0 band, below live hits
+            if not matches and keywords:
+                # Bounded fallback candidates are useful only after their
+                # live body has been fetched, so keep them below metadata
+                # keyword matches and provider-native search hits.
+                score = 0.25
             participants = (
                 list(row.participants.values())
                 if isinstance(row.participants, dict)
@@ -1140,7 +1177,7 @@ def _source_enabled(sources: list[str] | None, name: str) -> bool:
 def _cloud_folder_ids_for_provider(
     matter_cloud_folder: dict | None, provider: str
 ) -> list[str]:
-    """Return primary and context folder IDs for a matter/provider mapping."""
+    """Return primary, provider subfolder, and context folder IDs for a matter."""
     if not isinstance(matter_cloud_folder, dict):
         return []
 
@@ -1149,6 +1186,13 @@ def _cloud_folder_ids_for_provider(
     primary_id = _cloud_folder_id(primary, allow_id=True)
     if primary_id:
         ids.append(primary_id)
+
+    if isinstance(primary, dict):
+        ids.extend(
+            str(folder_id)
+            for folder_id in (primary.get("subfolders") or {}).values()
+            if folder_id
+        )
 
     for folder in matter_cloud_folder.get("context_folders") or []:
         if not isinstance(folder, dict) or folder.get("provider") != provider:
@@ -1185,6 +1229,14 @@ def _cloud_folder_refs_for_provider(
     refs: list[dict[str, str]] = []
     primary = matter_cloud_folder.get(provider)
     _append_cloud_folder_ref(refs, primary, allow_id=True)
+    if isinstance(primary, dict):
+        for folder_id in (primary.get("subfolders") or {}).values():
+            if not folder_id:
+                continue
+            ref = {"folder_id": str(folder_id)}
+            if primary.get("drive_id"):
+                ref["drive_id"] = str(primary["drive_id"])
+            refs.append(ref)
 
     for folder in matter_cloud_folder.get("context_folders") or []:
         if not isinstance(folder, dict) or folder.get("provider") != provider:
@@ -1222,6 +1274,62 @@ def _cloud_metadata_scope_folder_ids(matter_cloud_folder: dict | None) -> list[s
         seen.add(folder_id)
         deduped.append(folder_id)
     return deduped
+
+
+def _matter_metadata_scope_condition(
+    matter_cloud_folder: dict | None,
+    document_scope: MatterCloudDocumentScope,
+):
+    """Return an index predicate limited to one matter's cloud files.
+
+    Provisioned bindings cover the canonical folders.  Durable document
+    references cover files uploaded into product folders created after
+    provisioning, such as a user-created ``Validation`` folder. Those durable
+    references use exact file IDs: an uploaded file must not authorize its
+    untrusted siblings. Each provider/type pair is kept together so an opaque
+    ID from one provider cannot authorize another.
+    """
+    scopes: list[tuple[tuple[str, str], list[str]]] = [
+        (
+            ("google", "file"),
+            _cloud_folder_ids_for_provider(matter_cloud_folder, "google_drive"),
+        ),
+        (
+            ("microsoft", "file"),
+            _cloud_folder_ids_for_provider(matter_cloud_folder, "onedrive"),
+        ),
+        (
+            ("microsoft", "sharepoint_file"),
+            [
+                _sharepoint_object_id(ref["drive_id"], ref["folder_id"])
+                for ref in _cloud_folder_refs_for_provider(
+                    matter_cloud_folder, "sharepoint"
+                )
+                if ref.get("drive_id") and ref.get("folder_id")
+            ],
+        ),
+    ]
+
+    clauses = []
+    for index_key, configured_parent_ids in scopes:
+        provider, object_type = index_key
+        parent_ids = list(configured_parent_ids)
+        object_ids = document_scope.object_ids.get(index_key, [])
+        if not parent_ids and not object_ids:
+            continue
+
+        reference_clauses = []
+        if parent_ids:
+            reference_clauses.append(CloudMetadata.parent_id.in_(parent_ids))
+        if object_ids:
+            reference_clauses.append(CloudMetadata.object_id.in_(object_ids))
+        clauses.append(
+            (CloudMetadata.provider == provider)
+            & (CloudMetadata.object_type == object_type)
+            & or_(*reference_clauses)
+        )
+
+    return or_(*clauses) if clauses else None
 
 
 def _append_cloud_folder_ref(

@@ -10,9 +10,56 @@ beforeEach(() => {
   mocks.getContacts.mockResolvedValue({ contacts: [] })
   mocks.getMattersV2.mockResolvedValue({ matters: [] })
 })
-afterEach(cleanup)
+afterEach(() => {
+  vi.restoreAllMocks()
+  cleanup()
+})
 
 describe('matter import', () => {
+  it('sends ZIP previews as multipart form data', async () => {
+    mocks.post.mockResolvedValue({ data: { files: [] } })
+    const archive = new File(['payload'], 'cases.zip', { type: 'application/zip' })
+
+    render(<MatterImportWizard />)
+    fireEvent.change(screen.getByLabelText('Select ZIP'), { target: { files: [archive] } })
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledWith(
+      '/matter-imports/zip-preview',
+      expect.any(FormData),
+      expect.objectContaining({
+        timeout: 0,
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
+    ))
+    const [, body] = mocks.post.mock.calls[0]
+    expect(body.get('file')).toBe(archive)
+  })
+
+  it('sends each selected folder file and its source path as multipart form data', async () => {
+    const source = new File(['message'], 'history.eml', { type: 'message/rfc822' })
+    Object.defineProperty(source, 'webkitRelativePath', { value: 'Former firm/history.eml' })
+    vi.spyOn(crypto.subtle, 'digest').mockResolvedValue(new Uint8Array(32).buffer)
+    mocks.post.mockImplementation(async (url, body) => {
+      if (url === '/matter-imports') return { data: { id: 'run', files: body.files, status: 'review' } }
+      if (url.endsWith('/approve')) return { data: { id: 'run', files: [{ path: 'Former firm/history.eml' }], status: 'uploading', results: {} } }
+      if (url === '/matter-imports/run/file') return { data: { status: 'imported' } }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    mocks.get.mockResolvedValue({ data: { id: 'run', files: [{ path: 'Former firm/history.eml' }], status: 'complete', results: { 'Former firm/history.eml': { status: 'imported' } } } })
+
+    render(<MatterImportWizard matterId="matter-1" />)
+    fireEvent.change(screen.getByLabelText('Select folder'), { target: { files: [source] } })
+    await waitFor(() => expect(screen.getByRole('button', { name: /Review matter mappings/ })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: /Review matter mappings/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm mappings & import' }))
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Import complete'))
+    const [, body, config] = mocks.post.mock.calls.find(([url]) => url === '/matter-imports/run/file')
+    expect(body.get('file')).toBe(source)
+    expect(body.get('path')).toBe('Former firm/history.eml')
+    expect(config).toMatchObject({ headers: { 'Content-Type': 'multipart/form-data' } })
+  })
+
   it('groups wrapped folders without changing source paths', () => {
     const files = [{ path: 'USB/Smith/mail.eml' }, { path: 'USB/Jones/case.pdf' }]
     expect(groupFiles(files, 2).map(f => f.group)).toEqual(['USB/Smith', 'USB/Jones'])
