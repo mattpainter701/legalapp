@@ -3070,6 +3070,15 @@ async def get_template_outline(
     )
 
 
+def _remove_created_template_files(paths: list[str]) -> None:
+    """Remove only files created by one failed derived-draft request."""
+    for value in paths:
+        try:
+            Path(value).unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Unable to clean derived Word source after failed save")
+
+
 @router.post(
     "/{template_id}/derive-word-draft",
     response_model=DocumentTemplateResponse,
@@ -3119,18 +3128,27 @@ async def derive_word_draft(
 
     new_id = uuid.uuid4()
     filename = _safe_upload_filename(template.source_filename or "template.docx")
-    source_path = await _persist_template_source(
-        tenant_id=tenant_id,
-        template_id=new_id,
-        filename=filename,
-        content=derived.content,
-    )
-    evidence_path = await _persist_template_source(
-        tenant_id=tenant_id,
-        template_id=new_id,
-        filename=f"original-{filename}",
-        content=original,
-    )
+    created_paths: list[str] = []
+    try:
+        source_path = await _persist_template_source(
+            tenant_id=tenant_id,
+            template_id=new_id,
+            filename=filename,
+            content=derived.content,
+        )
+        created_paths.append(source_path)
+        evidence_path = await _persist_template_source(
+            tenant_id=tenant_id,
+            template_id=new_id,
+            filename=f"original-{filename}",
+            content=original,
+        )
+        created_paths.append(evidence_path)
+    except Exception as exc:
+        _remove_created_template_files(created_paths)
+        raise HTTPException(
+            status_code=500, detail="The derived Word source could not be saved"
+        ) from exc
     schema = dict(derived.variable_schema)
     title = f"{template.title} (derived draft)"[:300]
     draft = DocumentTemplate(
@@ -3168,16 +3186,12 @@ async def derive_word_draft(
         tested_version_no=None,
         published_version_no=None,
     )
-    db.add(draft)
     try:
+        db.add(draft)
         await db.commit()
     except Exception as exc:
         await db.rollback()
-        try:
-            Path(source_path).unlink(missing_ok=True)
-            Path(evidence_path).unlink(missing_ok=True)
-        except OSError:
-            logger.exception("Unable to clean derived Word source after failed commit")
+        _remove_created_template_files(created_paths)
         raise HTTPException(
             status_code=500, detail="The derived Word draft could not be saved"
         ) from exc
@@ -3237,15 +3251,24 @@ async def cleanup_word_draft(
         raise HTTPException(
             status_code=422, detail="Review the derived source again before cleanup"
         )
-    active_path = await _persist_template_source(
-        tenant_id=tenant_id, template_id=new_id, filename=filename, content=derived
-    )
-    retained_path = await _persist_template_source(
-        tenant_id=tenant_id,
-        template_id=new_id,
-        filename=f"original-{filename}",
-        content=evidence,
-    )
+    created_paths: list[str] = []
+    try:
+        active_path = await _persist_template_source(
+            tenant_id=tenant_id, template_id=new_id, filename=filename, content=derived
+        )
+        created_paths.append(active_path)
+        retained_path = await _persist_template_source(
+            tenant_id=tenant_id,
+            template_id=new_id,
+            filename=f"original-{filename}",
+            content=evidence,
+        )
+        created_paths.append(retained_path)
+    except Exception as exc:
+        _remove_created_template_files(created_paths)
+        raise HTTPException(
+            status_code=500, detail="The cleaned Word source could not be saved"
+        ) from exc
     schema = json.loads(json.dumps(template.variable_schema or {}))
     draft = DocumentTemplate(
         id=new_id,
@@ -3283,7 +3306,14 @@ async def cleanup_word_draft(
         is_active=False,
     )
     db.add(draft)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        _remove_created_template_files(created_paths)
+        raise HTTPException(
+            status_code=500, detail="The cleaned Word draft could not be saved"
+        ) from exc
     return _template_response(draft)
 
 

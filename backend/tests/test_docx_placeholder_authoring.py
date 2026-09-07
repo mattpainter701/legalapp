@@ -273,3 +273,20 @@ async def test_derive_word_draft_creates_new_inactive_source_owned_by_server(
     assert response.variable_schema["source"] == "docx_derived_placeholder"
     assert persisted[0]["content"] != content
     db.commit.assert_awaited_once()
+
+
+def test_failed_draft_save_removes_only_request_owned_files(tmp_path):
+    from app.routers.document_templates import _remove_created_template_files
+
+    owned = tmp_path / "derived.docx"
+    retained = tmp_path / "original.docx"
+    unrelated = tmp_path / "customer-upload.docx"
+    owned.write_bytes(b"derived")
+    retained.write_bytes(b"retained")
+    unrelated.write_bytes(b"keep")
+
+    _remove_created_template_files([str(owned), str(retained)])
+
+    assert not owned.exists()
+    assert not retained.exists()
+    assert unrelated.read_bytes() == b"keep"
