@@ -101,6 +101,7 @@ def test_index_source_map_targets_valid_fetch_sources():
         ("google", "file"),
         ("google", "email"),
         ("microsoft", "file"),
+        ("microsoft", "sharepoint_file"),
         ("microsoft", "email"),
     }
     assert all(v in valid_sources for v in _INDEX_SOURCE_MAP.values())

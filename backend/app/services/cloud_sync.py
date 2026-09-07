@@ -823,7 +823,8 @@ class CloudSyncService:
                 "google" if migration.target_provider == "google_drive" else "microsoft"
             )
             if data.get("provider") != target_group or (
-                data.get("object_type") == "file" and not trusted_reindex
+                data.get("object_type") in {"file", "sharepoint_file"}
+                and not trusted_reindex
             ):
                 return
 

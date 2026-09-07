@@ -25,6 +25,7 @@ _INDEX_SOURCE_MAP = {
     ("google", "file"): "drive",
     ("google", "email"): "gmail",
     ("microsoft", "file"): "onedrive",
+    ("microsoft", "sharepoint_file"): "sharepoint",
     ("microsoft", "email"): "outlook",
 }
 

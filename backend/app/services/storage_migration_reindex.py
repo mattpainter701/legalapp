@@ -26,11 +26,15 @@ def inventory_metadata(item: dict[str, Any], provider: str) -> dict[str, Any] | 
     """Convert discovery metadata to CloudMetadata fields; omit folders/markers."""
     if item.get("is_folder") or item.get("name") == ".lawhand-matter.json":
         return None
+    if provider == "sharepoint" and item.get("id") and not item.get("drive_id"):
+        raise ValueError("SharePoint inventory is missing its drive identity")
     return (
         {
             "provider": cloud_metadata_provider(provider),
-            "object_type": "file",
-            "object_id": item.get("id"),
+            "object_type": "sharepoint_file" if provider == "sharepoint" else "file",
+            "object_id": f"{item['drive_id']}:{item['id']}"
+            if provider == "sharepoint"
+            else item.get("id"),
             "title": item.get("name") or "",
             "path": item.get("path") or item.get("name") or "",
             "mime_type": item.get("mime_type") or item.get("mimeType"),
@@ -127,7 +131,7 @@ class StorageMigrationReindexService:
                 delete(CloudMetadata).where(
                     CloudMetadata.tenant_id == tenant_uuid,
                     CloudMetadata.provider == cloud_metadata_provider(target_provider),
-                    CloudMetadata.object_type == "file",
+                    CloudMetadata.object_type.in_(["file", "sharepoint_file"]),
                 )
             )
             for metadata in target_items:

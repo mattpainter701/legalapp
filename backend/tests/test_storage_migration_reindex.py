@@ -106,3 +106,34 @@ async def test_retired_provider_write_is_rejected_but_target_write_allowed():
         insert.assert_not_called()
         await service._upsert(db, str(migration.tenant_id), provider="google", object_type="file", object_id="new", trusted_reindex=True)
         insert.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_sharepoint_reindex_retains_drive_identity_for_live_content_fetch(monkeypatch):
+    import httpx
+    from app.services.storage_migration_reindex import inventory_metadata
+    from app.services.cloud_search import CloudHit, CloudSearchService, _INDEX_SOURCE_MAP
+    metadata = inventory_metadata({'id':'file-id','drive_id':'drive-id','name':'Contract.txt','is_folder':False}, 'sharepoint')
+    assert metadata['object_type'] == 'sharepoint_file'
+    assert metadata['object_id'] == 'drive-id:file-id'
+    hit = CloudHit(provider='microsoft', source=_INDEX_SOURCE_MAP[('microsoft', metadata['object_type'])], object_id=metadata['object_id'], title='Contract.txt', snippet='', url='', modified_time='', mime_type='text/plain')
+    reader = CloudSearchService()
+    reader._get_microsoft_token = AsyncMock(return_value='token')
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, text='Live document')
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr('app.services.cloud_search.httpx.AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
+    assert await reader._fetch_onedrive_content(None, hit, str(uuid.uuid4()), 500, None) == 'Live document'
+    assert calls == ['/v1.0/drives/drive-id/items/file-id/content']
+
+
+@pytest.mark.asyncio
+async def test_generic_sharepoint_scan_cannot_repopulate_migrated_index():
+    migration = _migration()
+    migration.target_provider = 'sharepoint'
+    service = CloudSyncService()
+    service._latest_completed_migration = AsyncMock(return_value=migration)
+    with patch('app.services.cloud_sync.pg_insert') as insert:
+        await service._upsert(AsyncMock(), str(migration.tenant_id), provider='microsoft', object_type='sharepoint_file', object_id='old:file')
+        insert.assert_not_called()
