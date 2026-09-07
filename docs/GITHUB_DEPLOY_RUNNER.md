@@ -62,6 +62,10 @@ environment with the exact Cube M Compose pair. Do not use a generic Compose
 profile: it selects the standard capacity floor instead of the reviewed Cube M
 profile.
 
+Keep this runbook and `.agents/skills/lawhand-deploy/SKILL.md` aligned whenever
+the IONOS deployment contract changes; the skill is the operator entrypoint and
+this document is its canonical repository reference.
+
 ```bash
 cd /srv/lawhand/app
 ENV_FILE=/etc/lawhand/core.env \
