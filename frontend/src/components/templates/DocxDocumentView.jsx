@@ -285,6 +285,8 @@ export default function DocxDocumentView({
   collections = [],
   conditionFields = [],
   onSelectField,
+  onSelectText,
+  onModeSuggestion,
   onCreateField,
   onCreateRegion,
   onRemoveRegion,
@@ -307,7 +309,9 @@ export default function DocxDocumentView({
           blocks: outline?.blocks,
           reviewCandidates: outline?.review_candidates || [],
           reviewTruncated: outline?.review_truncated,
+          sourceModeSuggestion: outline?.source_mode_suggestion || null,
         })
+        onModeSuggestion?.(outline?.source_mode_suggestion || null)
       })
       .catch((error) => {
         if (cancelled) return
@@ -399,7 +403,7 @@ export default function DocxDocumentView({
               opensRegion={openerByOrdinal.get(paragraph.ordinal)}
               selectedName={selectedName}
               onSelectField={onSelectField}
-              onSelectText={(selection) => { setRange(null); setPending(selection) }}
+              onSelectText={(selection) => { setRange(null); setPending(selection); onSelectText?.(selection) }}
               onPickParagraph={extendRange}
               onRemoveRegion={onRemoveRegion}
             />

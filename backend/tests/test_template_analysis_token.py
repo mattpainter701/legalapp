@@ -167,9 +167,7 @@ def _mixed_pdf_source() -> bytes:
     output = BytesIO()
     pdf = canvas.Canvas(output, pagesize=letter)
     pdf.drawString(72, 720, "Client:")
-    pdf.acroForm.textfield(
-        name="ClientName", x=125, y=705, width=220, height=24
-    )
+    pdf.acroForm.textfield(name="ClientName", x=125, y=705, width=220, height=24)
     pdf.drawString(72, 660, "Case: CV-OLD")
     pdf.save()
     return output.getvalue()
@@ -231,7 +229,10 @@ def test_reviewed_mixed_schema_preserves_each_authoritative_mapping():
     ]
     assert validated["fields"][0]["pdf_field_name"] == "ClientName"
     assert validated["fields"][1]["pdf_overlay"]["rect"] == [72.0, 700.0, 220.0, 716.0]
-    assert validated["fields"][1]["pdf_overlay"]["source_rect"] == discovered["fields"][1]["pdf_overlay"]["rect"]
+    assert (
+        validated["fields"][1]["pdf_overlay"]["source_rect"]
+        == discovered["fields"][1]["pdf_overlay"]["rect"]
+    )
 
 
 def test_reviewed_overlay_included_flag_must_be_a_boolean():
@@ -240,9 +241,7 @@ def test_reviewed_overlay_included_flag_must_be_a_boolean():
     reviewed["fields"][1]["included"] = "false"
 
     with pytest.raises(HTTPException, match="included must be boolean"):
-        document_templates._reviewed_variable_schema(
-            json.dumps(reviewed), discovered
-        )
+        document_templates._reviewed_variable_schema(json.dumps(reviewed), discovered)
 
 
 def test_reviewed_schema_accepts_manual_field_when_detection_is_empty():
@@ -255,15 +254,17 @@ def test_reviewed_schema_accepts_manual_field_when_detection_is_empty():
     }
     reviewed = {
         "version": 1,
-        "fields": [{
-            "name": "handwritten_name",
-            "label": "Name",
-            "pdf_source_key": manual_key,
-            "pdf_overlay": {"page": 1, "rect": [72, 700, 260, 724]},
-            "field_type": "text",
-            "required": True,
-            "multiline": False,
-        }],
+        "fields": [
+            {
+                "name": "handwritten_name",
+                "label": "Name",
+                "pdf_source_key": manual_key,
+                "pdf_overlay": {"page": 1, "rect": [72, 700, 260, 724]},
+                "field_type": "text",
+                "required": True,
+                "multiline": False,
+            }
+        ],
     }
     validated = document_templates._reviewed_variable_schema(
         json.dumps(reviewed), discovered
@@ -279,12 +280,63 @@ def test_reviewed_manual_field_requires_signed_page_metadata():
     key = "manual:" + str(uuid.uuid4())
     with pytest.raises(HTTPException, match="signed page bounds"):
         document_templates._reviewed_variable_schema(
-            json.dumps({"fields": [{
-                "name": "manual_name",
-                "pdf_source_key": key,
-                "pdf_overlay": {"page": 1, "rect": [72, 700, 260, 724]},
-            }]}),
+            json.dumps(
+                {
+                    "fields": [
+                        {
+                            "name": "manual_name",
+                            "pdf_source_key": key,
+                            "pdf_overlay": {"page": 1, "rect": [72, 700, 260, 724]},
+                        }
+                    ]
+                }
+            ),
             {"fields": [], "pages": []},
+        )
+
+
+def test_reviewed_schema_accepts_value_less_pdf_cover_regions():
+    discovered = {
+        "version": 1,
+        "pages": [{"page": 1, "width": 612, "height": 792, "rotation": 0}],
+        "fields": [],
+    }
+    validated = document_templates._reviewed_variable_schema(
+        json.dumps(
+            {"fields": [], "cover_regions": [{"page": 1, "rect": [10, 700, 200, 724]}]}
+        ),
+        discovered,
+    )
+    assert validated["cover_regions"] == [
+        {
+            "page": 1,
+            "rect": [10.0, 700.0, 200.0, 724.0],
+            "source_kind": "manual",
+            "erase_source": True,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "cover_regions",
+    [
+        None,
+        [{"page": 1}],
+        [{"page": 1, "rect": [0, 0, 1]}],
+        [{"page": 1.5, "rect": [0, 0, 1, 1]}],
+        [{"page": 1, "rect": [0, 0, 700, 1]}],
+    ],
+)
+def test_reviewed_schema_rejects_malformed_pdf_cover_regions(cover_regions):
+    discovered = {
+        "pages": [{"page": 1, "width": 612, "height": 792}],
+        "fields": [],
+    }
+    if cover_regions is None:
+        cover_regions = ["not an object"]
+    with pytest.raises(HTTPException, match="PDF cover region"):
+        document_templates._reviewed_variable_schema(
+            json.dumps({"fields": [], "cover_regions": cover_regions}), discovered
         )
 
 
@@ -301,7 +353,9 @@ def test_mixed_pdf_renderer_fills_acroform_and_ocr_overlay_together():
         enforce_required=True,
     )
 
-    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(rendered)).pages)
+    text = "\n".join(
+        page.extract_text() or "" for page in PdfReader(BytesIO(rendered)).pages
+    )
     assert "Grace Hopper" in text
     assert "CV-2027-9" in text
 
@@ -391,13 +445,17 @@ def test_manual_signature_needs_no_input_and_required_checkbox_must_be_true():
         "source_kind": "manual",
         "erase_source": False,
     }
-    signature_schema = {"fields": [{
-        "name": "client_signature",
-        "pdf_source_key": f"manual:{uuid.uuid4()}",
-        "field_type": "signature",
-        "required": True,
-        "pdf_overlay": signature_overlay,
-    }]}
+    signature_schema = {
+        "fields": [
+            {
+                "name": "client_signature",
+                "pdf_source_key": f"manual:{uuid.uuid4()}",
+                "field_type": "signature",
+                "required": True,
+                "pdf_overlay": signature_overlay,
+            }
+        ]
+    }
     assert fill_pdf_template(
         source,
         variable_schema=signature_schema,
@@ -412,13 +470,17 @@ def test_manual_signature_needs_no_input_and_required_checkbox_must_be_true():
         "source_kind": "manual",
         "erase_source": False,
     }
-    checkbox_schema = {"fields": [{
-        "name": "approved",
-        "pdf_source_key": f"manual:{uuid.uuid4()}",
-        "field_type": "checkbox",
-        "required": True,
-        "pdf_overlay": checkbox_overlay,
-    }]}
+    checkbox_schema = {
+        "fields": [
+            {
+                "name": "approved",
+                "pdf_source_key": f"manual:{uuid.uuid4()}",
+                "field_type": "checkbox",
+                "required": True,
+                "pdf_overlay": checkbox_overlay,
+            }
+        ]
+    }
     with pytest.raises(TemplatePdfError, match="Required PDF field"):
         fill_pdf_template(
             source,
@@ -440,21 +502,26 @@ def test_manual_signature_needs_no_input_and_required_checkbox_must_be_true():
     "overlay",
     [
         {"page": "not-a-page", "rect": [72, 700, 260, 724]},
-        [{"page": 1, "rect": [72, 700, 260, 724]}, {"page": 1, "rect": [80, 650, 200, 674]}],
+        [
+            {"page": 1, "rect": [72, 700, 260, 724]},
+            {"page": 1, "rect": [80, 650, 200, 674]},
+        ],
     ],
 )
 def test_malformed_manual_overlay_returns_422(overlay):
     key = f"manual:{uuid.uuid4()}"
     reviewed = {
-        "fields": [{
-            "name": "manual_name",
-            "pdf_source_key": key,
-            "pdf_overlays": overlay,
-            "field_type": "text",
-            "required": False,
-            "multiline": False,
-            "included": True,
-        }],
+        "fields": [
+            {
+                "name": "manual_name",
+                "pdf_source_key": key,
+                "pdf_overlays": overlay,
+                "field_type": "text",
+                "required": False,
+                "multiline": False,
+                "included": True,
+            }
+        ],
     }
     with pytest.raises(HTTPException) as exc_info:
         document_templates._reviewed_variable_schema(
@@ -501,9 +568,7 @@ def test_unreadable_handwriting_fallback_uses_bounded_nonduplicated_redaction():
     unreadable = discover_pdf_overlay_fields(
         output.getvalue(), [], fragments=[label, next_field]
     )
-    applicant = next(
-        field for field in unreadable if field["name"] == "client_name"
-    )
+    applicant = next(field for field in unreadable if field["name"] == "client_name")
     left, _bottom, right, _top = applicant["pdf_overlay"]["rect"]
     assert 24 <= right - left <= 216
     assert right <= next_field["x"] - 4
@@ -532,8 +597,6 @@ def test_unreadable_handwriting_fallback_uses_bounded_nonduplicated_redaction():
             },
         ],
     )
-    applicant = next(
-        field for field in recognized if field["name"] == "client_name"
-    )
+    applicant = next(field for field in recognized if field["name"] == "client_name")
     assert len(applicant["pdf_overlays"]) == 1
     assert applicant["pdf_overlay"]["source_text"] == "Ada Lovelace"

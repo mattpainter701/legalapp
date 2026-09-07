@@ -2,6 +2,61 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.9",
+      "version": "2026.09.07.9",
+      "title": "Turn reviewed Word spans into safe placeholders",
+      "published_at": "2026-09-07",
+      "summary": "Reviewed Word source spans can become selectable placeholders while the original upload remains available as evidence.",
+      "highlights": [
+        {
+          "title": "Keep the original upload as evidence",
+          "description": "Studio records separate original and derived source digests so a changed upload invalidates older review and test evidence."
+        },
+        {
+          "title": "Preserve Word formatting",
+          "description": "Confirmed spans become literal placeholders across split runs, tables, headers, and footers without rebuilding the document as plain text."
+        },
+        {
+          "title": "Review prose and forms explicitly",
+          "description": "Studio suggests a source mode while allowing a deliberate override; ambiguous or inferred text stays available for review."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.07.8",
+      "version": "2026.09.07.8",
+      "title": "Place signature fields on generated PDFs",
+      "published_at": "2026-09-07",
+      "summary": "Template Studio can bind signature, date, and initials fields to signer roles and preserve their positions through provider dispatch.",
+      "highlights": [
+        {
+          "title": "Bind fields to signer roles",
+          "description": "Signature, date, and initials fields retain their assigned signer role and are validated against the exact generated PDF revision."
+        },
+        {
+          "title": "Preserve provider placement",
+          "description": "Dropbox Sign requests receive positioned tabs with explicit page and coordinate conversion; unsupported internal portal placement fails closed."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.07.7",
+      "version": "2026.09.07.7",
+      "title": "Cover source details in PDF templates",
+      "published_at": "2026-09-07",
+      "summary": "Place value-less white cover regions over ruled lines or stale source values while preparing a PDF template.",
+      "highlights": [
+        {
+          "title": "Cover what is underneath",
+          "description": "Add, move, resize and remove visible cover regions in Template Studio without creating automation variables."
+        },
+        {
+          "title": "Keep source-backed fields clean",
+          "description": "Choose whether an editable field paints over its source before the generated PDF is flattened."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.6",
       "version": "2026.09.07.6",
       "title": "See Word masters as printable pages in Studio",
@@ -334,7 +389,7 @@
       "highlights": [
         {
           "title": "Tell a field where its value comes from",
-          "description": "Pick a data source for each field \u2014 case number, client address, plaintiff, attorney \u2014 and it fills from the matter every time, whatever you named it."
+          "description": "Pick a data source for each field — case number, client address, plaintiff, attorney — and it fills from the matter every time, whatever you named it."
         },
         {
           "title": "One template instead of near-identical copies",
@@ -342,7 +397,7 @@
         },
         {
           "title": "Repeating sections that follow the matter",
-          "description": "Wrap a block in {{#each parties}} and it renders once per party on the matter \u2014 a signature block each \u2014 with no editing afterwards."
+          "description": "Wrap a block in {{#each parties}} and it renders once per party on the matter — a signature block each — with no editing afterwards."
         },
         {
           "title": "Version history with restore",
@@ -400,7 +455,7 @@
         },
         {
           "title": "Know what a search did not cover",
-          "description": "Every incomplete response states in one sentence why, so \u201cno matches\u201d is only ever said about a search that actually covered its sources."
+          "description": "Every incomplete response states in one sentence why, so “no matches” is only ever said about a search that actually covered its sources."
         }
       ]
     },
@@ -417,7 +472,7 @@
         },
         {
           "title": "Label documents across matters",
-          "description": "Firm-wide tags apply to any case document and filter the list conjunctively, so \u201cSigned\u201d plus \u201cFiled\u201d narrows to documents carrying both."
+          "description": "Firm-wide tags apply to any case document and filter the list conjunctively, so “Signed” plus “Filed” narrows to documents carrying both."
         },
         {
           "title": "Find a document without scrolling",
@@ -966,6 +1021,69 @@
       ]
     },
     {
+      "id": "2026.08.27.12",
+      "version": "2026.08.27.12",
+      "title": "Product claims now show rollout and research boundaries",
+      "published_at": "2026-08-27",
+      "summary": "LawHand product and pricing pages now distinguish shipped behavior, controlled pilots, planned work, and provider-dependent connections.",
+      "highlights": [
+        {
+          "title": "See the rollout state",
+          "description": "Capability cards identify implemented behavior, controlled pilots, and connections that require a separate provider account or approval."
+        },
+        {
+          "title": "Evaluate Research MCP as a pilot",
+          "description": "Research MCP pricing and product pages now state the controlled-pilot gate and the configured public-authority coverage boundary."
+        },
+        {
+          "title": "Keep research claims precise",
+          "description": "LawHand explains that source links support attorney review without claiming Westlaw replacement, comprehensive coverage, or a good-law determination."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.27.11",
+      "version": "2026.08.27.11",
+      "title": "Agreement evidence and safer retention controls",
+      "published_at": "2026-08-27",
+      "summary": "Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.",
+      "highlights": [
+        {
+          "title": "Know what was accepted",
+          "description": "Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence."
+        },
+        {
+          "title": "Retention with guardrails",
+          "description": "Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.27.10",
+      "version": "2026.08.27.10",
+      "title": "Research API keys put staff access and spend under firm control",
+      "published_at": "2026-08-27",
+      "summary": "Firm administrators can provision LawHand Research keys for staff, bound their lifetime and budget, and see usage and charges from the MCP portal.",
+      "highlights": [
+        {
+          "title": "Issue keys with clear custody",
+          "description": "Name each key, record its purpose, assign it to a LawHand staff profile, and choose exactly which Research tools it may use."
+        },
+        {
+          "title": "Bound time and spend",
+          "description": "Set an expiration, monthly dollar budget, call cap, and burst limit; the gateway stops successful calls before they exceed either hard monthly boundary."
+        },
+        {
+          "title": "See the complete key ledger",
+          "description": "The portal shows active, expired, and revoked keys with creator, custodian, last use, successful and failed calls, current-month charges, and remaining budget."
+        },
+        {
+          "title": "Connect standard API clients",
+          "description": "LawHand Research keys work as standard Bearer credentials while the existing custom header remains supported for compatible clients."
+        }
+      ]
+    },
+    {
       "id": "2026.08.27.9",
       "version": "2026.08.27.9",
       "title": "Document automation is faster, safer, and easier to manage",
@@ -985,7 +1103,7 @@
           "description": "Independent scans and tenant background work can progress within bounded capacity instead of waiting behind one unrelated long-running job."
         },
         {
-          "title": "Save the reviewed PDF\u0393\u00c7\u00f6not a surprise",
+          "title": "Save the reviewed PDFΓÇönot a surprise",
           "description": "Final PDF saves recheck the exact reviewed output and clean up or quarantine staged files when storage and database results cannot be proven consistent."
         }
       ]
@@ -1138,69 +1256,6 @@
       ]
     },
     {
-      "id": "2026.08.27.12",
-      "version": "2026.08.27.12",
-      "title": "Product claims now show rollout and research boundaries",
-      "published_at": "2026-08-27",
-      "summary": "LawHand product and pricing pages now distinguish shipped behavior, controlled pilots, planned work, and provider-dependent connections.",
-      "highlights": [
-        {
-          "title": "See the rollout state",
-          "description": "Capability cards identify implemented behavior, controlled pilots, and connections that require a separate provider account or approval."
-        },
-        {
-          "title": "Evaluate Research MCP as a pilot",
-          "description": "Research MCP pricing and product pages now state the controlled-pilot gate and the configured public-authority coverage boundary."
-        },
-        {
-          "title": "Keep research claims precise",
-          "description": "LawHand explains that source links support attorney review without claiming Westlaw replacement, comprehensive coverage, or a good-law determination."
-        }
-      ]
-    },
-    {
-      "id": "2026.08.27.11",
-      "version": "2026.08.27.11",
-      "title": "Agreement evidence and safer retention controls",
-      "published_at": "2026-08-27",
-      "summary": "Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.",
-      "highlights": [
-        {
-          "title": "Know what was accepted",
-          "description": "Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence."
-        },
-        {
-          "title": "Retention with guardrails",
-          "description": "Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion."
-        }
-      ]
-    },
-    {
-      "id": "2026.08.27.10",
-      "version": "2026.08.27.10",
-      "title": "Research API keys put staff access and spend under firm control",
-      "published_at": "2026-08-27",
-      "summary": "Firm administrators can provision LawHand Research keys for staff, bound their lifetime and budget, and see usage and charges from the MCP portal.",
-      "highlights": [
-        {
-          "title": "Issue keys with clear custody",
-          "description": "Name each key, record its purpose, assign it to a LawHand staff profile, and choose exactly which Research tools it may use."
-        },
-        {
-          "title": "Bound time and spend",
-          "description": "Set an expiration, monthly dollar budget, call cap, and burst limit; the gateway stops successful calls before they exceed either hard monthly boundary."
-        },
-        {
-          "title": "See the complete key ledger",
-          "description": "The portal shows active, expired, and revoked keys with creator, custodian, last use, successful and failed calls, current-month charges, and remaining budget."
-        },
-        {
-          "title": "Connect standard API clients",
-          "description": "LawHand Research keys work as standard Bearer credentials while the existing custom header remains supported for compatible clients."
-        }
-      ]
-    },
-    {
       "id": "2026.08.27.1",
       "version": "2026.08.27.1",
       "title": "Prepare document templates with a guided review workspace",
@@ -1297,7 +1352,7 @@
         },
         {
           "title": "Connected assistants are yours to review",
-          "description": "The guide explains the Workspace MCP list in your profile \u0393\u00c7\u00f6 what each connection holds, when it was last used, and how revoking one takes effect immediately."
+          "description": "The guide explains the Workspace MCP list in your profile ΓÇö what each connection holds, when it was last used, and how revoking one takes effect immediately."
         },
         {
           "title": "Administrators can see who may connect",
@@ -1308,13 +1363,13 @@
     {
       "id": "2026.08.25.1",
       "version": "2026.08.25.1",
-      "title": "Workspace MCP connections respect your firm\u0393\u00c7\u00d6s access settings",
+      "title": "Workspace MCP connections respect your firmΓÇÖs access settings",
       "published_at": "2026-08-25",
       "summary": "Claude, ChatGPT, Codex, and other compatible assistants can connect when your firm administrator enables Workspace MCP for your account and Privacy Mode is off.",
       "highlights": [
         {
           "title": "Firm access settings take effect directly",
-          "description": "Admin \u0393\u00e5\u00c6 Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client."
+          "description": "Admin ΓåÆ Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client."
         },
         {
           "title": "Your privacy choice remains independent",

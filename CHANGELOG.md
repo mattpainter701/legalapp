@@ -11,6 +11,24 @@
 
 # Changelog
 
+## 2026.09.07.9 - Word derived placeholder drafts
+
+- Convert explicitly confirmed Word source spans into literal placeholders in a new draft while retaining the immutable original upload and provenance chain.
+- Preserve field metadata, formatting and surrounding text across body, table, header and footer stories; reject stale, overlapping or ambiguous edits safely.
+- Add source mode choice, original evidence download, targeted token-preserving cleanup and edit-then-fill coverage in Template Studio.
+
+## 2026.09.07.8 — Positioned signing fields
+
+- Bind template signing roles to the generated PDF digest and actual page geometry; retain placements on matter documents and signature requests.
+- Review final PDF signing positions before dispatch, including Word documents after reflow. Dropbox Sign receives explicit role-bound tabs; unsupported page geometry and internal portal placement fail before sending.
+- Migration 163 adds signing placement metadata. Source bytes, tenant boundaries, roles, and page geometry are revalidated before provider dispatch.
+
+## 2026.09.07.7 - PDF source cover regions
+
+- Add value-less, tenant-reviewed PDF cover regions in Template Studio. Authors can add, move, resize, remove, undo and redo white cover rectangles without introducing automation variables.
+- Preserve the existing source overlay controls with an explicit “Cover what is underneath” option and flatten covers before generated PDF field content is drawn.
+- Validate cover geometry, page bounds and flattened output requirements; original source bytes remain integrity checked and unchanged.
+
 ## 2026.09.07.6 - Word source page previews
 
 - Add a tenant-authorized, integrity-checked source preview endpoint using bounded LibreOffice conversion and a 64 MiB / 32-entry per-worker LRU.

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { getTemplateSourcePreview } from '../../api'
 import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocumentCanvas'
+import WordPlaceholderLayer from './WordPlaceholderLayer'
 
 const UNAVAILABLE = 'Document preview is unavailable. You can continue mapping fields in the text view.'
 
@@ -9,7 +10,7 @@ function PreviewButton(props) {
   return <button type="button" className="min-h-9 rounded-lg border border-brand-line bg-brand-surface-2 px-3 py-1.5 text-xs font-semibold text-brand-ink hover:border-brand-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-accent disabled:cursor-not-allowed disabled:opacity-40 aria-pressed:border-brand-accent aria-pressed:bg-brand-accent/10" {...props} />
 }
 
-function DocumentPages({ source, onUnavailable }) {
+function DocumentPages({ source, onUnavailable, active, fields, selectedIdentity, onSelectField }) {
   const { document, pages, error } = useTemplatePdfDocument(source)
   const [pageNumber, setPageNumber] = useState(1)
   const [zoom, setZoom] = useState(0.9)
@@ -40,6 +41,7 @@ function DocumentPages({ source, onUnavailable }) {
           {!document && <p role="status">Loading document pages…</p>}
           <div className="relative mx-auto" style={{ width: viewport?.width || width * zoom, height: viewport?.height || height * zoom }}>
             <PdfPageCanvas document={document} pageNumber={pageNumber} zoom={zoom} onViewport={setViewport} onError={onUnavailable} />
+            {active && <WordPlaceholderLayer document={document} pageNumber={pageNumber} viewport={viewport} fields={fields} selectedIdentity={selectedIdentity} onSelectField={onSelectField} />}
           </div>
         </div>
       </div>
@@ -48,7 +50,7 @@ function DocumentPages({ source, onUnavailable }) {
 }
 
 /** Source-only print preview. Character-span authoring stays in the text view. */
-export default function WordDocumentPreview({ templateId, sourceDigest, children }) {
+export default function WordDocumentPreview({ templateId, sourceDigest, fields, selectedIdentity, onSelectField, children }) {
   const [view, setView] = useState('document')
   const [result, setResult] = useState(null)
   const [failed, setFailed] = useState('')
@@ -84,10 +86,10 @@ export default function WordDocumentPreview({ templateId, sourceDigest, children
         <PreviewButton aria-pressed={view === 'document'} onClick={() => setView('document')}>Document</PreviewButton>
         <PreviewButton aria-pressed={view === 'fields'} onClick={() => setView('fields')}>Fields</PreviewButton>
       </div>
-      <p className="px-3 pt-3 text-xs text-brand-muted">Document shows the saved Word source. Use Fields to map text. Filled values can change pagination; review the generated PDF before sending.</p>
+      <p className="px-3 pt-3 text-xs text-brand-muted">Document shows the saved Word source. Select a highlighted placeholder to edit its field, or use Fields to map text. Tokens that cannot be located reliably remain available in Fields. Filled values can change pagination; review the generated PDF before sending.</p>
       {failed ? <div role="status" className="p-3 text-sm">{failed} <PreviewButton onClick={() => { setView('document'); setAttempt(value => value + 1) }}>Retry document preview</PreviewButton></div>
         : !source && <p role="status" className="p-3 text-sm">Preparing document preview. You can map fields below while it loads.</p>}
-      {source && !failed && <div hidden={!showDocument}><DocumentPages key={identity} source={source} onUnavailable={unavailable} /></div>}
+      {source && !failed && <div hidden={!showDocument}><DocumentPages key={identity} source={source} onUnavailable={unavailable} active={showDocument} fields={fields} selectedIdentity={selectedIdentity} onSelectField={onSelectField} /></div>}
       <div hidden={Boolean(showDocument)} onFocusCapture={() => setView('fields')} onPointerDownCapture={() => setView('fields')}>{children}</div>
     </section>
   )

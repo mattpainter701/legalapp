@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    JSON,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -169,6 +170,11 @@ class MatterDocument(Base):
     # Firm controls which case files are visible in the client portal.
     portal_visible: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
+    )
+    positioned_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    signing_roles: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    signing_placement_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
 
     created_at: Mapped[datetime] = mapped_column(

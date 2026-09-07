@@ -174,6 +174,18 @@ export const createManualField = (kind, { page, pageNumber, fields }) => {
   }
 }
 
+export const createCoverRegion = ({ page, pageNumber }) => {
+  const pageWidth = Number(page?.width || 612)
+  const pageHeight = Number(page?.height || 792)
+  const width = Math.min(180, pageWidth - 8)
+  const height = Math.min(24, pageHeight - 8)
+  const left = clamp(pageWidth * 0.12, 4, Math.max(4, pageWidth - width - 4))
+  const top = clamp(pageHeight * 0.84, height + 4, Math.max(height + 4, pageHeight - 4))
+  return { page: pageNumber, rect: [left, top - height, left + width, top].map(roundCoordinate), source_kind: 'manual', erase_source: true }
+}
+
+export const coverRegionIdentity = (region, index = 0) => region?.id || `cover:${index}:${(region?.page || 1)}:${(region?.rect || []).join(',')}`
+
 // Clamp a dragged/resized rect to the canvas, then convert it back to points.
 export const geometryToOverlays = (field, placementIndex, geometry, {
   page,

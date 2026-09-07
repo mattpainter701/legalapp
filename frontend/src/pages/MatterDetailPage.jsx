@@ -12,7 +12,7 @@ import {
   getTasks, updateTask, getMatterDashboard, getMatterCloudFiles,
   createMatterPortalInvite, listMatterPortalInvites, revokeMatterPortalInvite,
   getMatterDocuments, createSignatureRequest, listSignatureRequests,
-  sendSignatureRequest, resendSignatureRequest, voidSignatureRequest, getMatterDocumentDownloadUrl,
+  sendSignatureRequest, resendSignatureRequest, voidSignatureRequest, getMatterDocumentDownloadUrl, getMatterDocumentSigningSource,
   syncMatterCloudFolder, listTrustAccounts,
   getContacts, getAdminUsers,
 } from '../api'
@@ -26,6 +26,7 @@ import UserSearchInput from '../components/UserSearchInput'
 import ContactPicker from '../components/ContactPicker'
 import MatterExpensesPanel from '../components/MatterExpensesPanel'
 import MatterWorkflowPanel from '../components/MatterWorkflowPanel'
+import GeneratedSigningPlacementReview from '../components/templates/GeneratedSigningPlacementReview'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 function Icon({ d, size = 18, className = '' }) {
@@ -2358,10 +2359,16 @@ function signerStatusLabel(signer) {
   return 'Pending signature'
 }
 
-function SignatureRequestsPanel({ matterId }) {
+const EMPTY_SIGNING_FIELDS = []
+
+export function SignatureRequestsPanel({ matterId }) {
   const [requests, setRequests] = useState([])
   const [docs, setDocs] = useState([])
   const [docId, setDocId] = useState('')
+  const [provider, setProvider] = useState('internal')
+  const [positionedFields, setPositionedFields] = useState(EMPTY_SIGNING_FIELDS)
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [signingSource, setSigningSource] = useState(null)
   const [signers, setSigners] = useState([newSignerRow()])
   const [expiresOn, setExpiresOn] = useState('')
   const [reminderDays, setReminderDays] = useState('7,1')
@@ -2378,6 +2385,26 @@ function SignatureRequestsPanel({ matterId }) {
       .catch(() => {})
   }, [matterId])
   useEffect(() => { load() }, [load])
+
+  const selectedDocument = docs.find(document => String(document.id) === String(docId))
+  const initialFields = selectedDocument?.positioned_fields || EMPTY_SIGNING_FIELDS
+  const requiredRoles = selectedDocument?.signing_roles || EMPTY_SIGNING_FIELDS
+  const placementRoles = [...new Set([...requiredRoles, ...initialFields.map(field => field.role), ...signers.map(signer => signer.role).filter(Boolean)])]
+  const roleOptions = [...SIGNER_ROLE_OPTIONS, ...placementRoles.filter(role => !SIGNER_ROLE_OPTIONS.some(option => option.value === role)).map(role => ({ value: role, label: role }))]
+  useEffect(() => {
+    let cancelled = false
+    setSigningSource(null)
+    if (reviewOpen && docId) getMatterDocumentSigningSource(matterId, docId).then(source => {
+      if (!cancelled) setSigningSource(source)
+    }).catch(() => { if (!cancelled) setErr('The final PDF could not be loaded for placement review.') })
+    return () => { cancelled = true }
+  }, [reviewOpen, docId, matterId])
+  const chooseDocument = (id) => {
+    const document = docs.find(item => String(item.id) === id)
+    setDocId(id); setReviewOpen(false); setSigningSource(null)
+    setPositionedFields(document?.positioned_fields || EMPTY_SIGNING_FIELDS)
+    if (document?.signing_placement_required || document?.positioned_fields?.length) setProvider('dropbox_sign')
+  }
 
   const counts = requests.reduce((acc, r) => {
     acc[r.status] = (acc[r.status] || 0) + 1
@@ -2409,6 +2436,14 @@ function SignatureRequestsPanel({ matterId }) {
       setErr('Each signer needs a name and email.')
       return
     }
+    if (selectedDocument?.signing_placement_required && !positionedFields.length) {
+      setErr('Review signing positions on the final PDF and add the required fields before sending.'); return
+    }
+    if (requiredRoles.some(role => !positionedFields.some(field => field.role === role))) { setErr('Add signing fields for every role required by this document.'); return }
+    if (positionedFields.length && provider !== 'dropbox_sign') { setErr('Choose Dropbox Sign for positioned fields.'); return }
+    if (positionedFields.some(field => preparedSigners.filter(signer => signer.role === field.role).length !== 1)) {
+      setErr('Assign exactly one signer to each role used by a signing field.'); return
+    }
     const parsedReminderDays = reminderDays
       .split(/[\s,]+/)
       .map((value) => Number.parseInt(value, 10))
@@ -2418,6 +2453,10 @@ function SignatureRequestsPanel({ matterId }) {
       const req = await createSignatureRequest(matterId, {
         document_id: docId,
         signers: preparedSigners,
+        provider,
+        // Generated-PDF placement metadata is attached by the final-PDF
+        // generation flow. Never derive this from a DOCX preview here.
+        positioned_fields: positionedFields,
         expires_at: expiresOn ? new Date(`${expiresOn}T23:59:59`).toISOString() : null,
         reminder_days: parsedReminderDays,
         enforce_signing_order: enforceSigningOrder,
@@ -2425,10 +2464,11 @@ function SignatureRequestsPanel({ matterId }) {
       await sendSignatureRequest(matterId, req.id)
       setSigners([newSignerRow()])
       setDocId('')
+      setReviewOpen(false); setSigningSource(null); setPositionedFields(EMPTY_SIGNING_FIELDS)
       setExpiresOn('')
       setReminderDays('7,1')
       setEnforceSigningOrder(true)
-      setNotice('Signature request sent. Signers will see it in their client portal Signatures tab when it is their turn.')
+      setNotice(provider === 'dropbox_sign' ? 'Signature request sent through Dropbox Sign with the reviewed fields.' : 'Signature request sent. Signers will see it in their client portal Signatures tab when it is their turn.')
       load()
     } catch (e2) {
       setErr(e2?.response?.data?.detail || 'Failed to create signature request.')
@@ -2503,13 +2543,19 @@ function SignatureRequestsPanel({ matterId }) {
             <p className="text-xs text-brand-muted mt-0.5">Choose a matter document and the portal signers who should sign it.</p>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <select value={docId} onChange={(e) => setDocId(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
+            <select aria-label="Document to sign" value={docId} onChange={(e) => chooseDocument(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
               <option value="">Select document…</option>
               {docs.map((d) => <option key={d.id} value={d.id}>{d.filename}</option>)}
             </select>
             <input type="date" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
             <input value={reminderDays} onChange={(e) => setReminderDays(e.target.value)} placeholder="Reminder days: 7,1" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
           </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm">Signing provider <select aria-label="Signing provider" value={provider} onChange={event => setProvider(event.target.value)} className="rounded border border-brand-line p-2"><option value="internal">Internal portal</option><option value="dropbox_sign">Dropbox Sign</option></select></label>
+            {selectedDocument && <button type="button" onClick={() => { setProvider('dropbox_sign'); setReviewOpen(true) }} className="rounded border border-brand-line px-3 py-2 text-sm">Review PDF signing positions</button>}
+            {positionedFields.length > 0 && <span className="text-xs">{positionedFields.length} positioned signing fields</span>}
+          </div>
+          {reviewOpen && (signingSource ? <GeneratedSigningPlacementReview key={docId} source={signingSource} initialFields={initialFields} signerRoles={placementRoles} onChange={setPositionedFields} /> : <p role="status">Loading final PDF for placement review…</p>)}
           <label className="inline-flex items-center gap-2 text-xs text-brand-muted">
             <input type="checkbox" checked={enforceSigningOrder} onChange={(e) => setEnforceSigningOrder(e.target.checked)} />
             <span>Require signers to complete in listed order</span>
@@ -2520,7 +2566,7 @@ function SignatureRequestsPanel({ matterId }) {
                 <input value={signer.name} onChange={(e) => updateSigner(idx, 'name', e.target.value)} placeholder={`Signer ${idx + 1} full name`} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
                 <input type="email" value={signer.email} onChange={(e) => updateSigner(idx, 'email', e.target.value)} placeholder="Signer email" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
                 <select value={signer.role} onChange={(e) => updateSigner(idx, 'role', e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
-                  {SIGNER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  {roleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
                 <button type="button" onClick={() => removeSigner(idx)} disabled={signers.length === 1} className="px-3 py-2 text-xs font-semibold text-brand-rose disabled:text-brand-muted disabled:cursor-not-allowed">Remove</button>
               </div>

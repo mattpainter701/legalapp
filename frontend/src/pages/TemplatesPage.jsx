@@ -2077,6 +2077,15 @@ export default function TemplatesPage() {
     await load()
   }, [load])
 
+  const handleDerivedWordDraft = useCallback(async (draft) => {
+    await load()
+    if (draft?.id) {
+      navigate(`/templates/${encodeURIComponent(draft.id)}/studio`, {
+        state: { studioStatus: 'Derived draft created. Review its placeholders before testing or publishing.' },
+      })
+    }
+  }, [load, navigate])
+
   const handlePublishWorkspace = useCallback(async () => {
     try {
       const published = await publishTemplate(canonicalWorkspaceTemplateId)
@@ -2541,6 +2550,7 @@ export default function TemplatesPage() {
           sourceError={workspaceSourceError}
           onSaveFields={handleSaveWorkspaceFields}
           onRestored={handleRestoredVersion}
+          onDerived={handleDerivedWordDraft}
         />
         {editTemplate && (
           <Modal title="Edit Template" onClose={() => setEditTemplate(null)}>

@@ -6,6 +6,7 @@ import WordDocumentPreview from './WordDocumentPreview'
 
 const pdfState = vi.hoisted(() => ({ error: '' }))
 vi.mock('../../api', () => ({ getTemplateSourcePreview: vi.fn() }))
+vi.mock('./WordPlaceholderLayer', () => ({ default: ({ pageNumber, fields, onSelectField }) => <button onClick={() => onSelectField?.(`${fields?.[0]?.name}:0`)}>Highlight page {pageNumber}</button> }))
 vi.mock('./PdfDocumentCanvas', () => ({
   useTemplatePdfDocument: () => ({ document: {}, pages: [{ page: 1, width: 612, height: 792 }, { page: 2, width: 612, height: 792 }], error: pdfState.error }),
   PdfPageCanvas: ({ pageNumber, zoom, onError }) => <div data-testid="page" data-zoom={zoom}>Rendered page {pageNumber}<button onClick={onError}>Fail canvas</button></div>,
@@ -17,6 +18,17 @@ beforeEach(() => { pdfState.error = ''; getTemplateSourcePreview.mockReset() })
 afterEach(cleanup)
 
 describe('Word document preview', () => {
+  it('connects page highlights to field selection and remounts them after the Fields view', async () => {
+    getTemplateSourcePreview.mockResolvedValue(new Blob(['pdf']))
+    const select = vi.fn()
+    render(<WordDocumentPreview templateId="one" fields={[{ name: 'client_name' }]} onSelectField={select}><p>Text mapping</p></WordDocumentPreview>)
+    fireEvent.click(await screen.findByRole('button', { name: 'Highlight page 1' }))
+    expect(select).toHaveBeenCalledWith('client_name:0')
+    fireEvent.click(screen.getByRole('button', { name: 'Fields', exact: true }))
+    expect(screen.queryByRole('button', { name: 'Highlight page 1', hidden: true })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Document', exact: true }))
+    expect(screen.getByRole('button', { name: 'Highlight page 1' })).toBeVisible()
+  })
   it('shows source pages by default, navigates and zooms, and retains the field view', async () => {
     getTemplateSourcePreview.mockResolvedValue(new Blob(['pdf']))
     render(component())
