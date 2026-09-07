@@ -11,6 +11,14 @@
 
 # Changelog
 
+## 2026.09.07.3
+
+- Lead Firm Memory with one query box and a scope control; move matter, source, file-type and date filters behind a collapsed Refine panel and surface any active refinement as a removable chip. The matter selector becomes an optional narrowing filter rather than the first control a reader meets.
+- Collapse the separate source, file-share and cloud-provider selects into one control feeding the same `source_ids` list; selecting a cloud provider still expands to every source behind it.
+- Render search-node `<mark>` highlights as React nodes, unescaping only the text between markers, so hits are emphasised and no corpus markup is interpreted. Metadata-fallback snippets highlight query terms client-side.
+- Match research questions with `default_operator: OR` and `minimum_should_match` (`2<70%`, tunable through `OpenSearchLimits`) instead of a blanket AND; retry an OpenSearch parse error once with the query escaped as literal text. Explicit `AND`/`OR`/`NOT` and quoted phrases still bind as typed.
+- Replace `plainto_tsquery` with `websearch_to_tsquery` on the SaaS metadata fallback and widen a syntax-free question to an OR over its terms, matching the RAG retrieval path's recall.
+- State coverage positively when a search is complete and name the administrator action behind `matter_binding_required` and `no_authorized_matter_scope`. No authorization change: ACL, deny-token, path-scope and matter-binding clauses are untouched, and an unbound SMB share is still never searched.
 ## 2026.09.07.2
 
 - Add portal multi-file/folder transfer with bounded relative paths, preserved subfolders, per-file retry results and deterministic source/content identities for replay. Reject storage failures and prevent same-name physical file overwrites.
