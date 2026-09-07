@@ -1,6 +1,6 @@
 """Derive safe, source-backed Word placeholders after intake review.
 
-The retained upload is evidence.  This module creates a separate, deterministic
+The retained upload is evidence.  This module creates a separate
 DOCX for authoring/filling once a reviewer has explicitly mapped a discovered
 source span to a field.  Ordinal anchors are used only against the original
 bytes, before the derived document is serialized.
@@ -8,8 +8,10 @@ bytes, before the derived document is serialized.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import io
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -118,18 +120,29 @@ def _mapped_review_spans(
             # Authored {{name}} fields already have a literal token and do not
             # need derivation.  Unanchored inferred fields must remain review.
             continue
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", name):
+            raise TemplateDocxError(f"Word field {name!r} has an invalid name")
+        if set(anchor) != {"paragraph_ordinal", "start", "end"} or any(
+            type(anchor.get(key)) is not int
+            for key in ("paragraph_ordinal", "start", "end")
+        ):
+            raise TemplateDocxError("A reviewed Word field has an invalid location")
         try:
             ordinal, start, end = (
-                int(anchor["paragraph_ordinal"]),
-                int(anchor["start"]),
-                int(anchor["end"]),
+                anchor["paragraph_ordinal"],
+                anchor["start"],
+                anchor["end"],
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise TemplateDocxError(
                 "A reviewed Word field has an invalid location"
             ) from exc
-        if paragraphs.get(ordinal, "")[start:end] != source or end - start != len(
-            source
+        if (
+            ordinal not in paragraphs
+            or start < 0
+            or end <= start
+            or paragraphs[ordinal][start:end] != source
+            or end - start != len(source)
         ):
             raise TemplateDocxError(
                 f"The reviewed source for Word field {name!r} no longer matches"
@@ -154,6 +167,16 @@ def _mapped_review_spans(
             )
         seen.add(key)
         spans.append((ordinal, start, end, name, source, candidate_id))
+    by_paragraph: dict[int, list[tuple[int, int]]] = {}
+    for ordinal, start, end, *_ in spans:
+        by_paragraph.setdefault(ordinal, []).append((start, end))
+    for locations in by_paragraph.values():
+        locations.sort()
+        if any(
+            start < previous_end
+            for (_, previous_end), (start, _) in zip(locations, locations[1:])
+        ):
+            raise TemplateDocxError("Word fields cannot overlap; select separate text")
     # Mutate right-to-left inside each paragraph so offsets from the original
     # evidence remain valid when token length differs from source length.
     return sorted(spans, key=lambda item: (item[0], -item[1]))
@@ -166,6 +189,7 @@ def derive_reviewed_docx_source(
     decisions: dict[str, str] | None = None,
     source_mode: str = "prose",
     source_mode_suggestion: SourceModeSuggestion | None = None,
+    base_schema: dict[str, Any] | None = None,
 ) -> DerivedDocxSource:
     """Replace only confirmed exact spans with literal ``{{field}}`` tokens.
 
@@ -228,25 +252,27 @@ def derive_reviewed_docx_source(
         if not isinstance(anchor, dict):
             continue
         key = (
-            int(anchor.get("paragraph_ordinal", -1)),
-            int(anchor.get("start", -1)),
-            int(anchor.get("end", -1)),
+            anchor.get("paragraph_ordinal"),
+            anchor.get("start"),
+            anchor.get("end"),
         )
         name = by_anchor.get(key)
         if name:
             field["source_text"] = "{{" + name + "}}"
             field.pop("docx_anchor", None)
             field.pop("docx_source_key", None)
-    active_schema = {
-        "version": 1,
-        "source": "docx_derived_placeholder",
-        "fields": source_fields,
-        "source_review_version": 1,
-        # Candidate IDs are tied to the original source text and offsets. The
-        # active outline has new IDs, so decisions must be collected again.
-        "source_review": {},
-        "source_provenance": metadata,
-    }
+    active_schema = copy.deepcopy(base_schema or {})
+    active_schema.update(
+        {
+            "version": 1,
+            "source": "docx_derived_placeholder",
+            "fields": source_fields,
+            "source_review_version": 1,
+            # Candidate IDs are tied to the original source text and offsets.
+            # The active outline has new IDs, so decisions must be collected again.
+            "source_review": {},
+        }
+    )
     return DerivedDocxSource(derived, metadata, active_schema)
 
 

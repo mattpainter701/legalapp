@@ -2,6 +2,9 @@
 
 import hashlib
 import io
+import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from docx import Document
@@ -167,3 +170,77 @@ def test_conflicting_disposition_and_overlapping_mapping_fail_closed():
         )
     with pytest.raises(TemplateDocxError, match="same source span"):
         derive_reviewed_docx_source(content, fields=[field, {**field, "name": "other"}])
+
+
+@pytest.mark.asyncio
+async def test_derive_word_draft_creates_new_inactive_source_owned_by_server(
+    monkeypatch,
+):
+    from app.routers import document_templates as router
+    from app.schemas.document_template import DocumentTemplateWordDeriveRequest
+
+    content = _source()
+    outline = docx_outline(content)
+    candidate = next(
+        item
+        for item in outline["review_candidates"]
+        if item["source_text"] == "[AMOUNT]"
+    )
+    original_id = uuid.uuid4()
+    original = SimpleNamespace(
+        id=original_id,
+        tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        format="docx",
+        source_storage_path="/tmp/original.docx",
+        source_filename="master.docx",
+        source_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        source_sha256=hashlib.sha256(content).hexdigest(),
+        title="Master",
+        body="",
+        category="other",
+        description=None,
+        visibility="tenant",
+        layer=None,
+        module=None,
+        stage=None,
+        jurisdiction=None,
+        kind=None,
+        variable_schema={"source_review": {}},
+        signer_roles=None,
+        branding_profile=None,
+    )
+    db = AsyncMock()
+    db.add = Mock()
+    db.scalar.return_value = original
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        router, "_verified_template_source", AsyncMock(return_value=content)
+    )
+    persisted = []
+
+    async def persist(**kwargs):
+        persisted.append(kwargs)
+        return "F:/derived.docx"
+
+    monkeypatch.setattr(router, "_persist_template_source", persist)
+    monkeypatch.setattr(router, "_template_response", lambda value: value)
+    user = SimpleNamespace(tenant_id=original.tenant_id)
+    response = await router.derive_word_draft(
+        original_id,
+        DocumentTemplateWordDeriveRequest(
+            fields=[
+                {
+                    "name": "amount",
+                    "source_text": "[AMOUNT]",
+                    "docx_anchor": candidate["docx_anchor"],
+                }
+            ]
+        ),
+        current_user=user,
+        db=db,
+    )
+    assert response.is_active is False
+    assert response.published_version_no is None
+    assert response.variable_schema["source"] == "docx_derived_placeholder"
+    assert persisted[0]["content"] != content
+    db.commit.assert_awaited_once()

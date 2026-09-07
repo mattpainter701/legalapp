@@ -98,6 +98,8 @@ class DocumentTemplateResponse(BaseModel):
     source_content_type: Optional[str] = None
     source_sha256: Optional[str] = None
     source_file_size: Optional[int] = None
+    source_evidence_sha256: Optional[str] = None
+    source_provenance: Optional[dict[str, Any]] = None
     source_ready: bool = True
     last_test_rendered_at: Optional[datetime] = None
     approved_at: Optional[datetime] = None
@@ -180,6 +182,14 @@ class DocumentTemplateRenderRequest(BaseModel):
 
 class DocumentTemplatePublishRequest(BaseModel):
     change_summary: Optional[str] = Field(None, max_length=500)
+
+
+class DocumentTemplateWordDeriveRequest(BaseModel):
+    """Explicit Word span selections used to create a fresh draft source."""
+
+    fields: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+    source_review: dict[str, str] = Field(default_factory=dict, max_length=500)
+    source_mode: Literal["prose", "form"] | None = None
 
 
 class DocumentTemplateVariableSuggestion(BaseModel):
