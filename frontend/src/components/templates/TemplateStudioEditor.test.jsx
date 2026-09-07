@@ -53,6 +53,7 @@ vi.mock('./DocxDocumentView', () => ({
 }))
 
 vi.mock('../../api', () => ({
+  getTemplateSourcePreview: () => Promise.reject(new Error('Preview unavailable')),
   getTemplateOutline: () => Promise.resolve({ paragraphs: [], paragraph_count: 0 }),
   getTemplateBindings: () => Promise.resolve({
     bindings: [

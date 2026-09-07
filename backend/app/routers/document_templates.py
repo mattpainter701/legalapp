@@ -96,6 +96,7 @@ from app.services.pdf_templates import (
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
 from app.services.docx_to_pdf import DocxToPdfError, docx_to_pdf_bytes
+from app.services.template_source_preview import source_preview_cache
 from app.services.docx_outline import docx_outline, validate_visual_field_map
 from app.services.template_regions import (
     TemplateRegionError,
@@ -3054,6 +3055,58 @@ async def get_template_outline(
     except TemplateDocxError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return DocumentTemplateOutlineResponse(template_id=str(template.id), **outline)
+
+
+@router.get("/{template_id}/preview-render")
+async def preview_template_source(
+    template_id: uuid.UUID,
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Print preview of the retained source, never generation/test evidence."""
+    tenant_id = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_id))
+    template = await db.scalar(
+        select(DocumentTemplate).where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == tenant_id,
+        )
+    )
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if template.format != "docx":
+        raise HTTPException(
+            status_code=422, detail="Source preview requires a Word template."
+        )
+    # Verify even on cache hits: a retained file that changed on disk must never
+    # be concealed by serving a previously successful render.
+    source = await _verified_template_source(template)
+    if not settings.DOCX_PDF_CONVERSION_ENABLED:
+        raise HTTPException(
+            status_code=503, detail="Word-to-PDF conversion is unavailable."
+        )
+    try:
+        output = await source_preview_cache.render(
+            source,
+            tenant_id=tenant_id,
+            template_id=template.id,
+            executable=settings.DOCX_PDF_CONVERTER_PATH,
+            timeout_seconds=settings.DOCX_PDF_CONVERSION_TIMEOUT_SECONDS,
+            max_output_bytes=settings.DOCX_PDF_CONVERSION_MAX_OUTPUT_BYTES,
+            max_pages=settings.DOCX_PDF_CONVERSION_MAX_PAGES,
+        )
+    except DocxToPdfError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=output,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'inline; filename="template-source-preview.pdf"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @router.get("/{template_id}/source")

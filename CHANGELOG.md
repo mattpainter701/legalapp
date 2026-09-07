@@ -11,6 +11,12 @@
 
 # Changelog
 
+## 2026.09.07.6 - Word source page previews
+
+- Add a tenant-authorized, integrity-checked source preview endpoint using bounded LibreOffice conversion and a 64 MiB / 32-entry per-worker LRU.
+- Show Word source PDF pages, thumbnails and zoom in Studio with persistent Document/Fields switching and safe conversion fallback. Source previews do not create generation evidence or change original uploads.
+- Coordinate after source-review PR #352 (release .5); document remaining visual-authoring work and provider coordinate constraints.
+
 ## 2026.09.07.5
 
 - Add the searchable Field Library using existing built-in and tenant custom definitions, distinct current-template counts, paginated usage and Studio links. Document explicit Word placeholder conventions and the difference between shared data sources and template-local value links.

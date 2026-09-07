@@ -18,6 +18,7 @@ describe('request deadlines', () => {
       '/imports/tabs3/upload',
       '/imports/run-1/reconcile',
       '/templates/t1/render-file',
+      '/templates/t1/preview-render',
       '/templates/t1/render',
       '/templates/intake/analyze',
       '/billing/invoices/i1/export',

@@ -1,3 +1,4 @@
+import asyncio
 from io import BytesIO
 from pathlib import Path
 
@@ -5,7 +6,57 @@ import pytest
 from docx import Document
 from pypdf import PdfWriter
 
-from app.services.docx_to_pdf import DocxToPdfError, docx_to_pdf_bytes
+from app.services.docx_to_pdf import DocxToPdfError, docx_to_pdf_bytes, _kill_converter
+
+
+@pytest.mark.asyncio
+async def test_cancelled_conversion_kills_and_reaps_process(tmp_path, monkeypatch):
+    executable = tmp_path / "converter"
+    executable.write_text("synthetic converter")
+    started = asyncio.Event()
+    state = {"killed": False, "reaped": False}
+
+    class Process:
+        returncode = None
+
+        async def communicate(self):
+            if state["killed"]:
+                state["reaped"] = True
+                return b"", b""
+            started.set()
+            await asyncio.Event().wait()
+
+        def kill(self):
+            state["killed"] = True
+
+    async def spawn(*args, **kwargs):
+        return Process()
+
+    monkeypatch.setattr(
+        "app.services.docx_to_pdf.asyncio.create_subprocess_exec", spawn
+    )
+    task = asyncio.create_task(docx_to_pdf_bytes(_docx(), executable=str(executable)))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert state == {"killed": True, "reaped": True}
+
+
+def test_converter_cleanup_kills_private_process_group(monkeypatch):
+    import signal
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    killpg = Mock()
+    monkeypatch.setattr(signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr("app.services.docx_to_pdf.os.killpg", killpg, raising=False)
+    process = SimpleNamespace(pid=12345, kill=Mock())
+    _kill_converter(process)
+    killpg.assert_called_once_with(12345, signal.SIGKILL)
+    process.kill.assert_not_called()
+    killpg.side_effect = ProcessLookupError
+    _kill_converter(process)
 
 
 def _docx() -> bytes:

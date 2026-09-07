@@ -138,6 +138,7 @@ const LONG_REQUEST_PATTERNS = [
   /\/export(\/|$)/,
   /\/imports(\/|$)/,
   /\/render(-file)?(\/|$)/,
+  /\/preview-render(\/|$)/,
   /\/analyze(\/|$)/,
   /\/revisions(\/|$)/,
 ]
@@ -2158,6 +2159,9 @@ export const getTemplateSource = (id, filename = 'template-source.pdf') =>
     const type = r.data?.type || r.headers?.['content-type'] || 'application/octet-stream'
     return new File([r.data], filename, { type: String(type).split(';')[0].trim() })
   })
+
+export const getTemplateSourcePreview = (id) =>
+  api.get(`/templates/${id}/preview-render`, { responseType: 'blob' }).then(r => r.data)
 
 export const deleteTemplate = (id) =>
   api.delete(`/templates/${id}`).then(r => r.data)

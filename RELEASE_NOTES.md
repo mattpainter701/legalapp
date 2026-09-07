@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.6 — See Word masters as printable pages in Studio
+
+Released September 7, 2026.
+
+Inspect the saved Word source with page previews while retaining text field mapping.
+
+- **Recognize your document.** Review letterhead, tables and page layout with thumbnails, zoom and page navigation.
+- **Keep mapping when preview is unavailable.** Switch to Fields for text mapping, with a retry option when document conversion is busy or unavailable.
+
 ## 2026.09.07.5 — Prepare reusable Word templates with clearer source review
 
 Released September 7, 2026.
