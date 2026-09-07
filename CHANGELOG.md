@@ -11,6 +11,10 @@
 
 # Changelog
 
+## 2026.09.07.13 - Cloud folder recovery test order
+
+- Make the cloud-folder retry regression deliberately fail the first attempted matter, then verify the next one proceeds. PostgreSQL does not guarantee query row order, so the check now validates savepoint recovery without assuming a particular matter is first.
+
 ## 2026.09.07.12 - Cloud folder retry isolation
 
 - Resolve cloud provider tokens before each retry pass, then isolate every matter-folder initialization in its own database savepoint. A lock failure now rolls back only that matter's work and leaves the next matter eligible to proceed.

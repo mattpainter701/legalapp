@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.13 — Verified cloud folder recovery
+
+Released September 7, 2026.
+
+Cloud folder recovery now has a database-level check that covers a temporarily busy matter.
+
+- **Keep the rest of setup moving.** When one matter folder is temporarily busy, setup continues for the other matters and reports the one that needs another retry.
+- **Check real database behavior.** Release checks now verify recovery from a database failure without relying on the order matters happen to be returned.
+
 ## 2026.09.07.12 — Reliable cloud folder recovery
 
 Released September 7, 2026.

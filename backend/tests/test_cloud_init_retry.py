@@ -29,8 +29,7 @@ async def test_cloud_init_retry_keeps_later_matters_healthy_after_database_error
     )
     db_session.add_all([first, second])
     await db_session.commit()
-    first_id = first.id
-    second_id = second.id
+    matter_ids = {first.id, second.id}
     attempts = []
 
     async def fake_root(_db, _tenant_id):
@@ -41,9 +40,10 @@ async def test_cloud_init_retry_keeps_later_matters_healthy_after_database_error
 
     async def fake_matter_init(db, *, matter_id, tokens, **_kwargs):
         attempts.append((matter_id, tokens))
-        if matter_id == first_id:
+        if len(attempts) == 1:
             # This is a real Postgres error, so without a savepoint the session
-            # would remain aborted and the second matter could not run.
+            # would remain aborted and the next matter could not run. Matter
+            # query order is intentionally unspecified by PostgreSQL.
             await db.execute(text("SELECT 1 / 0"))
         return {"onedrive": {"matter_folder_id": f"folder-{matter_id}"}}
 
@@ -62,10 +62,11 @@ async def test_cloud_init_retry_keeps_later_matters_healthy_after_database_error
         "matters_failed": 1,
         "status": "partial",
     }
-    assert attempts == [
-        (first_id, {"microsoft": "fresh-token"}),
-        (second_id, {"microsoft": "fresh-token"}),
-    ]
+    assert len(attempts) == 2
+    assert {matter_id for matter_id, _tokens in attempts} == matter_ids
+    assert all(
+        tokens == {"microsoft": "fresh-token"} for _matter_id, tokens in attempts
+    )
 
 
 @pytest.mark.asyncio
