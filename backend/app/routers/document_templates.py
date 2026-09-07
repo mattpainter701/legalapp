@@ -2804,7 +2804,10 @@ async def create_template_from_sample(
     # canvas can still add valid manual overlays. Validate the final reviewed
     # contract, rather than rejecting the source before the user's edits are
     # considered.
-    if analysis.format == "pdf" and not any(
+    if analysis.format == "pdf" and not (
+        isinstance(reviewed_schema.get("cover_regions"), list)
+        and reviewed_schema.get("cover_regions")
+    ) and not any(
         isinstance(field, dict)
         and field.get("included", True) is True
         and (
