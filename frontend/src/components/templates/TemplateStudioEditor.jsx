@@ -660,10 +660,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 />
               </PropertyRow>
               {selected.context && <p className="text-xs text-brand-muted">Source context: {selected.context}</p>}
-              {isDocx && !selected.docx_choice && <PropertyRow label="Use the same value as">
+              {isDocx && !selected.docx_choice && (!selected.binding?.startsWith('item.') || selected.value_from) && <PropertyRow label="Use the same value as">
                 <select value={selected.value_from || ''} onChange={event => updateField(selectedEntry.identity, { value_from: event.target.value })} className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm">
                   <option value="">Separate value</option>
-                  {fields.filter(field => field.name !== selected.name && field.included !== false && !field.value_from && !field.docx_choice && (field.field_type || 'text') === (selected.field_type || 'text')).map(field => <option key={field.name} value={field.name}>{field.label || field.name}</option>)}
+                  {fields.filter(field => field.name !== selected.name && field.included !== false && !field.value_from && !field.docx_choice && !field.binding?.startsWith('item.') && (field.field_type || 'text') === (selected.field_type || 'text')).map(field => <option key={field.name} value={field.name}>{field.label || field.name}</option>)}
                 </select>
               </PropertyRow>}
               <PropertyRow label="Type">

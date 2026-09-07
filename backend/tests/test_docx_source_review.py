@@ -201,6 +201,16 @@ def test_links_require_an_independent_included_compatible_target(target):
         validate_value_links([{"name": "a", "value_from": "b"}, target, {"name": "c"}])
 
 
+@pytest.mark.parametrize("item_field", ["a", "b"])
+def test_links_cannot_silently_copy_an_unresolved_repeat_item(item_field):
+    fields = [{"name": "a", "value_from": "b"}, {"name": "b"}]
+    next(field for field in fields if field["name"] == item_field)["binding"] = (
+        "item.party_name"
+    )
+    with pytest.raises(TemplateDocxError, match="repeating item"):
+        word_values(fields, {"b": "Taylor Example"})
+
+
 def test_malformed_fields_raise_a_customer_error():
     with pytest.raises(TemplateDocxError):
         validate_value_links([None])

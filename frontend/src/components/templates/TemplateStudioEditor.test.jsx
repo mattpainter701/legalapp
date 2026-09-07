@@ -92,6 +92,14 @@ describe('TemplateStudioEditor', () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ source_review: { synthetic: 'fixed' }, source_review_version: 1 })))
   })
 
+  it('keeps repeating item bindings out of single-value links', () => {
+    render(<TemplateStudioEditor template={{ ...templateWith([{ name: 'amount', label: 'Value' }, { name: 'party', label: 'Repeated party', binding: 'item.party_name' }]), format: 'docx' }} onSave={vi.fn()} />)
+    const selector = screen.getByLabelText('Use the same value as')
+    expect([...selector.options].map(option => option.value)).toEqual([''])
+    fireEvent.click(screen.getByRole('button', { name: 'Repeated party' }))
+    expect(screen.queryByLabelText('Use the same value as')).not.toBeInTheDocument()
+  })
+
   it('links two independent Word fields explicitly', async () => {
     const onSave = vi.fn().mockResolvedValue({})
     render(<TemplateStudioEditor template={{ ...templateWith([{ name: 'amount', label: 'Value', context: 'Car value' }, { name: 'loan', label: 'Loan' }]), format: 'docx' }} onSave={onSave} />)

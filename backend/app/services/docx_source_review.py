@@ -3,6 +3,7 @@
 import re
 
 from app.services.docx_templates import docx_source_key, TemplateDocxError
+from app.services.template_bindings import is_item_binding
 
 MAX_REVIEW_CANDIDATES = 500
 DISPOSITIONS = {"fixed", "signature", "not_applicable"}
@@ -158,10 +159,12 @@ def validate_value_links(fields):
                 or other.get("included") is False
                 or field.get("docx_choice")
                 or other.get("docx_choice")
+                or is_item_binding(field.get("binding"))
+                or is_item_binding(other.get("binding"))
                 or field.get("field_type", "text") != other.get("field_type", "text")
             ):
                 raise TemplateDocxError(
-                    "Link a Word field to an included, independent field of the same type"
+                    "Link a Word field to an included, independent field of the same type; repeating item values must use their item bindings"
                 )
 
 
