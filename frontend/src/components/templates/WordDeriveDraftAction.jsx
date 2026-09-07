@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { deriveWordTemplateDraft, getTemplateOriginalSource } from '../../api'
 
 /** Small, review-explicit action kept separate from the shared Studio editor. */
-export default function WordDeriveDraftAction({ templateId, fields = [], sourceReview = {}, suggestedMode = 'prose', onCreated }) {
+export default function WordDeriveDraftAction({ templateId, fields = [], sourceReview = {}, reviewedSchema = {}, suggestedMode = 'prose', onCreated }) {
   const [mode, setMode] = useState(suggestedMode)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -10,7 +10,7 @@ export default function WordDeriveDraftAction({ templateId, fields = [], sourceR
   const create = async () => {
     setBusy(true); setMessage('')
     try {
-      const draft = await deriveWordTemplateDraft(templateId, { fields, source_review: sourceReview, source_mode: mode })
+      const draft = await deriveWordTemplateDraft(templateId, { fields, source_review: sourceReview, source_mode: mode, reviewed_schema: reviewedSchema })
       setMessage('Derived draft created. Review it before testing or publishing.')
       onCreated?.(draft)
     } catch (error) {

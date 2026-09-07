@@ -190,6 +190,7 @@ class DocumentTemplateWordDeriveRequest(BaseModel):
     fields: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
     source_review: dict[str, str] = Field(default_factory=dict, max_length=500)
     source_mode: Literal["prose", "form"] | None = None
+    reviewed_schema: dict[str, Any] | None = None
 
 
 class DocumentTemplateWordCleanupRequest(BaseModel):

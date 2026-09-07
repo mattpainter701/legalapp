@@ -98,6 +98,12 @@ from app.services.docx_templates import TemplateDocxError, fill_docx_template
 from app.services.docx_to_pdf import DocxToPdfError, docx_to_pdf_bytes
 from app.services.template_source_preview import source_preview_cache
 from app.services.docx_outline import docx_outline, validate_visual_field_map
+from app.services.docx_placeholder_authoring import (
+    cleanup_docx_source,
+    derive_reviewed_docx_source,
+    resolve_source_mode,
+    suggest_source_mode,
+)
 from app.services.template_regions import (
     TemplateRegionError,
     parse_regions,
@@ -3052,9 +3058,223 @@ async def get_template_outline(
     source = await _verified_template_source(template)
     try:
         outline = await asyncio.to_thread(docx_outline, source)
+    except TemplateDocxError a@router.post(
+    "/{template_id}/derive-word-draft",
+    response_model=DocumentTemplateResponse,
+)
+async def derive_word_draft(
+    template_id: uuid.UUID,
+    payload: DocumentTemplateWordDeriveRequest,
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a fresh draft from reviewed Word spans.
+
+    Published masters are immutable. The new row owns the derived source and
+    carries server-owned provenance back to the original template.
+    """
+
+    tenant_id = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_id))
+    template = await db.scalar(
+        select(DocumentTemplate).where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == tenant_id,
+        )
+    )
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if str(template.format or "").lower() != "docx":
+        raise HTTPException(
+            status_code=422, detail="Word derivation requires a DOCX template"
+        )
+    original = await _verified_template_source(template)
+    try:
+        suggestion = await asyncio.to_thread(suggest_source_mode, original)
+        mode = resolve_source_mode(suggestion, payload.source_mode)
+        derived = await asyncio.to_thread(
+            derive_reviewed_docx_source,
+            original,
+            fields=payload.fields,
+            decisions=payload.source_review
+            or (template.variable_schema or {}).get("source_review", {}),
+            source_mode=mode,
+            source_mode_suggestion=suggestion,
+            base_schema=payload.reviewed_schema or template.variable_schema or {},
+        )
     except TemplateDocxError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return DocumentTemplateOutlineResponse(template_id=str(template.id), **outline)
+
+    new_id = uuid.uuid4()
+    filename = _safe_upload_filename(template.source_filename or "template.docx")
+    source_path = await _persist_template_source(
+        tenant_id=tenant_id,
+        template_id=new_id,
+        filename=filename,
+        content=derived.content,
+    )
+    evidence_path = await _persist_template_source(
+        tenant_id=tenant_id,
+        template_id=new_id,
+        filename=f"original-{filename}",
+        content=original,
+    )
+    schema = dict(derived.variable_schema)
+    title = f"{template.title} (derived draft)"[:300]
+    draft = DocumentTemplate(
+        id=new_id,
+        tenant_id=tenant_id,
+        title=title,
+        body=template.body or "",
+        category=template.category,
+        description=f"Derived from Word source: {template.title}",
+        visibility=template.visibility,
+        layer=template.layer,
+        status="draft",
+        format="docx",
+        module=template.module,
+        stage=template.stage,
+        jurisdiction=template.jurisdiction,
+        kind=template.kind,
+        variable_schema=schema,
+        signer_roles=template.signer_roles,
+        branding_profile=template.branding_profile,
+        source_storage_path=source_path,
+        source_filename=filename,
+        source_content_type=template.source_content_type,
+        source_sha256=hashlib.sha256(derived.content).hexdigest(),
+        source_file_size=len(derived.content),
+        source_evidence_storage_path=evidence_path,
+        source_evidence_filename=filename,
+        source_evidence_sha256=hashlib.sha256(original).hexdigest(),
+        source_provenance={
+            **derived.metadata,
+            "original_template_id": str(template.id),
+        },
+        is_active=False,
+        current_version_no=0,
+        tested_version_no=None,
+        published_version_no=None,
+    )
+    db.add(draft)
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        try:
+            Path(source_path).unlink(missing_ok=True)
+            Path(evidence_path).unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Unable to clean derived Word source after failed commit")
+        raise HTTPException(
+            status_code=500, detail="The derived Word draft could not be saved"
+        ) from exc
+    return _template_response(draft)
+
+
+@router.post(
+    "/{template_id}/cleanup-word-draft",
+    response_model=DocumentTemplateResponse,
+)
+async def cleanup_word_draft(
+    template_id: uuid.UUID,
+    payload: DocumentTemplateWordCleanupRequest,
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a fresh draft after one exact, token-preserving text cleanup."""
+    tenant_id = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_id))
+    template = await db.scalar(
+        select(DocumentTemplate).where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == tenant_id,
+        )
+    )
+    if not template or str(template.format or "").lower() != "docx":
+        raise HTTPException(status_code=404, detail="Word template not found")
+    source = await _verified_template_source(template)
+    try:
+        derived = await asyncio.to_thread(
+            cleanup_docx_source, source, **payload.model_dump()
+        )
+    except TemplateDocxError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    new_id = uuid.uuid4()
+    filename = _safe_upload_filename(template.source_filename or "template.docx")
+    if not template.source_evidence_storage_path or not template.source_evidence_sha256:
+        raise HTTPException(
+            status_code=409, detail="The original template evidence is unavailable"
+        )
+    evidence_path = Path(template.source_evidence_storage_path).resolve()
+    expected = Path(_template_source_dir(str(tenant_id), template.id)).resolve()
+    if not evidence_path.is_relative_to(expected) or not evidence_path.is_file():
+        raise HTTPException(
+            status_code=409, detail="The original template evidence is unavailable"
+        )
+    evidence = await asyncio.to_thread(evidence_path.read_bytes)
+    if hashlib.sha256(evidence).hexdigest() != template.source_evidence_sha256:
+        raise HTTPException(
+            status_code=409,
+            detail="The original template evidence failed its integrity check",
+        )
+    if any(
+        isinstance(field, dict) and field.get("docx_anchor")
+        for field in (template.variable_schema or {}).get("fields", [])
+    ):
+        raise HTTPException(
+            status_code=422, detail="Review the derived source again before cleanup"
+        )
+    active_path = await _persist_template_source(
+        tenant_id=tenant_id, template_id=new_id, filename=filename, content=derived
+    )
+    retained_path = await _persist_template_source(
+        tenant_id=tenant_id,
+        template_id=new_id,
+        filename=f"original-{filename}",
+        content=evidence,
+    )
+    schema = json.loads(json.dumps(template.variable_schema or {}))
+    draft = DocumentTemplate(
+        id=new_id,
+        tenant_id=tenant_id,
+        title=f"{template.title} (cleaned draft)"[:300],
+        body=template.body or "",
+        category=template.category,
+        description=f"Cleaned Word draft from: {template.title}",
+        visibility=template.visibility,
+        layer=template.layer,
+        status="draft",
+        format="docx",
+        module=template.module,
+        stage=template.stage,
+        jurisdiction=template.jurisdiction,
+        kind=template.kind,
+        variable_schema=schema,
+        signer_roles=template.signer_roles,
+        branding_profile=template.branding_profile,
+        source_storage_path=active_path,
+        source_filename=filename,
+        source_content_type=template.source_content_type,
+        source_sha256=hashlib.sha256(derived).hexdigest(),
+        source_file_size=len(derived),
+        source_evidence_storage_path=retained_path,
+        source_evidence_filename=template.source_evidence_filename or filename,
+        source_evidence_sha256=hashlib.sha256(evidence).hexdigest(),
+        source_provenance={
+            "derivation_version": 1,
+            "kind": "cleanup",
+            "original_template_id": str(template.id),
+            "original_sha256": hashlib.sha256(evidence).hexdigest(),
+            "derived_sha256": hashlib.sha256(derived).hexdigest(),
+        },
+        is_active=False,
+    )
+    db.add(draft)
+    await db.commit()
+    return _template_response(draft)
+
+
 
 
 @router.get("/{template_id}/preview-render")
