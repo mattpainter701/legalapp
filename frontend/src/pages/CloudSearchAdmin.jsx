@@ -117,6 +117,7 @@ function TestPanel() {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const fetchedContent = result?.fetch_content_results || result?.contents || []
 
   const handleTest = async () => {
     if (!query.trim()) return
@@ -235,14 +236,14 @@ function TestPanel() {
           </div>
 
           {/* Fetched content */}
-          {result.contents && result.contents.length > 0 && (
+          {fetchedContent.length > 0 && (
             <div className="bg-brand-surface border border-brand-line rounded-lg">
               <div className="px-4 py-3 border-b border-brand-line bg-brand-bg-soft/50">
                 <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
-                  Fetched Content ({result.contents.length})
+                  Fetched Content ({fetchedContent.length})
                 </span>
               </div>
-              {result.contents.map((item, i) => (
+              {fetchedContent.map((item, i) => (
                 <div key={i} className="p-4 border-b border-brand-line last:border-0">
                   <p className="text-xs font-sans font-medium text-brand-ink mb-1">{item.hit?.title}</p>
                   <pre className="text-xs font-mono text-brand-ink-2 whitespace-pre-wrap max-h-48 overflow-y-auto bg-brand-bg-soft p-3 rounded">

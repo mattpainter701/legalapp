@@ -31,7 +31,9 @@ async def ms_read_mail_user(
 ) -> list[dict]:
     token = await _ms_get_user_token(db, tenant_id, user_id)
     if not token:
-        raise RuntimeError(f"No Microsoft OAuth token for user {user_id}")
+        raise RuntimeError(
+            "Connect or reconnect Microsoft 365 in Integrations before reading mail."
+        )
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
@@ -88,7 +90,9 @@ async def ms_read_mail_raw(
     """
     token = await _ms_get_user_token(db, tenant_id, user_id)
     if not token:
-        raise RuntimeError(f"No Microsoft OAuth token for user {user_id}")
+        raise RuntimeError(
+            "Connect or reconnect Microsoft 365 in Integrations before reading mail."
+        )
 
     resp = await graph_request("GET", f"/me/messages/{message_id}/$value", token=token)
     return resp.content

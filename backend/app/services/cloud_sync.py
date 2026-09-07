@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import set_tenant_context
 from app.models.cloud_metadata import CloudMetadata
+from app.services.matter_cloud_scope import load_matter_document_cloud_scope
 from app.models.storage_migration import StorageMigration
 from app.models.tenant import Tenant
 from app.services.token_vault import get_fresh_token, get_fresh_user_token
@@ -142,12 +143,14 @@ class CloudSyncService:
         tenant_id: str,
         matter_cloud_folder: dict | None,
         user_id: str | None = None,
+        matter_id: str | None = None,
     ) -> dict:
-        """Sync only the folders mapped to one matter.
+        """Sync only folders authorized by one matter.
 
         This powers the per-matter "Sync folder" action. It intentionally avoids
-        tenant-wide mail and root-folder scans; scheduler/admin jobs still use
-        ``sync_all``.
+        tenant-wide mail and root-folder scans.  Alongside provisioned mappings,
+        it includes the bounded durable parent IDs of this matter's uploads;
+        scheduler/admin jobs still use ``sync_all``.
         """
         await set_tenant_context(db, tenant_id)
 
@@ -181,7 +184,14 @@ class CloudSyncService:
                 },
             }
 
-        google_folder_ids = _matter_folder_ids(cloud_folder, "google_drive")
+        document_scope = await load_matter_document_cloud_scope(
+            db, tenant_id=tenant_id, matter_id=matter_id
+        )
+
+        google_folder_ids = _dedupe(
+            _matter_folder_ids(cloud_folder, "google_drive")
+            + document_scope.folder_ids.get("google_drive", [])
+        )
         if google_folder_ids:
             try:
                 result["google"]["files"] = await self.sync_google_drive_folders(
@@ -194,7 +204,10 @@ class CloudSyncService:
                     exc,
                 )
 
-        onedrive_folder_ids = _matter_folder_ids(cloud_folder, "onedrive")
+        onedrive_folder_ids = _dedupe(
+            _matter_folder_ids(cloud_folder, "onedrive")
+            + document_scope.folder_ids.get("onedrive", [])
+        )
         if onedrive_folder_ids:
             try:
                 result["microsoft"]["files"] += await self.sync_onedrive_folders(
@@ -207,7 +220,12 @@ class CloudSyncService:
                     exc,
                 )
 
-        sharepoint_refs = _sharepoint_folder_refs(cloud_folder)
+        sharepoint_refs = list(
+            dict.fromkeys(
+                _sharepoint_folder_refs(cloud_folder)
+                + document_scope.sharepoint_folder_refs
+            )
+        )
         if sharepoint_refs:
             try:
                 result["microsoft"]["files"] += await self.sync_sharepoint_folders(
@@ -621,8 +639,9 @@ class CloudSyncService:
                         tenant_id,
                         token,
                         children_url,
-                        "file",
+                        "sharepoint_file",
                         drive_name=drive_name,
+                        drive_id=drive_id,
                     )
                     count += item_count
                     # _sync_graph_files commits each page internally; no extra
@@ -661,9 +680,10 @@ class CloudSyncService:
                 tenant_id,
                 token,
                 f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}/children",
-                "file",
+                "sharepoint_file",
                 max_items=MAX_FILES - count,
                 drive_name="SharePoint",
+                drive_id=drive_id,
             )
         return count
 
@@ -959,6 +979,7 @@ class CloudSyncService:
         children_url: str,
         object_type: str,
         drive_name: str | None = None,
+        drive_id: str | None = None,
         max_items: int = MAX_FILES,
     ) -> int:
         """List files from a MS Graph ``children`` endpoint and upsert metadata.
@@ -1020,6 +1041,8 @@ class CloudSyncService:
 
                         parent_ref = item.get("parentReference", {})
                         parent_id = parent_ref.get("id")
+                        if object_type == "sharepoint_file" and drive_id and parent_id:
+                            parent_id = _sharepoint_object_id(drive_id, parent_id)
 
                         # Build a logical path from parent path + drive name
                         raw_path = (parent_ref.get("path") or "").replace(
@@ -1037,7 +1060,11 @@ class CloudSyncService:
                             tenant_id,
                             provider="microsoft",
                             object_type=object_type,
-                            object_id=item["id"],
+                            object_id=(
+                                _sharepoint_object_id(drive_id, item["id"])
+                                if object_type == "sharepoint_file" and drive_id
+                                else item["id"]
+                            ),
                             title=name,
                             parent_id=parent_id,
                             path=path_segments,
@@ -1061,6 +1088,11 @@ class CloudSyncService:
 
 
 # ── Standalone helpers ──────────────────────────────────────────────────────
+
+
+def _sharepoint_object_id(drive_id: str, item_id: str) -> str:
+    """Store SharePoint metadata with a drive-qualified stable identity."""
+    return f"{drive_id}:{item_id}"
 
 
 def _parse_dt(dt_str: str | None) -> datetime | None:

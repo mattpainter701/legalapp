@@ -62,6 +62,12 @@ Directory sync requires an administrative directory that personal accounts do no
 
 Review [Integrations → Cloud](/admin?tab=integrations&integration=cloud) for connection state, and treat a directory sync error on a known personal-tier tenant as expected rather than actionable.
 
+## Sending matter email
+
+The matter's **Email Client** action uses the approving user's connected Microsoft or Google mailbox, then an available firm mailbox. SMTP is used only when the firm has no cloud-mail grant. An existing grant without send permission requires reconnection; a cloud-provider failure does not silently switch senders or retry through SMTP.
+
+Correspondence records failed attempts separately from messages whose delivery is unconfirmed. If delivery is unconfirmed, check the sending mailbox's Sent Items before sending again. The composer disables another send for that attempt because the provider may already have accepted it.
+
 ## Onboarding requirements
 
 Before a firm connects a provider, confirm:
@@ -77,7 +83,7 @@ Record the business owner, technical owner, granted scopes, and disconnect proce
 
 ## Matter folders and correspondence
 
-Matter folders retain the `claritylegal-records` root and use one canonical matter folder name that includes the matter identifier. Captured `.eml` messages are stored in the provisioned `correspondence` subfolder. Folder setup is tenant-owned cloud storage; LawHand does not silently create a second slug-only tree when provisioning is pending.
+Matter folders retain the `claritylegal-records` root and use one canonical matter folder name that includes the matter identifier. Captured `.eml` messages are stored in the provisioned `correspondence` subfolder. New captures retain the provider file and library identity so LawHand can reopen the archived message. Older captures missing that identity may need administrator reconciliation. Folder setup is tenant-owned cloud storage; LawHand does not silently create a second slug-only tree when provisioning is pending.
 
 For a read-only audit of realized matter bindings, an operator can run the repository maintenance report:
 
@@ -86,6 +92,14 @@ python scripts/audit_matter_cloud_folders.py <tenant-id>
 ```
 
 The report identifies matters with missing, provisioning, or duplicate provider bindings. It does not merge or delete folders.
+
+## Retrieval and calendar checks
+
+Matter chat requires a route approved for private matter data. Retrieval includes provisioned folders and exact cloud-file references for uploaded documents in custom folders. A bounded fallback can fetch a few authorized files when the requested fact appears only inside their content; it is not an exhaustive review of every document.
+
+New SharePoint metadata records identify both the library and item. After upgrading an older installation, use the matter’s **Sync folder** action to refresh legacy SharePoint metadata before relying on scoped retrieval.
+
+New scheduled events preserve the browser’s local time as an explicit instant and use the declared timezone for the provider. Open a scheduled event for its details, provider link, or delete action. A failed provider delete leaves the LawHand event available for review.
 
 ## Changing provider after onboarding
 

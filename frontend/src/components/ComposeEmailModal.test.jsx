@@ -64,4 +64,16 @@ describe('ComposeEmailModal delivery honesty', () => {
 
     expect(props.onSent).toHaveBeenCalledWith({ sent: true, id: 'communication-1' })
   })
+
+  it('prevents a blind retry when the provider may have accepted the message', async () => {
+    emailMatterClient.mockRejectedValueOnce({ response: {
+      status: 409, data: { detail: 'Delivery is unconfirmed. Check Sent Items before sending again.' },
+    } })
+    render(<ComposeEmailModal {...props} />)
+    await submitMessage()
+    expect(await screen.findByText(/delivery is unconfirmed/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    expect(props.onSent).not.toHaveBeenCalled()
+    expect(emailMatterClient).toHaveBeenCalledOnce()
+  })
 })

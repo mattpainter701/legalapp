@@ -11,6 +11,15 @@
 
 # Changelog
 
+## 2026.09.07.10 - Connected matter workflow corrections
+
+- Submit ZIP and folder import file/path payloads as multipart data; render Cloud Search fetch_content_results.
+- Scope live matter retrieval to provisioned folders and exact tenant/matter document references; never authorize siblings from a linked file. Use a bounded metadata fallback and bypass stale live-matter RAG caches. New SharePoint index item and parent identities include the drive; legacy unqualified rows require normal resync and are excluded from scoped fallback without purging unrelated metadata.
+- Preserve scheduled-event instants across browser and provider timezones with DST tests. Add event details, provider links, and delete controls; failed deletes retain the event and already-absent Microsoft events remain idempotent.
+- Route Email Client through the existing actor/firm Microsoft and Google mailbox delivery service; retain SMTP only when no cloud-mail grant exists. Restore tenant context after token refresh and record recipient/provider with the delivery outcome.
+- Preserve provider item, drive, parent, and backend identity on newly captured .eml records; restore tenant scope after token refresh. Capture/read regressions cover OneDrive, SharePoint, and Google Drive. Disconnected scans now give reconnection instructions.
+- Escape text in HTML email and label failed/unconfirmed correspondence. Prevent blind composer retries after an ambiguous provider outcome.
+
 ## 2026.09.07.9 - Word derived placeholder drafts
 
 - Convert explicitly confirmed Word source spans into literal placeholders in a new draft while retaining the immutable original upload and provenance chain.

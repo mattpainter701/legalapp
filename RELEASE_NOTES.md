@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.10 — Reliable connected matter workflows
+
+Released September 7, 2026.
+
+Import matter files, retrieve connected content, keep calendar times aligned, and send and reopen matter email.
+
+- **Import and find matter files.** ZIP and folder imports preserve their files and paths. Private matter retrieval includes uploaded files in custom folders, and Cloud Search displays fetched content.
+- **Keep calendar times aligned.** New scheduled events preserve the selected local time across LawHand and the connected calendar. Open event details, return to the provider, or delete the event from LawHand.
+- **Send and reopen matter email.** Matter email uses the connected mailbox. Newly captured messages retain their cloud identity so their archived .eml can be reopened.
+- **Review delivery outcomes.** Failed and unconfirmed attempts are labeled in correspondence. Unconfirmed delivery asks you to check Sent Items before sending again.
+
 ## 2026.09.07.9 — Turn reviewed Word spans into safe placeholders
 
 Released September 7, 2026.

@@ -1891,6 +1891,7 @@ async def _connected_source_query(
                         tenant_id=tenant_id,
                         user_id=user_id,
                         matter_cloud_folder=matter_cloud_folder,
+                        matter_id=matter_id,
                     )
                     if cloud_hits:
                         hits_with_content = await cloud_search_service.fetch_contents(
