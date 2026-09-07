@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.11",
+      "version": "2026.09.07.11",
+      "title": "More reliable Template Studio AI proposals",
+      "published_at": "2026-09-07",
+      "summary": "Premium AI field suggestions now reuse the completed local document analysis for the exact uploaded source.",
+      "highlights": [
+        {
+          "title": "Keep your reviewed scan",
+          "description": "Template Studio securely carries the completed local analysis into the optional Premium AI suggestion step, avoiding a duplicate document scan."
+        },
+        {
+          "title": "Keep source checks in place",
+          "description": "AI suggestions still require the same user, tenant, file name, and uploaded bytes. If the source changed, analyze it again before requesting suggestions."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.10",
       "version": "2026.09.07.10",
       "title": "Reliable connected matter workflows",
