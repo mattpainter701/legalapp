@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.15 — Reliable cloud folder retries
+
+Released September 7, 2026.
+
+Cloud setup can now lock and repair an unbound matter folder in PostgreSQL.
+
+- **Repair unbound matter folders.** Retry cloud setup now handles matters that do not yet have a cloud folder, including matters without a partner attorney.
+- **Keep retries moving.** Matter folder repair locks only the matter record, so a nullable relationship cannot stop the rest of the firm's setup.
+
 ## 2026.09.07.14 — Clearer document-first Template Studio
 
 Released September 7, 2026.

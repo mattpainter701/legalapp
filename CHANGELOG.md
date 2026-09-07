@@ -11,6 +11,11 @@
 
 # Changelog
 
+## 2026.09.07.15 - Matter cloud-folder lock repair
+
+- Override Matter's nullable joined partner-attorney relationship while selecting a row for cloud-folder repair, and lock only the Matter table. PostgreSQL can now initialize an unbound matter without rejecting `FOR UPDATE` on an outer join.
+- Add a PostgreSQL retry-route regression for a matter with no cloud folder and no partner attorney.
+
 ## 2026.09.07.14 - Document-first Studio import and clear test results
 
 - Start bounded, tenant-scoped DOCX page preview on file selection, before analysis or persistence; retain explicit Fields/failure fallback.
