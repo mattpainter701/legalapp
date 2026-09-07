@@ -1345,13 +1345,19 @@ def _flatten_with_overlays(
             x1, y1, x2, y2 = (float(item) for item in rect)
         except (TypeError, ValueError):
             raise TemplatePdfError("The stored PDF cover region is invalid.")
-        if (not all(math.isfinite(value) for value in (x1, y1, x2, y2))
-                or page_index < 0 or page_index >= len(reader.pages)
-                or x2 <= x1 or y2 <= y1):
+        if (
+            not all(math.isfinite(value) for value in (x1, y1, x2, y2))
+            or page_index < 0
+            or page_index >= len(reader.pages)
+            or x2 <= x1
+            or y2 <= y1
+        ):
             raise TemplatePdfError("The stored PDF cover region is invalid.")
         media = reader.pages[page_index].mediabox
         if float(media.left) != 0 or float(media.bottom) != 0:
-            raise TemplatePdfError("The stored PDF cover region uses an unsupported page origin.")
+            raise TemplatePdfError(
+                "The stored PDF cover region uses an unsupported page origin."
+            )
         covers_by_page.setdefault(page_index, []).append({"rect": [x1, y1, x2, y2]})
 
     has_ocr_overlays = any(
@@ -1364,7 +1370,9 @@ def _flatten_with_overlays(
     else:
         _redact_static_overlay_sources(reader, static_by_page)
 
-    for page_index in sorted(set(widgets_by_page) | set(static_by_page) | set(covers_by_page)):
+    for page_index in sorted(
+        set(widgets_by_page) | set(static_by_page) | set(covers_by_page)
+    ):
         widgets = widgets_by_page.get(page_index, [])
         page = reader.pages[page_index]
         raw_fields = reader.get_fields() or {}
@@ -1375,8 +1383,15 @@ def _flatten_with_overlays(
         for region in covers_by_page.get(page_index, []):
             x1, y1, x2, y2 = region["rect"]
             left, bottom = min(x1, x2), min(y1, y2)
-            if left < 0 or bottom < 0 or left + abs(x2 - x1) > width + 1 or bottom + abs(y2 - y1) > height + 1:
-                raise TemplatePdfError("The stored PDF cover region falls outside its page.")
+            if (
+                left < 0
+                or bottom < 0
+                or left + abs(x2 - x1) > width + 1
+                or bottom + abs(y2 - y1) > height + 1
+            ):
+                raise TemplatePdfError(
+                    "The stored PDF cover region falls outside its page."
+                )
             overlay.setFillColorRGB(1, 1, 1)
             overlay.rect(left, bottom, abs(x2 - x1), abs(y2 - y1), stroke=0, fill=1)
         for widget in widgets:
@@ -1611,7 +1626,9 @@ def fill_pdf_template(
             if isinstance(field, dict)
             and (field.get("pdf_overlay") or field.get("pdf_overlays"))
         ]
-        if (not overlay_fields and not cover_regions) or len(overlay_fields) != len(schema_fields):
+        if (not overlay_fields and not cover_regions) or len(overlay_fields) != len(
+            schema_fields
+        ):
             raise TemplatePdfError(
                 "This ordinary PDF has no reviewed text-overlay fields. Re-upload it and review the detected locations before generating."
             )
