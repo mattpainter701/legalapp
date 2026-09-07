@@ -1,5 +1,6 @@
 """Plan, reconcile, and explicitly cut over cloud-provider bindings."""
 
+import os
 import re
 import uuid
 from datetime import datetime, timezone
@@ -23,6 +24,19 @@ ID_SUFFIX = re.compile(r"\(([0-9a-fA-F]{8})\)\s*$")
 
 def _text(value: Any) -> str:
     return str(value or "").strip().lower().replace("\\", "/").strip("/")
+
+
+def _document_names(doc) -> set[str]:
+    """Match displayed names and the portal's collision-safe physical name."""
+    names = {_text(doc.filename)}
+    try:
+        identity = uuid.UUID(str(doc.id)).hex
+    except (TypeError, ValueError):
+        return names
+    stem, extension = os.path.splitext(doc.filename)
+    stored_stem = stem.encode("utf-8")[:180].decode("utf-8", errors="ignore")
+    names.add(_text(f"{identity}_{stored_stem}{extension}"))
+    return names
 
 
 def _matter_folder(matter: Matter, provider: str) -> dict:
@@ -360,7 +374,7 @@ class StorageMigrationService:
                     i
                     for i in children
                     if (not sha or not i.get("sha256"))
-                    and _text(i.get("name")) == _text(doc.filename)
+                    and _text(i.get("name")) in _document_names(doc)
                     and doc.file_size is not None
                     and i.get("size") is not None
                     and int(i.get("size")) == int(doc.file_size)

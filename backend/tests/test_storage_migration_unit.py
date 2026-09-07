@@ -131,3 +131,19 @@ async def test_google_discovery_paginates_and_attaches_marker(monkeypatch):
     folder = next(item for item in result if item["id"] == "folder")
     assert folder["marker"]["matter_id"] == "m1"
     assert any("pageToken=next" in call for call in calls)
+
+@pytest.mark.asyncio
+async def test_portal_import_physical_filename_matches_without_provider_sha():
+    from unittest.mock import AsyncMock, Mock
+    import uuid
+    doc_id = uuid.UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+    doc = SimpleNamespace(id=doc_id, storage_backend='google_drive', document_sha256='a'*64, provider_checksum=None, provider_object_id='source-file', provider_drive_id=None, provider_parent_id='source-folder', provider_etag=None, provider_version_id=None, filename='Client statement.pdf', file_size=42)
+    db = Mock(execute=AsyncMock(return_value=Mock(scalars=Mock(return_value=Mock(all=Mock(return_value=[doc]))))), add=Mock())
+    migration = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4(), source_provider='google_drive')
+    matter = SimpleNamespace(id=uuid.uuid4())
+    counts = {'matched':0, 'missing':0, 'ambiguous':0}
+    await StorageMigrationService()._reconcile_documents(db, migration, matter, {'id':'target-folder'}, [{'id':'target-file', 'name':f'{doc_id.hex}_Client statement.pdf', 'parent_id':'target-folder', 'is_folder':False, 'size':42}], counts)
+    assert counts == {'matched':1, 'missing':0, 'ambiguous':0}
+    match = db.add.call_args.args[0]
+    assert match.matching_rung == 'filename_size'
+    assert match.target_ref['id'] == 'target-file'
