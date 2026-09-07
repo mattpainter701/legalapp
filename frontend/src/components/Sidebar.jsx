@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { X, User, Lock, LogOut, PanelLeftClose, PanelLeftOpen, Settings } from 'lucide-react'
-import { NAV_GROUPS, visibleNavigation, availableNavigation } from '../navigation'
+import { NAV_GROUPS, visibleNavigation, availableNavigation, isNavigationActive } from '../navigation'
 import NavigationEditor from './NavigationEditor'
 import UpgradeModal from './UpgradeModal'
 import LawHandLogo from './LawHandLogo'
@@ -84,10 +84,7 @@ export default function Sidebar({
   }, [isMobile, isOpen])
 
 
-  const isActive = (path) => {
-    if (path === '/intake') return pathname === '/intake'
-    return pathname === path || pathname.startsWith(path + '/')
-  }
+  const isActive = (path) => isNavigationActive(path, pathname)
 
   const handleNavAndClose = (path) => {
     navigate(path)

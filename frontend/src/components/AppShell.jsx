@@ -3,7 +3,7 @@ import { reportError } from '../utils/reportError'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
 import Sidebar from './Sidebar'
-import { visibleNavigation, mobileNavigation } from '../navigation'
+import { visibleNavigation, mobileNavigation, isNavigationActive } from '../navigation'
 import BillingStatusBanner from './BillingStatusBanner'
 import { getConversations, createConversation, deleteConversation, getDocuments, deleteDocument, logout, updateMe } from '../api'
 import { canAccessModuleList } from '../moduleAccess'
@@ -74,7 +74,7 @@ export default function AppShell({ children, title }) {
   const shouldLoadChatData = pathname === '/chat' && canSeeModule('chat')
 
   const isActiveRoute = useCallback((path) => (
-    pathname === path || pathname.startsWith(path + '/')
+    isNavigationActive(path, pathname)
   ), [pathname])
 
   const handleShellNavigate = useCallback((path) => {

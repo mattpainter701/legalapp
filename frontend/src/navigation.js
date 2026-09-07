@@ -60,6 +60,11 @@ const attorney = ['/matters', '/chat', '/firm-memory', '/calendar', '/tasks', '/
 const finance = ['/invoices', '/trust', '/reports', '/time-tracking', '/clients', '/tasks', '/calendar']
 export const VIEW_PRESETS = { Receptionist: receptionist, Finance: finance, Secretary: secretary, Paralegal: paralegal, Attorney: attorney, Partner: [...attorney, '/invoices', '/trust', '/reports'] }
 
+export function isNavigationActive(path, pathname) {
+  if (path === '/intake') return pathname === path
+  return pathname === path || pathname.startsWith(path + '/')
+}
+
 export function availableNavigation(user) {
   return NAV_ITEMS.filter((item) => {
     if (!canAccessModuleList(user?.enabled_modules, item.module)) return false

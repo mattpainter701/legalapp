@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { availableNavigation, visibleNavigation, VIEW_PRESETS, NAV_ITEMS } from './navigation'
+import { availableNavigation, visibleNavigation, mobileNavigation, isNavigationActive, VIEW_PRESETS, NAV_ITEMS } from './navigation'
 
 const user = { role: 'user', enabled_modules: NAV_ITEMS.map((item) => item.module) }
 describe('role and personal navigation', () => {
+  it('highlights only Call Intake when both intake functions are shown on a phone', () => {
+    const items = mobileNavigation({ ...user, navigation_paths: ['/intake', '/intake/dashboard'] })
+    expect(items.filter((item) => isNavigationActive(item.path, '/intake/dashboard')).map((item) => item.path)).toEqual(['/intake/dashboard'])
+    expect(isNavigationActive('/intake', '/intake')).toBe(true)
+    expect(isNavigationActive('/matters', '/matters/123')).toBe(true)
+    expect(mobileNavigation(user).map((item) => item.path)).toEqual(['/intake/dashboard', '/matters', '/chat', '/calendar', '/tasks'])
+  })
   it('gives reception only its six requested functions', () => {
     const items = availableNavigation({ ...user, navigation_paths: VIEW_PRESETS.Receptionist })
     expect(items.map((item) => item.path).sort()).toEqual([...VIEW_PRESETS.Receptionist].sort())
