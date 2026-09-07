@@ -23,6 +23,7 @@ import {
 
 import { getTemplateBindings } from '../../api'
 import DocxDocumentView from './DocxDocumentView'
+import WordDocumentPreview from './WordDocumentPreview'
 import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocumentCanvas'
 import {
   MIN_FIELD_SIZE,
@@ -489,6 +490,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
       <div className={`grid gap-0 ${pdfSource ? 'lg:grid-cols-[168px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
         {!pdfSource && isDocx && (
+          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256}>
           <DocxDocumentView
             templateId={template.id}
             fields={fields}
@@ -513,6 +515,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
             onCreateRegion={addRegion}
             onRemoveRegion={removeRegion}
           />
+          </WordDocumentPreview>
         )}
         {!pdfSource && !isDocx && (
           <div className="max-h-[70vh] overflow-y-auto p-5">

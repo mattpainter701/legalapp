@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import os
 import shutil
+import signal
 import tempfile
 from pathlib import Path
 
@@ -22,6 +24,19 @@ from app.services.docx_templates import TemplateDocxError, validate_docx_package
 
 class DocxToPdfError(RuntimeError):
     """A sanitized conversion or output-validation failure."""
+
+
+def _kill_converter(process) -> None:
+    # The launcher can spawn soffice.bin. start_new_session=True gives this
+    # conversion its own process group on the production Linux worker.
+    kill_group = getattr(os, "killpg", None)
+    try:
+        if kill_group and getattr(process, "pid", None):
+            kill_group(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+    except ProcessLookupError:
+        pass  # Already exited; communicate below still reaps it.
 
 
 async def docx_to_pdf_bytes(
@@ -92,9 +107,11 @@ async def docx_to_pdf_bytes(
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=timeout_seconds
             )
-        except TimeoutError as exc:
-            process.kill()
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            _kill_converter(process)
             await process.communicate()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             raise DocxToPdfError("Word-to-PDF conversion timed out.") from exc
         if process.returncode != 0:
             # Converter output can contain customer filenames and host paths;
