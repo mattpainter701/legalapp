@@ -10,7 +10,7 @@ ordering or implementation suggestions.
 
 | Workstream | Current ownership / decision |
 | --- | --- |
-| Page-accurate Word source view | First slice in `feat/template-studio-page-preview`; see [source preview](template-studio-source-preview.md). Uses bounded process cache instead of persistent disk cache. |
+| Page-accurate Word source view | First slice in `feat/template-studio-page-preview`; see [source preview](mcp/template-studio-source-preview.md). Uses bounded process cache instead of persistent disk cache. |
 | Richer text view | Largely delivered by #352; preserve its tables, numbering, emphasis, selection fixes and source-review controls. Do not rebuild. |
 | White-out toggle / eraser | Still pending. Underlying PDF painting already exists. A cover is not permanent redaction: original PDF text may remain extractable. |
 | Signature fields to e-sign tabs | Still pending. Positions must bind to the exact generated PDF digest and signer identity, not the DOCX source preview. |
