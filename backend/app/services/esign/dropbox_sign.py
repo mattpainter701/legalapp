@@ -7,9 +7,9 @@ authenticated webhook reconciler.
 
 import hashlib
 import json
-import httpx  # pragma: no cover - provider integration module
+import httpx
 
-from app.config import get_settings  # pragma: no cover - provider integration module
+from app.config import get_settings
 
 from app.services.esign.base import ESignProvider
 from app.services.esign.placement import (
@@ -23,9 +23,7 @@ from app.services.esign.placement import (
 class DropboxSignProvider(ESignProvider):
     name = "dropbox_sign"
 
-    async def send(
-        self, request
-    ) -> str | None:  # pragma: no cover - provider integration
+    async def send(self, request) -> str | None:
         settings = get_settings()
         if not settings.DROPBOX_SIGN_API_KEY:
             raise RuntimeError("Dropbox Sign is not configured")
@@ -62,7 +60,7 @@ class DropboxSignProvider(ESignProvider):
             except PlacementError as exc:
                 raise RuntimeError(str(exc)) from exc
         role_to_index = {
-            (signer.role or "signer").strip(): index
+            ((signer.role or "signer").strip() or "signer"): index
             for index, signer in enumerate(signers)
         }
         if validated:

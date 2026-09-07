@@ -106,3 +106,14 @@ async def test_dropbox_payload_contains_role_bound_positioned_form_field(
     request.positioned_fields[0]["source_sha256"] = "a" * 64
     with pytest.raises(RuntimeError, match="stale"):
         await dropbox.DropboxSignProvider().send(request)
+
+
+@pytest.mark.asyncio
+async def test_internal_provider_rejects_positioned_tabs_but_keeps_legacy_flow():
+    from app.services.esign.internal import InternalProvider
+
+    assert await InternalProvider().send(SimpleNamespace()) is None
+    with pytest.raises(RuntimeError, match="does not support positioned"):
+        await InternalProvider().send(
+            SimpleNamespace(positioned_fields=[{"field_id": "sig"}])
+        )
