@@ -3596,7 +3596,10 @@ async def update_template(
                 or field.get("pdf_overlays")
             )
         }
-        if not mapped_variables:
+        if not mapped_variables and not (
+            isinstance(updates["variable_schema"].get("cover_regions"), list)
+            and updates["variable_schema"].get("cover_regions")
+        ):
             raise HTTPException(
                 status_code=422,
                 detail=(
