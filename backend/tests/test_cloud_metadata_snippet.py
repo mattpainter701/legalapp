@@ -6,7 +6,10 @@ from app.services.cloud_sync import CloudSyncService
 
 
 def test_cloud_metadata_snippet_column_is_bounded():
-    assert CloudMetadata.__table__.c.snippet.type.length == 500
+    from sqlalchemy import CheckConstraint, Text
+    assert isinstance(CloudMetadata.__table__.c.snippet.type, Text)
+    constraints = [c for c in CloudMetadata.__table__.constraints if isinstance(c, CheckConstraint)]
+    assert any(c.name == "ck_cloud_metadata_snippet_length" and "char_length(snippet) <= 500" in str(c.sqltext) for c in constraints)
 
 
 @pytest.mark.asyncio

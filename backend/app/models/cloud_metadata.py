@@ -3,7 +3,14 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +27,10 @@ class CloudMetadata(Base):
 
     __tablename__ = "cloud_metadata_index"
     __table_args__ = (
+        CheckConstraint(
+            "snippet IS NULL OR char_length(snippet) <= 500",
+            name="ck_cloud_metadata_snippet_length",
+        ),
         UniqueConstraint(
             "tenant_id",
             "provider",
@@ -56,7 +67,7 @@ class CloudMetadata(Base):
         nullable=True,
     )
     mime_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    snippet: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     web_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     sync_cursor: Mapped[str | None] = mapped_column(Text, nullable=True)

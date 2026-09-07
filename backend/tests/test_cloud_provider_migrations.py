@@ -40,6 +40,9 @@ def test_tier_migration_clips_legacy_preview_in_offline_sql():
     sql = _render("160_cloud_provider_tiers")
     assert "left(snippet, 500)" in sql
     assert "account_type" in sql
+    assert "where char_length(snippet) > 500" in sql
+    assert "check (snippet is null or char_length(snippet) <= 500)" in sql
+    assert "alter column snippet type" not in sql
 
 
 def test_alias_migration_has_rls_and_read_only_verified_lookup():

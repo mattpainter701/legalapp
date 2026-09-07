@@ -280,3 +280,8 @@ Local validation covers provider transport behavior, aliases and tier detection,
 provisioning and upload races, reconciliation and cutover, retryable indexing,
 offline migration upgrade/downgrade SQL and the admin UI. PostgreSQL lifecycle
 checks and the complete required CI gate remain required before merge.
+
+The preview cap uses an additive `char_length(snippet) <= 500` database check
+with a scoped cleanup of legacy oversized previews. It preserves the existing
+TEXT type for rolling-release compatibility and passes the tenant migration
+safety gate without an in-place type change.

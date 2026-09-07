@@ -588,6 +588,11 @@ class StorageMigrationService:
             doc.provider_checksum = target.get("sha256")
             doc.provider_etag = target.get("etag")
             doc.provider_version_id = target.get("version_id")
+            doc.provider_modified_at = (
+                datetime.fromisoformat(target["modified_time"].replace("Z", "+00:00"))
+                if target.get("modified_time")
+                else None
+            )
             doc.storage_path = target.get("url")
         for row in matter_rows.values():
             if row.bucket != "matched" or not row.target_ref:
