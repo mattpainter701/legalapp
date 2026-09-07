@@ -288,6 +288,24 @@ def test_reviewed_manual_field_requires_signed_page_metadata():
         )
 
 
+def test_reviewed_schema_accepts_value_less_pdf_cover_regions():
+    discovered = {
+        "version": 1,
+        "pages": [{"page": 1, "width": 612, "height": 792, "rotation": 0}],
+        "fields": [],
+    }
+    validated = document_templates._reviewed_variable_schema(
+        json.dumps({"fields": [], "cover_regions": [{"page": 1, "rect": [10, 700, 200, 724]}]}),
+        discovered,
+    )
+    assert validated["cover_regions"] == [{
+        "page": 1,
+        "rect": [10.0, 700.0, 200.0, 724.0],
+        "source_kind": "manual",
+        "erase_source": True,
+    }]
+
+
 def test_mixed_pdf_renderer_fills_acroform_and_ocr_overlay_together():
     from io import BytesIO
 

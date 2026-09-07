@@ -1340,7 +1340,9 @@ def _flatten_with_overlays(
             x1, y1, x2, y2 = (float(item) for item in rect)
         except (TypeError, ValueError):
             raise TemplatePdfError("The stored PDF cover region is invalid.")
-        if page_index < 0 or page_index >= len(reader.pages) or x2 <= x1 or y2 <= y1:
+        if (not all(math.isfinite(value) for value in (x1, y1, x2, y2))
+                or page_index < 0 or page_index >= len(reader.pages)
+                or x2 <= x1 or y2 <= y1):
             raise TemplatePdfError("The stored PDF cover region is invalid.")
         covers_by_page.setdefault(page_index, []).append({"rect": [x1, y1, x2, y2]})
 
@@ -1592,6 +1594,8 @@ def fill_pdf_template(
     reader, discovered_fields = _inspect_pdf_template(content)
     schema_fields = (variable_schema or {}).get("fields") or []
     cover_regions = (variable_schema or {}).get("cover_regions") or []
+    if cover_regions and not flatten:
+        raise TemplatePdfError("PDF cover regions require a flattened generated PDF.")
     if not discovered_fields:
         overlay_fields = [
             field

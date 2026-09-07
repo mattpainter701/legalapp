@@ -243,7 +243,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     setFields(nextFields)
     setDirty(true)
     setSaveError('')
-  }, [fields, regions, sourceReview])
+  }, [fields, regions, coverRegions, sourceReview])
 
   const undo = () => {
     const previous = undoStack.current.at(-1)
@@ -621,10 +621,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 `Page ${pageNumber} could not be rendered. (${error?.message || 'Preview unavailable'})`,
               )}
             />
-            {coverRegions.filter((region) => Number(region.page) === pageNumber).map((region, index) => {
+            {coverRegions.map((region, index) => Number(region.page) === pageNumber ? (() => {
               const geometry = overlayToCanvasRect(region, page, pdfSource ? viewport : null, pdfSource ? 1 : zoom)
-              return <Rnd key={`cover:${index}`} bounds="parent" size={{ width: geometry.width, height: geometry.height }} position={{ x: geometry.x, y: geometry.y }} minWidth={MIN_FIELD_SIZE} minHeight={MIN_FIELD_SIZE} onDragStop={(_, data) => updateCoverRegion(index, { ...geometry, x: data.x, y: data.y })} onResizeStop={(_, __, ref, ___, position) => updateCoverRegion(index, { x: position.x, y: position.y, width: ref.offsetWidth, height: ref.offsetHeight })} className="rounded-sm border-2 border-slate-700 bg-white/90 cursor-move"><button type="button" aria-label="Remove cover region" onClick={() => removeCoverRegion(index)} className="h-full w-full text-[10px] font-semibold text-slate-700">Cover</button></Rnd>
-            })}
+              return <Rnd key={`cover:${index}`} bounds="parent" size={{ width: geometry.width, height: geometry.height }} position={{ x: geometry.x, y: geometry.y }} minWidth={MIN_FIELD_SIZE} minHeight={MIN_FIELD_SIZE} onDragStop={(_, data) => updateCoverRegion(index, { ...geometry, x: data.x, y: data.y })} onResizeStop={(_, __, ref, ___, position) => updateCoverRegion(index, { x: position.x, y: position.y, width: ref.offsetWidth, height: ref.offsetHeight })} className="rounded-sm border-2 border-slate-700 bg-white/90 cursor-move"><span className="pointer-events-none text-[10px] font-semibold text-slate-700">Cover</span><button type="button" aria-label="Remove cover region" onClick={(event) => { event.stopPropagation(); removeCoverRegion(index) }} className="absolute right-0 top-0 bg-slate-700 px-1 text-[10px] text-white">×</button></Rnd>
+            })() : null)}
             {visiblePlacements.map(({ entry, overlay, index }) => {
               const rect = overlayToCanvasRect(
                 overlay,
