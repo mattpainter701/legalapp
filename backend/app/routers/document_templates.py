@@ -2804,18 +2804,22 @@ async def create_template_from_sample(
     # canvas can still add valid manual overlays. Validate the final reviewed
     # contract, rather than rejecting the source before the user's edits are
     # considered.
-    if analysis.format == "pdf" and not (
-        isinstance(reviewed_schema.get("cover_regions"), list)
-        and reviewed_schema.get("cover_regions")
-    ) and not any(
-        isinstance(field, dict)
-        and field.get("included", True) is True
-        and (
-            field.get("pdf_field_name")
-            or field.get("pdf_overlay")
-            or field.get("pdf_overlays")
+    if (
+        analysis.format == "pdf"
+        and not (
+            isinstance(reviewed_schema.get("cover_regions"), list)
+            and reviewed_schema.get("cover_regions")
         )
-        for field in (reviewed_schema.get("fields") or [])
+        and not any(
+            isinstance(field, dict)
+            and field.get("included", True) is True
+            and (
+                field.get("pdf_field_name")
+                or field.get("pdf_overlay")
+                or field.get("pdf_overlays")
+            )
+            for field in (reviewed_schema.get("fields") or [])
+        )
     ):
         raise HTTPException(
             status_code=422,
