@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.12",
+      "version": "2026.09.07.12",
+      "title": "Keep calendar events at the time you chose",
+      "published_at": "2026-09-07",
+      "summary": "Scheduled events retain the chosen local time in Microsoft and Google Calendar, including across daylight-saving changes.",
+      "highlights": [
+        {
+          "title": "Keep appointments in sync",
+          "description": "New and moved events retain their selected local time when LawHand creates an event in Microsoft or Google Calendar."
+        },
+        {
+          "title": "Remove scheduled events from one place",
+          "description": "Open a LawHand-created event to review it, join its meeting, or delete the LawHand and connected-calendar copies together."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.5",
       "version": "2026.09.07.5",
       "title": "Prepare reusable Word templates with clearer source review",

@@ -1,5 +1,6 @@
 import logging
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import select
@@ -14,6 +15,24 @@ logger = logging.getLogger(__name__)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 GOOGLE_CAL_BASE = "https://www.googleapis.com/calendar/v3"
+
+
+def _provider_local_datetime(value: datetime, timezone_name: str) -> str:
+    """Return the wall-clock value required by calendar-provider APIs.
+
+    Microsoft Graph and Google Calendar pair a timezone-less ``dateTime`` with a
+    separate IANA ``timeZone`` value. Passing an ISO string with a UTC offset
+    as well as a timezone can make the provider interpret the instant and the
+    wall-clock value differently. Scheduled events are stored as instants, so
+    convert them back to the requested local wall-clock time at this boundary.
+    """
+    if value.tzinfo is None:
+        # Preserve the legacy API contract for callers that supplied a local
+        # wall-clock value without an offset.
+        return value.isoformat()
+    return value.astimezone(ZoneInfo(timezone_name or "UTC")).replace(
+        tzinfo=None
+    ).isoformat()
 
 
 class CalendarSyncService:
@@ -176,11 +195,11 @@ class CalendarSyncService:
         event = {
             "subject": subject,
             "start": {
-                "dateTime": start_dt.isoformat(),
+                "dateTime": _provider_local_datetime(start_dt, timezone_name),
                 "timeZone": timezone_name or "UTC",
             },
             "end": {
-                "dateTime": end_dt.isoformat(),
+                "dateTime": _provider_local_datetime(end_dt, timezone_name),
                 "timeZone": timezone_name or "UTC",
             },
         }
@@ -378,11 +397,11 @@ class CalendarSyncService:
         event = {
             "summary": subject,
             "start": {
-                "dateTime": start_dt.isoformat(),
+                "dateTime": _provider_local_datetime(start_dt, timezone_name),
                 "timeZone": timezone_name or "UTC",
             },
             "end": {
-                "dateTime": end_dt.isoformat(),
+                "dateTime": _provider_local_datetime(end_dt, timezone_name),
                 "timeZone": timezone_name or "UTC",
             },
         }

@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.12 — Keep calendar events at the time you chose
+
+Released September 7, 2026.
+
+Scheduled events retain the chosen local time in Microsoft and Google Calendar, including across daylight-saving changes.
+
+- **Keep appointments in sync.** New and moved events retain their selected local time when LawHand creates an event in Microsoft or Google Calendar.
+- **Remove scheduled events from one place.** Open a LawHand-created event to review it, join its meeting, or delete the LawHand and connected-calendar copies together.
+
 ## 2026.09.07.5 — Prepare reusable Word templates with clearer source review
 
 Released September 7, 2026.

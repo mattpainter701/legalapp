@@ -6,6 +6,78 @@ import pytest
 from app.models.user_oauth_token import UserOAuthToken
 
 
+def test_scheduled_event_rejects_unknown_iana_timezone():
+    from app.schemas.calendar import ScheduledEventCreate
+
+    with pytest.raises(ValueError, match="valid IANA timezone"):
+        ScheduledEventCreate(
+            title="Timezone validation",
+            start_at="2026-09-07T08:30:00-05:00",
+            end_at="2026-09-07T09:00:00-05:00",
+            timezone="Central Time",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("instant", "expected_local"),
+    [
+        # America/Chicago changes from CST to CDT at 02:00 on this date.
+        (datetime(2026, 3, 8, 13, 30, tzinfo=timezone.utc), "2026-03-08T08:30:00"),
+        # It changes back to CST at 02:00 on this date.
+        (datetime(2026, 11, 1, 14, 30, tzinfo=timezone.utc), "2026-11-01T08:30:00"),
+    ],
+)
+async def test_scheduled_microsoft_event_uses_local_wall_time_for_provider(
+    monkeypatch, instant, expected_local
+):
+    """An offset-bearing stored instant must not be sent to Graph with its offset."""
+    from app.services import calendar_sync as calendar_sync_module
+
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 201
+
+        def json(self):
+            return {"id": "provider-event"}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            captured.update(kwargs["json"])
+            return FakeResponse()
+
+    async def fake_token(*args, **kwargs):
+        return "token"
+
+    monkeypatch.setattr(calendar_sync_module, "get_fresh_user_token", fake_token)
+    monkeypatch.setattr(calendar_sync_module.httpx, "AsyncClient", FakeClient)
+
+    await calendar_sync_module.CalendarSyncService().ms_create_scheduled_event(
+        None,
+        "tenant-id",
+        "user-id",
+        subject="Timezone boundary",
+        start_dt=instant,
+        end_dt=instant + timedelta(minutes=30),
+        timezone_name="America/Chicago",
+    )
+
+    assert captured["start"] == {
+        "dateTime": expected_local,
+        "timeZone": "America/Chicago",
+    }
+    assert captured["end"]["dateTime"] == (
+        datetime.fromisoformat(expected_local) + timedelta(minutes=30)
+    ).isoformat()
+
+
 @pytest.mark.asyncio
 async def test_calendar_sync_provider_auth_failure_is_not_app_401(client, monkeypatch):
     from app.routers import calendar as calendar_router

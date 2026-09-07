@@ -11,6 +11,11 @@
 
 # Changelog
 
+## 2026.09.07.12
+
+- Serialize scheduled-event instants as local wall-clock values plus their IANA timezone when creating Microsoft and Google Calendar events. The calendar form now submits an offset-bearing instant, and DST boundary coverage protects new and drag-moved events from time shifts.
+- Open firm-created scheduled events in LawHand for event details, meeting joining and a single delete action that removes the local record and connected-calendar event. Provider-side Microsoft `404` deletes remain idempotent.
+
 ## 2026.09.07.5
 
 - Add the searchable Field Library using existing built-in and tenant custom definitions, distinct current-template counts, paginated usage and Studio links. Document explicit Word placeholder conventions and the difference between shared data sources and template-local value links.
