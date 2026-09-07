@@ -537,7 +537,9 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       const result = await proposeTemplateFieldsWithAi(form)
       if (analysisRequestRef.current !== requestId) return
       const proposals = result?.suggested_variable_schema?.fields || []
-      setAnalysis(result)
+      // The proposal token proves this is the same uploaded source. Preserve
+      // its local paragraph geometry even when an AI response omits it.
+      setAnalysis({ ...result, source_paragraphs: analysis.source_paragraphs })
       setDraftBody(result.body || result.extracted_text || '')
       setMappedFields(proposals.map((field) => ({ ...field, _bodyName: field.name })))
       setReviewConfirmed(false)

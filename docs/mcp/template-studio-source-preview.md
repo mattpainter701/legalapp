@@ -37,6 +37,12 @@ click one to edit its name, type or automation key beside the document. Matching
 occurrences in an upload share the same replacement value, as disclosed in the
 selection editor. No upload is persisted just to show a preview.
 
+DOCX analysis includes ephemeral `source_paragraphs` (Word ordinal and text),
+so detected blanks and choices can be boxed before the first save. The metadata
+uses the existing bounded outline and is omitted if truncated or over 20,000
+characters. Local paragraph context survives the optional AI proposal response;
+it is not added to the saved variable schema.
+
 For saved Word documents, selections resolve to an exact, unique source paragraph
 and Unicode character span. Anchored field boxes require unique paragraph context
 and matching source text. Repeated/ambiguous text, incomplete outlines and fields

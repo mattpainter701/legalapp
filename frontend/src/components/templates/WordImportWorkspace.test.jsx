@@ -2,7 +2,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import WordImportWorkspace from './WordImportWorkspace'
 
-vi.mock('./WordDocumentPreview', () => ({ default: ({ file, children }) => <div><span>Preview: {file.name}</span>{children}</div> }))
+const preview = vi.hoisted(() => ({ props: null }))
+vi.mock('./WordDocumentPreview', () => ({ default: props => { preview.props = props; return <div><span>Preview: {props.file.name}</span>{props.children}</div> } }))
 vi.mock('../../api', () => ({ previewWordUpload: vi.fn() }))
 afterEach(cleanup)
 const file = new File(['word'], 'sample.docx')
@@ -11,6 +12,13 @@ it('shows the upload while detection is still running', () => {
   render(<WordImportWorkspace file={file} fields={[]} />)
   expect(screen.getByText('Preview: sample.docx')).toBeVisible()
   expect(screen.getByText('Rendering the document and detecting fields…')).toBeVisible()
+})
+it('supplies the analyzer’s original paragraph context for anchored blank boxes', () => {
+  const paragraphs = [{ ordinal: 2, text: 'Client signature: ___' }]
+  const fields = [{ name: 'signature', source_text: '___', docx_anchor: { paragraph_ordinal: 2, start: 18, end: 21 } }]
+  render(<WordImportWorkspace file={file} fields={fields} analysis={{ source_paragraphs: paragraphs }} />)
+  expect(preview.props.paragraphs).toEqual(paragraphs)
+  expect(preview.props.fields).toEqual(fields)
 })
 it('makes a real source text selection into a field without saving the template first', () => {
   const add = vi.fn()
