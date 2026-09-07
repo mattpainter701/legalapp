@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import set_tenant_context
 from app.models.cloud_metadata import CloudMetadata
+from app.services.matter_cloud_scope import load_matter_document_cloud_scope
 from app.models.storage_migration import StorageMigration
 from app.models.tenant import Tenant
 from app.services.token_vault import get_fresh_token, get_fresh_user_token
@@ -142,12 +143,14 @@ class CloudSyncService:
         tenant_id: str,
         matter_cloud_folder: dict | None,
         user_id: str | None = None,
+        matter_id: str | None = None,
     ) -> dict:
-        """Sync only the folders mapped to one matter.
+        """Sync only folders authorized by one matter.
 
         This powers the per-matter "Sync folder" action. It intentionally avoids
-        tenant-wide mail and root-folder scans; scheduler/admin jobs still use
-        ``sync_all``.
+        tenant-wide mail and root-folder scans.  Alongside provisioned mappings,
+        it includes the bounded durable parent IDs of this matter's uploads;
+        scheduler/admin jobs still use ``sync_all``.
         """
         await set_tenant_context(db, tenant_id)
 
@@ -181,7 +184,14 @@ class CloudSyncService:
                 },
             }
 
-        google_folder_ids = _matter_folder_ids(cloud_folder, "google_drive")
+        document_scope = await load_matter_document_cloud_scope(
+            db, tenant_id=tenant_id, matter_id=matter_id
+        )
+
+        google_folder_ids = _dedupe(
+            _matter_folder_ids(cloud_folder, "google_drive")
+            + document_scope.folder_ids.get("google_drive", [])
+        )
         if google_folder_ids:
             try:
                 result["google"]["files"] = await self.sync_google_drive_folders(
@@ -194,7 +204,10 @@ class CloudSyncService:
                     exc,
                 )
 
-        onedrive_folder_ids = _matter_folder_ids(cloud_folder, "onedrive")
+        onedrive_folder_ids = _dedupe(
+            _matter_folder_ids(cloud_folder, "onedrive")
+            + document_scope.folder_ids.get("onedrive", [])
+        )
         if onedrive_folder_ids:
             try:
                 result["microsoft"]["files"] += await self.sync_onedrive_folders(
@@ -207,7 +220,12 @@ class CloudSyncService:
                     exc,
                 )
 
-        sharepoint_refs = _sharepoint_folder_refs(cloud_folder)
+        sharepoint_refs = list(
+            dict.fromkeys(
+                _sharepoint_folder_refs(cloud_folder)
+                + document_scope.sharepoint_folder_refs
+            )
+        )
         if sharepoint_refs:
             try:
                 result["microsoft"]["files"] += await self.sync_sharepoint_folders(

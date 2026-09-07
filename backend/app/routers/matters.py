@@ -2917,6 +2917,7 @@ async def sync_matter_cloud_folder(
         tenant_id_str,
         matter.cloud_folder,
         user_id=str(current_user.id),
+        matter_id=str(matter.id),
     )
     files = await _build_matter_cloud_files_response(
         db, tenant_id, current_user.id, matter

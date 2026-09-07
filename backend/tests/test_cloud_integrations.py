@@ -25,6 +25,7 @@ from app.services.cloud_sync import (
     _sharepoint_folder_refs,
     CloudSyncService,
 )
+from app.services.matter_cloud_scope import MatterCloudDocumentScope
 from app.services.rag import build_cloud_context
 from app.services.scheduler import AGENT_REGISTRY, LegalScheduler
 
@@ -131,6 +132,8 @@ async def test_matter_metadata_search_falls_back_to_scoped_file_for_content_quer
     service = CloudSearchService()
     execute_calls = 0
     statements = []
+    tenant_id = "11111111-1111-1111-1111-111111111111"
+    matter_id = "22222222-2222-2222-2222-222222222222"
 
     indexed_file = SimpleNamespace(
         provider="microsoft",
@@ -158,14 +161,31 @@ async def test_matter_metadata_search_falls_back_to_scoped_file_for_content_quer
         def scalars(self):
             return _Scalars(self._rows)
 
+        def all(self):
+            return self._rows
+
     class _Db:
         async def execute(self, _stmt):
             nonlocal execute_calls
             execute_calls += 1
             statements.append(_stmt)
+            if execute_calls == 1:
+                # The upload's custom product-folder path is persisted on the
+                # durable document, not in matter.cloud_folder.
+                return _Result(
+                    [
+                        (
+                            "microsoft",
+                            "onedrive",
+                            "validation-file",
+                            "matter-validation",
+                            None,
+                        )
+                    ]
+                )
             # The keyword query cannot match the body-only project number;
             # the scoped fallback gets the indexed file for live fetching.
-            return _Result([] if execute_calls == 1 else [indexed_file])
+            return _Result([] if execute_calls == 2 else [indexed_file])
 
     monkeypatch.setattr(cloud_search, "set_tenant_context", AsyncMock())
 
@@ -176,24 +196,20 @@ async def test_matter_metadata_search_falls_back_to_scoped_file_for_content_quer
             "keywords": ["project", "number"],
             "date_after": "2026-01-01",
         },
-        tenant_id="tenant-1",
+        tenant_id=tenant_id,
+        matter_id=matter_id,
         matter_cloud_folder={
             "onedrive": {
                 "matter_folder_id": "matter-root",
                 "subfolders": {"documents": "matter-documents"},
-            },
-            "context_folders": [
-                {
-                    "provider": "onedrive",
-                    "matter_folder_id": "matter-validation",
-                }
-            ],
+            }
         },
     )
 
-    assert execute_calls == 2
-    initial_params = list(statements[0].compile().params.values())
-    fallback_params = list(statements[1].compile().params.values())
+    assert execute_calls == 3
+    document_params = list(statements[0].compile().params.values())
+    initial_params = list(statements[1].compile().params.values())
+    fallback_params = list(statements[2].compile().params.values())
     fallback_values = [
         item
         for value in fallback_params
@@ -203,7 +219,12 @@ async def test_matter_metadata_search_falls_back_to_scoped_file_for_content_quer
     assert "%number%" in initial_params
     assert "%project%" not in fallback_params
     assert "%number%" not in fallback_params
-    assert "tenant-1" in fallback_values
+    assert tenant_id in {str(value) for value in document_params}
+    assert matter_id in {str(value) for value in document_params}
+    assert "matter_documents.tenant_id" in str(statements[0])
+    assert "matter_documents.matter_id" in str(statements[0])
+    assert statements[0]._limit_clause.value == 50
+    assert tenant_id in fallback_values
     assert "microsoft" in fallback_values
     assert "file" in fallback_values
     assert "matter-root" in fallback_values
@@ -212,10 +233,51 @@ async def test_matter_metadata_search_falls_back_to_scoped_file_for_content_quer
     assert "foreign-tenant" not in fallback_values
     assert "foreign-matter-folder" not in fallback_values
     assert any(isinstance(value, datetime) for value in fallback_values)
-    assert statements[1]._limit_clause.value == 3
+    assert statements[2]._limit_clause.value == 3
     assert [(hit.object_id, hit.source, hit.relevance_score) for hit in hits] == [
         ("validation-file", "onedrive", 0.25)
     ]
+
+
+@pytest.mark.asyncio
+async def test_matter_sync_includes_custom_upload_parent_from_document_scope(
+    monkeypatch,
+):
+    """The per-matter sync must index files in user-created product folders."""
+    service = CloudSyncService()
+    monkeypatch.setattr(
+        service, "_latest_completed_migration", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        "app.services.cloud_sync.load_matter_document_cloud_scope",
+        AsyncMock(
+            return_value=MatterCloudDocumentScope(
+                folder_ids={"onedrive": ["matter-validation"]}
+            )
+        ),
+    )
+    monkeypatch.setattr("app.services.cloud_sync.set_tenant_context", AsyncMock())
+    calls = []
+
+    class _Db:
+        pass
+
+    async def fake_onedrive(_db, _tenant_id, folder_ids, user_id=None):
+        calls.append((folder_ids, user_id))
+        return 2
+
+    monkeypatch.setattr(service, "sync_onedrive_folders", fake_onedrive)
+
+    result = await service.sync_matter_folders(
+        _Db(),
+        "11111111-1111-1111-1111-111111111111",
+        {"onedrive": {"matter_folder_id": "matter-root"}},
+        user_id="user-1",
+        matter_id="22222222-2222-2222-2222-222222222222",
+    )
+
+    assert calls == [(["matter-root", "matter-validation"], "user-1")]
+    assert result["microsoft"]["files"] == 2
 
 
 def test_gmail_query_helpers_present():
