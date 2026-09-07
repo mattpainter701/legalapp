@@ -490,7 +490,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
       <div className={`grid gap-0 ${pdfSource ? 'lg:grid-cols-[168px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
         {!pdfSource && isDocx && (
-          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256}>
+          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256} fields={fields} selectedIdentity={selectedIdentity} onSelectField={setSelectedIdentity}>
           <DocxDocumentView
             templateId={template.id}
             fields={fields}
