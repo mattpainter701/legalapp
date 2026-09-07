@@ -10,7 +10,7 @@ export default function WordCleanupAction({ templateId, selection, onCreated }) 
     setBusy(true); setMessage('')
     try {
       const draft = await cleanupWordTemplateDraft(templateId, { ...selection, replacement_text: replacementText })
-      setMessage('Cleaned draft created.'); onCreated?.(draft)
+      setMessage('Cleaned draft created.'); await onCreated?.(draft)
     } catch (error) { setMessage(error?.response?.data?.detail || 'The Word cleanup could not be saved.') }
     finally { setBusy(false) }
   }
