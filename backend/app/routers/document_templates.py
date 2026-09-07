@@ -2684,6 +2684,7 @@ async def analyze_template_sample(
 async def propose_template_fields_with_ai(
     file: UploadFile = File(...),
     title: str | None = Form(None),
+    analysis_token: str | None = Form(None),
     consent_to_external_ai: bool = Form(False),
     current_user=Depends(require_capability("use_premium_ai")),
     db: AsyncSession = Depends(get_db),
@@ -2698,12 +2699,14 @@ async def propose_template_fields_with_ai(
     await set_tenant_context(db, str(current_user.tenant_id))
     sample = await _read_template_sample(file)
     try:
-        analysis = await asyncio.to_thread(
-            analyze_template_upload,
+        analysis = await _analysis_for_template_create(
             file_bytes=sample.content,
             filename=sample.filename,
             content_type=sample.content_type,
-            title=_validated_title(title),
+            requested_title=_validated_title(title),
+            analysis_token=analysis_token,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
         )
         analysis.warnings.extend(
             warning for warning in sample.warnings if warning not in analysis.warnings

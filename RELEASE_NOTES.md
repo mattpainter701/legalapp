@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.11 — More reliable Template Studio AI proposals
+
+Released September 7, 2026.
+
+Premium AI field suggestions now reuse the completed local document analysis for the exact uploaded source.
+
+- **Keep your reviewed scan.** Template Studio securely carries the completed local analysis into the optional Premium AI suggestion step, avoiding a duplicate document scan.
+- **Keep source checks in place.** AI suggestions still require the same user, tenant, file name, and uploaded bytes. If the source changed, analyze it again before requesting suggestions.
+
 ## 2026.09.07.10 — Reliable connected matter workflows
 
 Released September 7, 2026.

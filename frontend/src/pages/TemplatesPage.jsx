@@ -451,7 +451,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     fields: reviewedFields(),
   })
 
-  const buildFormData = ({ includeCategory = false, includeReview = false, sourceFile = file } = {}) => {
+  const buildFormData = ({ includeCategory = false, includeReview = false, includeAnalysisToken = false, sourceFile = file } = {}) => {
     const form = new FormData()
     form.append('file', sourceFile)
     // A newly selected File is analyzed before React commits its reset state.
@@ -461,8 +461,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     if (includeReview) {
       if (draftBody.trim()) form.append('reviewed_body', draftBody)
       form.append('variable_schema', JSON.stringify(reviewedVariableSchema()))
-      if (analysis?.analysis_token) form.append('analysis_token', analysis.analysis_token)
     }
+    if ((includeReview || includeAnalysisToken) && analysis?.analysis_token) form.append('analysis_token', analysis.analysis_token)
     return form
   }
 
@@ -522,7 +522,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     setAiAnalyzing(true)
     setError(null)
     try {
-      const form = buildFormData()
+      const form = buildFormData({ includeAnalysisToken: true })
       form.append('consent_to_external_ai', 'true')
       const result = await proposeTemplateFieldsWithAi(form)
       if (analysisRequestRef.current !== requestId) return

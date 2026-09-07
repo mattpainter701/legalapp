@@ -1,9 +1,12 @@
 import copy
 import json
 import uuid
+from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from starlette.datastructures import UploadFile
 
 from app.routers import document_templates
 from app.services.pdf_templates import (
@@ -156,6 +159,62 @@ async def test_create_handoff_reuses_signed_analysis_without_running_ocr_again(
     assert analysis.variable_schema == payload["suggested_variable_schema"]
     assert analysis._normalized_source_bytes == source
     assert analysis._normalized_source_filename == "filled-form.pdf"
+
+
+@pytest.mark.asyncio
+async def test_ai_proposal_handoff_reuses_signed_analysis_without_running_ocr_again(
+    monkeypatch,
+):
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    source = b"%PDF-1.7 already validated source"
+    payload = _analysis_payload()
+    token = document_templates._issue_analysis_token(
+        analysis=payload,
+        file_bytes=source,
+        filename="filled-form.pdf",
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+    def unexpected_analysis(**_kwargs):
+        raise AssertionError("the AI proposal source must not be analyzed twice")
+
+    monkeypatch.setattr(
+        document_templates,
+        "analyze_template_upload",
+        unexpected_analysis,
+    )
+
+    async def noop_set_tenant_context(*_args, **_kwargs):
+        return None
+
+    async def unchanged_assistance(**kwargs):
+        return kwargs["analysis"]
+
+    monkeypatch.setattr(document_templates, "set_tenant_context", noop_set_tenant_context)
+    monkeypatch.setattr(document_templates, "assist_template_mapping", unchanged_assistance)
+
+    current_user = SimpleNamespace(
+        premium_ai_enabled=True,
+        tenant_id=tenant_id,
+        id=user_id,
+    )
+    response = await document_templates.propose_template_fields_with_ai(
+        file=UploadFile(
+            file=BytesIO(source),
+            filename="filled-form.pdf",
+            headers={"content-type": "application/pdf"},
+        ),
+        title="AI reviewed intake",
+        analysis_token=token,
+        consent_to_external_ai=True,
+        current_user=current_user,
+        db=object(),
+    )
+
+    assert response.title == "AI reviewed intake"
+    assert response.suggested_variable_schema == payload["suggested_variable_schema"]
 
 
 def _mixed_pdf_source() -> bytes:

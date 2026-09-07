@@ -11,6 +11,11 @@
 
 # Changelog
 
+## 2026.09.07.11 - Template Studio AI proposal handoff
+
+- Reuse the short-lived, signed local-analysis snapshot when Template Studio requests an explicitly consented Premium AI field proposal. The snapshot remains bound to the exact tenant, user, file name, and source bytes; stale or changed inputs require a new local analysis.
+- Avoid a second full PDF/DOCX/OCR analysis before the AI request while preserving the existing source normalization and local proposal reconciliation safeguards.
+
 ## 2026.09.07.10 - Connected matter workflow corrections
 
 - Submit ZIP and folder import file/path payloads as multipart data; render Cloud Search fetch_content_results.

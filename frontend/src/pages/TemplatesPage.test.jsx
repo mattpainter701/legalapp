@@ -645,6 +645,7 @@ describe('document template workflow', () => {
       .mockResolvedValueOnce({
         title: 'First Source',
         format: 'docx',
+        analysis_token: 'first-local-token',
         body: 'Yes: {{yes}}',
         suggested_variable_schema: { fields: [{ name: 'yes', label: 'Yes', source_text: '________' }] },
         detected_branding_profile: {},
@@ -676,6 +677,7 @@ describe('document template workflow', () => {
     const aiForm = proposeTemplateFieldsWithAi.mock.calls[0][0]
     expect(aiForm.get('file')).toEqual(first)
     expect(aiForm.get('consent_to_external_ai')).toBe('true')
+    expect(aiForm.get('analysis_token')).toBe('first-local-token')
 
     const second = new File(['second'], 'second.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
     fireEvent.change(input, { target: { files: [second] } })
