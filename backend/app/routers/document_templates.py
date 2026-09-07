@@ -1532,10 +1532,13 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         for index, region in enumerate(cover_regions):
             if not isinstance(region, dict):
                 raise HTTPException(status_code=422, detail=f"PDF cover region {index + 1} must be an object")
+            raw_page = region.get("page")
             try:
-                page_number = int(region.get("page"))
-            except (TypeError, ValueError) as exc:
+                page_number = int(raw_page)
+            except (TypeError, ValueError, OverflowError) as exc:
                 raise HTTPException(status_code=422, detail=f"PDF cover region {index + 1} page must be an integer") from exc
+            if isinstance(raw_page, bool) or float(raw_page) != page_number:
+                raise HTTPException(status_code=422, detail=f"PDF cover region {index + 1} page must be an integer")
             rect = _safe_rect(region.get("rect"), page_number=page_number, label="PDF cover region rectangle")
             reviewed_covers.append({
                 "page": page_number,

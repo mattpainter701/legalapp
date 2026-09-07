@@ -293,25 +293,25 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
   const addCoverRegion = () => {
     const region = { ...createCoverRegion({ page, pageNumber }), id: globalThis.crypto?.randomUUID?.() }
-    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, coverRegions, sourceReview }]
-    redoStack.current = []
-    setCoverRegions([...coverRegions, region])
-    setDirty(true)
+    commitCoverRegions([...coverRegions, region])
   }
 
   const updateCoverRegion = (index, geometry) => {
     const rect = canvasToOverlayRect(geometry, page, pdfSource ? viewport : null, pdfSource ? 1 : zoom)
-    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, coverRegions, sourceReview }]
-    redoStack.current = []
-    setCoverRegions(coverRegions.map((item, itemIndex) => itemIndex === index ? { ...item, page: pageNumber, rect } : item))
-    setDirty(true)
+    commitCoverRegions(coverRegions.map((item, itemIndex) => itemIndex === index ? { ...item, page: pageNumber, rect } : item))
   }
 
   const removeCoverRegion = (index) => {
+    commitCoverRegions(coverRegions.filter((_, itemIndex) => itemIndex !== index))
+  }
+
+  const commitCoverRegions = (nextCoverRegions) => {
     undoStack.current = [...undoStack.current.slice(-49), { fields, regions, coverRegions, sourceReview }]
     redoStack.current = []
-    setCoverRegions(coverRegions.filter((_, itemIndex) => itemIndex !== index))
+    setHistoryVersion((value) => value + 1)
+    setCoverRegions(nextCoverRegions)
     setDirty(true)
+    setSaveError('')
   }
 
   // A Word field is created from a text selection rather than a drawn box: the
