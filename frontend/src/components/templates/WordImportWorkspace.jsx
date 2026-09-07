@@ -22,6 +22,14 @@ export default function WordImportWorkspace({ file, analysis, fields, onFieldsCh
     if (active) setSelected(fieldIdentity(next[active.index], active.index))
     onFieldsChange(next)
   }
+  const updateDocumentField = (identity, changes) => {
+    const entry = entries.find(item => item.identity === identity)
+    if (!entry) return 'This field has changed. Select it again.'
+    if (changes.name && entries.some(item => item.identity !== identity && item.field.name === changes.name)) return 'That automation key is already used. Choose another.'
+    const next = fields.map((field, index) => index === entry.index ? { ...field, ...changes } : field)
+    setSelected(fieldIdentity(next[entry.index], entry.index))
+    onFieldsChange(next)
+  }
   const pickText = () => {
     const range = globalThis.getSelection?.()
     if (!range || range.isCollapsed || !textRef.current?.contains(range.anchorNode) || !textRef.current?.contains(range.focusNode)) return
@@ -31,11 +39,11 @@ export default function WordImportWorkspace({ file, analysis, fields, onFieldsCh
     <div className="border-b border-brand-line p-4">
       <h2 className="font-semibold">Review your document and fields</h2>
       <p role="status" className="mt-1 text-sm text-brand-muted">{analysis ? `${included.length} detected or added fields · ${needsReview.length} need review` : 'Rendering the document and detecting fields…'}</p>
-      <p className="mt-1 text-xs text-brand-muted">Yellow marks show located fields. Select a field in the list to name it or choose its type. To add one, choose Add field from text and highlight the words to replace.</p>
+      <p className="mt-1 text-xs text-brand-muted">Click a named box to edit it. To add a field, drag across the words to replace on the document, then give the field a name. The list also includes fields on other pages or awaiting placement.</p>
       {analysis?.warnings?.length > 0 && <ul aria-label="Document scan warnings" className="mt-2 list-disc pl-4 text-xs text-brand-muted">{analysis.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>}
     </div>
     <div className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_300px]">
-      <WordDocumentPreview file={file} loadUploadPreview={previewWordUpload} fields={fields} selectedIdentity={active?.identity} onSelectField={setSelected}>
+      <WordDocumentPreview file={file} loadUploadPreview={previewWordUpload} fields={fields} selectedIdentity={active?.identity} onSelectField={setSelected} onUpdateField={updateDocumentField} onCreateField={({ text: source, ...options }) => analysis ? onAddField(source, options) : 'The document scan is still running. Try again when field detection finishes.'} selectionNote="Matching occurrences of this exact text will use the same value.">
         <div className="p-4">
           <p className="mb-3 text-sm font-semibold">Highlight the exact words that should become a field.</p>
           {!analysis ? <p role="status">Reading source text…</p> : <div ref={textRef} onMouseUp={pickText} onKeyUp={pickText} className="max-h-[55vh] select-text overflow-auto whitespace-pre-wrap rounded border border-brand-line bg-white p-5 text-sm leading-7 text-slate-900" aria-label="Select source text">{text || 'No selectable text was found. Try scanning this document again.'}</div>}
@@ -57,7 +65,7 @@ export default function WordImportWorkspace({ file, analysis, fields, onFieldsCh
             {entry.field.ai_suggested && <span className="block text-xs">AI proposal · verify</span>}
           </button></li>)}
         </ul>
-        {analysis && !fields.length && <p className="mt-3 text-sm text-brand-muted">No fields found automatically. Use Add field from text to choose the first replacement.</p>}
+        {analysis && !fields.length && <p className="mt-3 text-sm text-brand-muted">No fields found automatically. Select words on the document to create your first field.</p>}
         {active && <div className="mt-4 space-y-3 border-t border-brand-line pt-4">
           <label className="block text-sm">Field label<input aria-label="Imported field label" value={active.field.label ?? active.field.name} onChange={event => update({ label: event.target.value })} className="mt-1 w-full rounded border border-brand-line bg-brand-bg p-2" /></label>
           <label className="block text-sm">Field type<select aria-label="Imported field type" disabled={Boolean(active.field.docx_choice)} value={active.field.field_type || 'text'} onChange={event => update({ field_type: event.target.value })} className="mt-1 w-full rounded border border-brand-line bg-brand-bg p-2">{['text', 'date', 'number', 'currency', 'checkbox', 'signature'].map(type => <option key={type} value={type}>{type}</option>)}</select></label>

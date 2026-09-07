@@ -11,7 +11,7 @@ Released September 7, 2026.
 
 See Word pages during upload, add fields from source text, and understand test results before publishing.
 
-- **See the document immediately.** Word page previews begin when you choose a file, before saving a template. Review detected fields beside the document and select source text to add replacements.
+- **See the document immediately.** Word page previews begin when you choose a file, before saving a template. Select words directly on the page to create a named field, or click a visible field box to edit it.
 - **Know what needs attention.** Field lists show replacement text and review status. Test results identify missing values and generation failures, and separate successful generation from visual approval.
 
 ## 2026.09.07.13 — Verified cloud folder recovery

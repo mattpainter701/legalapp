@@ -31,12 +31,19 @@ The Document view remains selected while conversion runs; choose Fields to
 start mapping early or use the explicit fallback if conversion fails.
 
 The import sidebar lists detected and added fields with source text, inclusion,
-type and review status. Select **Add field from text**, highlight the exact words,
-and choose **Make selection a field**. Edit its label/type, compare it with the
-source and save the reviewed draft. No upload is persisted just to show a preview.
-Literal tokens and unambiguous source-text replacements highlight on the page;
-Word paragraph anchors remain in Fields when page location cannot be established
-reliably. No guessed PDF positions are stored as Word anchors.
+type and review status. Drag across words directly on the rendered page, enter
+a field name and type, and choose **Create field**. Named boxes stay visible;
+click one to edit its name, type or automation key beside the document. Matching
+occurrences in an upload share the same replacement value, as disclosed in the
+selection editor. No upload is persisted just to show a preview.
+
+For saved Word documents, selections resolve to an exact, unique source paragraph
+and Unicode character span. Anchored field boxes require unique paragraph context
+and matching source text. Repeated/ambiguous text, incomplete outlines and fields
+whose page location cannot be established remain available in **Fields**; no
+guessed PDF positions are stored as Word anchors. The Fields view also supports
+longer selections, source review and conditional/repeating paragraphs. Saved PDF
+boxes keep their names visible while preserving drag/resize placement.
 
 Test results separate source availability, field definitions, missing sample
 values, generation errors/success and human visual review. A successful render

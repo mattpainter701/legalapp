@@ -615,7 +615,7 @@ describe('document template workflow', () => {
     expect(createTemplateFromUpload).not.toHaveBeenCalled()
     await act(async () => { finishAnalysis({ title: 'Immediate', format: 'docx', body: 'Dear Ada', extracted_text: 'Dear Ada', suggested_variable_schema: { fields: [] }, warnings: [] }) })
     expect(screen.queryByLabelText('Select source text')).not.toBeVisible()
-    await user.click(screen.getByRole('button', { name: 'Add field from text' }))
+    await user.click(screen.getByRole('button', { name: 'Fields', exact: true }))
     expect(screen.getByLabelText('Select source text')).toBeVisible()
   })
 
@@ -783,7 +783,7 @@ describe('document template workflow', () => {
     const file = new File(['word'], 'application.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
     fireEvent.change(screen.getByLabelText('Sample document'), { target: { files: [file] } })
     await screen.findByDisplayValue('Application')
-    await user.click(screen.getByRole('button', { name: 'Add field from text' }))
+    await user.click(screen.getByRole('button', { name: 'Fields', exact: true }))
     const source = screen.getByLabelText('Select source text')
     const range = document.createRange()
     range.setStart(source.firstChild, 11)

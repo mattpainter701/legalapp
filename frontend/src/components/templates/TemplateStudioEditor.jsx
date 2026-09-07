@@ -25,6 +25,7 @@ import {
 import { getTemplateBindings } from '../../api'
 import DocxDocumentView from './DocxDocumentView'
 import WordDocumentPreview from './WordDocumentPreview'
+import { resolveWordPageSelection } from './wordPlaceholderMatches'
 import WordDeriveDraftAction from './WordDeriveDraftAction'
 import WordCleanupAction from './WordCleanupAction'
 import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocumentCanvas'
@@ -159,6 +160,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [coverRegions, setCoverRegions] = useState(() => schemaCoverRegions(template))
   const [sourceReview, setSourceReview] = useState(template.variable_schema?.source_review || {})
   const [cleanupSelection, setCleanupSelection] = useState(null)
+  const [wordParagraphs, setWordParagraphs] = useState([])
   const [sourceModeSuggestion, setSourceModeSuggestion] = useState(
     template.variable_schema?.source_mode_suggestion || null,
   )
@@ -229,7 +231,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
   useEffect(() => setViewport(null), [pageNumber, zoom])
 
-  const indexedFields = fields.map((field, index) => ({ field, identity: fieldIdentity(field, index) }))
+  const indexedFields = fields.map((field, index) => ({ field, index, identity: fieldIdentity(field, index) }))
   const selectedEntry = indexedFields.find((entry) => entry.identity === selectedIdentity)
   const selected = selectedEntry?.field || null
 
@@ -324,18 +326,19 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   // A Word field is created from a text selection rather than a drawn box: the
   // span the user highlighted *is* the anchor, and the exact text it covers is
   // what the renderer re-checks before replacing it.
-  const addDocxField = ({ ordinal, start, end, text }) => {
+  const addDocxField = ({ ordinal, start, end, text, label, field_type = 'text', name: requestedName }) => {
     const taken = new Set(fields.map((entry) => entry.name))
-    let name = docxFieldName(text)
+    if (requestedName && taken.has(requestedName)) return 'That automation key is already used. Choose another.'
+    let name = requestedName || docxFieldName(label || text)
     let suffix = 1
     while (taken.has(name)) {
       suffix += 1
-      name = `${docxFieldName(text)}_${suffix}`
+      name = `${docxFieldName(label || text)}_${suffix}`
     }
     const field = {
       name,
-      label: text.trim().slice(0, 60) || name,
-      field_type: 'text',
+      label: label || text.trim().slice(0, 60) || name,
+      field_type,
       required: false,
       included: true,
       source_text: text,
@@ -463,7 +466,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-surface-2">
       <div className="border-b border-brand-line p-3 text-sm">
         <p className="font-semibold">{fields.filter(field => field.included !== false).length} included fields · {fields.filter(field => field.included !== false && (field.review_required || field.ai_suggested || Number(field.confidence ?? 1) < 0.75)).length} need review</p>
-        <p className="mt-1 text-xs text-brand-muted">Select a highlight or a field in the list to edit it. {isDocx ? 'Use Add field from text to highlight the words that should change.' : 'Choose a field type in the toolbar to add a box, then move and resize it on the page.'}</p>
+        <p className="mt-1 text-xs text-brand-muted">Select a named box or a field in the list to edit it. {isDocx ? 'Drag across the words that should change to create a field directly on the page.' : 'Choose a field type in the toolbar to add a box, then move and resize it on the page.'}</p>
       </div>
       {isDocx && template.variable_schema?.source_review_version === 1 && (
         <div className="border-b border-brand-line p-3">
@@ -564,7 +567,21 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
       <div className={`grid gap-0 ${pdfSource ? 'lg:grid-cols-[168px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
         {!pdfSource && isDocx && (
-          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256} fields={fields} selectedIdentity={selectedIdentity} onSelectField={setSelectedIdentity}>
+          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256} fields={fields} paragraphs={wordParagraphs} selectedIdentity={selectedIdentity} onSelectField={setSelectedIdentity}
+            onCreateField={({ text, ...options }) => {
+              const selection = resolveWordPageSelection(text, wordParagraphs)
+              if (!selection) return 'This text occurs more than once or cannot be matched to the Word source. Use Fields to select its exact paragraph.'
+              if (fields.some(field => field.included !== false && field.docx_anchor?.paragraph_ordinal === selection.ordinal && field.docx_anchor.start < selection.end && selection.start < field.docx_anchor.end)) return 'This selection overlaps an existing field. Click its box to edit it.'
+              return addDocxField({ ...selection, ...options })
+            }}
+            onUpdateField={(identity, changes) => {
+              const entry = indexedFields.find(item => item.identity === identity)
+              if (!entry) return 'This field has changed. Select it again.'
+              if (changes.name && indexedFields.some(item => item.identity !== identity && item.field.name === changes.name)) return 'That automation key is already used. Choose another.'
+              const next = fields.map((field, index) => index === entry.index ? { ...field, ...changes } : field)
+              commitFields(next)
+              setSelectedIdentity(fieldIdentity(next[entry.index], entry.index))
+            }}>
           <DocxDocumentView
             templateId={template.id}
             fields={fields}
@@ -572,6 +589,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
             sourceReview={sourceReview}
             onSelectText={(selection) => setCleanupSelection({ paragraph_ordinal: selection.ordinal, start: selection.start, end: selection.end, original_text: selection.text })}
             onModeSuggestion={setSourceModeSuggestion}
+            onParagraphs={setWordParagraphs}
             onReviewChange={template.variable_schema?.source_review_version === 1 ? (next) => {
               undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
               redoStack.current = []
@@ -684,7 +702,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                   onMouseDown={() => setSelectedIdentity(entry.identity)}
                   className={`group rounded-sm border-2 ${active ? 'border-brand-accent bg-brand-accent/20' : 'border-brand-accent-2/70 bg-brand-accent-2/10'} ${locked ? 'cursor-not-allowed' : 'cursor-move'}`}
                 >
-                  <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-brand-ink px-1.5 py-0.5 text-[10px] font-semibold text-white opacity-0 group-hover:opacity-100">
+                  <span className="pointer-events-none block max-w-full truncate rounded-sm bg-brand-ink px-1.5 py-0.5 text-[10px] font-semibold text-white">
                     {entry.field.label || entry.field.name}
                   </span>
                 </Rnd>

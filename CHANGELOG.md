@@ -14,7 +14,7 @@
 ## 2026.09.07.14 - Document-first Studio import and clear test results
 
 - Start bounded, tenant-scoped DOCX page preview on file selection, before analysis or persistence; retain explicit Fields/failure fallback.
-- Add selected source text as a field and inspect detected replacements, types, inclusion and review status beside the document.
+- Select rendered Word text to create a named field and click a persistent field box to edit it beside the page. Resolve saved Word selections to exact paragraph anchors; retain the text view for ambiguous locations. Keep saved PDF field labels visible.
 - Expose test evidence, missing values and exact render errors separately from visual approval; keep cleanup controls from displacing the Word field inspector.
 
 ## 2026.09.07.13 - Cloud folder recovery test order

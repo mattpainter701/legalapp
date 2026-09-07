@@ -733,20 +733,21 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     ])
   }
 
-  const addWordSelection = (sourceText) => {
+  const addWordSelection = (sourceText, options = {}) => {
     if (!(analysis?.extracted_text || analysis?.body || '').includes(sourceText)) {
       setError('Select the exact source text again before adding a field.')
-      return
+      return 'Select the exact source text again before adding a field.'
     }
     if (fields.some(field => field.included !== false && field.source_text === sourceText)) {
       setError('That text is already mapped. Select its existing field in the list to edit it.')
-      return
+      return 'That text is already mapped. Click its existing field box to edit it.'
     }
-    const normalized = normalizeVariableName(sourceText).slice(0, 48) || 'new_field'
+    if (options.name && fields.some(field => field.name === options.name)) return 'That automation key is already used. Choose another.'
+    const normalized = normalizeVariableName(options.label || sourceText).slice(0, 48) || 'new_field'
     const base = /^[a-z]/i.test(normalized) ? normalized : `field_${normalized}`
-    let name = base
+    let name = options.name || base
     for (let suffix = 2; fields.some(field => field.name === name); suffix += 1) name = `${base}_${suffix}`
-    const field = { name, label: sourceText.slice(0, 60), field_type: 'text', source_text: sourceText, example: sourceText, included: true, confidence: 1, review_required: true, _bodyName: name }
+    const field = { name, label: options.label || sourceText.slice(0, 60), field_type: options.field_type || 'text', source_text: sourceText, example: sourceText, included: true, confidence: 1, review_required: true, _bodyName: name }
     setMappedFields(current => [...current, field])
     setDraftBody(current => current.split(sourceText).join(`{{${name}}}`))
     setReviewConfirmed(false)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { placeholderBoxes, placeholderRange, wordPlaceholderMatches } from './wordPlaceholderMatches'
+import { placeholderBoxes, placeholderRange, resolveWordPageSelection, wordPlaceholderMatches } from './wordPlaceholderMatches'
 
 describe('literal Word placeholder matching', () => {
   it('highlights explicitly detected source text, including repeated replacements', () => {
@@ -40,6 +40,52 @@ describe('literal Word placeholder matching', () => {
   it('bounds work for enormous or pathological text pages', () => {
     expect(wordPlaceholderMatches(['x'.repeat(500_001)], [{ name: 'x' }])).toEqual([])
     expect(wordPlaceholderMatches(['{{x}}'.repeat(600)], [{ name: 'x' }])).toHaveLength(500)
+  })
+
+  it('uses unique paragraph context for anchored fields, including repeated blanks', () => {
+    const fields = [{ name: 'signature', source_text: '___', docx_anchor: { paragraph_ordinal: 1, start: 18, end: 21 } }]
+    const paragraphs = [{ ordinal: 0, text: 'Signature: ___' }, { ordinal: 1, text: 'Client signature: ___' }]
+    expect(wordPlaceholderMatches(['Signature: ___ Client signature: ___'], fields, paragraphs).map(({ start, end }) => [start, end])).toEqual([[33, 36]])
+  })
+
+  it('refuses anchored matches when the same outline paragraph is duplicated', () => {
+    const fields = [{ name: 'fee', source_text: '___', docx_anchor: { paragraph_ordinal: 1, start: 5, end: 8 } }]
+    const paragraphs = [{ ordinal: 0, text: 'Fee: ___' }, { ordinal: 1, text: 'Fee: ___' }]
+    expect(wordPlaceholderMatches(['Fee: ___'], fields, paragraphs)).toEqual([])
+  })
+
+  it('refuses ambiguous paragraph context and invalid or cross-paragraph anchors', () => {
+    const paragraphs = [{ ordinal: 2, text: 'Fee: ___' }, { ordinal: 3, text: 'Fee: ___' }]
+    expect(resolveWordPageSelection('Fee: ___', paragraphs)).toBeNull()
+    expect(resolveWordPageSelection('Fee: ___\nOther', [{ ordinal: 2, text: 'Fee: ___' }, { ordinal: 3, text: 'Other' }])).toBeNull()
+    expect(resolveWordPageSelection('Missing', paragraphs)).toBeNull()
+  })
+
+  it('returns Unicode codepoint offsets for an anchored selection', () => {
+    expect(resolveWordPageSelection('Fee: ___', [{ ordinal: 4, text: '😀 Fee: ___' }])).toEqual({ ordinal: 4, start: 2, end: 10, text: 'Fee: ___' })
+  })
+
+  it('resolves a selected substring uniquely within one paragraph', () => {
+    expect(resolveWordPageSelection('Ada Lovelace', [{ ordinal: 2, text: 'Dear Ada Lovelace,' }])).toEqual({ ordinal: 2, start: 5, end: 17, text: 'Ada Lovelace' })
+    expect(resolveWordPageSelection('Ada', [{ ordinal: 2, text: 'Ada met Ada.' }])).toBeNull()
+  })
+
+  it('resolves Unicode selected substrings after an emoji prefix', () => {
+    expect(resolveWordPageSelection('Fee: ___', [{ ordinal: 4, text: '😀 Fee: ___' }])).toEqual({ ordinal: 4, start: 2, end: 10, text: 'Fee: ___' })
+  })
+
+  it('maps expanded PDF whitespace and Unicode offsets without moving an anchor', () => {
+    const paragraphs = [{ ordinal: 1, text: '😀 Fee: ___' }]
+    const fields = [{ name: 'fee', source_text: '___', docx_anchor: { paragraph_ordinal: 1, start: 7, end: 10 } }]
+    expect(wordPlaceholderMatches(['😀  Fee: ', '___'], fields, paragraphs).map(({ start, end }) => [start, end])).toEqual([[9, 12]])
+    expect(wordPlaceholderMatches(['😀 Fee: ___'], [{ ...fields[0], source_text: 'XYZ' }], paragraphs)).toEqual([])
+    expect(wordPlaceholderMatches(['😀 Fee: ___'], [{ ...fields[0], docx_anchor: { paragraph_ordinal: 1, start: -1, end: 10 } }], paragraphs)).toEqual([])
+  })
+
+  it('refuses overlapping repeated selections and does not duplicate a literal anchored box', () => {
+    expect(resolveWordPageSelection('aaa', [{ ordinal: 0, text: 'aaaa' }])).toBeNull()
+    const fields = [{ name: 'fee', source_text: '{{fee}}', docx_anchor: { paragraph_ordinal: 1, start: 0, end: 7 } }]
+    expect(wordPlaceholderMatches(['{{fee}}'], fields, [{ ordinal: 1, text: '{{fee}}' }])).toHaveLength(1)
   })
 })
 

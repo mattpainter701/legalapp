@@ -32,5 +32,5 @@ it('distinguishes diagnostic output from publication evidence', () => {
 it('names malformed or duplicate fields and missing sources', () => {
   show({ template: { ...template, source_ready: false, variable_schema: { fields: [{ name: 'client', label: 'First' }, { name: 'client', label: 'Second' }, { name: '9bad', label: 'Invalid' }] } } })
   expect(row('Source document').getByText('Needs fixing')).toBeVisible()
-  expect(row('Field setup').getByText(/First, Second, Invalid/)).toBeVisible()
+  expect(row('Field names').getByText(/First, Second, Invalid/)).toBeVisible()
 })

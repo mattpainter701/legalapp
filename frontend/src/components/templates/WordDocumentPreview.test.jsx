@@ -18,6 +18,16 @@ beforeEach(() => { pdfState.error = ''; getTemplateSourcePreview.mockReset() })
 afterEach(cleanup)
 
 describe('Word document preview', () => {
+  it('keeps Add field on the document and explains direct selection', async () => {
+    getTemplateSourcePreview.mockResolvedValue(new Blob(['pdf']))
+    render(<WordDocumentPreview templateId="one" onCreateField={vi.fn()}><p>Text tools</p></WordDocumentPreview>)
+    await screen.findByTestId('page')
+    fireEvent.click(screen.getByRole('button', { name: 'Fields', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add field', exact: true }))
+    expect(screen.getByTestId('page')).toBeVisible()
+    expect(screen.getByText('Text tools')).not.toBeVisible()
+    expect(screen.getByText(/A field name box will open/)).toBeVisible()
+  })
   it('connects page highlights to field selection and remounts them after the Fields view', async () => {
     getTemplateSourcePreview.mockResolvedValue(new Blob(['pdf']))
     const select = vi.fn()
