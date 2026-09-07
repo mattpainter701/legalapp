@@ -1041,6 +1041,8 @@ class CloudSyncService:
 
                         parent_ref = item.get("parentReference", {})
                         parent_id = parent_ref.get("id")
+                        if object_type == "sharepoint_file" and drive_id and parent_id:
+                            parent_id = _sharepoint_object_id(drive_id, parent_id)
 
                         # Build a logical path from parent path + drive name
                         raw_path = (parent_ref.get("path") or "").replace(

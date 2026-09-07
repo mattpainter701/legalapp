@@ -468,6 +468,33 @@ def test_sharepoint_document_scope_uses_drive_qualified_item_identity():
     assert "item-1" not in values
 
 
+def test_sharepoint_configured_scope_qualifies_same_parent_per_drive():
+    """Two document libraries may each expose an otherwise identical parent ID."""
+    predicate = cloud_search._matter_metadata_scope_condition(
+        {
+            "sharepoint": {"drive_id": "drive-a", "matter_folder_id": "root"},
+            "context_folders": [
+                {
+                    "provider": "sharepoint",
+                    "drive_id": "drive-b",
+                    "matter_folder_id": "root",
+                }
+            ],
+        },
+        MatterCloudDocumentScope(),
+    )
+    params = list(predicate.compile().params.values())
+    values = [
+        item
+        for value in params
+        for item in (value if isinstance(value, (list, tuple, set)) else [value])
+    ]
+
+    assert "drive-a:root" in values
+    assert "drive-b:root" in values
+    assert "root" not in values
+
+
 def test_matter_scoped_sync_extracts_primary_subfolders_and_context():
     cloud_folder = {
         "google_drive": {

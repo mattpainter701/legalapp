@@ -15,6 +15,7 @@
 
 - Include provisioned matter subfolders and tenant-and-matter-bound document parent IDs in OneDrive, Google Drive, SharePoint, and metadata-index retrieval scopes, matching the per-matter sync inventory for user-created folders.
 - When a private matter question asks for a fact found only inside an authorized document, fetch a bounded set of matter-scoped metadata candidates after title/snippet matching has no result. Do not reuse cached RAG results for live matter cloud folders.
+- Store new SharePoint index identities as drive-qualified item and parent IDs. A matter-folder resync refreshes legacy unqualified SharePoint rows; they are not used by the scoped fallback and unrelated metadata is not purged.
 
 ## 2026.09.07.6 - Word source page previews
 

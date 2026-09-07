@@ -1301,11 +1301,11 @@ def _matter_metadata_scope_condition(
         (
             ("microsoft", "sharepoint_file"),
             [
-                ref["folder_id"]
+                _sharepoint_object_id(ref["drive_id"], ref["folder_id"])
                 for ref in _cloud_folder_refs_for_provider(
                     matter_cloud_folder, "sharepoint"
                 )
-                if ref.get("folder_id")
+                if ref.get("drive_id") and ref.get("folder_id")
             ],
         ),
     ]
