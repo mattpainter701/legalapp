@@ -11,6 +11,12 @@
 
 # Changelog
 
+## 2026.09.07.2
+
+- Add portal multi-file/folder transfer with bounded relative paths, preserved subfolders, per-file retry results and deterministic source/content identities for replay. Reject storage failures and prevent same-name physical file overwrites.
+- Add explicitly published portal upload links with matter access checks and an append-only matter event audit; source links enter the existing portal correspondence review flow.
+- Add document-list refresh controls and document the separate metadata sync and content-indexing boundaries. No migration or production indexing activation.
+
 ## 2026.09.06.8
 
 - Preserve matter sections in URLs and return document review to Documents; expose scoped task links and completion/load recovery on the dashboard.

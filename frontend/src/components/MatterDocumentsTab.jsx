@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import MatterTransferSettings from './MatterTransferSettings'
 import MatterImportWizard from './MatterImportWizard'
 import MatterIntakePanel from './MatterIntakePanel'
 import { format, parseISO } from 'date-fns'
@@ -649,6 +650,13 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
         </div>
       )}
 
+      <button type="button" className="border border-brand-line rounded-lg px-4 py-2" disabled={explorer.listing} onClick={async () => {
+        try { await Promise.all([refreshDocuments(), refreshFolders()]) } catch { explorer.setError('Could not refresh documents. Please retry.') }
+      }}>Refresh document list</button>
+      <details className="border border-brand-line rounded-lg p-3">
+        <summary className="cursor-pointer font-semibold">Portal upload-folder link</summary>
+        <MatterTransferSettings matterId={matterId} />
+      </details>
       <details className="border border-brand-line rounded-lg p-3">
         <summary className="cursor-pointer font-semibold">Import files &amp; emails</summary>
         <MatterImportWizard matterId={matterId} onComplete={() => { refreshDocuments(); refreshFolders() }} />

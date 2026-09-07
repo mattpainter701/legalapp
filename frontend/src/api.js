@@ -1205,10 +1205,15 @@ export const sendClientPortalMessage = (data) =>
 export const listClientPortalDocuments = () =>
   clientPortalApi.get('/portal/client/documents').then((r) => r.data)
 
-export const uploadClientPortalDocument = (file, description, onProgress) => {
+export const getClientPortalUploadLink = () => clientPortalApi.get('/portal/client/documents/upload-link').then(r => r.data)
+export const getMatterPortalUploadLink = (matterId) => api.get(`/matters/${matterId}/portal/upload-link`).then(r => r.data)
+export const setMatterPortalUploadLink = (matterId, url) => api.put(`/matters/${matterId}/portal/upload-link`, { url }).then(r => r.data)
+
+export const uploadClientPortalDocument = (file, description, onProgress, relativePath) => {
   const form = new FormData()
   form.append('file', file)
-  if (description) form.append('description', description)
+    if (description) form.append('description', description)
+    if (relativePath) form.append('relative_path', relativePath)
   return clientPortalApi
     .post('/portal/client/documents/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },

@@ -40,6 +40,18 @@ from jose import JWTError, jwt
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from pydantic import BaseModel, field_validator
+
+from app.services.portal_document_transfer import (
+    PORTAL_UPLOAD_LINK_KEY,
+    destination_folder,
+    shared_upload_link,
+    upload_link,
+    upload_path,
+)
+from app.services.matter_document_organization import DocumentOrganizationError
+from app.services.matter_access import can_access_matter
+from app.services.matter_import_manifest import parse_eml
 
 from app.config import get_settings
 from app.services.upload_guard import reject_oversized_request
@@ -1390,12 +1402,17 @@ async def portal_upload_document(
     description: str | None = Form(None),
     resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
     db: AsyncSession = Depends(get_db),
+    relative_path: str | None = Form(None),
 ):
     ctx, matter = resolved
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
     safe_filename = _validate_upload_filename(file.filename)
+    try:
+        source_path = upload_path(relative_path, safe_filename)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if description and len(description) > MAX_DOCUMENT_DESCRIPTION:
         raise HTTPException(
             status_code=400,
@@ -1407,7 +1424,7 @@ async def portal_upload_document(
 
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     reject_oversized_request(request, max_bytes, settings.MAX_FILE_SIZE_MB)
-    file_bytes = await file.read()
+    file_bytes = await file.read(max_bytes + 1)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="That file is empty")
     if len(file_bytes) > max_bytes:
@@ -1415,6 +1432,41 @@ async def portal_upload_document(
             status_code=413,
             detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB}MB",
         )
+
+    # Stable identity makes a reselected source/retried lost response replay-safe.
+    # Distinct paths and changed contents remain separate documents.
+    doc_id = (
+        uuid.uuid5(
+            uuid.UUID(ctx.matter_id),
+            f"portal-upload:{source_path}:{hashlib.sha256(file_bytes).hexdigest()}",
+        )
+        if source_path
+        else uuid.uuid4()
+    )
+    if source_path:
+        existing = await db.scalar(
+            select(MatterDocument).where(
+                MatterDocument.id == doc_id,
+                MatterDocument.tenant_id == uuid.UUID(ctx.tenant_id),
+                MatterDocument.matter_id == uuid.UUID(ctx.matter_id),
+                MatterDocument.uploaded_by_user_id.is_(None),
+            )
+        )
+        if existing:
+            if not existing.portal_visible:
+                raise HTTPException(
+                    409,
+                    "This file was already received. Contact your legal team to review it.",
+                )
+            return PortalDocumentResponse(
+                id=str(existing.id),
+                filename=existing.filename,
+                content_type=existing.content_type,
+                file_size=existing.file_size,
+                description=existing.description,
+                uploaded_by_client=True,
+                created_at=existing.created_at,
+            )
 
     # File the upload into the matter's "Client Uploads" folder so it lands
     # somewhere predictable in the firm's document explorer instead of at the
@@ -1425,20 +1477,39 @@ async def portal_upload_document(
         matter_id=uuid.UUID(ctx.matter_id),
         system_key=SYSTEM_FOLDER_CLIENT_UPLOADS,
     )
+    try:
+        client_upload_folder = await destination_folder(
+            db,
+            tenant_id=uuid.UUID(ctx.tenant_id),
+            matter_id=uuid.UUID(ctx.matter_id),
+            root=client_upload_folder,
+            path=source_path,
+        )
+    except DocumentOrganizationError as exc:
+        raise HTTPException(exc.status_code, exc.message) from exc
 
+    name_stem, name_extension = os.path.splitext(safe_filename)
+    storage_name = f"{doc_id.hex}_{name_stem.encode('utf-8')[:180].decode('utf-8', errors='ignore')}{name_extension}"
     storage_result = await matter_file_store.store_matter_file_result(
         db=db,
         tenant_id=str(ctx.tenant_id),
         matter_slug=matter.slug,
         category="client_uploads",
-        filename=safe_filename,
+        filename=storage_name,
         content=file_bytes,
         content_type=file.content_type or "application/octet-stream",
         matter_cloud_folder=matter.cloud_folder,
+        folder_path=(
+            ["client_uploads", *source_path.split("/")[:-1]]
+            if source_path and "/" in source_path
+            else None
+        ),
     )
+    if storage_result.error:
+        raise HTTPException(503, "Document storage failed. Please retry this file.")
     # Client uploads are visible to the client (uploaded_by_user_id stays NULL).
     doc = MatterDocument(
-        id=uuid.uuid4(),
+        id=doc_id,
         tenant_id=uuid.UUID(ctx.tenant_id),
         matter_id=uuid.UUID(ctx.matter_id),
         uploaded_by_user_id=None,
@@ -1458,6 +1529,26 @@ async def portal_upload_document(
         portal_visible=True,
     )
     db.add(doc)
+    if safe_filename.lower().endswith(".eml"):
+        email = parse_eml(file_bytes, [])
+        await db.flush()
+        db.add(
+            CommunicationLog(
+                tenant_id=uuid.UUID(ctx.tenant_id),
+                matter_id=uuid.UUID(ctx.matter_id),
+                document_id=doc_id,
+                channel="email",
+                status="logged",
+                direction=email["direction"],
+                subject=email["subject"],
+                body=email["body"],
+                participants=email["participants"],
+                occurred_at=email["occurred_at"] or datetime.now(timezone.utc),
+                external_ref=f"portal-historical:{doc_id}",
+                summary="Historical email uploaded through the client portal"
+                + ("; original date unavailable" if not email["occurred_at"] else ""),
+            )
+        )
     await db.commit()
     await db.refresh(doc)
     return PortalDocumentResponse(
@@ -1469,6 +1560,78 @@ async def portal_upload_document(
         uploaded_by_client=True,
         created_at=doc.created_at,
     )
+
+
+class PortalUploadLink(BaseModel):
+    url: str | None = None
+
+    _validate_url = field_validator("url")(upload_link)
+
+
+@router.get("/documents/upload-link", response_model=PortalUploadLink)
+async def portal_get_upload_link(
+    resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    _, matter = resolved
+    return PortalUploadLink(
+        url=await shared_upload_link(
+            db, tenant_id=matter.tenant_id, matter_id=matter.id
+        )
+    )
+
+
+async def _transfer_matter(matter_id, request, db):
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    if not await can_access_matter(
+        db,
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        is_admin=user.role == "admin",
+        matter_id=uuid.UUID(matter_id),
+    ):
+        raise HTTPException(404, "Matter not found")
+    return user, await _get_matter_for_firm(db, matter_id, user.tenant_id)
+
+
+@firm_router.get("/{matter_id}/portal/upload-link", response_model=PortalUploadLink)
+async def firm_get_upload_link(
+    matter_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)
+):
+    _, matter = await _transfer_matter(str(matter_id), request, db)
+    return PortalUploadLink(
+        url=await shared_upload_link(
+            db, tenant_id=matter.tenant_id, matter_id=matter.id
+        )
+    )
+
+
+@firm_router.put("/{matter_id}/portal/upload-link", response_model=PortalUploadLink)
+async def firm_set_upload_link(
+    matter_id: uuid.UUID,
+    body: PortalUploadLink,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.plugin import MatterEvent
+
+    user, matter = await _transfer_matter(str(matter_id), request, db)
+    db.add(
+        MatterEvent(
+            tenant_id=user.tenant_id,
+            matter_id=matter.id,
+            created_by=user.id,
+            event_type=PORTAL_UPLOAD_LINK_KEY,
+            title="Portal upload link updated",
+            content="Upload link shared with portal clients."
+            if body.url
+            else "Portal upload link removed.",
+            metadata_json={"url": body.url},
+        )
+    )
+    await db.commit()
+    return body
 
 
 @router.get("/documents/{doc_id}/download")

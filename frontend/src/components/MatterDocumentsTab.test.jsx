@@ -7,6 +7,8 @@ import { ConfirmProvider } from './dialog/ConfirmProvider'
 import { ToastProvider } from './toast/ToastProvider'
 
 const apiMocks = vi.hoisted(() => ({
+  getMatterPortalUploadLink: vi.fn().mockResolvedValue({ url: null }),
+  setMatterPortalUploadLink: vi.fn(),
   createDocumentTag: vi.fn(),
   createMatterDocumentFolder: vi.fn(),
   deleteMatterDocument: vi.fn(),

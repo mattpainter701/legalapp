@@ -31,6 +31,80 @@ from app.services.portal_token import create_matter_portal_token
 PORTAL = "/api/portal/client"
 
 
+@pytest.mark.asyncio
+async def test_portal_folder_upload_reselection_preserves_path_and_document(
+    client,
+    portal_cookie,
+    portal_matter,
+    db_session,
+):
+    from app.models.matter_document_folder import MatterDocumentFolder
+
+    matter_id = portal_matter.id
+    headers = _portal_headers(portal_cookie)
+    ids = []
+    for _ in range(2):
+        response = await client.post(
+            f"{PORTAL}/documents/upload",
+            headers=headers,
+            files={"file": ("scan.png", io.BytesIO(b"scan-original"), "image/png")},
+            data={"relative_path": "Smith/Evidence/scan.png"},
+        )
+        assert response.status_code == 201, response.text
+        ids.append(response.json()["id"])
+    assert ids[0] == ids[1]
+    doc = await db_session.get(MatterDocument, uuid.UUID(ids[0]))
+    folder = await db_session.get(MatterDocumentFolder, doc.folder_id)
+    assert folder.matter_id == matter_id
+    assert folder.path == "Client Uploads/Smith/Evidence"
+    download = await client.get(
+        f"{PORTAL}/documents/{ids[0]}/download", headers=headers
+    )
+    assert download.content == b"scan-original"
+    invalid = await client.post(
+        f"{PORTAL}/documents/upload",
+        headers=headers,
+        files={"file": ("scan.png", io.BytesIO(b"scan-original"), "image/png")},
+        data={"relative_path": "../Another client/scan.png"},
+    )
+    assert invalid.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_upload_link_requires_explicit_publication_and_revoked_portal_is_denied(
+    client,
+    portal_cookie,
+    portal_matter,
+    portal_invite,
+    db_session,
+):
+    matter_id = portal_matter.id
+    headers = _portal_headers(portal_cookie)
+    assert (
+        await client.get(f"{PORTAL}/documents/upload-link", headers=headers)
+    ).json() == {"url": None}
+    target = f"/api/matters/{matter_id}/portal/upload-link"
+    saved = await client.put(
+        target, json={"url": "https://files.example/client-request"}
+    )
+    assert saved.status_code == 200, saved.text
+    assert (
+        await client.get(f"{PORTAL}/documents/upload-link", headers=headers)
+    ).json() == saved.json()
+    assert (
+        await client.put(target, json={"url": "javascript:alert(1)"})
+    ).status_code == 422
+    assert (await client.put(target, json={"url": None})).status_code == 200
+    assert (
+        await client.get(f"{PORTAL}/documents/upload-link", headers=headers)
+    ).json() == {"url": None}
+    portal_invite.revoked = True
+    await db_session.commit()
+    assert (
+        await client.get(f"{PORTAL}/documents/upload-link", headers=headers)
+    ).status_code == 401
+
+
 @pytest_asyncio.fixture
 async def portal_matter(db_session, test_tenant, test_user):
     matter = Matter(
