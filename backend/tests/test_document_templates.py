@@ -3021,6 +3021,55 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
         in combined_edit_activation.json()["detail"]
     )
 
+    renamed_draft = await client.patch(
+        f"/api/templates/{template_id}", json={"title": "Mapped PDF v2"}
+    )
+    assert renamed_draft.status_code == 200, renamed_draft.text
+    # The title participates in output identity (including the generated file
+    # name), so even a rename returns the changed version to draft.
+    assert renamed_draft.json()["is_active"] is True
+    assert renamed_draft.json()["approved_at"] is None
+
+    edited_contract = await client.patch(
+        f"/api/templates/{template_id}", json={"body": "{{client_name}}"}
+    )
+    assert edited_contract.status_code == 200, edited_contract.text
+    assert edited_contract.json()["is_active"] is True
+    assert edited_contract.json()["last_test_rendered_at"] is None
+    assert edited_contract.json()["approved_at"] is None
+    assert edited_contract.json()["approved_by_user_id"] is None
+
+    edited_activation = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert edited_activation.status_code == 409
+    assert "representative flattened PDF preview" in edited_activation.json()["detail"]
+
+    second_preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": activation_values,
+            "preview_purpose": "activation",
+        },
+    )
+    assert second_preview.status_code == 200, second_preview.text
+    reactivated = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert reactivated.status_code == 200, reactivated.text
+    assert reactivated.json()["is_active"] is True
+
+    template = await db_session.scalar(
+        select(DocumentTemplate).where(DocumentTemplate.id == uuid.UUID(template_id))
+    )
+    template.source_sha256 = None
+    await db_session.commit()
+    missing_integrity = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert missing_integrity.status_code == 409
+    assert "integrity check" in missing_integrity.json()["detail"]
+
 
 @pytest.mark.asyncio
 async def test_cover_only_pdf_completes_intake_activation_publish_generation(
@@ -3028,6 +3077,11 @@ async def test_cover_only_pdf_completes_intake_activation_publish_generation(
 ):
     """A reviewed value-less cover is a complete PDF template contract."""
 
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from app.models.matter_document import MatterDocument
     from app.models.plugin import Matter
 
     await _grant_manage_documents(db_session, test_tenant, test_user)
@@ -3085,56 +3139,19 @@ async def test_cover_only_pdf_completes_intake_activation_publish_generation(
     )
     assert generated.status_code == 200, generated.text
     assert generated.headers["content-type"].startswith("application/pdf")
-
-    renamed_draft = await client.patch(
-        f"/api/templates/{template_id}", json={"title": "Mapped PDF v2"}
+    preview_id = generated.headers["x-clarity-preview-id"]
+    saved = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={"variables": {}, "matter_id": str(matter.id), "preview_id": preview_id},
     )
-    assert renamed_draft.status_code == 200, renamed_draft.text
-    # The title participates in output identity (including the generated file
-    # name), so even a rename returns the changed version to draft.
-    assert renamed_draft.json()["is_active"] is True
-    assert renamed_draft.json()["approved_at"] is None
-
-    edited_contract = await client.patch(
-        f"/api/templates/{template_id}", json={"body": "{{client_name}}"}
+    assert saved.status_code == 200, saved.text
+    document = await db_session.scalar(
+        select(MatterDocument).where(
+            MatterDocument.id == uuid.UUID(saved.json()["matter_document_id"])
+        )
     )
-    assert edited_contract.status_code == 200, edited_contract.text
-    assert edited_contract.json()["is_active"] is True
-    assert edited_contract.json()["last_test_rendered_at"] is None
-    assert edited_contract.json()["approved_at"] is None
-    assert edited_contract.json()["approved_by_user_id"] is None
-
-    edited_activation = await client.patch(
-        f"/api/templates/{template_id}", json={"is_active": True}
-    )
-    assert edited_activation.status_code == 409
-    assert "representative flattened PDF preview" in edited_activation.json()["detail"]
-
-    second_preview = await client.post(
-        f"/api/templates/{template_id}/render-file",
-        json={
-            "variables": activation_values,
-            "preview_purpose": "activation",
-        },
-    )
-    assert second_preview.status_code == 200, second_preview.text
-    reactivated = await client.patch(
-        f"/api/templates/{template_id}", json={"is_active": True}
-    )
-    assert reactivated.status_code == 200, reactivated.text
-    assert reactivated.json()["is_active"] is True
-
-    template = await db_session.scalar(
-        select(DocumentTemplate).where(DocumentTemplate.id == uuid.UUID(template_id))
-    )
-    template.source_sha256 = None
-    await db_session.commit()
-    missing_integrity = await client.patch(
-        f"/api/templates/{template_id}", json={"is_active": True}
-    )
-    assert missing_integrity.status_code == 409
-    assert "integrity check" in missing_integrity.json()["detail"]
-
+    assert document is not None
+    assert Path(document.storage_path).read_bytes().startswith(b"%PDF-")
 
 @pytest.mark.asyncio
 async def test_pdf_creation_rejects_unmapped_reviewed_body_and_json_shortcut(
