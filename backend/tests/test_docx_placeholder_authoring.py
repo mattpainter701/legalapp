@@ -404,8 +404,9 @@ async def test_derive_second_storage_failure_removes_first_file_and_keeps_origin
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rollback_fails", [False, True])
 async def test_cleanup_commit_failure_removes_new_files_and_keeps_original(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, rollback_fails
 ):
     from app.routers import document_templates as router
     from app.schemas.document_template import DocumentTemplateWordCleanupRequest
@@ -427,6 +428,8 @@ async def test_cleanup_commit_failure_removes_new_files_and_keeps_original(
     db.add = Mock()
     db.scalar.return_value = template
     db.commit.side_effect = RuntimeError("db failed")
+    if rollback_fails:
+        db.rollback.side_effect = RuntimeError("connection lost")
     monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
     monkeypatch.setattr(
         router, "_verified_template_source", AsyncMock(return_value=content)

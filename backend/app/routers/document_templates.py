@@ -694,7 +694,9 @@ def _normalized_media_type(content_type: str | None) -> str:
 
 
 def _template_source_dir(tenant_id: str, template_id: uuid.UUID) -> str:
-    return os.path.join(settings.UPLOAD_DIR, tenant_id, "templates", str(template_id))
+    return os.path.join(
+        settings.UPLOAD_DIR, str(tenant_id), "templates", str(template_id)
+    )
 
 
 async def _persist_template_source(
@@ -705,7 +707,22 @@ async def _persist_template_source(
         Path(directory).mkdir, parents=True, exist_ok=True, mode=0o750
     )
     path = os.path.join(directory, _safe_upload_filename(filename))
-    await asyncio.to_thread(Path(path).write_bytes, content)
+
+    def write_source():
+        created = False
+        try:
+            with Path(path).open("xb") as destination:
+                created = True
+                destination.write(content)
+        except Exception:
+            if created:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError:
+                    logger.exception("Unable to clean a failed template source write")
+            raise
+
+    await asyncio.to_thread(write_source)
     return path
 
 
@@ -3131,6 +3148,45 @@ def _remove_created_template_files(paths: list[str]) -> None:
             logger.exception("Unable to clean derived Word source after failed save")
 
 
+async def _verified_word_original(template) -> tuple[bytes, str]:
+    """Return the first upload, never substitute a later derived source for it."""
+    evidence_path = getattr(template, "source_evidence_storage_path", None)
+    evidence_hash = getattr(template, "source_evidence_sha256", None)
+    provenance = getattr(template, "source_provenance", None)
+    if not evidence_path and not evidence_hash and not provenance:
+        return await _verified_template_source(
+            template
+        ), template.source_filename or "original.docx"
+    if not evidence_path or not evidence_hash:
+        raise HTTPException(
+            status_code=409, detail="The original template evidence is unavailable"
+        )
+    path = Path(evidence_path).resolve()
+    root = Path(_template_source_dir(str(template.tenant_id), template.id)).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(
+            status_code=409, detail="The original template evidence is unavailable"
+        )
+    content = await asyncio.to_thread(path.read_bytes)
+    if hashlib.sha256(content).hexdigest() != evidence_hash:
+        raise HTTPException(
+            status_code=409,
+            detail="The original template evidence failed its integrity check",
+        )
+    return content, getattr(
+        template, "source_evidence_filename", None
+    ) or template.source_filename or "original.docx"
+
+
+async def _rollback_word_draft(db, paths: list[str]) -> None:
+    try:
+        await db.rollback()
+    except Exception:
+        logger.exception("Unable to roll back failed Word draft save")
+    finally:
+        _remove_created_template_files(paths)
+
+
 @router.post(
     "/{template_id}/derive-word-draft",
     response_model=DocumentTemplateResponse,
@@ -3162,6 +3218,8 @@ async def derive_word_draft(
             status_code=422, detail="Word derivation requires a DOCX template"
         )
     original = await _verified_template_source(template)
+    evidence, evidence_filename = await _verified_word_original(template)
+    provenance = getattr(template, "source_provenance", None) or {}
     try:
         suggestion = await asyncio.to_thread(suggest_source_mode, original)
         mode = resolve_source_mode(suggestion, payload.source_mode)
@@ -3192,8 +3250,8 @@ async def derive_word_draft(
         evidence_path = await _persist_template_source(
             tenant_id=tenant_id,
             template_id=new_id,
-            filename=f"original-{filename}",
-            content=original,
+            filename=f"original-{new_id.hex}.docx",
+            content=evidence,
         )
         created_paths.append(evidence_path)
     except Exception as exc:
@@ -3227,11 +3285,15 @@ async def derive_word_draft(
         source_sha256=hashlib.sha256(derived.content).hexdigest(),
         source_file_size=len(derived.content),
         source_evidence_storage_path=evidence_path,
-        source_evidence_filename=filename,
-        source_evidence_sha256=hashlib.sha256(original).hexdigest(),
+        source_evidence_filename=evidence_filename,
+        source_evidence_sha256=hashlib.sha256(evidence).hexdigest(),
         source_provenance={
             **derived.metadata,
-            "original_template_id": str(template.id),
+            "parent_template_id": str(template.id),
+            "parent_source_sha256": hashlib.sha256(original).hexdigest(),
+            "original_template_id": provenance.get("original_template_id")
+            or str(template.id),
+            "original_sha256": hashlib.sha256(evidence).hexdigest(),
         },
         is_active=False,
         current_version_no=0,
@@ -3242,8 +3304,7 @@ async def derive_word_draft(
         db.add(draft)
         await db.commit()
     except Exception as exc:
-        await db.rollback()
-        _remove_created_template_files(created_paths)
+        await _rollback_word_draft(db, created_paths)
         raise HTTPException(
             status_code=500, detail="The derived Word draft could not be saved"
         ) from exc
@@ -3280,22 +3341,8 @@ async def cleanup_word_draft(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     new_id = uuid.uuid4()
     filename = _safe_upload_filename(template.source_filename or "template.docx")
-    if not template.source_evidence_storage_path or not template.source_evidence_sha256:
-        raise HTTPException(
-            status_code=409, detail="The original template evidence is unavailable"
-        )
-    evidence_path = Path(template.source_evidence_storage_path).resolve()
-    expected = Path(_template_source_dir(str(tenant_id), template.id)).resolve()
-    if not evidence_path.is_relative_to(expected) or not evidence_path.is_file():
-        raise HTTPException(
-            status_code=409, detail="The original template evidence is unavailable"
-        )
-    evidence = await asyncio.to_thread(evidence_path.read_bytes)
-    if hashlib.sha256(evidence).hexdigest() != template.source_evidence_sha256:
-        raise HTTPException(
-            status_code=409,
-            detail="The original template evidence failed its integrity check",
-        )
+    evidence, evidence_filename = await _verified_word_original(template)
+    provenance = getattr(template, "source_provenance", None) or {}
     if any(
         isinstance(field, dict) and field.get("docx_anchor")
         for field in (template.variable_schema or {}).get("fields", [])
@@ -3312,7 +3359,7 @@ async def cleanup_word_draft(
         retained_path = await _persist_template_source(
             tenant_id=tenant_id,
             template_id=new_id,
-            filename=f"original-{filename}",
+            filename=f"original-{new_id.hex}.docx",
             content=evidence,
         )
         created_paths.append(retained_path)
@@ -3322,6 +3369,7 @@ async def cleanup_word_draft(
             status_code=500, detail="The cleaned Word source could not be saved"
         ) from exc
     schema = json.loads(json.dumps(template.variable_schema or {}))
+    schema["source_review"] = {}
     draft = DocumentTemplate(
         id=new_id,
         tenant_id=tenant_id,
@@ -3346,23 +3394,26 @@ async def cleanup_word_draft(
         source_sha256=hashlib.sha256(derived).hexdigest(),
         source_file_size=len(derived),
         source_evidence_storage_path=retained_path,
-        source_evidence_filename=template.source_evidence_filename or filename,
+        source_evidence_filename=evidence_filename,
         source_evidence_sha256=hashlib.sha256(evidence).hexdigest(),
         source_provenance={
+            **provenance,
             "derivation_version": 1,
             "kind": "cleanup",
-            "original_template_id": str(template.id),
+            "parent_template_id": str(template.id),
+            "parent_source_sha256": hashlib.sha256(source).hexdigest(),
+            "original_template_id": provenance.get("original_template_id")
+            or str(template.id),
             "original_sha256": hashlib.sha256(evidence).hexdigest(),
             "derived_sha256": hashlib.sha256(derived).hexdigest(),
         },
         is_active=False,
     )
-    db.add(draft)
     try:
+        db.add(draft)
         await db.commit()
     except Exception as exc:
-        await db.rollback()
-        _remove_created_template_files(created_paths)
+        await _rollback_word_draft(db, created_paths)
         raise HTTPException(
             status_code=500, detail="The cleaned Word draft could not be saved"
         ) from exc
@@ -3387,27 +3438,12 @@ async def download_original_template_source(
     )
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    path = Path(template.source_evidence_storage_path or "").resolve()
-    expected_root = Path(_template_source_dir(str(tenant_id), template.id)).resolve()
-    if (
-        not template.source_evidence_sha256
-        or not path.is_relative_to(expected_root)
-        or not path.is_file()
-    ):
-        raise HTTPException(
-            status_code=409, detail="The original template evidence is unavailable"
-        )
-    content = await asyncio.to_thread(path.read_bytes)
-    if hashlib.sha256(content).hexdigest() != template.source_evidence_sha256:
-        raise HTTPException(
-            status_code=409,
-            detail="The original template evidence failed its integrity check",
-        )
+    content, filename = await _verified_word_original(template)
     return Response(
         content=content,
         media_type=template.source_content_type or "application/octet-stream",
         headers={
-            "Content-Disposition": f'attachment; filename="{_safe_upload_filename(template.source_evidence_filename or "original.docx")}"'
+            "Content-Disposition": f'attachment; filename="{_safe_upload_filename(filename)}"'
         },
     )
 
