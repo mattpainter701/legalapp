@@ -6,7 +6,9 @@ role to a date only when it should record the signing date; ordinary template
 dates remain filled values. Role edits use the editor's normal save and undo.
 
 Test and publish the map, then preview and save the document to its matter.
-PDF templates retain their authored positions. Word templates reflow, so their
+Supported PDF templates retain their authored positions. Missing roles or
+unsupported signing page geometry leave the generated document usable and
+require final review before signing. Word templates reflow, so their
 signature positions must be reviewed on the final generated PDF.
 
 In the matter's E-Signature panel, select the saved document, choose Dropbox

@@ -116,6 +116,25 @@ def template_positioned_fields(
     return result
 
 
+def generated_signing_metadata(
+    variable_schema: dict | None, *, source: bytes, template_format: str
+) -> tuple[list[dict], list[str], bool]:
+    """Keep generation usable while requiring verified placements at dispatch."""
+    fields = signing_template_fields(variable_schema)
+    roles = sorted(
+        {str(field.get("signer_role") or "").strip() for field in fields} - {""}
+    )
+    placements = []
+    if fields and template_format == "pdf":
+        try:
+            placements = template_positioned_fields(variable_schema, source=source)
+        except PlacementError:
+            # Missing roles and provider page restrictions must not block saving
+            # an unsigned document. The required flag prevents unpositioned send.
+            pass
+    return placements, roles, bool(fields)
+
+
 def _number(value: Any, label: str) -> float:
     try:
         result = float(value)

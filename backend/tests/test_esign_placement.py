@@ -12,6 +12,7 @@ from app.services.esign.placement import (
     validate_placements,
     template_positioned_fields,
     signing_template_fields,
+    generated_signing_metadata,
     validate_pdf_geometry,
 )
 
@@ -219,3 +220,37 @@ def test_final_pdf_review_requires_all_original_signer_roles():
         required_roles=["client", "witness"],
     )
     assert [field.role for field in fields] == ["client", "witness"]
+
+
+@pytest.mark.parametrize(
+    "source_format,width,role,has_positions",
+    [
+        ("pdf", 612, "client", True),
+        ("pdf", 595, "client", False),
+        ("pdf", 612, "", False),
+        ("docx", 612, "client", False),
+    ],
+)
+def test_generation_keeps_documents_usable_and_requires_review_when_positions_cannot_transfer(
+    source_format, width, role, has_positions
+):
+    schema = {
+        "fields": [
+            {
+                "field_type": "signature",
+                "signer_role": role,
+                "pdf_overlay": {"page": 1, "rect": [72, 100, 216, 136]},
+            }
+        ]
+    }
+    positions, roles, required = generated_signing_metadata(
+        schema, source=_pdf(width=width), template_format=source_format
+    )
+    assert bool(positions) is has_positions
+    assert roles == ([role] if role else [])
+    assert required is True
+    assert generated_signing_metadata(
+        {"fields": [{"field_type": "date"}]},
+        source=b"ordinary document",
+        template_format=source_format,
+    ) == ([], [], False)

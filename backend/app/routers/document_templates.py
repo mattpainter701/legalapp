@@ -133,11 +133,7 @@ from app.services.template_bindings import (
 )
 from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
-from app.services.esign.placement import (
-    PlacementError,
-    signing_template_fields,
-    template_positioned_fields,
-)
+from app.services.esign.placement import generated_signing_metadata
 from app.services.access_control import require_capability, require_capabilities
 from app.utils.text_processing import extract_text
 from app.utils.sql_filters import escape_like
@@ -4255,19 +4251,9 @@ async def render_template_endpoint(
                 if field.get("name") not in suppressed
             ],
         }
-        signing_fields = signing_template_fields(signing_schema)
-        signing_required = bool(signing_fields)
-        signing_roles = sorted(
-            {str(field.get("signer_role") or "").strip() for field in signing_fields}
-            - {""}
+        positioned_fields, signing_roles, signing_required = generated_signing_metadata(
+            signing_schema, source=output_bytes, template_format=template_format
         )
-        if template_format == "pdf":
-            try:
-                positioned_fields = template_positioned_fields(
-                    signing_schema, source=output_bytes
-                )
-            except PlacementError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
     if (
         matter is None
         and payload.preview_purpose == "activation"
