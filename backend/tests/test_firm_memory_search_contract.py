@@ -195,3 +195,36 @@ async def test_rejected_concurrent_search_cannot_release_active_lease(monkeypatc
     finish.set()
     assert await first == "complete"
     assert redis.value is None
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        # The complaint this fixes: a research question over a decade-old
+        # archive returned nothing because every word had to appear.
+        (
+            "indemnification carve out vendor negligence",
+            "indemnification or carve or out or vendor or negligence",
+        ),
+        ("indemnification", "indemnification"),
+        # Explicit syntax is the reader saying what they meant, so it stands.
+        ('"summary judgment" granted', '"summary judgment" granted'),
+        ("breach or default", "breach or default"),
+        ("notice -draft", "notice -draft"),
+        # Punctuation a lawyer actually types must not become search syntax.
+        ("Smith v. Jones (2019)", "Smith or v. or Jones or 2019"),
+    ],
+)
+def test_a_research_question_is_widened_but_explicit_syntax_is_preserved(
+    query, expected
+):
+    from app.services.firm_memory import recall_tsquery_text
+
+    assert recall_tsquery_text(query) == expected
+
+
+def test_recall_query_never_produces_an_empty_tsquery_input():
+    """An empty input would silently match everything or nothing."""
+    from app.services.firm_memory import recall_tsquery_text
+
+    assert recall_tsquery_text("  ???  ") == "???"

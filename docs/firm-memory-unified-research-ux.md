@@ -42,6 +42,66 @@ Two invariants follow, and both are enforced server-side:
 Where a firm does enable per-user native authorization, the identity ticket
 remains in force and adds to these rules; it never replaces them.
 
+## The interface: one box, then refinement
+
+The corpus this page is bought for is an on-premises archive that nobody
+curated for search — old records, filed by whoever filed them, most of it never
+linked to a matter. The interface therefore leads with the query and nothing
+else:
+
+- A single query box and a scope control (Everything / On-premises / Cloud) are
+  the only controls above the results. Every narrowing filter lives behind
+  **Refine**, collapsed by default.
+- **The matter selector is a filter, not a gate, and it is not the first thing
+  a reader sees.** It sits inside Refine, defaulted to "Any matter, including
+  unlinked documents", and says in words that most archived documents are not
+  matter-linked. A page that asks for a matter first teaches the opposite of
+  what this search does.
+- Source, file share, and cloud provider were three controls feeding one
+  `source_ids` list, and three ways for the form to contradict itself. They are
+  now one "Limit to source" control; picking a cloud provider still selects
+  every source behind it.
+- Collapsing filters hides state, so any active refinement stays on screen as a
+  removable chip. A search is never quietly shaped by a control the reader
+  cannot see.
+- The example queries on the empty state are research questions, because the
+  common failure is a reader who types a file name into a box that reads
+  document text.
+
+## Reading a result
+
+Search-node snippets arrive as `<mark>`-tagged fragments with the surrounding
+text HTML-escaped. They are split into React nodes and the text between the
+markers is unescaped, so a hit is emphasised and nothing from the corpus is
+ever interpreted as markup. The metadata fallback returns a plain snippet, and
+the query terms are highlighted client-side so scanning works the same way on
+both paths.
+
+## Matching a research question
+
+A five-word question must not be read as "all five of these words are in one
+chunk". That reading is what makes a decade-old archive answer "no results" to
+a half-remembered phrase, and it is fixed on both retrieval paths:
+
+- The customer node's OpenSearch query runs `default_operator: OR` with
+  `minimum_should_match` (`2<70%` by default, per-deployment tunable through
+  `OpenSearchLimits`). One- and two-word queries still require every term;
+  longer ones require most of them and let BM25 rank the rest. A reader's own
+  `AND`, `OR`, `NOT` and quoted phrases still bind exactly as typed.
+- A stray operator is a typo in a search box, not a failed search. A parse
+  error is retried once with the query escaped as literal text, so
+  `notice of breach !! (2019` searches rather than surfacing as an unreachable
+  node.
+- The SaaS-side metadata fallback uses `websearch_to_tsquery`, which
+  understands quoted phrases, `or`, and `-exclusion`. A query carrying none of
+  that syntax is widened to an OR over its terms and ordered by `ts_rank`,
+  matching the recall the RAG retrieval path already uses.
+
+None of this widens authorization. The ACL filter, the deny-token `must_not`,
+the path scopes and the matter-binding re-check are all filter-context clauses
+and are untouched by the scoring change: a broader query returns more of what
+the actor could already have found, and nothing else.
+
 ## Where results come from
 
 A matter-bound SMB source is searched through the customer's own search node,
@@ -84,6 +144,8 @@ searched, and nothing that policy does not positively allow is included.
 - Coverage names the index that actually answered. `smb_local_fulltext` is the customer node's document text and may be reported as complete; `smb_metadata_fts` is the SaaS-side file-name and preview index, is only ever a fallback, and stays partial with reason `metadata_index_fallback` so a unified search never asserts that a phrase is absent from the corpus.
 - The response carries a one-sentence `coverage_message` naming the reason a search is incomplete, so a reader does not have to decode coverage tokens, and `duration_ms`.
 - Every incomplete search says **No matches in available sources** when it has zero hits.
+- The coverage panel is shown only when a search is incomplete, and a complete one says **All authorized sources searched**. Absence of a warning is not an assertion, and a reader deciding whether "nothing found" means "not in the corpus" needs the positive statement.
+- A coverage reason the reader cannot act on is paired with the action that clears it. `matter_binding_required` and `no_authorized_matter_scope` name the administrator's job; nothing the reader types will reach an unbound share.
 - Source and provenance labels remain on every result card.
 - On-premises cards show relative location and local-index freshness. Cloud cards use validated provider-native HTTPS actions.
 - Stable LawHand links use same-origin action URLs. Raw `file://` and `smb://` destinations are never rendered.

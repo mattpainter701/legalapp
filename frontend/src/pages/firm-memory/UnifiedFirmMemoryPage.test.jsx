@@ -17,6 +17,10 @@ vi.mock('../../documentSearchApi', async () => {
   }
 })
 
+const submit = () => fireEvent.click(screen.getByRole('button', { name: /^search$/i }))
+const openRefine = () => fireEvent.click(screen.getByRole('button', { name: /refine/i }))
+const typeQuery = (value) => fireEvent.change(screen.getByLabelText('Research query'), { target: { value } })
+
 describe('UnifiedFirmMemoryPage', () => {
   afterEach(cleanup)
 
@@ -41,8 +45,8 @@ describe('UnifiedFirmMemoryPage', () => {
       durationMs: 18,
     })
     render(<UnifiedFirmMemoryPage />)
-    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'notice history' } })
-    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+    typeQuery('notice history')
+    submit()
 
     await waitFor(() => expect(searchAuthorizedDocuments).toHaveBeenCalledWith(expect.objectContaining({
       query: 'notice history',
@@ -50,26 +54,91 @@ describe('UnifiedFirmMemoryPage', () => {
       filters: expect.objectContaining({ matterIds: [] }),
     })))
     expect(screen.getByRole('heading', { name: 'No matching documents' })).toBeInTheDocument()
+    // Completeness is asserted, not implied by the lack of a warning.
+    expect(screen.getByText('All authorized sources searched')).toBeInTheDocument()
   })
 
-  it('sends source, share, provider, file type, matter, and date filters', async () => {
+  it('keeps the query box and scope in front and every narrowing filter behind Refine', async () => {
+    render(<UnifiedFirmMemoryPage />)
+    await screen.findByRole('button', { name: /on-premises/i })
+    // A matter is the least relevant filter for an unlinked on-premises
+    // archive, so it must not greet the reader before they have searched.
+    expect(screen.queryByLabelText('Matter filter')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Source filter')).not.toBeInTheDocument()
+
+    openRefine()
+    expect(await screen.findByLabelText('Matter filter')).toBeInTheDocument()
+    expect(screen.getByLabelText('Matter filter')).toHaveValue('')
+    expect(screen.getByRole('option', { name: 'Any matter, including unlinked documents' })).toBeInTheDocument()
+  })
+
+  it('runs an example research query so the box reads as a question, not a filename', async () => {
+    searchAuthorizedDocuments.mockResolvedValue({ results: [], coverage: { state: 'ready', complete: true, sources: [] }, durationMs: 2 })
+    render(<UnifiedFirmMemoryPage />)
+    fireEvent.click(screen.getByRole('button', { name: /indemnification carve-out/i }))
+    await waitFor(() => expect(searchAuthorizedDocuments).toHaveBeenCalledWith(expect.objectContaining({
+      query: 'indemnification carve-out for vendor negligence',
+    })))
+  })
+
+  it('sends source, file type, matter, and date filters', async () => {
     searchAuthorizedDocuments.mockResolvedValue({ results: [], coverage: { state: 'ready', complete: true, sources: [] }, durationMs: 1 })
     render(<UnifiedFirmMemoryPage />)
-    await screen.findByRole('option', { name: 'Legacy archive' })
-    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'prior advice' } })
+    openRefine()
+    await screen.findByRole('option', { name: 'Legacy archive · Cases' })
+    typeQuery('prior advice')
     fireEvent.change(screen.getByLabelText('Matter filter'), { target: { value: 'matter-1' } })
-    fireEvent.change(screen.getByLabelText('Source filter'), { target: { value: 'source-local' } })
-    fireEvent.change(screen.getByLabelText('File share filter'), { target: { value: 'share-1' } })
+    fireEvent.change(screen.getByLabelText('Source filter'), { target: { value: 'source:source-local' } })
     fireEvent.change(screen.getByLabelText('Modified after'), { target: { value: '2025-01-01' } })
     fireEvent.click(screen.getByRole('button', { name: 'PDF' }))
-    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+    submit()
     await waitFor(() => expect(searchAuthorizedDocuments).toHaveBeenCalledWith(expect.objectContaining({
+      scope: 'selected',
       filters: expect.objectContaining({
         matterIds: ['matter-1'],
         sourceIds: ['source-local'],
         fileTypes: ['PDF'],
         modifiedFrom: '2025-01-01',
       }),
+    })))
+  })
+
+  it('selects every source behind a cloud provider from one control', async () => {
+    listAuthorizedDocumentSources.mockResolvedValue([
+      { id: 'source-sp', label: 'SharePoint sites', kind: 'cloud', share: '', shareId: '', provider: 'Microsoft 365', providerId: 'm365' },
+      { id: 'source-od', label: 'OneDrive', kind: 'cloud', share: '', shareId: '', provider: 'Microsoft 365', providerId: 'm365' },
+    ])
+    searchAuthorizedDocuments.mockResolvedValue({ results: [], coverage: { state: 'ready', complete: true, sources: [] }, durationMs: 1 })
+    render(<UnifiedFirmMemoryPage />)
+    openRefine()
+    await screen.findByRole('option', { name: 'Microsoft 365' })
+    typeQuery('vendor notice')
+    fireEvent.change(screen.getByLabelText('Source filter'), { target: { value: 'provider:m365' } })
+    submit()
+    await waitFor(() => expect(searchAuthorizedDocuments).toHaveBeenCalledWith(expect.objectContaining({
+      scope: 'selected',
+      filters: expect.objectContaining({ sourceIds: ['source-sp', 'source-od'] }),
+    })))
+  })
+
+  it('shows collapsed refinements as removable chips so hidden state never shapes results silently', async () => {
+    searchAuthorizedDocuments.mockResolvedValue({ results: [], coverage: { state: 'ready', complete: true, sources: [] }, durationMs: 1 })
+    render(<UnifiedFirmMemoryPage />)
+    openRefine()
+    await screen.findByLabelText('Matter filter')
+    fireEvent.change(screen.getByLabelText('Matter filter'), { target: { value: 'matter-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'PDF' }))
+    openRefine()
+
+    expect(screen.queryByLabelText('Matter filter')).not.toBeInTheDocument()
+    const chip = screen.getByRole('button', { name: /Acme v\. Northstar/ })
+    expect(chip).toBeInTheDocument()
+
+    fireEvent.click(chip)
+    typeQuery('vendor notice')
+    submit()
+    await waitFor(() => expect(searchAuthorizedDocuments).toHaveBeenCalledWith(expect.objectContaining({
+      filters: expect.objectContaining({ matterIds: [], fileTypes: ['PDF'] }),
     })))
   })
 
@@ -80,13 +149,13 @@ describe('UnifiedFirmMemoryPage', () => {
       durationMs: 20,
     })
     render(<UnifiedFirmMemoryPage />)
-    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'indemnity' } })
-    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+    typeQuery('indemnity')
+    submit()
     expect(await screen.findByRole('heading', { name: 'No matches in available sources' })).toBeInTheDocument()
     expect(screen.getByText('Archive agent is offline.')).toBeInTheDocument()
   })
 
-  it('clears source-dependent filters when the matter changes', async () => {
+  it('clears a source refinement the matter change no longer offers', async () => {
     listAuthorizedDocumentSources.mockImplementation((matterIds) => Promise.resolve(
       matterIds[0] === 'matter-2'
         ? [{ id: 'source-rivera', label: 'Rivera archive', kind: 'on_prem', share: 'Rivera', shareId: 'share-2', provider: '', providerId: '' }]
@@ -96,31 +165,29 @@ describe('UnifiedFirmMemoryPage', () => {
         ],
     ))
     render(<UnifiedFirmMemoryPage />)
-    await screen.findByRole('option', { name: 'Legacy archive' })
-    fireEvent.change(screen.getByLabelText('Source filter'), { target: { value: 'source-local' } })
-    fireEvent.change(screen.getByLabelText('File share filter'), { target: { value: 'share-1' } })
-    fireEvent.change(screen.getByLabelText('Cloud provider filter'), { target: { value: 'm365' } })
+    openRefine()
+    await screen.findByRole('option', { name: 'Legacy archive · Cases' })
+    fireEvent.change(screen.getByLabelText('Source filter'), { target: { value: 'source:source-local' } })
 
     fireEvent.change(screen.getByLabelText('Matter filter'), { target: { value: 'matter-2' } })
 
-    expect(screen.getByLabelText('Source filter')).toHaveValue('')
-    expect(screen.getByLabelText('File share filter')).toHaveValue('')
-    expect(screen.getByLabelText('Cloud provider filter')).toHaveValue('')
     await waitFor(() => expect(listAuthorizedDocumentSources).toHaveBeenLastCalledWith(['matter-2']))
-    expect(await screen.findByRole('option', { name: 'Rivera archive' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'Rivera archive · Rivera' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Source filter')).toHaveValue('')
   })
 
   it('cannot submit a selected source that contradicts the displayed scope', async () => {
     searchAuthorizedDocuments.mockResolvedValue({ results: [], coverage: { state: 'partial', complete: false, sources: [] }, durationMs: 1 })
     render(<UnifiedFirmMemoryPage />)
-    await screen.findByRole('option', { name: 'Legacy archive' })
-    fireEvent.change(screen.getByLabelText('Source filter'), { target: { value: 'source-local' } })
-    fireEvent.change(screen.getByLabelText('Search scope'), { target: { value: 'cloud' } })
+    openRefine()
+    await screen.findByRole('option', { name: 'Legacy archive · Cases' })
+    fireEvent.change(screen.getByLabelText('Source filter'), { target: { value: 'source:source-local' } })
+    fireEvent.click(screen.getByRole('button', { name: /^cloud$/i }))
 
-    expect(screen.getByLabelText('Source filter')).toHaveValue('')
-    expect(screen.queryByRole('option', { name: 'Legacy archive' })).not.toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'cloud advice' } })
-    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+    await waitFor(() => expect(screen.getByLabelText('Source filter')).toHaveValue(''))
+    expect(screen.queryByRole('option', { name: 'Legacy archive · Cases' })).not.toBeInTheDocument()
+    typeQuery('cloud advice')
+    submit()
 
     await waitFor(() => expect(searchAuthorizedDocuments).toHaveBeenCalledWith(expect.objectContaining({
       scope: 'cloud',
@@ -141,12 +208,34 @@ describe('UnifiedFirmMemoryPage', () => {
       durationMs: 4,
     })
     render(<UnifiedFirmMemoryPage />)
-    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'indemnity' } })
-    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+    typeQuery('indemnity')
+    submit()
 
     expect(await screen.findByText('Search unavailable')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'No matches in available sources' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'No matching documents' })).not.toBeInTheDocument()
+  })
+
+  it('names the administrator action behind an unsearchable file share', async () => {
+    searchAuthorizedDocuments.mockResolvedValue({
+      results: [],
+      coverage: {
+        state: 'unsupported',
+        complete: false,
+        message: 'A file share can only be searched through the matters it is bound to.',
+        checkedSources: 0,
+        totalSources: 1,
+        sources: [{ id: 'source-local', label: 'Legacy archive', state: 'unsupported', reason: 'matter_binding_required' }],
+      },
+      durationMs: 3,
+    })
+    render(<UnifiedFirmMemoryPage />)
+    typeQuery('old vendor file')
+    submit()
+
+    // The reader cannot rephrase their way past an unbound share, so the panel
+    // has to name whose job it is rather than repeat a coverage token.
+    expect(await screen.findByText(/ask an administrator to bind this file share/i)).toBeInTheDocument()
   })
 
   it.each(['Win32', 'iPhone'])('keeps source actions honest on %s', async platform => {
@@ -170,10 +259,10 @@ describe('UnifiedFirmMemoryPage', () => {
       ],
     })
     render(<UnifiedFirmMemoryPage />)
-    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'notice' } })
-    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+    typeQuery('notice')
+    submit()
 
-    expect((await screen.findAllByText('Legacy archive')).length).toBeGreaterThan(1)
+    expect(await screen.findByText('Legacy archive')).toBeInTheDocument()
     expect(screen.getByText('2019/Order.pdf')).toBeInTheDocument()
     if (platform === 'Win32') expect(screen.getByRole('link', { name: 'Open on this computer' })).toHaveAttribute('href', '/v1/document-search/results/local-1/open')
     else {
@@ -182,40 +271,34 @@ describe('UnifiedFirmMemoryPage', () => {
     }
     vi.restoreAllMocks()
     expect(screen.getByRole('link', { name: 'Open in Microsoft 365' })).toHaveAttribute('href', 'https://contoso.sharepoint.com/document')
-    expect(screen.getAllByText('Acme v. Northstar')).toHaveLength(2)
-    expect(screen.getAllByText('None')).toHaveLength(1)
+    expect(screen.getByText('Acme v. Northstar')).toBeInTheDocument()
+    expect(screen.getByText('No linked matter')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Copy path' }))
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('\\\\server\\cases\\2019\\Order.pdf'))
   })
 
-  it('opens a server-issued LawHand result link and says why a device open is not offered', async () => {
+  it('renders search-node highlights as emphasis instead of literal markup', async () => {
     searchAuthorizedDocuments.mockResolvedValue({
       coverage: { state: 'partial', complete: false, sources: [] },
       results: [
         {
-          id: 'local-1', title: 'Motion.pdf', snippet: 'Prior notice analysis', fileType: 'PDF', modifiedAt: '', pageNumber: null, score: 0.5,
-          source: { kind: 'on_prem', label: 'Legacy archive', provider: '', share: 'Cases', relativeLocation: 'Acme/Motion.pdf', path: 'Acme/Motion.pdf', freshness: '', indexKind: 'smb_metadata_fts' },
-          linkedMatters: [{ id: 'matter-1', label: 'Acme v. Northstar' }],
-          actions: {
-            openOnComputerUrl: '',
-            openOnComputerReason: 'Open from the lawhand result page',
-            providerUrl: '',
-            lawHandUrl: '/firm-memory?matter=matter-1&file=file-1',
-          },
+          id: 'local-1', title: 'Order.pdf', fileType: 'PDF', modifiedAt: '', pageNumber: null, score: 0.5,
+          snippet: 'the <mark>indemnification</mark> clause in Smith &amp; Co &lt;draft&gt;',
+          source: { kind: 'on_prem', label: 'Legacy archive', provider: '', share: '', relativeLocation: 'a.pdf', path: 'a.pdf', freshness: '' },
+          linkedMatters: [],
+          actions: { openOnComputerUrl: '', providerUrl: '', lawHandUrl: '' },
         },
       ],
     })
     render(<UnifiedFirmMemoryPage />)
-    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'notice' } })
-    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+    typeQuery('indemnification')
+    submit()
 
-    expect(await screen.findByRole('link', { name: 'Open LawHand result' }))
-      .toHaveAttribute('href', '/firm-memory?matter=matter-1&file=file-1')
-    expect(screen.getByRole('button', { name: 'Open on this computer' }))
-      .toHaveAttribute('title', 'Open from the lawhand result page')
-    // A relative location is not pasteable into Explorer, so it is not called a path.
-    expect(screen.getByRole('button', { name: 'Copy location' })).toBeInTheDocument()
-    expect(screen.getByText(/not the full document/i)).toBeInTheDocument()
+    const highlight = await screen.findByText('indemnification')
+    expect(highlight.tagName).toBe('MARK')
+    // Entities are unescaped as text; corpus markup is never interpreted.
+    expect(screen.getByText(/Smith & Co <draft>/)).toBeInTheDocument()
+    expect(screen.queryByText(/<mark>/)).not.toBeInTheDocument()
   })
 
   it('explains a firm-wide search that reached nothing instead of showing a bare zero', async () => {
@@ -231,11 +314,11 @@ describe('UnifiedFirmMemoryPage', () => {
       },
     })
     render(<UnifiedFirmMemoryPage />)
-    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'notice' } })
-    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+    typeQuery('notice')
+    submit()
 
-    expect(await screen.findByText(/not authorized on any matter/i)).toBeInTheDocument()
-    expect(screen.getByText(/choosing a matter searches the file shares bound to it/i)).toBeInTheDocument()
+    expect(await screen.findByText(/not authorized on any matter bound to one or more/i)).toBeInTheDocument()
+    expect(screen.getByText(/ask an administrator for access to the matter/i)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'No matching documents' })).not.toBeInTheDocument()
   })
 })

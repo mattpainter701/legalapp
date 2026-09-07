@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.3 — Search your firm's whole archive from one box
+
+Released September 7, 2026.
+
+Firm Memory leads with a single research question instead of a wall of filters, and finds documents that were never linked to a matter.
+
+- **Ask a question, then narrow.** One search box and a scope choice replace six filters. Matter, source, file type and dates now sit behind Refine, and anything you set stays visible as a chip you can remove.
+- **Find old records nobody linked to a matter.** A research question no longer has to match every word in one passage, so a half-remembered phrase finds a document filed years ago. Quoted phrases and AND, OR and NOT still work.
+- **See what was searched.** Matched words are highlighted in every result. A complete search says so, and an incomplete one names the reason and who can clear it.
+
 ## 2026.09.07.2 — Transfer client folders through the portal
 
 Released September 7, 2026.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import re
 import secrets
 import time
 import uuid
@@ -92,6 +93,34 @@ def _uuid(value: str) -> uuid.UUID | None:
         return uuid.UUID(str(value))
     except (TypeError, ValueError, AttributeError):
         return None
+
+
+# Explicit search syntax means the reader said what they wanted; anything else
+# is a question, and `websearch_to_tsquery` would AND every word of it. On a
+# filename-and-preview index that is the difference between finding a 2016
+# memo and being told it does not exist.
+_EXPLICIT_SEARCH_SYNTAX = ('"', " or ", " -")
+
+# Postgres carries no stop-word-free tokenizer here, so terms are split on
+# non-word characters and rejoined as an OR, matching the recall the RAG
+# retrieval path already uses.
+_QUERY_TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'._-]*")
+
+
+def recall_tsquery_text(query: str) -> str:
+    """Return the text handed to ``websearch_to_tsquery`` for a research query.
+
+    A quoted phrase, an explicit ``or``, or a ``-exclusion`` is left exactly as
+    typed. A plain question is widened to an OR over its terms, and ``ts_rank``
+    then puts the documents matching the most terms first rather than returning
+    nothing because one word was remembered wrong.
+    """
+    value = query.strip()
+    lowered = f" {value.casefold()} "
+    if any(token in lowered for token in _EXPLICIT_SEARCH_SYNTAX):
+        return value
+    terms = _QUERY_TERM_RE.findall(value)
+    return " or ".join(terms) if len(terms) > 1 else value
 
 
 def _normalize_windows(value: str | None) -> str:
@@ -675,7 +704,9 @@ class FirmMemorySearchService:
                     reason="native_document_authorization_required",
                     index_kind=SMB_FULL_TEXT_INDEX_KIND,
                 )
-            ts_query = func.plainto_tsquery("english", request.query)
+            ts_query = func.websearch_to_tsquery(
+                "english", recall_tsquery_text(request.query)
+            )
             stmt = select(
                 SmbFileIndex,
                 func.ts_rank(SmbFileIndex.search_vector, ts_query).label("score"),
