@@ -365,7 +365,7 @@ async def test_generated_pdf_persists_positioned_signing_descriptor_and_lists_it
     assert [tab["signer"] for tab in tabs] == [0, 0, 1]
     assert all(tab["y"] == 656 and tab["page"] == 1 for tab in tabs)
     assert (
-        hashlib.sha256(sent_payloads[0]["files"]["file[0]"][1]).hexdigest()
+        hashlib.sha256(sent_payloads[0]["files"]["files[]"][1]).hexdigest()
         == document.document_sha256
     )
 

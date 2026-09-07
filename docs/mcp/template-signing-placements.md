@@ -2,7 +2,7 @@
 
 In Template Studio, choose a signature field and assign a signer role, such as
 `client` or `attorney`. A signature field can request initials instead. Assign a
-role to a date only when the signer should enter that date; ordinary template
+role to a date only when it should record the signing date; ordinary template
 dates remain filled values. Role edits use the editor's normal save and undo.
 
 Test and publish the map, then preview and save the document to its matter.
@@ -31,7 +31,8 @@ it records acknowledgement without placing fields into the source document.
 Existing documents with no placements retain their previous flow.
 
 Dropbox Sign receives a JSON-encoded flat `form_fields_per_document` array in
-the multipart request, with `document_index: 0`. Page positions use top-left
+the multipart request, with `document_index: 0`. The PDF upload uses `files[]`;
+canonical date fields map to `date_signed`, per the [send API contract](https://developers.hellosign.com/api/signature-request/send). Page positions use top-left
 72-DPI coordinates; width and height use 80-DPI units, including the documented
 two-unit width adjustment. See the provider's [field format](https://developers.hellosign.com/docs/sdks/open-api/form-fields-per-document/)
 and [coordinate rules](https://help.dropbox.com/integrations/how-to-use-the-form-fields-per-document-parameter).

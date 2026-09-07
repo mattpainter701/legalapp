@@ -33,7 +33,13 @@ class _Client:
 
 
 @pytest.mark.asyncio
-async def test_dropbox_payload_contains_role_bound_positioned_form_field(monkeypatch):
+@pytest.mark.parametrize(
+    "field_type,provider_type",
+    [("signature", "signature"), ("date", "date_signed"), ("initials", "initials")],
+)
+async def test_dropbox_payload_contains_role_bound_positioned_form_field(
+    monkeypatch, field_type, provider_type
+):
     monkeypatch.setattr(dropbox.httpx, "AsyncClient", lambda **kwargs: _Client())
     monkeypatch.setattr(
         dropbox,
@@ -66,7 +72,7 @@ async def test_dropbox_payload_contains_role_bound_positioned_form_field(monkeyp
         positioned_fields=[
             {
                 "field_id": "client-signature",
-                "field_type": "signature",
+                "field_type": field_type,
                 "role": "client",
                 "page": 1,
                 "rect": [72, 100, 216, 136],
@@ -92,7 +98,11 @@ async def test_dropbox_payload_contains_role_bound_positioned_form_field(monkeyp
     assert data[0]["page"] == 1
     assert data[0]["y"] == 656
     assert data[0]["required"] is True
+    assert data[0]["type"] == provider_type
     assert data[1]["signer"] == 1
+    assert _Client.last[1]["files"] == {
+        "files[]": ("generated.pdf", source, "application/pdf")
+    }
     request.positioned_fields[0]["source_sha256"] = "a" * 64
     with pytest.raises(RuntimeError, match="stale"):
         await dropbox.DropboxSignProvider().send(request)

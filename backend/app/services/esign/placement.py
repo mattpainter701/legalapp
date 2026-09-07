@@ -254,7 +254,7 @@ def to_dropbox_form_field(
     return {
         "api_id": field.field_id,
         "document_index": 0,
-        "type": field.field_type,
+        "type": "date_signed" if field.field_type == "date" else field.field_type,
         "signer": signer_index,
         "required": True,
         # Dropbox's PDF examples use one-based page numbers; document_index is

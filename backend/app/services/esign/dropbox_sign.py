@@ -73,7 +73,7 @@ class DropboxSignProvider(ESignProvider):
                 ]
             )
         files = {
-            "file[0]": (
+            "files[]": (
                 request.source_document_filename or "document.pdf",
                 source,
                 "application/pdf",
