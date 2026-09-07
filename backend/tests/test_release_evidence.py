@@ -198,7 +198,9 @@ def test_probe_transport_errors_are_sanitized(monkeypatch, case, expected):
                 if case == "oversized"
                 else b"<html>private</html>"
                 if case == "html"
-                else json.dumps(payload()).encode()
+                else json.dumps(
+                    {**payload(), "checked_at": datetime.now(timezone.utc).isoformat()}
+                ).encode()
             )
             return Response(body)
 
