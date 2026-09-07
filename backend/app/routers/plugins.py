@@ -931,7 +931,13 @@ async def create_matter(
             from app.services.cloud_init import initialize_matter_folders
 
             cloud_folder = await initialize_matter_folders(
-                db, str(user.tenant_id), matter.slug, tenant.cloud_root_folder
+                db,
+                str(user.tenant_id),
+                matter.slug,
+                tenant.cloud_root_folder,
+                matter_id=matter.id,
+                folder_name=matter.matter_name,
+                existing_folder=matter.cloud_folder,
             )
             if cloud_folder:
                 matter.cloud_folder = {**(matter.cloud_folder or {}), **cloud_folder}

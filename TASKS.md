@@ -1,5 +1,12 @@
 # TASKS.md
 
+## Cloud provider portability remediation — 2026-09-07
+
+- [x] A2: Add tenant-scoped verified user aliases with primary-address-first OAuth matching, correspondence matching, one-time proof, duplicate protection, and administrator management UI.
+- [x] Migration controls: add connected-target selection, server-generated reconciliation evidence, matter/document match review, unresolved-item blocking, explicit cutover, abandon/retry, durable refresh, and reindex-pending status.
+- [x] Administrative guide and release housekeeping updated for account tiers, aliases, canonical matter folders, correspondence destination, provider migration, and the bounded routing-metadata/full-ingested-corpus distinction.
+- [ ] D1/D3: Decide and publish a platform-wide corpus posture. This remains pending and is intentionally not claimed by the current release.
+
 ## BK29 — Competitive Parity and Research Trust — 2026-08-27 (PLANNED)
 
 **Goal:** Remove the remaining reasons a small or midsize firm would reject

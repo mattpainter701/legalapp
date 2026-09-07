@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.4 — Prepare provider changes with clearer account and storage controls
+
+Released September 7, 2026.
+
+Use verified correspondence aliases, review provider tier limits, and manage storage migration discovery from Administration.
+
+- **Match verified correspondence aliases.** Administrators can add a secondary address for a user; the address must complete email verification before it can identify a sign-in or match internal correspondence.
+- **Review storage migration evidence.** Administrators can start a provider migration, reconcile matter and document bindings, review matched, missing, and ambiguous items, and explicitly confirm a clean cutover.
+- **Understand account-tier limits.** The cloud support guide explains personal-account limits, directory-sync expectations, custom-domain aliases, and provider-bound file custody.
+
 ## 2026.09.07.3 — Search your firm's whole archive from one box
 
 Released September 7, 2026.

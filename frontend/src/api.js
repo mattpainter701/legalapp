@@ -682,6 +682,9 @@ export const reactivateUser = (userId) =>
 
 export const updateUser = (userId, data) =>
   api.patch(`/admin/users/${userId}`, data).then((r) => r.data)
+export const getUserAliases = (userId) => api.get(`/admin/users/${userId}/aliases`).then((r) => r.data.aliases ?? [])
+export const addUserAlias = (userId, address) => api.post(`/admin/users/${userId}/aliases`, { address }).then((r) => r.data)
+export const deleteUserAlias = (userId, aliasId) => api.delete(`/admin/users/${userId}/aliases/${aliasId}`)
 
 export const setUserBillingRate = (userId, rate) =>
   api.patch(`/admin/users/${userId}/billing-rate`, null, { params: { default_billing_rate: rate } }).then((r) => r.data)
@@ -716,6 +719,23 @@ export const getAdminSettings = () =>
   api.get('/admin/settings').then((r) => r.data)
 export const updateAdminSettings = (body) =>
   api.put('/admin/settings', body).then((r) => r.data)
+// Cloud provider migration
+export const startStorageMigration = (body) =>
+  api.post('/admin/storage-migrations', body).then((r) => r.data)
+export const getStorageMigration = (migrationId) =>
+  api.get(`/admin/storage-migrations/${migrationId}`).then((r) => r.data)
+export const getLatestStorageMigration = () =>
+  api.get('/admin/storage-migrations/latest').then((r) => r.data)
+export const getStorageMigrationMatches = (migrationId) =>
+  api.get(`/admin/storage-migrations/${migrationId}/matches`).then((r) => r.data)
+export const reconcileStorageMigration = (migrationId) =>
+  api.post(`/admin/storage-migrations/${migrationId}/reconcile`, {}).then((r) => r.data)
+export const cutoverStorageMigration = (migrationId, body) =>
+  api.post(`/admin/storage-migrations/${migrationId}/cutover`, body).then((r) => r.data)
+export const abandonStorageMigration = (migrationId) =>
+  api.post(`/admin/storage-migrations/${migrationId}/abandon`).then((r) => r.data)
+export const retryStorageMigrationReindex = (migrationId) =>
+  api.post(`/admin/storage-migrations/${migrationId}/reindex`).then((r) => r.data)
 export const getAdminMcpOverview = () =>
   api.get('/admin/mcp').then((r) => r.data)
 
@@ -724,6 +744,8 @@ export const getOnboardingStatus = () =>
   api.get('/admin/onboarding/status').then((r) => r.data)
 export const completeOnboarding = () =>
   api.post('/admin/onboarding/complete').then((r) => r.data)
+export const reenterOnboarding = () =>
+  api.post('/admin/onboarding/reenter', {}).then((r) => r.data)
 export const skipOnboarding = () =>
   api.post('/admin/onboarding/skip').then((r) => r.data)
 export const updateOnboardingStep = (step) =>

@@ -463,6 +463,12 @@ class CloudSearchService:
             "fields": "files(id,name,mimeType,webViewLink,modifiedTime,owners)",
             "pageSize": min(max_hits, 100),
             "orderBy": "modifiedTime desc",
+            # ``allDrives`` covers both My Drive and Shared Drives.  These
+            # flags are harmless for personal Google accounts (which simply
+            # have no Shared Drives) and required for Workspace tenants.
+            "corpora": "allDrives",
+            "includeItemsFromAllDrives": True,
+            "supportsAllDrives": True,
         }
 
         async with httpx.AsyncClient(timeout=30) as client:
@@ -516,7 +522,7 @@ class CloudSearchService:
                 resp = await client.get(
                     f"{GOOGLE_DRIVE_BASE}/files/{file_id}",
                     headers={"Authorization": f"Bearer {token}"},
-                    params={"fields": "description"},
+                    params={"fields": "description", "supportsAllDrives": True},
                 )
                 if resp.status_code == 200:
                     desc = (resp.json().get("description") or "").strip()
@@ -829,7 +835,7 @@ class CloudSearchService:
                 params = {"mimeType": export_mime}
             else:
                 url = f"{GOOGLE_DRIVE_BASE}/files/{hit.object_id}"
-                params = {"alt": "media"}
+                params = {"alt": "media", "supportsAllDrives": True}
 
             try:
                 resp = await client.get(

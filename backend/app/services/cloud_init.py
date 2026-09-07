@@ -5,6 +5,7 @@ Creates the 'claritylegal-records' root folder in the customer's cloud storage
 """
 
 import logging
+from datetime import datetime, timezone
 import base64
 import re
 import uuid
@@ -26,7 +27,6 @@ GOOGLE_DRIVE_BASE = "https://www.googleapis.com/drive/v3"
 
 ROOT_FOLDER_NAME = "claritylegal-records"
 MATTER_SUBFOLDERS = [
-    "emails",
     "client_uploads",
     "documents",
     "pleadings",
@@ -35,9 +35,26 @@ MATTER_SUBFOLDERS = [
 ]
 
 
-def matter_relative_path(matter_slug: str) -> str:
-    """Return the canonical tenant-relative matter path."""
-    return f"{ROOT_FOLDER_NAME}/{matter_slug}"
+def canonical_matter_folder_name(
+    matter_name: str | None, matter_id, matter_slug: str = "matter"
+) -> str:
+    """Stable naming convention for newly bound folders on every provider."""
+    identity = str(uuid.UUID(str(matter_id)))[:8]
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", matter_name or matter_slug)
+    name = re.sub(r"\s+", " ", name).strip(" .") or "matter"
+    return f"{name[:189].rstrip(' .')} ({identity})"
+
+
+def matter_relative_path(
+    matter_name: str, matter_id=None, matter_slug: str = "matter"
+) -> str:
+    """Return a logical path; existing persisted paths remain authoritative."""
+    name = (
+        canonical_matter_folder_name(matter_name, matter_id, matter_slug)
+        if matter_id
+        else matter_name
+    )
+    return f"{ROOT_FOLDER_NAME}/{name}"
 
 
 async def initialize_cloud_root_folder(
@@ -138,136 +155,168 @@ async def initialize_matter_folders(
     matter_slug: str,
     cloud_root: dict,
     folder_name: str | None = None,
+    *,
+    matter_id=None,
+    existing_folder: dict | None = None,
 ) -> dict:
-    """Create per-matter subfolder structure under claritylegal-records/{folder_name}/.
+    """Ensure one named, marked folder per matter/provider, retaining saved bindings.
 
-    Returns {provider: {matter_folder_id: str, subfolders: {name: id}}}
+    All application callers provide the matter UUID. Existing provider IDs and
+    logical paths survive folder renames and subsequent provider connections.
     """
+    if matter_id is None:
+        raise ValueError("Matter identity is required to provision cloud folders")
+    name = canonical_matter_folder_name(folder_name, matter_id, matter_slug)
+    # Refresh credentials before acquiring the matter lock: token refresh commits
+    # its own state. The network operations below use these already-fresh tokens.
+    tokens = {}
+    for auth_provider in ("google", "microsoft"):
+        if any(
+            cloud_root.get(p)
+            for p in (
+                ("google_drive",)
+                if auth_provider == "google"
+                else ("onedrive", "sharepoint")
+            )
+        ):
+            tokens[auth_provider] = await get_fresh_token(db, tenant_id, auth_provider)
+    locked_matter = None
+    if db is not None:
+        from app.database import set_tenant_context
+        from app.models.plugin import Matter
+        from app.models.tenant import Tenant
+
+        await set_tenant_context(db, tenant_id)
+        current_root = (
+            await db.execute(
+                select(Tenant.cloud_root_folder)
+                .where(
+                    Tenant.id == uuid.UUID(str(tenant_id)),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if current_root:
+            cloud_root = current_root
+        locked_matter = (
+            await db.execute(
+                select(Matter)
+                .where(
+                    Matter.id == uuid.UUID(str(matter_id)),
+                    Matter.tenant_id == uuid.UUID(str(tenant_id)),
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if locked_matter is None:
+            raise ValueError("Matter not found for cloud provisioning")
+        existing_folder = locked_matter.cloud_folder
+    existing_folder = existing_folder or {}
     result = {}
-    # Use the human-readable folder_name when provided; fall back to slug for
-    # backward compatibility with existing matters that were provisioned with slugs.
-    matter_folder_name = folder_name or matter_slug
+    for provider in ("onedrive", "google_drive", "sharepoint"):
+        root = cloud_root.get(provider)
+        if not root:
+            continue
+        token = tokens.get("google" if provider == "google_drive" else "microsoft")
+        if not token:
+            continue
+        saved = existing_folder.get(provider) or {}
+        root_id = (
+            root.get("id")
+            or root.get("matters_folder_id")
+            or root.get("matter_folder_id")
+        )
+        if not root_id:
+            raise RuntimeError(f"{provider} root folder ID is missing")
+        drive_id = saved.get("drive_id") or root.get("drive_id")
+        if provider == "sharepoint":
+            if not drive_id:
+                raise RuntimeError("SharePoint drive ID is missing")
 
-    # OneDrive
-    if cloud_root.get("onedrive"):
-        ms_token = await get_fresh_token(db, tenant_id, "microsoft")
-        if ms_token:
-            try:
-                root_id = (
-                    cloud_root["onedrive"].get("id")
-                    or cloud_root["onedrive"].get("matters_folder_id")
-                    or cloud_root["onedrive"].get("matter_folder_id")
-                )
-                if not root_id:
-                    raise RuntimeError("OneDrive cloud root missing folder id")
-                matter_folder = await _ensure_onedrive_folder(
-                    ms_token, matter_folder_name, root_id
-                )
-                folder_meta = await _get_onedrive_folder_metadata(
-                    ms_token, matter_folder
-                )
-                subfolders = {}
-                for sub in MATTER_SUBFOLDERS:
-                    sub_id = await _ensure_onedrive_folder(ms_token, sub, matter_folder)
-                    subfolders[sub] = sub_id
-                result["onedrive"] = {
-                    "matter_folder_id": matter_folder,
-                    "folder_name": folder_meta.get("name") or matter_slug,
-                    "url": folder_meta.get("webUrl") or "",
-                    "subfolders": subfolders,
-                }
-                logger.info("Created matter folders in OneDrive: %s", matter_slug)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to create OneDrive matter folders for %s: %s",
-                    matter_slug,
-                    exc,
-                )
+            async def ensure(child, parent):
+                return await _ensure_sharepoint_folder(token, drive_id, child, parent)
 
-    # Google Drive
-    if cloud_root.get("google_drive"):
-        g_token = await get_fresh_token(db, tenant_id, "google")
-        if g_token:
-            try:
-                root_id = (
-                    cloud_root["google_drive"].get("id")
-                    or cloud_root["google_drive"].get("matters_folder_id")
-                    or cloud_root["google_drive"].get("matter_folder_id")
-                )
-                if not root_id:
-                    raise RuntimeError("Google Drive cloud root missing folder id")
-                matter_folder = await _ensure_gdrive_folder(
-                    g_token, matter_folder_name, root_id
-                )
-                folder_meta = await _get_gdrive_folder_metadata(g_token, matter_folder)
-                subfolders = {}
-                for sub in MATTER_SUBFOLDERS:
-                    sub_id = await _ensure_gdrive_folder(g_token, sub, matter_folder)
-                    subfolders[sub] = sub_id
-                result["google_drive"] = {
-                    "matter_folder_id": matter_folder,
-                    "folder_name": folder_meta.get("name") or matter_folder_name,
-                    "url": folder_meta.get("webViewLink")
-                    or f"https://drive.google.com/drive/folders/{matter_folder}",
-                    "subfolders": subfolders,
-                }
-                logger.info("Created matter folders in Google Drive: %s", matter_slug)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to create Google Drive matter folders for %s: %s",
-                    matter_slug,
-                    exc,
-                )
+            async def metadata(item_id):
+                return await _get_sharepoint_folder_metadata(token, drive_id, item_id)
+        elif provider == "onedrive":
 
-    # SharePoint
-    if cloud_root.get("sharepoint"):
-        ms_token = await get_fresh_token(db, tenant_id, "microsoft")
-        if ms_token:
-            try:
-                drive_id = cloud_root["sharepoint"].get("drive_id")
-                root_id = (
-                    cloud_root["sharepoint"].get("id")
-                    or cloud_root["sharepoint"].get("matters_folder_id")
-                    or cloud_root["sharepoint"].get("matter_folder_id")
-                )
-                if not drive_id or not root_id:
-                    raise RuntimeError("SharePoint cloud root missing drive/folder id")
-                matter_folder = await _ensure_sharepoint_folder(
-                    ms_token, drive_id, matter_slug, root_id
-                )
-                folder_meta = await _get_sharepoint_folder_metadata(
-                    ms_token, drive_id, matter_folder
-                )
-                subfolders = {}
-                for sub in MATTER_SUBFOLDERS:
-                    sub_id = await _ensure_sharepoint_folder(
-                        ms_token, drive_id, sub, matter_folder
-                    )
-                    subfolders[sub] = sub_id
-                result["sharepoint"] = {
-                    "matter_folder_id": matter_folder,
-                    "drive_id": drive_id,
-                    "site_id": cloud_root["sharepoint"].get("site_id"),
-                    "folder_name": folder_meta.get("name") or matter_slug,
-                    "url": folder_meta.get("webUrl") or "",
-                    "subfolders": subfolders,
-                }
-                logger.info("Created matter folders in SharePoint: %s", matter_slug)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to create SharePoint matter folders for %s: %s",
-                    matter_slug,
-                    exc,
-                )
+            async def ensure(child, parent):
+                return await _ensure_onedrive_folder(token, child, parent)
 
-    if result:
-        result["path"] = matter_relative_path(matter_slug)
-        result["subfolder_paths"] = {
-            sub: f"{matter_relative_path(matter_slug)}/{sub}"
-            for sub in MATTER_SUBFOLDERS
+            async def metadata(item_id):
+                return await _get_onedrive_folder_metadata(token, item_id)
+        else:
+
+            async def ensure(child, parent):
+                return await _ensure_gdrive_folder(token, child, parent)
+
+            async def metadata(item_id):
+                return await _get_gdrive_folder_metadata(token, item_id)
+
+        item_id = saved.get("matter_folder_id") or await ensure(name, root_id)
+        item = await metadata(item_id)
+        binding = {
+            **saved,
+            "matter_folder_id": item_id,
+            "folder_name": item.get("name") or name,
+            "url": item.get("webUrl")
+            or item.get("webViewLink")
+            or saved.get("url")
+            or "",
         }
-
+        if drive_id or item.get("driveId"):
+            binding["drive_id"] = drive_id or item["driveId"]
+        if root.get("site_id"):
+            binding["site_id"] = root["site_id"]
+        # Validate ownership BEFORE writing subfolders into a manually renamed tree.
+        await ensure_matter_marker(
+            db, tenant_id, matter_id, provider, binding, name, token=token
+        )
+        binding["subfolders"] = {**(saved.get("subfolders") or {})}
+        for sub in MATTER_SUBFOLDERS:
+            if not binding["subfolders"].get(sub):
+                binding["subfolders"][sub] = await ensure(sub, item_id)
+        binding["path"] = f"{ROOT_FOLDER_NAME}/{binding['folder_name']}"
+        result[provider] = binding
+    if result:
+        result["path"] = existing_folder.get("path") or f"{ROOT_FOLDER_NAME}/{name}"
+        result["subfolder_paths"] = {
+            sub: f"{result['path']}/{sub}" for sub in MATTER_SUBFOLDERS
+        }
+        if locked_matter is not None:
+            locked_matter.cloud_folder = {
+                **existing_folder,
+                **result,
+                "_status": "provisioned",
+                "_status_message": "",
+            }
+            await db.flush()
     return result
+
+
+async def ensure_matter_marker(
+    db, tenant_id, matter_id, provider, binding, canonical_name, *, token=None
+):
+    from app.services.matter_folder_marker import ensure_marker
+
+    token = token or await get_fresh_token(
+        db, tenant_id, "google" if provider == "google_drive" else "microsoft"
+    )
+    if not token:
+        raise RuntimeError("Reconnect the provider before binding a matter folder")
+    await ensure_marker(
+        token,
+        provider,
+        binding,
+        {
+            "schema_version": 1,
+            "tenant_id": str(tenant_id),
+            "matter_id": str(matter_id),
+            "canonical_name": canonical_name,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
 
 
 async def share_matter_folders(
@@ -354,7 +403,7 @@ async def _share_gdrive_folder(
         for email in emails:
             resp = await client.post(
                 f"{GOOGLE_DRIVE_BASE}/files/{folder_id}/permissions",
-                params={"sendNotificationEmail": "false"},
+                params={"sendNotificationEmail": "false", "supportsAllDrives": "true"},
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "type": "user",
@@ -480,7 +529,9 @@ async def _list_sharepoint_child_folders(
         resp = await client.get(url, headers=headers, params=params)
         params = None
         if resp.status_code != 200:
-            return folders
+            raise RuntimeError(
+                f"Cloud folder listing failed ({resp.status_code}); no folder was created"
+            )
         data = resp.json()
         folders.extend(item for item in data.get("value", []) if item.get("folder"))
         url = data.get("@odata.nextLink")
@@ -539,7 +590,7 @@ async def _get_sharepoint_folder_metadata(
             f"SharePoint folder lookup failed: {resp.status_code} {resp.text[:200]}"
         )
     item = resp.json()
-    if not item.get("folder"):
+    if "folder" not in item:
         raise RuntimeError("SharePoint item is not a folder")
     return item
 
@@ -567,6 +618,7 @@ async def _ensure_gdrive_folder(token: str, folder_name: str, parent_id: str) ->
         # Create
         resp = await client.post(
             f"{GOOGLE_DRIVE_BASE}/files",
+            params={"supportsAllDrives": "true"},
             json={
                 "name": folder_name,
                 "mimeType": "application/vnd.google-apps.folder",
@@ -629,6 +681,7 @@ async def build_matter_folder_metadata(
         return {
             "matter_folder_id": item["id"],
             "folder_name": item.get("name") or "",
+            "drive_id": item.get("driveId"),
             "url": item.get("webViewLink")
             or f"https://drive.google.com/drive/folders/{item['id']}",
             "subfolders": subfolders,
@@ -693,7 +746,10 @@ async def rename_cloud_folder(
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.patch(
                 f"{GOOGLE_DRIVE_BASE}/files/{folder_id}",
-                params={"fields": "id,name,webViewLink,mimeType"},
+                params={
+                    "fields": "id,name,webViewLink,mimeType,driveId",
+                    "supportsAllDrives": "true",
+                },
                 headers={"Authorization": f"Bearer {token}"},
                 json={"name": new_name},
             )
@@ -838,7 +894,9 @@ async def _list_onedrive_child_folders(
         resp = await client.get(url, headers=headers, params=params)
         params = None
         if resp.status_code != 200:
-            return folders
+            raise RuntimeError(
+                f"Cloud folder listing failed ({resp.status_code}); no folder was created"
+            )
         data = resp.json()
         folders.extend(item for item in data.get("value", []) if item.get("folder"))
         url = data.get("@odata.nextLink")
@@ -879,7 +937,7 @@ async def _get_onedrive_folder_metadata(token: str, folder_id: str) -> dict:
             f"OneDrive folder lookup failed: {resp.status_code} {resp.text[:200]}"
         )
     item = resp.json()
-    if not item.get("folder"):
+    if "folder" not in item:
         raise RuntimeError("OneDrive item is not a folder")
     return item
 
@@ -897,7 +955,7 @@ async def _resolve_onedrive_share_url(token: str, folder_url: str) -> dict:
             f"OneDrive shared folder lookup failed: {resp.status_code} {resp.text[:200]}"
         )
     item = resp.json()
-    if not item.get("folder"):
+    if "folder" not in item:
         raise RuntimeError("OneDrive link does not point to a folder")
     return item
 
@@ -915,7 +973,7 @@ async def _resolve_sharepoint_share_url(token: str, folder_url: str) -> dict:
             f"SharePoint shared folder lookup failed: {resp.status_code} {resp.text[:200]}"
         )
     item = resp.json()
-    if not item.get("folder"):
+    if "folder" not in item:
         raise RuntimeError("SharePoint link does not point to a folder")
     return item
 
@@ -934,6 +992,8 @@ async def _list_gdrive_child_folders(
             "q": query,
             "fields": "nextPageToken,files(id,name,webViewLink,createdTime)",
             "pageSize": "200",
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
         }
         if page_token:
             params["pageToken"] = page_token
@@ -943,7 +1003,9 @@ async def _list_gdrive_child_folders(
             headers=headers,
         )
         if resp.status_code != 200:
-            return folders
+            raise RuntimeError(
+                f"Cloud folder listing failed ({resp.status_code}); no folder was created"
+            )
         data = resp.json()
         folders.extend(data.get("files", []))
         page_token = data.get("nextPageToken")
@@ -966,7 +1028,10 @@ async def _get_gdrive_folder_metadata(token: str, folder_id: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
             f"{GOOGLE_DRIVE_BASE}/files/{folder_id}",
-            params={"fields": "id,name,webViewLink,mimeType"},
+            params={
+                "fields": "id,name,webViewLink,mimeType,driveId",
+                "supportsAllDrives": "true",
+            },
             headers={"Authorization": f"Bearer {token}"},
         )
     if resp.status_code != 200:

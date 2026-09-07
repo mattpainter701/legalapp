@@ -26,11 +26,14 @@ from pathlib import Path
 import httpx
 from dateutil import parser as dateutil_parser
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import set_tenant_context
 from app.models.cloud_metadata import CloudMetadata
+from app.models.storage_migration import StorageMigration
+from app.models.tenant import Tenant
 from app.services.token_vault import get_fresh_token, get_fresh_user_token
 
 settings = get_settings()
@@ -68,41 +71,68 @@ class CloudSyncService:
         Per-provider errors are caught individually so a single failure
         does not prevent the other providers from syncing.
         """
+        await set_tenant_context(db, tenant_id)
+        migration = await self._latest_completed_migration(db, tenant_id)
+        if migration:
+            from app.services.storage_migration_reindex import storage_migration_reindex
+
+            reindex = await storage_migration_reindex.run(db, tenant_id, force=True)
+            if reindex.get("status") != "completed":
+                raise RuntimeError(
+                    "Target cloud reindex remains pending; retry after resolving the migration error"
+                )
+            target_group = (
+                "google" if migration.target_provider == "google_drive" else "microsoft"
+            )
+            mail = (
+                self.sync_gmail_metadata
+                if target_group == "google"
+                else self.sync_outlook_mail
+            )
+            result = {
+                "google": {"files": 0, "emails": 0},
+                "microsoft": {"files": 0, "emails": 0},
+            }
+            result[target_group]["files"] = reindex.get("items", 0)
+            result[target_group]["emails"] = await self._run_provider_sync(
+                db, tenant_id, "Target mail", lambda: mail(db, tenant_id)
+            )
+            return result
+
         result: dict = {
             "google": {"files": 0, "emails": 0},
             "microsoft": {"files": 0, "emails": 0},
         }
 
-        result["google"]["files"] = await self._run_provider_sync(
-            db,
-            tenant_id,
-            "Google Drive",
-            lambda: self.sync_google_drive(db, tenant_id),
-        )
-        result["google"]["emails"] = await self._run_provider_sync(
-            db,
-            tenant_id,
-            "Gmail",
-            lambda: self.sync_gmail_metadata(db, tenant_id),
-        )
-        result["microsoft"]["files"] = await self._run_provider_sync(
-            db,
-            tenant_id,
-            "OneDrive",
-            lambda: self.sync_onedrive(db, tenant_id),
-        )
-        result["microsoft"]["files"] += await self._run_provider_sync(
-            db,
-            tenant_id,
-            "SharePoint",
-            lambda: self.sync_sharepoint(db, tenant_id),
-        )
-        result["microsoft"]["emails"] = await self._run_provider_sync(
-            db,
-            tenant_id,
-            "Outlook mail",
-            lambda: self.sync_outlook_mail(db, tenant_id),
-        )
+        target = migration.target_provider if migration else None
+        if not migration or target == "google_drive":
+            result["google"]["files"] = await self._run_provider_sync(
+                db,
+                tenant_id,
+                "Google Drive",
+                lambda: self.sync_google_drive(db, tenant_id),
+            )
+            result["google"]["emails"] = await self._run_provider_sync(
+                db, tenant_id, "Gmail", lambda: self.sync_gmail_metadata(db, tenant_id)
+            )
+        if not migration or target in {"onedrive", "sharepoint"}:
+            if not migration or target == "onedrive":
+                result["microsoft"]["files"] = await self._run_provider_sync(
+                    db, tenant_id, "OneDrive", lambda: self.sync_onedrive(db, tenant_id)
+                )
+            if not migration or target == "sharepoint":
+                result["microsoft"]["files"] += await self._run_provider_sync(
+                    db,
+                    tenant_id,
+                    "SharePoint",
+                    lambda: self.sync_sharepoint(db, tenant_id),
+                )
+            result["microsoft"]["emails"] = await self._run_provider_sync(
+                db,
+                tenant_id,
+                "Outlook mail",
+                lambda: self.sync_outlook_mail(db, tenant_id),
+            )
 
         return result
 
@@ -126,6 +156,30 @@ class CloudSyncService:
             "microsoft": {"files": 0, "emails": 0},
         }
         cloud_folder = matter_cloud_folder or {}
+        migration = await self._latest_completed_migration(db, tenant_id)
+        if migration:
+            from app.services.storage_migration_reindex import storage_migration_reindex
+
+            reindex = await storage_migration_reindex.run(db, tenant_id, force=True)
+            if reindex.get("status") != "completed":
+                raise RuntimeError(
+                    "Target cloud reindex remains pending; retry after resolving the migration error"
+                )
+            target_group = (
+                "google" if migration.target_provider == "google_drive" else "microsoft"
+            )
+            return {
+                "google": {
+                    "files": reindex.get("items", 0) if target_group == "google" else 0,
+                    "emails": 0,
+                },
+                "microsoft": {
+                    "files": reindex.get("items", 0)
+                    if target_group == "microsoft"
+                    else 0,
+                    "emails": 0,
+                },
+            }
 
         google_folder_ids = _matter_folder_ids(cloud_folder, "google_drive")
         if google_folder_ids:
@@ -192,6 +246,19 @@ class CloudSyncService:
         await set_tenant_context(db, tenant_id)
         return count
 
+    async def _latest_completed_migration(self, db: AsyncSession, tenant_id: str):
+        return (
+            await db.execute(
+                select(StorageMigration)
+                .where(
+                    StorageMigration.tenant_id == uuid.UUID(str(tenant_id)),
+                    StorageMigration.phase == "complete",
+                )
+                .order_by(StorageMigration.completed_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
     async def sync_google_drive(
         self,
         db: AsyncSession,
@@ -231,6 +298,9 @@ class CloudSyncService:
                             "modifiedTime,createdTime,size,owners,parents)"
                         ),
                         "orderBy": "modifiedTime desc",
+                        "supportsAllDrives": True,
+                        "includeItemsFromAllDrives": True,
+                        "corpora": "user",
                     }
                     if page_token:
                         params["pageToken"] = page_token
@@ -737,7 +807,31 @@ class CloudSyncService:
         Identity columns and ``created_at`` are excluded from the update set;
         ``last_synced`` is always refreshed to the current time.
         """
+        trusted_reindex = bool(data.pop("trusted_reindex", False))
         identity_keys = {"tenant_id", "provider", "object_type", "object_id"}
+        # Serialize metadata writes with cutover. Generic writes are disabled
+        # after any completed migration; only the target inventory path may
+        # repopulate the index.
+        await db.execute(
+            select(Tenant)
+            .where(Tenant.id == uuid.UUID(str(tenant_id)))
+            .with_for_update()
+        )
+        migration = await self._latest_completed_migration(db, tenant_id)
+        if migration:
+            target_group = (
+                "google" if migration.target_provider == "google_drive" else "microsoft"
+            )
+            if data.get("provider") != target_group or (
+                data.get("object_type") == "file" and not trusted_reindex
+            ):
+                return
+
+        # Keep every provider ingestion path within the database column's
+        # 500-character contract, including future callers that bypass the
+        # current per-provider preview slicing.
+        if data.get("snippet") is not None:
+            data["snippet"] = str(data["snippet"])[:500]
 
         data["tenant_id"] = uuid.UUID(str(tenant_id))
 
@@ -788,6 +882,9 @@ class CloudSyncService:
                             "modifiedTime,createdTime,size,owners,parents)"
                         ),
                         "orderBy": "modifiedTime desc",
+                        "supportsAllDrives": True,
+                        "includeItemsFromAllDrives": True,
+                        "corpora": "user",
                     }
                     if page_token:
                         params["pageToken"] = page_token

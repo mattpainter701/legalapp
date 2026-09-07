@@ -1,6 +1,6 @@
 # Cloud Provider Portability & Tier Remediation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make LawHand honest about which cloud account tier a firm is on, correct in how it names and binds matter folders, and capable of moving a firm from one provider to another without rebuilding their matters.
 
@@ -55,9 +55,9 @@ Implements the approved June design unchanged, plus the alias gap that design di
 **Files:**
 - Follow `docs/superpowers/plans/2026-06-14-provider-tier-detection-capabilities.md` in full — it is still accurate against current `main`.
 
-- [ ] **Step 1:** Confirm the current Alembic head on `origin/main` and renumber the migration accordingly (the design says `056_account_tier`; verify before claiming that number, per AGENTS.md §1).
-- [ ] **Step 2:** Execute that plan's tasks 1–8 as written.
-- [ ] **Step 3:** Verify the regression case: a personal-Google tenant shows `not_applicable` and a capability matrix on `/status`, not a red failure banner.
+- [x] **Step 1:** Confirm the current Alembic head on `origin/main` and renumber the migration accordingly (the design says `056_account_tier`; verify before claiming that number, per AGENTS.md §1).
+- [x] **Step 2:** Execute that plan's tasks 1–8 as written.
+- [x] **Step 3:** Verify the regression case: a personal-Google tenant shows `not_applicable` and a capability matrix on `/status`, not a red failure banner.
 
 ### Task A2: Accept alias addresses on a user record
 
@@ -70,12 +70,12 @@ Implements the approved June design unchanged, plus the alias gap that design di
 - Modify: `backend/app/routers/auth.py`
 - Test: `backend/tests/test_user_alias_matching.py` (new)
 
-- [ ] **Step 1: Write the failing test** — a user with a verified alias; correspondence addressed to the alias resolves to that user; correspondence to an unverified alias does not.
-- [ ] **Step 2:** Add an alias table (or a JSONB column) keyed by tenant and user, each entry carrying the address, a verification state, and provenance. Addresses must be unique per tenant to avoid two users claiming one address.
-- [ ] **Step 3:** Extend the identity lookup to consider verified aliases, primary address first. Never let an unverified alias satisfy a sign-in match — only correspondence matching.
-- [ ] **Step 4:** Extend `_matter_party_addresses` to include verified aliases for internal users.
-- [ ] **Step 5:** Surface aliases in the user admin UI so a firm can add one without support involvement.
-- [ ] **Step 6:** Run the correspondence-capture suite; verify no regression in exact-match behavior.
+- [x] **Step 1: Write the failing test** — a user with a verified alias; correspondence addressed to the alias resolves to that user; correspondence to an unverified alias does not.
+- [x] **Step 2:** Add an alias table (or a JSONB column) keyed by tenant and user, each entry carrying the address, a verification state, and provenance. Addresses must be unique per tenant to avoid two users claiming one address.
+- [x] **Step 3:** Extend the identity lookup to consider verified aliases, primary address first. Never let an unverified alias satisfy a sign-in match — only correspondence matching.
+- [x] **Step 4:** Extend `_matter_party_addresses` to include verified aliases for internal users.
+- [x] **Step 5:** Surface aliases in the user admin UI so a firm can add one without support involvement.
+- [x] **Step 6:** Run the correspondence-capture suite; verify no regression in exact-match behavior.
 
 ---
 
@@ -92,9 +92,9 @@ Must land before Workstream C. Tasks B1–B3 are also live bug fixes independent
 - Modify: `backend/app/services/matter_file_store.py`
 - Test: `backend/tests/test_matter_folder_naming.py` (new)
 
-- [ ] **Step 1: Write the failing test** — resolving a matter's folder path through the provisioner, the canonical helper, and the upload fallback yields the same folder name.
-- [ ] **Step 2:** Introduce one function that derives the canonical matter folder name from `(matter_name, matter_id)`, and make all three call sites use it. Keep it tolerant of a missing name by falling back to the slug, but always append the ID suffix.
-- [ ] **Step 3:** Verify against both provider paths (OneDrive and Google Drive) and the SharePoint variant.
+- [x] **Step 1: Write the failing test** — resolving a matter's folder path through the provisioner, the canonical helper, and the upload fallback yields the same folder name.
+- [x] **Step 2:** Introduce one function that derives the canonical matter folder name from `(matter_name, matter_id)`, and make all three call sites use it. Keep it tolerant of a missing name by falling back to the slug, but always append the ID suffix.
+- [x] **Step 3:** Verify against both provider paths (OneDrive and Google Drive) and the SharePoint variant.
 
 ### Task B2: Resolve provisioning before the first upload
 
@@ -105,10 +105,10 @@ Must land before Workstream C. Tasks B1–B3 are also live bug fixes independent
 - Modify: `backend/app/services/matter_file_store.py`
 - Test: `backend/tests/test_matter_folder_provisioning_race.py` (new)
 
-- [ ] **Step 1: Write the failing test** — an upload issued while provisioning is still in flight must not create a second folder.
-- [ ] **Step 2:** Have the upload path wait on, or retry against, in-flight provisioning rather than falling through to path traversal. The existing `_status` metadata in `cloud_folder` already distinguishes provisioning states — use it rather than adding a new signal.
-- [ ] **Step 3:** When provisioning genuinely failed, fail the upload with an actionable error instead of silently creating a divergent folder.
-- [ ] **Step 4:** Add a maintenance command that reports matters holding both a slug-named and an ID-named folder, so existing tenants can be surveyed. Report only — do not merge automatically.
+- [x] **Step 1: Write the failing test** — an upload issued while provisioning is still in flight must not create a second folder.
+- [x] **Step 2:** Have the upload path wait on, or retry against, in-flight provisioning rather than falling through to path traversal. The existing `_status` metadata in `cloud_folder` already distinguishes provisioning states — use it rather than adding a new signal.
+- [x] **Step 3:** When provisioning genuinely failed, fail the upload with an actionable error instead of silently creating a divergent folder.
+- [x] **Step 4:** Add a maintenance command that reports matters holding both a slug-named and an ID-named folder, so existing tenants can be surveyed. Report only — do not merge automatically.
 
 ### Task B3: Make the logical path canonical
 
@@ -118,9 +118,9 @@ Must land before Workstream C. Tasks B1–B3 are also live bug fixes independent
 - Modify: `backend/app/routers/matters.py`
 - Test: `backend/tests/test_matter_cloud_folder_metadata.py`
 
-- [ ] **Step 1: Write the failing test** — provisioning a second provider onto a matter leaves `path` unchanged, and each provider binding carries its own realized path.
-- [ ] **Step 2:** Set `path` once, on first provision, from the canonical name function in B1. Move the per-provider realized path under `cloud_folder[provider]`.
-- [ ] **Step 3:** Backfill is not required; treat a missing canonical `path` as "derive and store on next touch".
+- [x] **Step 1: Write the failing test** — provisioning a second provider onto a matter leaves `path` unchanged, and each provider binding carries its own realized path.
+- [x] **Step 2:** Set `path` once, on first provision, from the canonical name function in B1. Move the per-provider realized path under `cloud_folder[provider]`.
+- [x] **Step 3:** Backfill is not required; treat a missing canonical `path` as "derive and store on next touch".
 
 ### Task B4: Marker file at provision time
 
@@ -130,10 +130,10 @@ Must land before Workstream C. Tasks B1–B3 are also live bug fixes independent
 - Modify: `backend/app/services/cloud_init.py`
 - Test: `backend/tests/test_matter_folder_marker.py` (new)
 
-- [ ] **Step 1: Write the failing test** — provisioning a matter folder writes a marker whose contents identify tenant, matter, and schema version.
-- [ ] **Step 2:** Write `.lawhand-matter.json` into each matter folder at provision time. Keep it small and non-secret: tenant ID, matter ID, canonical name, schema version, created timestamp. It is visible to the firm — do not put anything in it that should not be.
-- [ ] **Step 3:** Write the marker on remap as well, so folders bound manually gain the same anchor.
-- [ ] **Step 4:** Treat a marker naming a different matter as a hard conflict, never a silent overwrite.
+- [x] **Step 1: Write the failing test** — provisioning a matter folder writes a marker whose contents identify tenant, matter, and schema version.
+- [x] **Step 2:** Write `.lawhand-matter.json` into each matter folder at provision time. Keep it small and non-secret: tenant ID, matter ID, canonical name, schema version, created timestamp. It is visible to the firm — do not put anything in it that should not be.
+- [x] **Step 3:** Write the marker on remap as well, so folders bound manually gain the same anchor.
+- [x] **Step 4:** Treat a marker naming a different matter as a hard conflict, never a silent overwrite.
 
 ### Task B5: Include Shared Drives in Drive search
 
@@ -143,16 +143,16 @@ Must land before Workstream C. Tasks B1–B3 are also live bug fixes independent
 - Modify: `backend/app/services/cloud_search.py`
 - Test: `backend/tests/test_cloud_search.py`
 
-- [ ] **Step 1: Write the failing test** — the Drive query includes both parameters.
-- [ ] **Step 2:** Add them to the Drive list and search calls. Confirm `corpora` handling is correct for a tenant with both My Drive and Shared Drives.
-- [ ] **Step 3:** Confirm personal-tier Google accounts, which have no Shared Drives, are unaffected.
+- [x] **Step 1: Write the failing test** — the Drive query includes both parameters.
+- [x] **Step 2:** Add them to the Drive list and search calls. Confirm `corpora` handling is correct for a tenant with both My Drive and Shared Drives.
+- [x] **Step 3:** Confirm personal-tier Google accounts, which have no Shared Drives, are unaffected.
 
 ### Task B6: Route `.eml` to the provisioned subfolder
 
 **Problem:** `emails` is one of the six `MATTER_SUBFOLDERS` (`cloud_init.py:28`) but nothing writes to it; `correspondence_capture.py:291` files `.eml` under `correspondence`.
 
-- [ ] **Step 1:** Decide whether `emails` or `correspondence` is the intended destination, then make provisioning and capture agree. Do not move existing files.
-- [ ] **Step 2:** If `emails` is dropped, remove it from `MATTER_SUBFOLDERS` so new matters stop provisioning an empty folder.
+- [x] **Step 1:** Decide whether `emails` or `correspondence` is the intended destination, then make provisioning and capture agree. Do not move existing files.
+- [x] **Step 2:** If `emails` is dropped, remove it from `MATTER_SUBFOLDERS` so new matters stop provisioning an empty folder.
 
 ---
 
@@ -170,10 +170,10 @@ Depends on Workstream B. The manual remap endpoint (`PATCH /matters/{id}/cloud-f
 - Create: `backend/app/services/storage_migration.py`
 - Test: `backend/tests/test_storage_migration_state.py` (new)
 
-- [ ] **Step 1: Write the failing test** — changing the provider while a migration is pending does not silently re-route writes.
-- [ ] **Step 2:** Add migration state: target provider, phase (`planning`, `reconciling`, `awaiting_confirmation`, `cutover`, `complete`, `abandoned`), started/completed timestamps, and the operator who confirmed.
-- [ ] **Step 3:** Gate direct edits of `primary_cloud_provider` behind the migration flow when a migration is in progress. Preserve today's behavior when none is.
-- [ ] **Step 4:** Keep both provider bindings live through the window — `cloud_folder` is already keyed by provider and merges, so no schema change is needed for dual binding.
+- [x] **Step 1: Write the failing test** — changing the provider while a migration is pending does not silently re-route writes.
+- [x] **Step 2:** Add migration state: target provider, phase (`planning`, `reconciling`, `awaiting_confirmation`, `cutover`, `complete`, `abandoned`), started/completed timestamps, and the operator who confirmed.
+- [x] **Step 3:** Gate direct edits of `primary_cloud_provider` behind the migration flow when a migration is in progress. Preserve today's behavior when none is.
+- [x] **Step 4:** Keep both provider bindings live through the window — `cloud_folder` is already keyed by provider and merges, so no schema change is needed for dual binding.
 
 ### Task C2: Discovery and reconciliation
 
@@ -185,12 +185,12 @@ Ladder: (1) marker file from B4 — survives rename; (2) matter ID suffix in the
 - Modify: `backend/app/services/storage_migration.py`
 - Test: `backend/tests/test_storage_migration_reconcile.py` (new)
 
-- [ ] **Step 1: Write the failing tests** — one per ladder rung, plus an ambiguous case and a missing case.
-- [ ] **Step 2:** Implement folder-level discovery against the target provider, walking from the tenant cloud root.
-- [ ] **Step 3:** Treat a duplicate 8-hex ID suffix as ambiguous rather than assuming uniqueness — 32 bits collides well within a large tenant's matter count.
-- [ ] **Step 4:** Implement file-level verification on `document_sha256`, falling back to filename and size.
-- [ ] **Step 5:** Bucket every document as matched, missing, or ambiguous, and persist the bucket plus the matching rung.
-- [ ] **Step 6:** Rebind pointers on matched documents only. Never copy file content. Never delete from the source provider.
+- [x] **Step 1: Write the failing tests** — one per ladder rung, plus an ambiguous case and a missing case.
+- [x] **Step 2:** Implement folder-level discovery against the target provider, walking from the tenant cloud root.
+- [x] **Step 3:** Treat a duplicate 8-hex ID suffix as ambiguous rather than assuming uniqueness — 32 bits collides well within a large tenant's matter count.
+- [x] **Step 4:** Implement file-level verification on `document_sha256`, falling back to filename and size.
+- [x] **Step 5:** Bucket every document as matched, missing, or ambiguous, and persist the bucket plus the matching rung.
+- [x] **Step 6:** Rebind pointers on matched documents only. Never copy file content. Never delete from the source provider.
 
 ### Task C3: Cutover, confirmation, and index purge
 
@@ -202,10 +202,10 @@ Ladder: (1) marker file from B4 — survives rename; (2) matter ID suffix in the
 - Create: `backend/app/routers/storage_migration.py`
 - Test: `backend/tests/test_storage_migration_cutover.py` (new)
 
-- [ ] **Step 1: Write the failing test** — after cutover, no `cloud_metadata_index` rows remain for the previous provider, and a reindex has been scheduled for the new one.
-- [ ] **Step 2:** Expose the three bucket counts to an administrator and require explicit confirmation before cutover.
-- [ ] **Step 3:** On confirmation, flip `primary_cloud_provider`, purge the old provider's index rows, and trigger a reindex.
-- [ ] **Step 4:** Keep the migration record after completion — it is the audit trail for a firm's file custody changing hands.
+- [x] **Step 1: Write the failing test** — after cutover, no `cloud_metadata_index` rows remain for the previous provider, and a reindex has been scheduled for the new one.
+- [x] **Step 2:** Expose the three bucket counts to an administrator and require explicit confirmation before cutover.
+- [x] **Step 3:** On confirmation, flip `primary_cloud_provider`, purge the old provider's index rows, and trigger a reindex.
+- [x] **Step 4:** Keep the migration record after completion — it is the audit trail for a firm's file custody changing hands.
 
 ### Task C4: Re-runnable onboarding
 
@@ -215,9 +215,9 @@ Ladder: (1) marker file from B4 — survives rename; (2) matter ID suffix in the
 - Modify: `backend/app/routers/onboarding.py`
 - Test: `backend/tests/test_onboarding_rerun.py` (new)
 
-- [ ] **Step 1: Write the failing test** — re-entering setup on a configured tenant does not discard the existing cloud root.
-- [ ] **Step 2:** Make re-entry a distinct flow from first-run: preserve the existing root, and route a provider change into the Workstream C migration rather than re-initializing.
-- [ ] **Step 3:** Record the previous cloud root whenever it changes.
+- [x] **Step 1: Write the failing test** — re-entering setup on a configured tenant does not discard the existing cloud root.
+- [x] **Step 2:** Make re-entry a distinct flow from first-run: preserve the existing root, and route a provider change into the Workstream C migration rather than re-initializing.
+- [x] **Step 3:** Record the previous cloud root whenever it changes.
 
 ---
 
@@ -228,7 +228,7 @@ Not an implementation task. This is a product decision that gates what the publi
 **The tension:** `cloud_metadata_index` documents an invariant — routing metadata only, "NEVER stores full document content", fetched live at query time. `firm_memory_*` states it "intentionally do[es] not create a second cloud corpus". But `chunks` (`app/models/document.py:88`) stores `content` as `Text NOT NULL` alongside a tsvector and a pgvector embedding. Semantic search requires vectors; vectors require content to embed. Both postures currently ship without a stated boundary between them.
 
 - [ ] **Decision D1:** Choose the posture for the cloud corpus — metadata-only with weaker recall; embeddings without source text, accepting that embeddings are derived and partially invertible; or stored chunks, dropping any claim that client content is not held. Record the decision and its scope.
-- [ ] **Task D2:** Bound `cloud_metadata_index.snippet` in the column and document the cap, so the no-content invariant is enforced rather than conventional (`app/models/cloud_metadata.py:59`).
+- [x] **Task D2:** Bound `cloud_metadata_index.snippet` in the column and document the cap, so the no-content invariant is enforced rather than conventional (`app/models/cloud_metadata.py:59`).
 - [ ] **Task D3:** Write the decision into `frontend/platform_docs/administrative-guide/16-integration-data-visibility.md` so administrators can answer a client's data-residency question from the product documentation.
 
 ---
@@ -254,3 +254,29 @@ Not an implementation task. This is a product decision that gates what the publi
 - Frontend: `npm test` from `frontend/`. Adding a guide chapter requires updating the length expectations in `src/platformDocs.test.js`.
 - Migrations: confirm the head on `origin/main` before claiming a number, and update every hardcoded head expectation listed in AGENTS.md §1.
 - Diff coverage must clear 80%; budget test-writing time up front rather than at merge.
+
+## Execution record — 2026-09-07
+
+A1–A2, B1–B6, C1–C4 and D2 are implemented on `feat/cloud-provider-remediation`.
+The broader D1 policy and decision-dependent D3 remain pending; the admin guide
+records the existing metadata-index versus persisted-chunks boundary without
+claiming a new platform-wide retention policy. The public page stays deferred.
+
+The root remains `claritylegal-records`; new matter folders carry the canonical
+name and eight-character UUID suffix. Existing folders are retained by ID; new
+captured EML files use `correspondence`. Staff and portal imports keep their
+explorer-relative paths below the same bound matter root. The independently
+merged matter-import changes from PR #350 are included in final integration review.
+
+Migration revisions are 160–162 after `159_navigation_profiles`. The existing
+RBAC capability catalog is preserved; tier capabilities extend it. Cutover and
+uploads serialize on tenant state after credential refresh; stale bindings fail
+with a retry message. Once a tenant has completed a migration, subsequent provider
+changes also require migration so an old reindex cannot restore retired pointers.
+The pre-existing direct setting behavior remains available for tenants with no
+migration history.
+
+Local validation covers provider transport behavior, aliases and tier detection,
+provisioning and upload races, reconciliation and cutover, retryable indexing,
+offline migration upgrade/downgrade SQL and the admin UI. PostgreSQL lifecycle
+checks and the complete required CI gate remain required before merge.

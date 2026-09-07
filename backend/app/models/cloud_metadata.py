@@ -56,7 +56,7 @@ class CloudMetadata(Base):
         nullable=True,
     )
     mime_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snippet: Mapped[str | None] = mapped_column(String(500), nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     web_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     sync_cursor: Mapped[str | None] = mapped_column(Text, nullable=True)

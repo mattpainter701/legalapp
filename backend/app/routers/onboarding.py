@@ -11,11 +11,12 @@ Steps:
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_admin
 from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
@@ -28,6 +29,10 @@ from app.services.compliance import agreement_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin/onboarding", tags=["onboarding"])
+
+
+class OnboardingReentryRequest(BaseModel):
+    target_provider: str | None = None
 
 
 async def _get_integration_status(
@@ -131,6 +136,55 @@ async def update_onboarding_step(
     return {"status": "ok", "step": step}
 
 
+@router.post("/reenter")
+async def reenter_onboarding(
+    body: OnboardingReentryRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reopen setup without discarding the completed tenant's cloud root."""
+    admin = await require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+    result = await db.execute(select(Tenant).where(Tenant.id == admin.tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if tenant.cloud_root_folder:
+        from app.models.storage_migration import OnboardingRootAudit
+
+        db.add(
+            OnboardingRootAudit(
+                tenant_id=tenant.id,
+                root=tenant.cloud_root_folder,
+                action="onboarding_reentry",
+                actor_id=admin.id,
+            )
+        )
+    tenant.onboarding_step = 1
+    # Keep completed true so existing writes remain available during setup.
+    if body.target_provider:
+        from app.services.storage_migration import storage_migration
+
+        try:
+            migration = await storage_migration.start(
+                db,
+                str(admin.tenant_id),
+                body.target_provider,
+                str(admin.id),
+                target_root=(tenant.cloud_root_folder or {}).get(body.target_provider),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        await db.commit()
+        return {"status": "ok", "onboarding_step": 1, "migration_id": str(migration.id)}
+    await db.commit()
+    return {
+        "status": "ok",
+        "onboarding_step": 1,
+        "cloud_root": tenant.cloud_root_folder,
+    }
+
+
 @router.post("/complete", response_model=OnboardingCompleteResponse)
 async def complete_onboarding(
     request: Request,
@@ -164,16 +218,30 @@ async def complete_onboarding(
             detail="At least one integration (Microsoft or Google) must be connected to complete onboarding.",
         )
 
-    # Initialize cloud folders
-    cloud_root = None
-    try:
-        from app.services.cloud_init import initialize_cloud_root_folder
+    # Re-entry is deliberately distinct from first-run setup.  Preserve the
+    # existing root and record that it was observed; only initialize a root
+    # when this tenant has never completed cloud setup.
+    cloud_root = tenant.cloud_root_folder
+    if cloud_root:
+        from app.models.storage_migration import OnboardingRootAudit
 
-        cloud_root = await initialize_cloud_root_folder(db, str(user.tenant_id))
-        tenant.cloud_root_folder = cloud_root
-    except Exception as exc:
-        logger.warning("Cloud folder init failed during onboarding: %s", exc)
-        # Non-fatal — admin can retry later
+        db.add(
+            OnboardingRootAudit(
+                tenant_id=tenant.id,
+                root=cloud_root,
+                action="onboarding_rerun",
+                actor_id=user.id,
+            )
+        )
+    else:
+        try:
+            from app.services.cloud_init import initialize_cloud_root_folder
+
+            cloud_root = await initialize_cloud_root_folder(db, str(user.tenant_id))
+            tenant.cloud_root_folder = cloud_root
+        except Exception as exc:
+            logger.warning("Cloud folder init failed during onboarding: %s", exc)
+            # Non-fatal — admin can retry later
 
     tenant.onboarding_completed = True
     tenant.onboarding_step = 4

@@ -319,3 +319,22 @@ and catalogue status do not establish current law or treatment.
 ## Mobile workspace clients
 
 The browser casework paths reuse existing matter/task/document authorization and review actions; they add no MCP tool or autonomous action. The optional HTTP note request identity and replay boundary are documented in [Phone casework](../mobile-casework.md#note-api-retry-contract). The Windows opener remains a Windows network/VPN client; phone compatibility guidance is not an authorization check.
+
+### Workspace cloud storage and provider portability
+
+Workspace artifact and document writes use the matter's bound provider IDs.
+Pending provisioning blocks uploads from inventing a second folder tree; imports
+retain their explorer-relative folders beneath the bound matter root.
+Administrative provider migration reconciles existing destination files and
+requires reviewed evidence before rebinding pointers, purging retired-provider
+metadata and scheduling a retryable target-root index refresh. No MCP tool gains
+permission to start migration or bypass administrator confirmation.
+
+The canonical tier, alias, folder and migration operations are in the
+[cloud provider support guide](../../frontend/platform_docs/administrative-guide/18-cloud-provider-support.md).
+The [integration data visibility guide](../../frontend/platform_docs/administrative-guide/16-integration-data-visibility.md)
+distinguishes the bounded cloud metadata index from document workflows that
+persist text chunks and embeddings. The metadata-only property of one index
+must not become a platform-wide no-content claim; the broader corpus decision
+remains pending. These changes are implemented and subject to release checks,
+without implying a production deployment or a new public support claim.

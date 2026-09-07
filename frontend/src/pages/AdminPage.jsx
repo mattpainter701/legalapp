@@ -23,6 +23,7 @@ import { useConfirm } from '../components/dialog/ConfirmProvider'
 import PromptAdminPage from './PromptAdminPage'
 import RolesTab from './admin/RolesTab'
 import { UserMcpAccessCell, UserMcpAccessDrawer } from './admin/UserMcpAccess'
+import UserAliases from './admin/UserAliases'
 import LicensingPanel from '../components/LicensingPanel'
 import IntegrationsHub, { LEGACY_INTEGRATION_TABS } from '../components/IntegrationsHub'
 import FirmBrandingPanel from '../components/FirmBrandingPanel'
@@ -681,6 +682,7 @@ function UsersTab({ billingTier, onNavigateMcp }) {
                   <td className="px-6 py-4">
                     <p className="text-brand-ink font-sans font-medium text-sm">{u.full_name || u.email}</p>
                     {u.full_name && <p className="text-brand-muted font-sans text-xs">{u.email}</p>}
+                    <UserAliases user={u} />
                   </td>
                   <td className="px-6 py-4">
                     <RoleAssignCell

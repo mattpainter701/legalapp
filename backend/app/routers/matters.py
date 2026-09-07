@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import async_session_maker, get_db, set_tenant_context
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_admin
 from app.models.billing import TimeEntry, Expense, Invoice, Payment
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact
@@ -28,6 +28,9 @@ from app.models.tenant import Tenant
 from app.services.email import EmailService, email_delivery_http_error
 from app.services.cloud_init import (
     ROOT_FOLDER_NAME,
+    canonical_matter_folder_name,
+    build_matter_folder_metadata,
+    ensure_matter_marker,
     initialize_cloud_root_folder,
     initialize_matter_folders,
     rename_cloud_folder,
@@ -80,7 +83,7 @@ matter_context_cache_manager = ExpertiseCacheManager()
 
 router = APIRouter(prefix="/api/matters", tags=["matters"])
 logger = logging.getLogger(__name__)
-SUPPORTED_CLOUD_FOLDER_PROVIDERS = {"onedrive", "google_drive"}
+SUPPORTED_CLOUD_FOLDER_PROVIDERS = {"onedrive", "google_drive", "sharepoint"}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -279,26 +282,27 @@ async def _provision_cloud_folders(
     try:
         async with async_session_maker() as db:
             await set_tenant_context(db, tenant_id)
-            import re
-
-            folder_name = matter_name.strip() if matter_name else slug
-            folder_name = re.sub(r"\s+", " ", folder_name).strip(" .")
-            if not folder_name:
-                folder_name = slug
-            folder_name = f"{folder_name} ({matter_id[:8]})"
             cloud_folder = await initialize_matter_folders(
                 db=db,
                 tenant_id=tenant_id,
                 matter_slug=slug,
                 cloud_root=cloud_root,
-                folder_name=folder_name,
+                folder_name=matter_name,
+                matter_id=matter_id,
             )
+            if not cloud_folder:
+                raise RuntimeError(
+                    "No cloud provider could provision this matter; reconnect and retry"
+                )
             if cloud_folder:
                 cloud_folder.update(_cloud_folder_status("provisioned"))
                 result = await db.execute(select(Matter).where(Matter.id == matter_id))
                 matter = result.scalar_one_or_none()
                 if matter:
-                    matter.cloud_folder = cloud_folder
+                    matter.cloud_folder = {
+                        **(matter.cloud_folder or {}),
+                        **cloud_folder,
+                    }
                     await _share_matter_with_assignees(db, uuid.UUID(tenant_id), matter)
                     await db.commit()
     except Exception as exc:
@@ -761,18 +765,7 @@ async def create_matter(
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     tenant = tenant_result.scalar_one_or_none()
     if tenant and tenant.cloud_root_folder:
-        matter_cloud_root = tenant.cloud_root_folder
-        matter_id_str = str(matter.id)
-        tenant_id_str = str(tenant_id)
-        asyncio.create_task(
-            _provision_cloud_folders(
-                matter_id_str,
-                tenant_id_str,
-                slug,
-                matter_cloud_root,
-                matter_name=body.matter_name,
-            )
-        )
+        matter.cloud_folder = _cloud_folder_status("provisioning")
 
     # Create initial event
     event = MatterEvent(
@@ -854,6 +847,16 @@ async def create_matter(
     await db.commit()
     await set_tenant_context(db, str(tenant_id))
     await db.refresh(matter)
+    if tenant and tenant.cloud_root_folder:
+        asyncio.create_task(
+            _provision_cloud_folders(
+                str(matter.id),
+                str(tenant_id),
+                slug,
+                tenant.cloud_root_folder,
+                matter_name=body.matter_name,
+            )
+        )
 
     # Reload with relationships
     result = await db.execute(
@@ -2439,7 +2442,7 @@ async def get_matter_cloud_folder(
 
     if matter.cloud_folder:
         return MatterCloudFolderStatus(
-            status="provisioned",
+            status=matter.cloud_folder.get("_status", "provisioned"),
             providers=matter.cloud_folder,
         )
     return MatterCloudFolderStatus(status="not_provisioned", providers={})
@@ -2450,14 +2453,24 @@ def _apply_cloud_provider_metadata(
 ) -> dict:
     """Merge provider folder metadata into Matter.cloud_folder."""
     cloud_folder = dict(matter.cloud_folder or {})
-    cloud_folder[provider] = provider_metadata
-
-    folder_name = provider_metadata.get("folder_name") or matter.slug
-    cloud_folder["path"] = f"{ROOT_FOLDER_NAME}/{folder_name}"
+    metadata = dict(provider_metadata)
+    metadata["path"] = (
+        metadata.get("path")
+        or f"{ROOT_FOLDER_NAME}/{metadata.get('folder_name') or matter.slug}"
+    )
+    cloud_folder[provider] = metadata
+    cloud_folder["path"] = (
+        cloud_folder.get("path")
+        or f"{ROOT_FOLDER_NAME}/{canonical_matter_folder_name(matter.matter_name, matter.id, matter.slug)}"
+    )
     cloud_folder["subfolder_paths"] = {
-        sub: f"{ROOT_FOLDER_NAME}/{folder_name}/{sub}"
-        for sub in provider_metadata.get("subfolders", {})
+        **(cloud_folder.get("subfolder_paths") or {}),
+        **{
+            sub: f"{cloud_folder['path']}/{sub}"
+            for sub in metadata.get("subfolders", {})
+        },
     }
+    cloud_folder.update(_cloud_folder_status("provisioned"))
     matter.cloud_folder = cloud_folder
     return cloud_folder
 
@@ -2490,6 +2503,7 @@ def _build_cloud_context_folder(
         "folder_name": provider_metadata.get("folder_name") or "",
         "url": provider_metadata.get("url") or "",
         "subfolders": provider_metadata.get("subfolders") or {},
+        "drive_id": provider_metadata.get("drive_id"),
         "added_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -2525,7 +2539,7 @@ async def _repair_tenant_cloud_root(
     try:
         fresh = await initialize_cloud_root_folder(db, str(tenant_id))
         if fresh:
-            cloud_root = {**cloud_root, **fresh}
+            cloud_root = {**fresh, **cloud_root}
             tenant.cloud_root_folder = cloud_root
     except Exception as exc:
         logger.warning("Tenant cloud root repair failed for %s: %s", tenant_id, exc)
@@ -2572,6 +2586,9 @@ async def provision_matter_cloud_folder(
             tenant_id=str(tenant_id),
             matter_slug=matter.slug,
             cloud_root=cloud_root,
+            matter_id=matter.id,
+            folder_name=matter.matter_name,
+            existing_folder=matter.cloud_folder,
         )
     except Exception as exc:
         logger.warning(
@@ -2621,7 +2638,7 @@ async def remap_matter_cloud_folder(
             detail="Provide a folder ID, folder URL, or folder name",
         )
 
-    current_user = await get_current_user(request, db)
+    current_user = await require_admin(request, db)
     tenant_id = current_user.tenant_id
     tenant_id_str = str(tenant_id)
     await set_tenant_context(db, tenant_id_str)
@@ -2648,6 +2665,7 @@ async def remap_matter_cloud_folder(
             folder_url=body.folder_url,
             folder_name=body.folder_name,
             create_if_missing=body.create_if_missing,
+            ensure_subfolders=False,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2655,6 +2673,26 @@ async def remap_matter_cloud_folder(
         logger.warning("Cloud folder remap failed for matter %s: %s", matter_id, exc)
         raise HTTPException(status_code=422, detail=str(exc))
 
+    try:
+        await ensure_matter_marker(
+            db,
+            tenant_id_str,
+            matter.id,
+            provider,
+            provider_metadata,
+            canonical_matter_folder_name(matter.matter_name, matter.id, matter.slug),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Could not verify the folder identity marker; reconnect and retry",
+        ) from exc
+
+    provider_metadata = await build_matter_folder_metadata(
+        db, tenant_id_str, provider, provider_metadata["matter_folder_id"]
+    )
     providers = _apply_cloud_provider_metadata(matter, provider, provider_metadata)
     await _share_matter_with_assignees(db, tenant_id, matter)
     await db.commit()
@@ -2857,6 +2895,9 @@ async def sync_matter_cloud_folder(
             tenant_id=tenant_id_str,
             matter_slug=matter.slug,
             cloud_root=cloud_root,
+            matter_id=matter.id,
+            folder_name=matter.matter_name,
+            existing_folder=matter.cloud_folder,
         )
         if not cloud_folder:
             raise HTTPException(

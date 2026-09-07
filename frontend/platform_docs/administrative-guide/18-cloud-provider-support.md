@@ -54,11 +54,11 @@ Do not rely on what the customer says they pay for. Product names change and sev
 
 A custom domain purchased through Google One is an outgoing mail alias attached to a personal account. The account identity stays `@gmail.com`.
 
-LawHand identifies users and matches correspondence on a single primary address. Where sign-in address and corresponding address differ, mail sent from the alias does not associate with the user's record or with matter parties. Before onboarding a firm in this configuration, confirm which address they will use for client correspondence and record the limitation with the account.
+LawHand keeps the provider sign-in address as the user's primary address. An administrator can add a secondary address under Administration → Users, but the address remains pending until the recipient completes the one-time verification link. Only a verified alias can identify that user for OAuth sign-in or match an internal assigned user during correspondence capture. An unverified alias never grants access or creates a matter match.
 
 ## Directory sync on personal accounts
 
-Directory sync requires an administrative directory that personal accounts do not have. On a personal Google account the sync reports a failure. This indicates the tier, not a broken connection — mail, calendar, storage, and search continue to work normally.
+Directory sync requires an administrative directory that personal accounts do not have. On a personal Google account the capability is reported as `not_applicable`, rather than as a connection failure. Mail, calendar, storage, and search continue to work normally.
 
 Review [Integrations → Cloud](/admin?tab=integrations&integration=cloud) for connection state, and treat a directory sync error on a known personal-tier tenant as expected rather than actionable.
 
@@ -75,8 +75,22 @@ Before a firm connects a provider, confirm:
 
 Record the business owner, technical owner, granted scopes, and disconnect procedure as described in [Integrations](/admin?tab=integrations).
 
+## Matter folders and correspondence
+
+Matter folders retain the `claritylegal-records` root and use one canonical matter folder name that includes the matter identifier. Captured `.eml` messages are stored in the provisioned `correspondence` subfolder. Folder setup is tenant-owned cloud storage; LawHand does not silently create a second slug-only tree when provisioning is pending.
+
+For a read-only audit of realized matter bindings, an operator can run the repository maintenance report:
+
+```text
+python scripts/audit_matter_cloud_folders.py <tenant-id>
+```
+
+The report identifies matters with missing, provisioning, or duplicate provider bindings. It does not merge or delete folders.
+
 ## Changing provider after onboarding
 
 A firm that migrates between providers keeps its matters, documents, and history. The cloud binding is repointed rather than rebuilt, per matter and per provider.
 
-Migration is a supported operation but not an automatic one. Coordinate it rather than changing the storage provider setting directly: altering the configured provider redirects new writes immediately while existing documents continue to reference the previous provider.
+Migration is a supported, administrator-directed operation. Open Administration → Integrations → Cloud storage migration, choose a connected target root, run reconciliation, and review every matched, missing, and ambiguous matter or document. The server records the discovery evidence and matching rung. Cutover remains unavailable while any item is unresolved and requires explicit administrator confirmation.
+
+The migration flow rebinds pointers to files the firm has already placed in the target provider; it does not copy or delete provider content. The existing cloud root remains recorded when setup is re-entered, so rerunning onboarding does not discard the prior root. Do not change the primary provider setting directly while a migration is active.

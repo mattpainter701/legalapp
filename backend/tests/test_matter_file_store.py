@@ -307,6 +307,7 @@ async def test_auto_mode_binds_an_active_microsoft_tenant_to_onedrive(monkeypatc
     class _Db:
         def __init__(self):
             self.results = [
+                _Result(scalar=None),  # no saved matter folder
                 _Result(scalar=None),
                 _Result(values=["google", "microsoft"]),
             ]
@@ -479,7 +480,7 @@ async def test_cleanup_rejects_local_symlink_even_when_target_is_in_tenant_root(
             "google item",
             None,
             "google",
-            "https://www.googleapis.com/drive/v3/files/google%20item",
+            "https://www.googleapis.com/drive/v3/files/google%20item?supportsAllDrives=true",
         ),
         (
             "onedrive",

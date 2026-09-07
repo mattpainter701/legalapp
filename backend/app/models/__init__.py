@@ -4,6 +4,7 @@ from app.models.demo_session import DemoSession, DemoUsageReservation
 from app.models.platform import PlatformSetting
 from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.user import User, UserMemory
+from app.models.user_alias import UserAliasAddress
 from app.models.document import Document, Chunk
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.plugin import (
@@ -105,6 +106,12 @@ from app.models.studio_draft import (
     StudioSourceArtifact,
 )
 from app.models.cloud_metadata import CloudMetadata
+from app.models.storage_migration import (
+    StorageMigration,
+    StorageMigrationState,
+    StorageMigrationMatch,
+    OnboardingRootAudit,
+)
 from app.models.mediation import (
     MediationParty,
     MediationInvite,
@@ -223,6 +230,7 @@ __all__ = [
     "LLMRoutingProfile",
     "User",
     "UserMemory",
+    "UserAliasAddress",
     "Document",
     "Chunk",
     "Conversation",
@@ -322,6 +330,10 @@ __all__ = [
     "StudioPreferredRenderEvidence",
     "PromptOverride",
     "CloudMetadata",
+    "StorageMigration",
+    "StorageMigrationState",
+    "StorageMigrationMatch",
+    "OnboardingRootAudit",
     "SmbAgent",
     "SmbCredential",
     "SmbShare",

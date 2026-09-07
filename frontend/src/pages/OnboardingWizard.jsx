@@ -4,6 +4,7 @@ import { useAuth } from '../App'
 import {
   getOnboardingStatus,
   completeOnboarding,
+  reenterOnboarding,
   skipOnboarding,
   updateOnboardingStep,
   API_BASE_URL,
@@ -27,6 +28,7 @@ export default function OnboardingWizard() {
   const [error, setError] = useState(null)
   const [syncing, setSyncing] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [restarting, setRestarting] = useState(false)
   const [agreementStatus, setAgreementStatus] = useState(null)
 
   useEffect(() => {
@@ -106,6 +108,19 @@ export default function OnboardingWizard() {
       setError('Failed to skip.')
     } finally {
       setCompleting(false)
+    }
+  }
+
+  const handleRestart = async () => {
+    setRestarting(true)
+    setError(null)
+    try {
+      await reenterOnboarding()
+      await loadStatus()
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Failed to restart setup.')
+    } finally {
+      setRestarting(false)
     }
   }
 
@@ -398,12 +413,21 @@ export default function OnboardingWizard() {
                 Your firm is ready. You can manage users, licenses, and integrations
                 from the Admin panel.
               </p>
-              <button
-                onClick={() => navigate('/admin', { replace: true })}
-                className="py-3 px-8 bg-brand-ink text-white font-sans text-sm font-semibold rounded-xl hover:opacity-90 transition-opacity"
-              >
-                Go to Admin Panel
-              </button>
+              <div className="flex flex-col items-center gap-3">
+                <button
+                  onClick={() => navigate('/admin', { replace: true })}
+                  className="py-3 px-8 bg-brand-ink text-white font-sans text-sm font-semibold rounded-xl hover:opacity-90 transition-opacity"
+                >
+                  Go to Admin Panel
+                </button>
+                <button
+                  onClick={handleRestart}
+                  disabled={restarting}
+                  className="text-sm font-medium text-brand-ink underline disabled:opacity-40"
+                >
+                  {restarting ? 'Restarting setup...' : 'Restart setup'}
+                </button>
+              </div>
             </div>
           )}
         </div>
