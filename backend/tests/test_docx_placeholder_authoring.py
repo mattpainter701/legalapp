@@ -34,16 +34,30 @@ def test_derivation_rewrites_only_explicitly_mapped_spans_and_preserves_evidence
     content = _source()
     outline = docx_outline(content)
     amount_candidates = [
-        item for item in outline["review_candidates"] if item["source_text"] == "[AMOUNT]"
+        item
+        for item in outline["review_candidates"]
+        if item["source_text"] == "[AMOUNT]"
     ]
-    client = next(item for item in outline["review_candidates"] if item["source_text"] == "Taylor Example")
+    client = next(
+        item
+        for item in outline["review_candidates"]
+        if item["source_text"] == "Taylor Example"
+    )
     # Map only the first amount and the explicitly reviewed identity.  The
     # second amount and footer date remain source evidence for later review.
     result = derive_reviewed_docx_source(
         content,
         fields=[
-            {"name": "car_value", "source_text": "[AMOUNT]", "docx_anchor": amount_candidates[0]["docx_anchor"]},
-            {"name": "client_name", "source_text": client["source_text"], "docx_anchor": client["docx_anchor"]},
+            {
+                "name": "car_value",
+                "source_text": "[AMOUNT]",
+                "docx_anchor": amount_candidates[0]["docx_anchor"],
+            },
+            {
+                "name": "client_name",
+                "source_text": client["source_text"],
+                "docx_anchor": client["docx_anchor"],
+            },
         ],
         source_mode="prose",
     )
@@ -52,27 +66,47 @@ def test_derivation_rewrites_only_explicitly_mapped_spans_and_preserves_evidence
     assert any("{{client_name}}" in text for text in texts)
     assert any("[DATE]" in text for text in texts)
     assert result.metadata["original_sha256"] == hashlib.sha256(content).hexdigest()
-    assert result.metadata["derived_sha256"] == hashlib.sha256(result.content).hexdigest()
-    active_field = next(item for item in result.variable_schema["fields"] if item["name"] == "car_value")
+    assert (
+        result.metadata["derived_sha256"] == hashlib.sha256(result.content).hexdigest()
+    )
+    active_field = next(
+        item for item in result.variable_schema["fields"] if item["name"] == "car_value"
+    )
     assert active_field["source_text"] == "{{car_value}}"
     assert "docx_anchor" not in active_field
     assert result.variable_schema["source_review"] == {}
     assert derived_source_is_current(content, result.content, result.metadata)
-    assert not derived_source_is_current(content + b"x", result.content, result.metadata)
+    assert not derived_source_is_current(
+        content + b"x", result.content, result.metadata
+    )
 
 
 def test_repeated_generic_spans_are_independent_and_formatting_split_runs_is_safe():
     content = _source()
     outline = docx_outline(content)
-    amounts = [item for item in outline["review_candidates"] if item["source_text"] == "[AMOUNT]"]
+    amounts = [
+        item
+        for item in outline["review_candidates"]
+        if item["source_text"] == "[AMOUNT]"
+    ]
     result = derive_reviewed_docx_source(
         content,
         fields=[
-            {"name": "car_value", "source_text": "[AMOUNT]", "docx_anchor": amounts[0]["docx_anchor"]},
-            {"name": "loan_value", "source_text": "[AMOUNT]", "docx_anchor": amounts[1]["docx_anchor"]},
+            {
+                "name": "car_value",
+                "source_text": "[AMOUNT]",
+                "docx_anchor": amounts[0]["docx_anchor"],
+            },
+            {
+                "name": "loan_value",
+                "source_text": "[AMOUNT]",
+                "docx_anchor": amounts[1]["docx_anchor"],
+            },
         ],
     )
-    text = "\n".join(p.text for p in iter_docx_paragraphs(Document(io.BytesIO(result.content))))
+    text = "\n".join(
+        p.text for p in iter_docx_paragraphs(Document(io.BytesIO(result.content)))
+    )
     assert "Car value: {{car_value}}; loan: {{loan_value}}" in text
 
 
@@ -118,10 +152,18 @@ def test_mode_is_a_suggestion_and_invalid_override_is_rejected():
 def test_conflicting_disposition_and_overlapping_mapping_fail_closed():
     content = _source()
     candidate = next(
-        item for item in docx_outline(content)["review_candidates"] if item["source_text"] == "[AMOUNT]"
+        item
+        for item in docx_outline(content)["review_candidates"]
+        if item["source_text"] == "[AMOUNT]"
     )
-    field = {"name": "amount", "source_text": "[AMOUNT]", "docx_anchor": candidate["docx_anchor"]}
+    field = {
+        "name": "amount",
+        "source_text": "[AMOUNT]",
+        "docx_anchor": candidate["docx_anchor"],
+    }
     with pytest.raises(TemplateDocxError, match="conflicts"):
-        derive_reviewed_docx_source(content, fields=[field], decisions={candidate["id"]: "fixed"})
+        derive_reviewed_docx_source(
+            content, fields=[field], decisions={candidate["id"]: "fixed"}
+        )
     with pytest.raises(TemplateDocxError, match="same source span"):
         derive_reviewed_docx_source(content, fields=[field, {**field, "name": "other"}])

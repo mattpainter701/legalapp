@@ -76,7 +76,9 @@ def suggest_source_mode(content: bytes) -> SourceModeSuggestion:
     if labels:
         signals.append("labelled response lines")
     if blanks >= 2 or (blanks and labels >= 2):
-        return SourceModeSuggestion("form", 0.9 if blanks >= 2 else 0.75, tuple(signals))
+        return SourceModeSuggestion(
+            "form", 0.9 if blanks >= 2 else 0.75, tuple(signals)
+        )
     return SourceModeSuggestion("prose", 0.8, tuple(signals or ["continuous prose"]))
 
 
@@ -85,7 +87,9 @@ def resolve_source_mode(
 ) -> str:
     """Resolve a suggestion only with a valid, explicit optional override."""
 
-    mode = suggestion.suggested_mode if override is None else str(override).strip().lower()
+    mode = (
+        suggestion.suggested_mode if override is None else str(override).strip().lower()
+    )
     if mode not in SOURCE_MODES:
         raise TemplateDocxError("Word source mode must be prose or form")
     return mode
@@ -121,8 +125,12 @@ def _mapped_review_spans(
                 int(anchor["end"]),
             )
         except (KeyError, TypeError, ValueError) as exc:
-            raise TemplateDocxError("A reviewed Word field has an invalid location") from exc
-        if paragraphs.get(ordinal, "")[start:end] != source or end - start != len(source):
+            raise TemplateDocxError(
+                "A reviewed Word field has an invalid location"
+            ) from exc
+        if paragraphs.get(ordinal, "")[start:end] != source or end - start != len(
+            source
+        ):
             raise TemplateDocxError(
                 f"The reviewed source for Word field {name!r} no longer matches"
             )
@@ -131,13 +139,19 @@ def _mapped_review_spans(
         # view.  Discovery candidates are useful evidence, but are not a
         # prerequisite for an exact user selection.
         decision = (decisions or {}).get(candidate_id)
-        if candidate_id in by_id and decision in {"fixed", "signature", "not_applicable"}:
+        if candidate_id in by_id and decision in {
+            "fixed",
+            "signature",
+            "not_applicable",
+        }:
             raise TemplateDocxError(
                 f"Word field {name!r} conflicts with its source-review disposition"
             )
         key = (ordinal, start, end)
         if key in seen:
-            raise TemplateDocxError("Two Word fields cannot map to the same source span")
+            raise TemplateDocxError(
+                "Two Word fields cannot map to the same source span"
+            )
         seen.add(key)
         spans.append((ordinal, start, end, name, source, candidate_id))
     # Mutate right-to-left inside each paragraph so offsets from the original
@@ -172,9 +186,13 @@ def derive_reviewed_docx_source(
         paragraph = paragraphs[ordinal]
         combined = "".join(run.text for run in paragraph.runs)
         if combined[start:end] != source:
-            raise TemplateDocxError("The retained Word source changed during derivation")
+            raise TemplateDocxError(
+                "The retained Word source changed during derivation"
+            )
         if not _replace_at_span(paragraph, start, end, "{{" + name + "}}"):
-            raise TemplateDocxError(f"Word field {name!r} could not be rewritten safely")
+            raise TemplateDocxError(
+                f"Word field {name!r} could not be rewritten safely"
+            )
         replacements.append(
             {
                 "name": name,
@@ -240,6 +258,8 @@ def derived_source_is_current(
     return (
         metadata.get("derivation_version") == PLACEHOLDER_DERIVATION_VERSION
         and metadata.get("source_review_version") == 1
-        and metadata.get("original_sha256") == hashlib.sha256(original_content).hexdigest()
-        and metadata.get("derived_sha256") == hashlib.sha256(derived_content).hexdigest()
+        and metadata.get("original_sha256")
+        == hashlib.sha256(original_content).hexdigest()
+        and metadata.get("derived_sha256")
+        == hashlib.sha256(derived_content).hexdigest()
     )
