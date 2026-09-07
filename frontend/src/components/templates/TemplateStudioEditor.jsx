@@ -171,6 +171,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [fieldSearch, setFieldSearch] = useState('')
   const [savedAt, setSavedAt] = useState(null)
   const [renderError, setRenderError] = useState('')
   const undoStack = useRef([])
@@ -460,6 +461,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
   return (
     <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-surface-2">
+      <div className="border-b border-brand-line p-3 text-sm">
+        <p className="font-semibold">{fields.filter(field => field.included !== false).length} included fields · {fields.filter(field => field.included !== false && (field.review_required || field.ai_suggested || Number(field.confidence ?? 1) < 0.75)).length} need review</p>
+        <p className="mt-1 text-xs text-brand-muted">Select a highlight or a field in the list to edit it. {isDocx ? 'Use Add field from text to highlight the words that should change.' : 'Choose a field type in the toolbar to add a box, then move and resize it on the page.'}</p>
+      </div>
       {isDocx && template.variable_schema?.source_review_version === 1 && (
         <div className="border-b border-brand-line p-3">
           <WordDeriveDraftAction
@@ -588,7 +593,6 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           />
           </WordDocumentPreview>
         )}
-        {isDocx && <WordCleanupAction templateId={template.id} selection={cleanupSelection} onCreated={onDerived} />}
         {!pdfSource && !isDocx && (
           <div className="max-h-[70vh] overflow-y-auto p-5">
             <h2 className="font-semibold text-brand-ink">Markdown template</h2>
@@ -696,11 +700,13 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           <h2 className="text-sm font-semibold text-brand-ink">
             Fields <span className="font-normal text-brand-muted">({fields.filter((field) => field.included !== false).length})</span>
           </h2>
+          <input type="search" aria-label="Find a field" placeholder="Find a field…" value={fieldSearch} onChange={event => setFieldSearch(event.target.value)} className="mt-2 w-full rounded border border-brand-line bg-brand-bg p-2 text-sm" />
           <ul className="mt-2 max-h-52 space-y-1 overflow-y-auto">
-            {indexedFields.map((entry) => (
+            {indexedFields.filter(entry => `${entry.field.label || ''} ${entry.field.name || ''} ${entry.field.source_text || ''}`.toLowerCase().includes(fieldSearch.toLowerCase())).map((entry) => (
               <li key={entry.identity}>
                 <button
                   type="button"
+                  aria-label={entry.field.label || entry.field.name}
                   onClick={() => {
                     setSelectedIdentity(entry.identity)
                     const first = placementsFor(entry.field)[0]?.overlay?.page || entry.field.page
@@ -710,6 +716,8 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                   className={`w-full truncate rounded-md px-2 py-1.5 text-left text-xs ${entry.identity === selectedIdentity ? 'bg-brand-accent/15 font-semibold text-brand-ink' : 'text-brand-muted hover:bg-brand-bg'} ${entry.field.included === false ? 'line-through opacity-60' : ''}`}
                 >
                   {entry.field.label || entry.field.name}
+                  <span className="block truncate text-[11px] font-normal">{entry.field.included === false ? 'Excluded' : entry.field.review_required || entry.field.ai_suggested || Number(entry.field.confidence ?? 1) < 0.75 ? 'Needs review' : 'Included'} · {entry.field.field_type || 'text'}</span>
+                  {entry.field.source_text && <span className="block truncate text-[11px] font-normal">Replaces: {entry.field.source_text}</span>}
                 </button>
               </li>
             ))}
@@ -858,6 +866,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           <span className="sr-only" aria-live="polite">History step {historyVersion}</span>
         </aside>
       </div>
+      {isDocx && <WordCleanupAction templateId={template.id} selection={cleanupSelection} onCreated={onDerived} />}
     </div>
   )
 }

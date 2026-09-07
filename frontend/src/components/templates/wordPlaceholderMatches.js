@@ -1,7 +1,7 @@
 import { fieldIdentity, VARIABLE_NAME_PATTERN } from './pdfFieldGeometry'
 
-// Match exact literal tokens only. Conflicting definitions and ordinary prose
-// remain in the Fields view, where the author can resolve them explicitly.
+// Literal tokens and unambiguous, explicitly mapped source text. Anchored
+// ranges stay in the text view when repeated prose makes their location unclear.
 export function wordPlaceholderMatches(strings, fields) {
   const definitions = new Map()
   fields.forEach((field, index) => {
@@ -12,11 +12,26 @@ export function wordPlaceholderMatches(strings, fields) {
   })
   const text = strings.join('')
   if (text.length > 500_000) return []
-  return [...text.matchAll(/\{\{([A-Za-z][A-Za-z0-9_.-]*)\}\}/g)].slice(0, 500).flatMap(match => {
+  const matches = [...text.matchAll(/\{\{([A-Za-z][A-Za-z0-9_.-]*)\}\}/g)].slice(0, 500).flatMap(match => {
     const entries = definitions.get(match[1])
     if (entries?.length !== 1) return []
     return [{ ...entries[0], start: match.index, end: match.index + match[0].length }]
   })
+  for (const entries of definitions.values()) {
+    if (entries.length !== 1 || matches.length >= 500) continue
+    const entry = entries[0]
+    const source = entry.field.source_text
+    if (typeof source !== 'string' || !source.trim() || source.length > 2000 || source.includes('{{') || entry.field.docx_anchor) continue
+    // Anchors refer to Word paragraphs, whose page can change after reflow.
+    // Their exact location remains available in Fields, never guessed here.
+    const first = text.indexOf(source)
+    for (let start = first; start >= 0 && matches.length < 500; start = text.indexOf(source, start + source.length)) {
+      matches.push({ ...entry, start, end: start + source.length })
+    }
+  }
+  return matches.filter((match, index) => !matches.some((other, otherIndex) => otherIndex !== index
+    && other.identity !== match.identity && other.start < match.end && match.start < other.end))
+    .sort((a, b) => a.start - b.start)
 }
 
 export function placeholderRange(textDivs, start, end, ownerDocument) {

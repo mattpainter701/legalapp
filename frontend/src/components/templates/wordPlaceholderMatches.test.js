@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { placeholderBoxes, placeholderRange, wordPlaceholderMatches } from './wordPlaceholderMatches'
 
 describe('literal Word placeholder matching', () => {
+  it('highlights explicitly detected source text, including repeated replacements', () => {
+    const fields = [{ name: 'client', source_text: 'Ada Lovelace' }]
+    expect(wordPlaceholderMatches(['Dear Ada ', 'Lovelace. Ada Lovelace signs.'], fields).map(match => match.start)).toEqual([5, 19])
+  })
+
+  it('does not bind ambiguous source text to competing fields or repeated anchors', () => {
+    expect(wordPlaceholderMatches(['Amount Amount'], [{ name: 'first', source_text: 'Amount', docx_anchor: { paragraph_ordinal: 0, start: 0, end: 6 } }])).toEqual([])
+    expect(wordPlaceholderMatches(['Ada Lovelace'], [{ name: 'first', source_text: 'Ada Lovelace' }, { name: 'second', source_text: 'Ada' }])).toEqual([])
+  })
   it('finds split-run and repeated literal tokens without binding ordinary text', () => {
     const fields = [{ name: 'client_name', label: 'Client' }, { name: 'amount' }]
     const matches = wordPlaceholderMatches(['Dear {{cli', 'ent_name}}, {{amount}}; {{client_name}} and unknown {{other}}.'], fields)

@@ -50,12 +50,12 @@ function DocumentPages({ source, onUnavailable, active, fields, selectedIdentity
 }
 
 /** Source-only print preview. Character-span authoring stays in the text view. */
-export default function WordDocumentPreview({ templateId, sourceDigest, fields, selectedIdentity, onSelectField, children }) {
+export default function WordDocumentPreview({ templateId, sourceDigest, fields, selectedIdentity, onSelectField, children, file, loadUploadPreview, addFieldRequest = 0 }) {
   const [view, setView] = useState('document')
   const [result, setResult] = useState(null)
   const [failed, setFailed] = useState('')
   const [attempt, setAttempt] = useState(0)
-  const identity = `${templateId}:${sourceDigest || ''}`
+  const identity = file || `${templateId}:${sourceDigest || ''}`
   const source = result?.identity === identity ? result.source : null
   const unavailable = useCallback(() => { setFailed(UNAVAILABLE); setView('fields') }, [])
 
@@ -65,7 +65,7 @@ export default function WordDocumentPreview({ templateId, sourceDigest, fields, 
     setFailed('')
     const load = async () => {
       try {
-        const loaded = await getTemplateSourcePreview(templateId)
+        const loaded = file ? await loadUploadPreview(file) : await getTemplateSourcePreview(templateId)
         if (!cancelled) setResult({ identity, source: loaded })
       } catch (error) {
         if (!cancelled) {
@@ -77,7 +77,9 @@ export default function WordDocumentPreview({ templateId, sourceDigest, fields, 
     }
     void load()
     return () => { cancelled = true }
-  }, [templateId, identity, attempt, unavailable])
+  }, [templateId, identity, attempt, unavailable, file, loadUploadPreview])
+
+  useEffect(() => { if (addFieldRequest) setView('fields') }, [addFieldRequest])
 
   const showDocument = view === 'document' && source && !failed
   return (
@@ -85,12 +87,13 @@ export default function WordDocumentPreview({ templateId, sourceDigest, fields, 
       <div className="flex gap-2 border-b border-brand-line p-3" role="group" aria-label="Word view">
         <PreviewButton aria-pressed={view === 'document'} onClick={() => setView('document')}>Document</PreviewButton>
         <PreviewButton aria-pressed={view === 'fields'} onClick={() => setView('fields')}>Fields</PreviewButton>
+        <PreviewButton onClick={() => setView('fields')}>Add field from text</PreviewButton>
       </div>
-      <p className="px-3 pt-3 text-xs text-brand-muted">Document shows the saved Word source. Select a highlighted placeholder to edit its field, or use Fields to map text. Tokens that cannot be located reliably remain available in Fields. Filled values can change pagination; review the generated PDF before sending.</p>
+      <p className="px-3 pt-3 text-xs text-brand-muted">Highlights show fields located on this page. Use Fields for other detected fields or to select new source text. Filled values can change pagination; review the generated PDF before sending.</p>
       {failed ? <div role="status" className="p-3 text-sm">{failed} <PreviewButton onClick={() => { setView('document'); setAttempt(value => value + 1) }}>Retry document preview</PreviewButton></div>
-        : !source && <p role="status" className="p-3 text-sm">Preparing document preview. You can map fields below while it loads.</p>}
+        : !source && <p role="status" className="p-3 text-sm">Preparing document pages… Use Fields to start mapping while the preview loads.</p>}
       {source && !failed && <div hidden={!showDocument}><DocumentPages key={identity} source={source} onUnavailable={unavailable} active={showDocument} fields={fields} selectedIdentity={selectedIdentity} onSelectField={onSelectField} /></div>}
-      <div hidden={Boolean(showDocument)} onFocusCapture={() => setView('fields')} onPointerDownCapture={() => setView('fields')}>{children}</div>
+      <div hidden={view === 'document' && !failed} onFocusCapture={() => setView('fields')} onPointerDownCapture={() => setView('fields')}>{children}</div>
     </section>
   )
 }

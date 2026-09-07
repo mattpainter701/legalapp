@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import TemplateStudioEditor, { mergedVariableSchema, schemaFields } from './TemplateStudioEditor'
 
+vi.mock('./WordDocumentPreview', () => ({ default: ({ children }) => <>{children}</> }))
+
 // pdf.js cannot rasterize in jsdom, so the shared canvas module is stubbed with
 // deterministic page geometry. Everything under test here is placement state,
 // not rasterization.
