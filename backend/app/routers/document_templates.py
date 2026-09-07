@@ -1519,6 +1519,32 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         except TemplateRegionError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # PDF white-out rectangles are value-less authoring metadata.  Keep them
+    # outside ``fields`` so they can never become caller-supplied variables.
+    cover_regions = schema.get("cover_regions")
+    if cover_regions is not None:
+        if not isinstance(cover_regions, list) or len(cover_regions) > 200:
+            raise HTTPException(
+                status_code=422,
+                detail="variable_schema.cover_regions must be an array of at most 200 regions",
+            )
+        reviewed_covers: list[dict] = []
+        for index, region in enumerate(cover_regions):
+            if not isinstance(region, dict):
+                raise HTTPException(status_code=422, detail=f"PDF cover region {index + 1} must be an object")
+            try:
+                page_number = int(region.get("page"))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=f"PDF cover region {index + 1} page must be an integer") from exc
+            rect = _safe_rect(region.get("rect"), page_number=page_number, label="PDF cover region rectangle")
+            reviewed_covers.append({
+                "page": page_number,
+                "rect": rect,
+                "source_kind": "manual",
+                "erase_source": True,
+            })
+        schema["cover_regions"] = reviewed_covers
+
     # Conditions are checked once the full name set is known, so logic that
     # references a field the template does not define is rejected at save time
     # rather than silently dropping a clause at generation time.
