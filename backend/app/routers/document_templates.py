@@ -45,6 +45,9 @@ from app.models.plugin import Matter, MatterEvent
 from app.models.tenant import TenantSettings
 from app.schemas.document_template import (
     DocumentTemplateBindingCatalogue,
+    DocumentTemplateFieldLibrary,
+    DocumentTemplateFieldUsage,
+    DocumentTemplateLibraryField,
     DocumentTemplateOutlineResponse,
     DocumentTemplateVersionDetail,
     DocumentTemplateVersionListResponse,
@@ -66,7 +69,11 @@ from app.schemas.document_template import (
     DocumentTemplateVariableSuggestion,
 )
 from app.schemas.matter_party import normalize_matter_party_role
-from app.services import template_custom_fields, template_fact_review
+from app.services import (
+    template_custom_fields,
+    template_fact_review,
+    template_field_library,
+)
 from app.services.template_intake import (
     TemplateAnalysis,
     analyze_template_upload,
@@ -2304,9 +2311,8 @@ async def list_template_bindings(
 ):
     """Return the data sources a template field may bind to.
 
-    The catalogue is static, server-owned vocabulary rather than tenant data,
-    so it needs no tenant context — but it stays behind the same capability as
-    the editor that consumes it.
+    Built-in vocabulary is extended with eligible tenant-owned custom fields.
+    Both stay behind the same capability as the editor that consumes them.
     """
 
     await set_tenant_context(db, str(current_user.tenant_id))
@@ -2339,6 +2345,41 @@ async def list_template_bindings(
             for entry in binding_collections()
         ],
         operators=sorted(LOGIC_OPERATORS),
+    )
+
+
+@router.get("/field-library", response_model=DocumentTemplateFieldLibrary)
+async def template_field_library_catalogue(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_capability("manage_documents")),
+):
+    catalog = await list_template_bindings(db=db, current_user=current_user)
+    counts = await template_field_library.usage_counts(db, current_user.tenant_id)
+    return DocumentTemplateFieldLibrary(
+        fields=[
+            DocumentTemplateLibraryField(
+                **entry.model_dump(),
+                template_count=counts.get(entry.path, 0),
+                suggested_name=alias_for_binding(entry.path) or None,
+            )
+            for entry in catalog.bindings
+        ]
+    )
+
+
+@router.get("/field-library/usage", response_model=DocumentTemplateFieldUsage)
+async def template_field_library_usage(
+    binding: str = Query(min_length=1, max_length=200),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_capability("manage_documents")),
+):
+    catalog = await list_template_bindings(db=db, current_user=current_user)
+    if binding not in {entry.path for entry in catalog.bindings}:
+        raise HTTPException(status_code=404, detail="Shared field is unavailable.")
+    return await template_field_library.binding_usage(
+        db, current_user.tenant_id, binding, limit, offset
     )
 
 

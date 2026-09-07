@@ -17,8 +17,8 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["id"] == LATEST_RELEASE_ID
     assert latest["version"] == LATEST_RELEASE_ID
     assert latest["is_recent"] is True
-    assert len(latest["highlights"]) == 3
-    assert latest["highlights"][-1]["title"] == "Map fields in document context"
+    assert len(latest["highlights"]) == 4
+    assert latest["highlights"][-1]["title"] == "Find reusable fields across templates"
     assert catalog["release_notes"][0] == latest
 
 

@@ -6,7 +6,7 @@
       "version": "2026.09.07.5",
       "title": "Prepare reusable Word templates with clearer source review",
       "published_at": "2026-09-07",
-      "summary": "Review retained sample values, keep repeated amounts independent, and map Word fields with clearer document context.",
+      "summary": "Review retained sample values, keep repeated amounts independent, and find shared fields and their template mappings in the Field Library.",
       "highlights": [
         {
           "title": "Review the remaining source details",
@@ -19,6 +19,10 @@
         {
           "title": "Map fields in document context",
           "description": "Studio shows tables in source order, common numbering and emphasis, and highlights existing fields. Word inspection and unchanged fills preserve the original formatting."
+        },
+        {
+          "title": "Find reusable fields across templates",
+          "description": "Find shared client, matter and custom fields, see their template mappings, and open them in Studio. Authoring guidance explains Word placeholders and formatting."
         }
       ]
     },

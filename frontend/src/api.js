@@ -2230,9 +2230,15 @@ export const discoverTemplateVariables = (id, data = {}) =>
   api.post(`/templates/${id}/smart-fill-preview`, data).then(r => r.data)
 
 // The closed vocabulary a template field may bind to, plus the collections a
-// repeating section may iterate. Static server-owned data, so callers cache it.
+// repeating section may iterate, including eligible firm custom fields.
 export const getTemplateBindings = () =>
   api.get('/templates/bindings').then(r => r.data)
+
+export const getTemplateFieldLibrary = () =>
+  api.get('/templates/field-library').then(r => r.data)
+
+export const getTemplateFieldUsage = (params) =>
+  api.get('/templates/field-library/usage', { params }).then(r => r.data)
 
 // A Word template's paragraphs, numbered by the same iterator that fills it.
 // This is the authoring surface for DOCX, where a field is a character span

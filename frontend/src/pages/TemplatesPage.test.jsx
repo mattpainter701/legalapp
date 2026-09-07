@@ -27,6 +27,8 @@ vi.mock('../api', () => ({
   getTemplateSource: vi.fn().mockRejectedValue(new Error('source unavailable in tests')),
   getTemplates: vi.fn().mockResolvedValue({ items: [{ id: 'template-1', title: 'Engagement Letter', body: 'Dear {{client_name}}', category: 'engagement_letter', is_active: true }] }),
   getTemplateQueues: vi.fn().mockRejectedValue(new Error('queue fixture not configured')),
+  getTemplateFieldLibrary: vi.fn().mockResolvedValue({ fields: [] }),
+  getTemplateFieldUsage: vi.fn(),
   getMattersV2: vi.fn().mockResolvedValue({ items: [{ id: 'matter-1', matter_name: 'Smith Matter', client_name: 'Smith' }] }),
   analyzeTemplateUpload: vi.fn(),
   proposeTemplateFieldsWithAi: vi.fn(),
@@ -110,6 +112,8 @@ describe('document template workflow', () => {
     render(<TemplatesPage />)
 
     expect(await screen.findByRole('tab', { name: 'Templates' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('tab', { name: 'Field Library' }))
+    expect(await screen.findByRole('heading', { name: 'Field Library' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: 'Generate / Smart Fill' }))
     await waitFor(() => expect(getTemplates).toHaveBeenLastCalledWith(expect.objectContaining({
       include_inactive: false,

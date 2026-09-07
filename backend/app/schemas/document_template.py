@@ -245,6 +245,36 @@ class DocumentTemplateCollectionOption(BaseModel):
     item_fields: list[str]
 
 
+class DocumentTemplateLibraryField(DocumentTemplateBindingOption):
+    template_count: int
+    suggested_name: str | None = None
+
+
+class DocumentTemplateFieldLibrary(BaseModel):
+    fields: list[DocumentTemplateLibraryField]
+
+
+class DocumentTemplateFieldUsagePlacement(BaseModel):
+    name: str
+    label: str | None = None
+
+
+class DocumentTemplateFieldUsageItem(BaseModel):
+    template_id: uuid.UUID
+    title: str
+    status: str | None = None
+    current_version_no: int
+    fields: list[DocumentTemplateFieldUsagePlacement]
+
+
+class DocumentTemplateFieldUsage(BaseModel):
+    items: list[DocumentTemplateFieldUsageItem]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class DocumentTemplateBindingCatalogue(BaseModel):
     """The closed vocabulary a template author may draw on.
 

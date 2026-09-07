@@ -9,11 +9,12 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 Released September 7, 2026.
 
-Review retained sample values, keep repeated amounts independent, and map Word fields with clearer document context.
+Review retained sample values, keep repeated amounts independent, and find shared fields and their template mappings in the Field Library.
 
 - **Review the remaining source details.** New Word masters ask you to map suggested blanks and sample values or deliberately keep them fixed before publishing. Save your decisions and test the resulting version.
 - **Keep different answers separate.** Repeated generic placeholders become separate fields. Link values explicitly when they represent the same fact, and select clear answers for recognized choice marks.
 - **Map fields in document context.** Studio shows tables in source order, common numbering and emphasis, and highlights existing fields. Word inspection and unchanged fills preserve the original formatting.
+- **Find reusable fields across templates.** Find shared client, matter and custom fields, see their template mappings, and open them in Studio. Authoring guidance explains Word placeholders and formatting.
 
 ## 2026.09.07.4 — Prepare provider changes with clearer account and storage controls
 

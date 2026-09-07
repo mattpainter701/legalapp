@@ -5,6 +5,7 @@ import PrepareFormWorkspace from '../components/templates/PrepareFormWorkspace'
 import TemplateStudioHome from '../components/templates/TemplateStudioHome'
 import TemplateStudioWorkspace from '../components/templates/TemplateStudioWorkspace'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
+import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
   getTemplate,
@@ -67,6 +68,7 @@ const CATEGORY_LABELS = {
 
 const TABS = [
   { key: 'templates', label: 'Templates', icon: FileText },
+  { key: 'fields', label: 'Field Library', icon: Layers3 },
   { key: 'generate', label: 'Generate / Smart Fill', icon: Wand2 },
 ]
 
@@ -1831,6 +1833,7 @@ export default function TemplatesPage() {
   const [matterLoading, setMatterLoading] = useState(true)
   const [error, setError] = useState(null)
   const [activeTab, setActiveTab] = useState('templates')
+  const [fieldLibraryRefresh, setFieldLibraryRefresh] = useState(0)
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -2182,6 +2185,10 @@ export default function TemplatesPage() {
   }
 
   const refreshActiveView = async () => {
+    if (activeTab === 'fields') {
+      setFieldLibraryRefresh((value) => value + 1)
+      return
+    }
     if (activeTab === 'generate') {
       await Promise.all([load(), loadGenerationTemplates()])
       return
@@ -2630,7 +2637,7 @@ export default function TemplatesPage() {
       <TemplateStudioHome templates={templates} summary={libraryMeta.summary} queues={studioQueues} />
 
       <div className="my-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div role="tablist" aria-label="Template Studio views" className="inline-flex w-fit rounded-xl border border-brand-line bg-brand-surface-2 p-1 shadow-sm">
+        <div role="tablist" aria-label="Template Studio views" className="inline-flex w-fit max-w-full flex-wrap rounded-xl border border-brand-line bg-brand-surface-2 p-1 shadow-sm">
           {TABS.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -2667,6 +2674,7 @@ export default function TemplatesPage() {
       )}
 
       {activeTab === 'templates' && renderTemplatesPanel()}
+      {activeTab === 'fields' && <TemplateFieldLibrary refreshKey={fieldLibraryRefresh} />}
       {activeTab === 'generate' && renderGeneratePanel()}
 
       {(showCreate || (isNewRoute && new URLSearchParams(location.search).get('mode') === 'manual')) && (
