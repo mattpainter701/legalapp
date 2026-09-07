@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import lazyload
 
 from app.config import get_settings
 from app.models.tenant import TenantSettings
@@ -220,11 +221,15 @@ async def initialize_matter_folders(
         locked_matter = (
             await db.execute(
                 select(Matter)
+                # Matter.partner_attorney normally uses joined loading. Do not
+                # include its nullable user join in this locking query: Postgres
+                # cannot apply FOR UPDATE to the nullable side of an outer join.
+                .options(lazyload(Matter.partner_attorney))
                 .where(
                     Matter.id == uuid.UUID(str(matter_id)),
                     Matter.tenant_id == uuid.UUID(str(tenant_id)),
                 )
-                .with_for_update()
+                .with_for_update(of=Matter)
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
