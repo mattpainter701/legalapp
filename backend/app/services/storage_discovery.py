@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from dateutil import parser as dateutil_parser
@@ -21,7 +21,7 @@ def _time(value):
     if not value:
         return None
     try:
-        return dateutil_parser.isoparse(str(value))
+        return dateutil_parser.isoparse(str(value)).isoformat()
     except (TypeError, ValueError, OverflowError):
         return None
 
@@ -36,9 +36,9 @@ async def _read_marker(response: httpx.Response) -> dict:
         raise ValueError("Matter marker could not be read safely")
     data = bytearray()
     async for chunk in response.aiter_bytes():
-        data.extend(chunk)
-        if len(data) > MAX_MARKER_BYTES:
+        if len(data) + len(chunk) > MAX_MARKER_BYTES:
             raise ValueError("Matter marker could not be read safely")
+        data.extend(chunk)
     try:
         value = json.loads(bytes(data).decode("utf-8"))
     except (UnicodeDecodeError, TypeError, ValueError) as exc:
@@ -66,14 +66,14 @@ class StorageDiscovery:
         if not root_id:
             raise ValueError("Target Google Drive root is not bound")
         headers = {"Authorization": f"Bearer {token}"}
-        fields = "id,name,mimeType,parents,webViewLink,driveId,modifiedTime,createdTime,size,sha256Checksum,md5Checksum,version,etag"
+        fields = "id,name,mimeType,parents,webViewLink,driveId,modifiedTime,createdTime,size,sha256Checksum,version"
         result: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
         marker_parents: set[str] = set()
         queue = [(str(root_id), str(root.get("path") or ""))]
         async with httpx.AsyncClient(timeout=30) as client:
             root_response = await client.get(
-                f"{GOOGLE_FILES}/{root_id}",
+                f"{GOOGLE_FILES}/{quote(str(root_id), safe='')}",
                 headers=headers,
                 params={"fields": fields, "supportsAllDrives": True},
             )
@@ -135,12 +135,13 @@ class StorageDiscovery:
                                     "Duplicate matter markers found for folder"
                                 )
                             marker_parents.add(marker_parent)
-                            marker_response = await client.get(
-                                f"{GOOGLE_FILES}/{normalized['id']}",
+                            async with client.stream(
+                                "GET",
+                                f"{GOOGLE_FILES}/{quote(normalized['id'], safe='')}",
                                 headers=headers,
                                 params={"alt": "media", "supportsAllDrives": True},
-                            )
-                            marker = await _read_marker(marker_response)
+                            ) as marker_response:
+                                marker = await _read_marker(marker_response)
                             for prior in reversed(result):
                                 if prior["id"] == marker_parent:
                                     prior["marker"] = marker
@@ -166,9 +167,8 @@ class StorageDiscovery:
             "is_folder": item.get("mimeType") == "application/vnd.google-apps.folder",
             "size": int(item["size"]) if item.get("size") else None,
             "sha256": item.get("sha256Checksum"),
-            "md5": item.get("md5Checksum"),
             "etag": item.get("etag"),
-            "version": item.get("version"),
+            "version_id": item.get("version"),
             "mime_type": item.get("mimeType"),
             "modified_time": _time(item.get("modifiedTime")),
             "drive_id": item.get("driveId"),
@@ -188,7 +188,11 @@ class StorageDiscovery:
             raise ValueError("Target Microsoft Drive root is not bound")
         if provider == "sharepoint" and not drive_id:
             raise ValueError("SharePoint drive_id is required")
-        base = f"{GRAPH}/drives/{drive_id}" if drive_id else f"{GRAPH}/me/drive"
+        base = (
+            f"{GRAPH}/drives/{quote(str(drive_id), safe='')}"
+            if drive_id
+            else f"{GRAPH}/me/drive"
+        )
         headers = {"Authorization": f"Bearer {token}"}
         fields = (
             "id,name,parentReference,file,folder,size,webUrl,fileSystemInfo,eTag,cTag"
@@ -197,11 +201,17 @@ class StorageDiscovery:
         seen_ids: set[str] = set()
         marker_parents: set[str] = set()
         queue = [
-            (f"{base}/items/{root_id}/children", root_id, str(root.get("path") or ""))
+            (
+                f"{base}/items/{quote(str(root_id), safe='')}/children",
+                root_id,
+                str(root.get("path") or ""),
+            )
         ]
         async with httpx.AsyncClient(timeout=30) as client:
             root_response = await client.get(
-                f"{base}/items/{root_id}", headers=headers, params={"$select": fields}
+                f"{base}/items/{quote(str(root_id), safe='')}",
+                headers=headers,
+                params={"$select": fields},
             )
             if root_response.status_code != 200:
                 raise ValueError(
@@ -212,8 +222,8 @@ class StorageDiscovery:
             if not root.get("path"):
                 queue[0] = (
                     queue[0][0],
+                    root_id,
                     str(root_response.json().get("name") or ""),
-                    queue[0][2],
                 )
             seen_urls: set[str] = set()
             for _ in range(MAX_PAGES):
@@ -253,12 +263,13 @@ class StorageDiscovery:
                                 "Duplicate matter markers found for folder"
                             )
                         marker_parents.add(marker_parent)
-                        marker_response = await client.get(
-                            f"{base}/items/{normalized['id']}/content",
+                        async with client.stream(
+                            "GET",
+                            f"{base}/items/{quote(normalized['id'], safe='')}/content",
                             headers=headers,
                             follow_redirects=True,
-                        )
-                        marker = await _read_marker(marker_response)
+                        ) as marker_response:
+                            marker = await _read_marker(marker_response)
                         for prior in reversed(result):
                             if prior["id"] == marker_parent:
                                 prior["marker"] = marker
@@ -266,7 +277,7 @@ class StorageDiscovery:
                     if normalized["is_folder"]:
                         queue.append(
                             (
-                                f"{base}/items/{normalized['id']}/children",
+                                f"{base}/items/{quote(normalized['id'], safe='')}/children",
                                 normalized["id"],
                                 normalized["path"],
                             )
@@ -301,7 +312,7 @@ class StorageDiscovery:
             "size": item.get("size"),
             "sha256": hashes.get("sha256Hash"),
             "etag": item.get("eTag"),
-            "version": item.get("version") or item.get("cTag"),
+            "version_id": item.get("cTag"),
             "mime_type": file_data.get("mimeType"),
             "modified_time": _time(modified),
             "drive_id": parent_ref.get("driveId") or drive_id,
