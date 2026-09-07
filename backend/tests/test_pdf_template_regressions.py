@@ -92,6 +92,39 @@ def test_pdf_cover_region_flattens_value_less_whiteout() -> None:
     assert len(PdfReader(BytesIO(output)).pages) == 1
 
 
+@pytest.mark.parametrize(
+    "region",
+    [
+        {"page": 0, "rect": [60, 730, 260, 750]},
+        {"page": 1.5, "rect": [60, 730, 260, 750]},
+        {"page": 1, "rect": [60, 730, 260]},
+        {"page": 1, "rect": [float("nan"), 730, 260, 750]},
+        {"page": 1, "rect": [600, 730, 700, 750]},
+    ],
+)
+def test_pdf_cover_region_rejects_invalid_stored_geometry(region) -> None:
+    with pytest.raises(TemplatePdfError, match="cover region"):
+        fill_pdf_template(
+            _plain_pdf(),
+            variable_schema={"fields": [], "cover_regions": [region]},
+            variables={},
+            flatten=True,
+        )
+
+
+def test_pdf_cover_region_requires_flattened_output() -> None:
+    with pytest.raises(TemplatePdfError, match="flattened"):
+        fill_pdf_template(
+            _plain_pdf(),
+            variable_schema={
+                "fields": [],
+                "cover_regions": [{"page": 1, "rect": [60, 730, 260, 750]}],
+            },
+            variables={},
+            flatten=False,
+        )
+
+
 def test_pdf_flatten_wraps_long_text_and_rejects_overlong_text() -> None:
     source = _multiline_pdf()
     value = (

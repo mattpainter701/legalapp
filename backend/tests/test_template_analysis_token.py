@@ -317,6 +317,29 @@ def test_reviewed_schema_accepts_value_less_pdf_cover_regions():
     ]
 
 
+@pytest.mark.parametrize(
+    "cover_regions",
+    [
+        None,
+        [{"page": 1}],
+        [{"page": 1, "rect": [0, 0, 1]}],
+        [{"page": 1.5, "rect": [0, 0, 1, 1]}],
+        [{"page": 1, "rect": [0, 0, 700, 1]}],
+    ],
+)
+def test_reviewed_schema_rejects_malformed_pdf_cover_regions(cover_regions):
+    discovered = {
+        "pages": [{"page": 1, "width": 612, "height": 792}],
+        "fields": [],
+    }
+    if cover_regions is None:
+        cover_regions = ["not an object"]
+    with pytest.raises(HTTPException, match="PDF cover region"):
+        document_templates._reviewed_variable_schema(
+            json.dumps({"fields": [], "cover_regions": cover_regions}), discovered
+        )
+
+
 def test_mixed_pdf_renderer_fills_acroform_and_ocr_overlay_together():
     from io import BytesIO
 
