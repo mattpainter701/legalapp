@@ -11,6 +11,11 @@
 
 # Changelog
 
+## 2026.09.07.6
+
+- Send Matter Import ZIP previews and uploads as multipart form data, preserving the selected archive instead of serializing it through the shared JSON client default.
+- Render the fetched-content payload returned by Cloud Search test requests so administrators can inspect the retrieved text alongside metadata hits.
+
 ## 2026.09.07.5
 
 - Add the searchable Field Library using existing built-in and tenant custom definitions, distinct current-template counts, paginated usage and Studio links. Document explicit Word placeholder conventions and the difference between shared data sources and template-local value links.

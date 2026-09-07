@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.6",
+      "version": "2026.09.07.6",
+      "title": "Import and inspect cloud files reliably",
+      "published_at": "2026-09-07",
+      "summary": "Preview ZIP matter imports before mapping them, and inspect text LawHand retrieves during an administrator cloud search test.",
+      "highlights": [
+        {
+          "title": "Preview an import ZIP",
+          "description": "Selecting an archive sends the selected file to the import preview safely, so staff can review its folders and mappings before creating or changing a matter."
+        },
+        {
+          "title": "Inspect retrieved cloud text",
+          "description": "Cloud Search test results now show fetched text when the administrator selects Fetch full content, alongside the metadata hit that produced it."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.5",
       "version": "2026.09.07.5",
       "title": "Prepare reusable Word templates with clearer source review",

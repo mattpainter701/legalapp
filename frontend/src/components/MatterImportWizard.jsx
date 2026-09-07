@@ -7,7 +7,12 @@ const postFile = (url, file, path) => {
   const form = new FormData()
   form.append('file', file)
   if (path) form.append('path', path)
-  return api.post(url, form, { timeout: 0 }).then(r => r.data)
+  return api.post(url, form, {
+    timeout: 0,
+    // The shared client defaults to JSON. Override it so Axios preserves the
+    // FormData body and lets the browser supply the multipart boundary.
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
 }
 
 export function groupFiles(files, depth) {

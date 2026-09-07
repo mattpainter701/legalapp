@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.6 — Import and inspect cloud files reliably
+
+Released September 7, 2026.
+
+Preview ZIP matter imports before mapping them, and inspect text LawHand retrieves during an administrator cloud search test.
+
+- **Preview an import ZIP.** Selecting an archive sends the selected file to the import preview safely, so staff can review its folders and mappings before creating or changing a matter.
+- **Inspect retrieved cloud text.** Cloud Search test results now show fetched text when the administrator selects Fetch full content, alongside the metadata hit that produced it.
+
 ## 2026.09.07.5 — Prepare reusable Word templates with clearer source review
 
 Released September 7, 2026.
