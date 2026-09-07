@@ -720,6 +720,21 @@ async def _verified_template_source(template: DocumentTemplate) -> bytes:
     return content
 
 
+async def _ensure_word_source_review(template, schema):
+    if (
+        str(template.format).lower() != "docx"
+        or (schema or {}).get("source_review_version") != 1
+    ):
+        return
+    from app.services.docx_source_review import require_source_review
+
+    source = await _verified_template_source(template)
+    try:
+        await asyncio.to_thread(require_source_review, source, schema)
+    except TemplateDocxError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _storage_document_fields(result) -> dict:
     return {
         "storage_path": result.storage_path,
@@ -1312,6 +1327,11 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
             field["docx_source_key"] = docx_key
             field["docx_anchor"] = authoritative.get("docx_anchor")
             field["source_text"] = authoritative.get("source_text")
+            if authoritative.get("docx_choice"):
+                field["docx_choice"] = authoritative["docx_choice"]
+                field["field_type"] = "checkbox"
+            if authoritative.get("context"):
+                field["context"] = authoritative["context"]
             if authoritative.get("example") is not None:
                 field["example"] = authoritative.get("example")
         elif field.get("docx_anchor") is not None and discovered_docx_keys:
@@ -1519,6 +1539,9 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
     schema.pop("ai_proposal", None)
     schema.pop("unmapped_ai_suggestions", None)
     schema["source"] = "reviewed_upload"
+    if discovered.get("source_review_version") == 1:
+        schema["source_review_version"] = 1
+        schema.pop("source_review", None)
     return schema
 
 
@@ -3464,6 +3487,10 @@ async def update_template(
         or (pdf_body_update_requested and updates["body"] != template.body)
     )
     requested_activation = updates.get("is_active") is True
+    if current_format == "docx" and requested_activation:
+        await _ensure_word_source_review(
+            template, updates.get("variable_schema", template.variable_schema)
+        )
     if pdf_contract_changed and requested_activation:
         raise HTTPException(
             status_code=409,
@@ -3839,6 +3866,7 @@ async def publish_template(
             detail="Test this exact template version successfully before publishing it.",
         )
 
+    await _ensure_word_source_review(template, template.variable_schema)
     template.is_active = True
     template.status = "published"
     template.approved_at = datetime.now(timezone.utc)

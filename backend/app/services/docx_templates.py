@@ -187,6 +187,35 @@ def validate_docx_package(content: bytes) -> None:
         raise TemplateDocxError("The DOCX is damaged or could not be parsed.") from exc
 
 
+def existing_header_footer(container):
+    """Resolve inheritance without python-docx's create-on-read side effect."""
+    while container is not None:
+        if container._has_definition:
+            return container
+        container = container._prior_headerfooter
+    return None
+
+
+def docx_story_containers(document, *, variants=False):
+    seen = set()
+    for section in document.sections:
+        candidates = (
+            (
+                section.first_page_header,
+                section.first_page_footer,
+                section.even_page_header,
+                section.even_page_footer,
+            )
+            if variants
+            else (section.header, section.footer)
+        )
+        for candidate in candidates:
+            container = existing_header_footer(candidate)
+            if container is not None and container._element not in seen:
+                seen.add(container._element)
+                yield container
+
+
 def iter_docx_paragraphs(document: Document) -> Iterable[Any]:
     """Yield body, table, header, and footer paragraphs exactly once.
 
@@ -223,19 +252,35 @@ def iter_docx_paragraphs(document: Document) -> Iterable[Any]:
 
     yield from emit(document.paragraphs)
     yield from emit_tables(document.tables)
+    # Keep the empty slots the legacy iterator assigned to missing default
+    # stories, but never attach those virtual paragraphs to the source package.
+    # Stored anchors on content controls after those slots remain valid.
+    virtual = {}
     for section in document.sections:
-        for container in (section.header, section.footer):
-            yield from emit(container.paragraphs)
-            yield from emit_tables(container.tables)
+        for kind, candidate in (("hdr", section.header), ("ftr", section.footer)):
+            container = existing_header_footer(candidate)
+            if container is None:
+                if kind not in virtual:
+                    root = OxmlElement(f"w:{kind}")
+                    element = OxmlElement("w:p")
+                    root.append(element)
+                    virtual[kind] = Paragraph(element, document)
+                yield from emit([virtual[kind]])
+            else:
+                yield from emit(container.paragraphs)
+                yield from emit_tables(container.tables)
 
     # python-docx omits paragraphs wrapped in some structured document tags
     # and DrawingML/VML text boxes from its high-level collections. Append
     # those missing paragraphs after the legacy traversal so existing stored
     # paragraph ordinals remain stable.
     yield from emit_missing_xml(document.element.body, document)
-    for section in document.sections:
-        for container in (section.header, section.footer):
-            yield from emit_missing_xml(container._element, container)
+    for container in docx_story_containers(document):
+        yield from emit_missing_xml(container._element, container)
+    # Newly supported first/even stories are appended, never renumbering an
+    # existing default-story, text-box, or content-control anchor.
+    for container in docx_story_containers(document, variants=True):
+        yield from emit_missing_xml(container._element, container)
 
 
 def iter_docx_paragraphs_with_anchors(document: Document) -> Iterable[tuple[int, Any]]:
@@ -297,6 +342,9 @@ def _replace_in_paragraph(
         if first >= len(runs) or last < first:
             continue
         replacement = replacement_by_source[match.group(0)]
+        if replacement == match.group(0):
+            applied += 1
+            continue
         prefix = runs[first].text[: start - run_starts[first]]
         suffix = runs[last].text[end - run_starts[last] :]
         runs[first].text = prefix + replacement + (suffix if first == last else "")
@@ -317,6 +365,8 @@ def _replace_at_span(paragraph: Any, start: int, end: int, replacement: str) -> 
     combined = "".join(run.text for run in runs)
     if end > len(combined):
         return False
+    if combined[start:end] == replacement:
+        return True
 
     run_starts: list[int] = []
     run_ends: list[int] = []
@@ -382,8 +432,8 @@ def _paragraph_containers(document: Document) -> Iterable[Any]:
                     yield from walk_tables(cell.tables)
 
     yield from walk_tables(document.tables)
-    for section in document.sections:
-        for container in (section.header, section.footer):
+    for variants in (False, True):
+        for container in docx_story_containers(document, variants=variants):
             yield container._element
             yield from walk_tables(container.tables)
 
@@ -661,6 +711,10 @@ def fill_docx_template(
             )
         by_name[name] = field
 
+    from app.services.docx_source_review import word_values
+
+    variables = word_values(fields, variables)
+
     unknown = set(variables) - set(by_name)
     if unknown:
         raise TemplateDocxError(
@@ -670,7 +724,9 @@ def fill_docx_template(
         missing = sorted(
             name
             for name, field in by_name.items()
-            if field.get("required") and not str(variables.get(name) or "").strip()
+            if field.get("included") is not False
+            and field.get("required")
+            and not str(variables.get(name) or "").strip()
         )
         if missing:
             raise TemplateDocxError(
@@ -683,6 +739,8 @@ def fill_docx_template(
     # document, so it is excluded here and applied during cloning instead.
     item_fields: list[tuple[str, str]] = []
     for name, field in by_name.items():
+        if field.get("included") is False:
+            continue
         binding = field.get("binding")
         if is_item_binding(str(binding or "")):
             item_fields.append(

@@ -143,6 +143,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [fields, setFields] = useState(() => schemaFields(template))
   const [applicability, setApplicability] = useState(template.variable_schema?.applicability || null)
   const [regions, setRegions] = useState(() => schemaRegions(template))
+  const [sourceReview, setSourceReview] = useState(template.variable_schema?.source_review || {})
   const [selectedIdentity, setSelectedIdentity] = useState(
     () => fieldIdentity(schemaFields(template)[0], 0),
   )
@@ -177,6 +178,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     const next = schemaFields(template)
     setFields(next)
     setRegions(schemaRegions(template))
+    setSourceReview(template.variable_schema?.source_review || {})
     setApplicability(template.variable_schema?.applicability || null)
     setSelectedIdentity(fieldIdentity(next[0], 0))
     setPageNumber(1)
@@ -222,22 +224,23 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     || (Number(page.rotation || 0) % 180 ? Number(page.width) : Number(page.height)) * zoom
 
   const commitFields = useCallback((nextFields) => {
-    undoStack.current = [...undoStack.current.slice(-49), { fields, regions }]
+    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
     redoStack.current = []
     setHistoryVersion((value) => value + 1)
     setFields(nextFields)
     setDirty(true)
     setSaveError('')
-  }, [fields, regions])
+  }, [fields, regions, sourceReview])
 
   const undo = () => {
     const previous = undoStack.current.at(-1)
     if (!previous) return
     undoStack.current = undoStack.current.slice(0, -1)
-    redoStack.current = [...redoStack.current.slice(-49), { fields, regions }]
+    redoStack.current = [...redoStack.current.slice(-49), { fields, regions, sourceReview }]
     setHistoryVersion((value) => value + 1)
     setFields(previous.fields)
     setRegions(previous.regions)
+    setSourceReview(previous.sourceReview || {})
     setDirty(true)
   }
 
@@ -245,10 +248,11 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     const next = redoStack.current.at(-1)
     if (!next) return
     redoStack.current = redoStack.current.slice(0, -1)
-    undoStack.current = [...undoStack.current.slice(-49), { fields, regions }]
+    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
     setHistoryVersion((value) => value + 1)
     setFields(next.fields)
     setRegions(next.regions)
+    setSourceReview(next.sourceReview || {})
     setDirty(true)
   }
 
@@ -290,7 +294,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   }
 
   const commitRegions = (nextRegions) => {
-    undoStack.current = [...undoStack.current.slice(-49), { fields, regions }]
+    undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
     redoStack.current = []
     setHistoryVersion((value) => value + 1)
     setRegions(nextRegions)
@@ -367,7 +371,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     setSaving(true)
     setSaveError('')
     try {
-      await onSave({ ...mergedVariableSchema(template, fields, regions), ...(applicability || template.variable_schema?.applicability ? { applicability } : {}) })
+      await onSave({ ...mergedVariableSchema(template, fields, regions), ...(isDocx && template.variable_schema?.source_review_version === 1 ? { source_review: sourceReview } : {}), ...(applicability || template.variable_schema?.applicability ? { applicability } : {}) })
       setDirty(false)
       setSavedAt(new Date())
     } catch (error) {
@@ -489,6 +493,15 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
             templateId={template.id}
             fields={fields}
             regions={regions}
+            sourceReview={sourceReview}
+            onReviewChange={template.variable_schema?.source_review_version === 1 ? (next) => {
+              undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
+              redoStack.current = []
+              setHistoryVersion(value => value + 1)
+              setSourceReview(next)
+              setDirty(true)
+              setSaveError('')
+            } : undefined}
             selectedName={selected?.name}
             collections={collections}
             conditionFields={fields.map((entry) => entry.name).filter(Boolean)}
@@ -646,8 +659,16 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                   className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
                 />
               </PropertyRow>
+              {selected.context && <p className="text-xs text-brand-muted">Source context: {selected.context}</p>}
+              {isDocx && !selected.docx_choice && <PropertyRow label="Use the same value as">
+                <select value={selected.value_from || ''} onChange={event => updateField(selectedEntry.identity, { value_from: event.target.value })} className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm">
+                  <option value="">Separate value</option>
+                  {fields.filter(field => field.name !== selected.name && field.included !== false && !field.value_from && !field.docx_choice && (field.field_type || 'text') === (selected.field_type || 'text')).map(field => <option key={field.name} value={field.name}>{field.label || field.name}</option>)}
+                </select>
+              </PropertyRow>}
               <PropertyRow label="Type">
                 <select
+                  disabled={Boolean(selected.docx_choice)}
                   value={selected.field_type || selected.type || 'text'}
                   onChange={(event) => updateField(selectedEntry.identity, { field_type: event.target.value })}
                   className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"

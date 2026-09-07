@@ -7,3 +7,5 @@ A named scenario additionally checks the current non-sensitive custom detail, in
 For the canonical API, acceptance, evidence, sensitive-data exclusions and extraction limits, see [Template Studio reviewed details and live drafts](../template-studio-launch-readiness.md). The browser fact-review endpoints do not add an MCP tool or authorize automatic fact acceptance. Workspace proposals still require the existing human review/release workflow.
 
 Wiki handoff: teach the difference between editing the next draft, generating from a publication, and explicitly accepting a source-backed matter fact. State the limited label/value extractor and unsupported repeated children/assets clearly.
+
+New Word masters additionally require [source review before publication](../template-studio-word-source-review.md). Review decisions concern retained template wording and blanks, not accepted matter facts. Workspace generation continues to resolve the published snapshot, including explicit same-value links and source-backed choice groups. No new MCP tool, automatic publication or fact acceptance is added.

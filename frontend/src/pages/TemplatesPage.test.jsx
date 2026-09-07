@@ -988,6 +988,30 @@ describe('document template workflow', () => {
     expect(await screen.findByText('This PDF has no fillable AcroForm fields.')).toBeInTheDocument()
   })
 
+  it('uses linked Word values and clears the other answer in an exclusive choice group', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{
+      id: 'word-choices', title: 'Word choices', body: '', category: 'other', format: 'docx', source_filename: 'synthetic.docx', source_sha256: 'abc', is_active: true,
+      variable_schema: { fields: [
+        { name: 'amount', label: 'Amount', field_type: 'text', required: true },
+        { name: 'copy', label: 'Repeated amount', value_from: 'amount', required: true },
+        { name: 'yes', label: 'Yes answer', field_type: 'checkbox', docx_choice: { group: 'question', option: 'Yes', exclusive: true } },
+        { name: 'no', label: 'No answer', field_type: 'checkbox', docx_choice: { group: 'question', option: 'No', exclusive: true } },
+      ] },
+    }] })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    expect(screen.getByText('Uses Amount')).toBeInTheDocument()
+    expect(screen.getByText(/1 required field still need review/)).toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: /^Amount/ }), '500')
+    const answers = screen.getAllByRole('checkbox').filter(input => input.id.startsWith('template-variable-'))
+    await user.click(answers[0])
+    expect(answers[0]).toBeChecked()
+    await user.click(answers[1])
+    expect(answers[0]).not.toBeChecked()
+    expect(answers[1]).toBeChecked()
+  })
+
   it('renders PDF fields from schema metadata and blocks only missing required values', async () => {
     getTemplates.mockResolvedValueOnce({ items: [{
       id: 'schema-pdf', title: 'Schema Form', body: 'For {{client_name}}', category: 'other', format: 'pdf',

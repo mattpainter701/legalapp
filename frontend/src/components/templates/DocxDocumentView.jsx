@@ -27,7 +27,7 @@ const HEADING_CLASS = {
 
 /** Anchored fields, keyed by the paragraph they live in. A field with no
  *  anchor (a plain {{name}} placeholder) has no span to highlight. */
-export const anchorsByParagraph = (fields) => {
+export const anchorsByParagraph = (fields, paragraphs = []) => {
   const byOrdinal = new Map()
   for (const field of fields || []) {
     const anchor = field?.docx_anchor
@@ -38,6 +38,20 @@ export const anchorsByParagraph = (fields) => {
     if (!Number.isInteger(ordinal) || !(end > start)) continue
     if (!byOrdinal.has(ordinal)) byOrdinal.set(ordinal, [])
     byOrdinal.get(ordinal).push({ field, start, end })
+  }
+  for (const field of fields || []) {
+    if (field.docx_anchor || field.included === false) continue
+    const source = field.source_text || `{{${field.name}}}`
+    if (!source) continue
+    for (const paragraph of paragraphs) {
+      for (let position = paragraph.text.indexOf(source); position >= 0; position = paragraph.text.indexOf(source, position + source.length)) {
+        const start = Array.from(paragraph.text.slice(0, position)).length
+        const end = start + Array.from(source).length
+        const spans = byOrdinal.get(paragraph.ordinal) || []
+        if (!spans.some(span => span.start < end && start < span.end)) spans.push({ field, start, end })
+        byOrdinal.set(paragraph.ordinal, spans)
+      }
+    }
   }
   for (const spans of byOrdinal.values()) spans.sort((a, b) => a.start - b.start)
   return byOrdinal
@@ -83,21 +97,76 @@ export const regionsFromMarkers = (paragraphs) => {
 
 /** Split a paragraph into plain and field-highlighted pieces. */
 export const segmentsFor = (text, spans) => {
+  text = Array.from(text)
   const segments = []
   let cursor = 0
   for (const span of spans || []) {
     const start = Math.max(cursor, Math.min(span.start, text.length))
     const end = Math.max(start, Math.min(span.end, text.length))
-    if (start > cursor) segments.push({ text: text.slice(cursor, start) })
-    if (end > start) segments.push({ text: text.slice(start, end), field: span.field })
+    if (start > cursor) segments.push({ text: text.slice(cursor, start).join(''), start: cursor })
+    if (end > start) segments.push({ text: text.slice(start, end).join(''), start, field: span.field })
     cursor = end
   }
-  if (cursor < text.length) segments.push({ text: text.slice(cursor) })
+  if (cursor < text.length) segments.push({ text: text.slice(cursor).join(''), start: cursor })
   return segments
+}
+
+function StyledText({ segment, runs = [] }) {
+  const characters = Array.from(segment.text)
+  const start = segment.start || 0
+  const cuts = [...new Set([0, characters.length, ...runs.flatMap(run => [run.start - start, run.end - start])])]
+    .filter(offset => offset >= 0 && offset <= characters.length).sort((a, b) => a - b)
+  return cuts.slice(0, -1).map((from, index) => {
+    const run = runs.find(item => item.start <= start + from && item.end > start + from)
+    return <span key={from} style={{ fontWeight: run?.bold ? 'bold' : undefined, fontStyle: run?.italic ? 'italic' : undefined, textDecoration: run?.underline ? 'underline' : undefined }}>{characters.slice(from, cuts[index + 1]).join('')}</span>
+  })
+}
+
+function SourceBlocks({ blocks, paragraphs, renderParagraph }) {
+  const rendered = new Set()
+  const render = (items, prefix = '') => items.map((block, index) => {
+    const key = `${prefix}${index}`
+    if (block.kind === 'paragraph') {
+      const paragraph = paragraphs.find(item => item.ordinal === block.ordinal)
+      rendered.add(block.ordinal)
+      return paragraph ? renderParagraph(paragraph) : null
+    }
+    if (block.kind !== 'table') return null
+    return <table key={key} className="my-3 w-full border-collapse"><tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.cells.map((cell, cellIndex) => <td key={cellIndex} colSpan={cell.colspan} rowSpan={cell.rowspan} className="border border-brand-line px-3 align-top">{render(cell.blocks, `${key}-${rowIndex}-${cellIndex}-`)}</td>)}</tr>)}</tbody></table>
+  })
+  const content = render(blocks || paragraphs.map(paragraph => ({ kind: 'paragraph', ordinal: paragraph.ordinal })))
+  return <>{content}{paragraphs.filter(paragraph => !rendered.has(paragraph.ordinal) && paragraph.text).map(renderParagraph)}</>
+}
+
+function SourceReview({ candidates, truncated, fields, decisions, onChange, onCreateField }) {
+  const [showReviewed, setShowReviewed] = useState(false)
+  const remaining = candidates.filter(candidate => !(fields || []).some(field => {
+    if (field.included === false) return false
+    const a = field.docx_anchor
+    const b = candidate.docx_anchor
+    return a ? a.paragraph_ordinal === b.paragraph_ordinal && a.start <= b.start && a.end >= b.end : field.source_text === candidate.source_text
+  }))
+  const pending = remaining.filter(candidate => !decisions[candidate.id])
+  const visible = showReviewed ? remaining : pending
+  return <details className="border-b border-brand-line p-4" open={pending.length > 0 || undefined}>
+    <summary className="cursor-pointer text-sm font-semibold">Source review: {pending.length} details to review</summary>
+    <p className="my-2 text-xs text-brand-muted">Review suggested blanks and sample values, then inspect the document for other wording specific to the original matter. Save your decisions before testing and publishing.</p>
+    {truncated && <p role="alert" className="text-sm">This source exceeds the review limit. Split it into smaller templates before publishing.</p>}
+    <label className="text-xs"><input type="checkbox" checked={showReviewed} onChange={event => setShowReviewed(event.target.checked)} /> Show reviewed details</label>
+    <ul className="max-h-64 space-y-3 overflow-auto">{visible.map(candidate => <li key={candidate.id} className="rounded border border-brand-line p-2 text-xs">
+      <p className="whitespace-pre-wrap">{candidate.context}</p>
+      <p className="mt-1 font-semibold">{candidate.kind}: “{candidate.source_text}”</p>
+      <button type="button" className="mr-3 underline" onClick={() => onCreateField?.({ ordinal: candidate.docx_anchor.paragraph_ordinal, start: candidate.docx_anchor.start, end: candidate.docx_anchor.end, text: candidate.source_text })}>Make field</button>
+      <select aria-label={`Review ${candidate.kind} at paragraph ${candidate.docx_anchor.paragraph_ordinal + 1}, character ${candidate.docx_anchor.start + 1}`} value={decisions[candidate.id] || ''} onChange={event => { const next = { ...decisions }; if (event.target.value) next[candidate.id] = event.target.value; else delete next[candidate.id]; onChange(next) }}>
+        <option value="">Needs review</option><option value="fixed">Keep as fixed wording</option><option value="signature">Leave for signature</option><option value="not_applicable">Not applicable</option>
+      </select>
+    </li>)}</ul>
+  </details>
 }
 
 function ParagraphRow({
   paragraph,
+  tableLayout,
   spans,
   regionDepth,
   inRange,
@@ -120,8 +189,8 @@ function ParagraphRow({
     const before = range.cloneRange()
     before.selectNodeContents(ref.current)
     before.setEnd(range.startContainer, range.startOffset)
-    const start = before.toString().length
-    const end = start + range.toString().length
+    const start = Array.from(before.toString()).length
+    const end = start + Array.from(range.toString()).length
     if (end > start) {
       onSelectText?.({ ordinal: paragraph.ordinal, start, end, text: range.toString() })
     }
@@ -150,7 +219,7 @@ function ParagraphRow({
     )
   }
 
-  const label = CONTAINER_LABELS[paragraph.container] || ''
+  const label = tableLayout && paragraph.container === 'table' ? '' : CONTAINER_LABELS[paragraph.container] || ''
   return (
     <div className="relative">
       {opensRegion && (
@@ -171,10 +240,9 @@ function ParagraphRow({
         </div>
       )}
       <p
-        ref={ref}
         onMouseUp={handleMouseUp}
         data-ordinal={paragraph.ordinal}
-        style={regionDepth ? { paddingLeft: `${regionDepth * 12}px` } : undefined}
+        style={{ paddingLeft: regionDepth ? `${regionDepth * 12}px` : undefined, textAlign: paragraph.alignment }}
         className={`group relative py-0.5 leading-6 text-brand-ink ${HEADING_CLASS[paragraph.style] || 'text-sm'} ${inRange ? 'bg-brand-accent/10' : ''}`}
       >
         {gutter}
@@ -183,6 +251,8 @@ function ParagraphRow({
           {label}
         </span>
       )}
+      {paragraph.numbering && <span aria-hidden="true" className="mr-2">{paragraph.numbering}</span>}
+      <span ref={ref} data-source-text="true" style={{ whiteSpace: 'pre-wrap' }}>
       {paragraph.text
         ? segmentsFor(paragraph.text, spans).map((segment, index) => (
           segment.field ? (
@@ -193,13 +263,15 @@ function ParagraphRow({
               title={`Field: ${segment.field.name}`}
               className={`rounded px-0.5 ${segment.field.name === selectedName ? 'bg-brand-accent/40 ring-1 ring-brand-accent' : 'bg-brand-accent/15 hover:bg-brand-accent/30'}`}
             >
-              {segment.text}
+              <StyledText segment={segment} runs={paragraph.runs} />
             </button>
           ) : (
-            <span key={index}>{segment.text}</span>
+            <span key={index}><StyledText segment={segment} runs={paragraph.runs} /></span>
           )
         ))
           : <span className="text-brand-muted">&nbsp;</span>}
+      </span>
+      {paragraph.dynamic_field && <small className="ml-2 text-brand-muted">Page fields update in the rendered document</small>}
       </p>
     </div>
   )
@@ -216,6 +288,8 @@ export default function DocxDocumentView({
   onCreateField,
   onCreateRegion,
   onRemoveRegion,
+  sourceReview = {},
+  onReviewChange,
 }) {
   const [state, setState] = useState({ status: 'loading', paragraphs: [], truncated: false })
   const [pending, setPending] = useState(null)
@@ -230,6 +304,9 @@ export default function DocxDocumentView({
           status: 'ready',
           paragraphs: outline?.paragraphs || [],
           truncated: Boolean(outline?.truncated),
+          blocks: outline?.blocks,
+          reviewCandidates: outline?.review_candidates || [],
+          reviewTruncated: outline?.review_truncated,
         })
       })
       .catch((error) => {
@@ -244,7 +321,7 @@ export default function DocxDocumentView({
     return () => { cancelled = true }
   }, [templateId])
 
-  const spansByOrdinal = useMemo(() => anchorsByParagraph(fields), [fields])
+  const spansByOrdinal = useMemo(() => anchorsByParagraph(fields, state.paragraphs), [fields, state.paragraphs])
   const allRegions = useMemo(() => [
     ...regionsFromMarkers(state.paragraphs),
     ...regionsFromStore(regions),
@@ -308,12 +385,14 @@ export default function DocxDocumentView({
         Select text to make it a field. Use the margin handles to choose paragraphs —
         shift-click for a range — then make them conditional or repeating.
       </div>
+      {onReviewChange && <SourceReview candidates={state.reviewCandidates || []} truncated={state.reviewTruncated} fields={fields} decisions={sourceReview} onChange={onReviewChange} onCreateField={onCreateField} />}
       <div className="max-h-[70vh] overflow-y-auto bg-white px-6 py-5 md:px-10">
         <article aria-label="Word template contents" className="mx-auto max-w-[7in]">
-          {state.paragraphs.map((paragraph) => (
+          <SourceBlocks blocks={state.blocks} paragraphs={state.paragraphs} renderParagraph={(paragraph) => (
             <ParagraphRow
               key={paragraph.ordinal}
               paragraph={paragraph}
+              tableLayout={Boolean(state.blocks)}
               spans={spansByOrdinal.get(paragraph.ordinal)}
               regionDepth={depthByOrdinal.get(paragraph.ordinal) || 0}
               inRange={Boolean(range) && paragraph.ordinal >= range.from && paragraph.ordinal <= range.to}
@@ -324,7 +403,7 @@ export default function DocxDocumentView({
               onPickParagraph={extendRange}
               onRemoveRegion={onRemoveRegion}
             />
-          ))}
+          )} />
         </article>
         {state.truncated && (
           <p className="mt-4 text-xs text-brand-muted">

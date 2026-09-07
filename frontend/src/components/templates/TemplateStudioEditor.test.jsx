@@ -24,10 +24,12 @@ vi.mock('./PdfDocumentCanvas', () => ({
 // The binding catalogue is static server-owned vocabulary; the editor only
 // needs it to populate the picker.
 vi.mock('./DocxDocumentView', () => ({
-  default: ({ fields, regions, onCreateField, onCreateRegion, onRemoveRegion }) => (
+  default: ({ fields, regions, onCreateField, onCreateRegion, onRemoveRegion, sourceReview, onReviewChange }) => (
     <div data-testid="docx-view">
       <span>{fields.length} mapped</span>
       <span>{(regions || []).length} regions</span>
+      <span>{Object.keys(sourceReview || {}).length} reviewed</span>
+      {onReviewChange && <button onClick={() => onReviewChange({ synthetic: 'fixed' })}>Keep sample fixed</button>}
       <button
         type="button"
         onClick={() => onCreateField({ ordinal: 2, start: 6, end: 18, text: 'Ada Lovelace' })}
@@ -77,6 +79,28 @@ afterEach(() => {
 })
 
 describe('TemplateStudioEditor', () => {
+  it('saves source review decisions with undo and redo', async () => {
+    const onSave = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={{ ...templateWith([], { source_review_version: 1 }), format: 'docx' }} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Keep sample fixed' }))
+    expect(screen.getByText('1 reviewed')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(screen.getByText('0 reviewed')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Redo' }))
+    expect(screen.getByText('1 reviewed')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ source_review: { synthetic: 'fixed' }, source_review_version: 1 })))
+  })
+
+  it('links two independent Word fields explicitly', async () => {
+    const onSave = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={{ ...templateWith([{ name: 'amount', label: 'Value', context: 'Car value' }, { name: 'loan', label: 'Loan' }]), format: 'docx' }} onSave={onSave} />)
+    expect(screen.getByText('Source context: Car value')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Use the same value as'), { target: { value: 'loan' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(onSave.mock.calls[0][0].fields[0].value_from).toBe('loan')
+  })
   it('keeps server-owned schema keys when merging edited fields', () => {
     const template = templateWith([{ name: 'client_name' }], { detection: { method: 'acroform' } })
     const merged = mergedVariableSchema(template, [{ name: 'renamed' }])
