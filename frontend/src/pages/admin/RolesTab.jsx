@@ -48,7 +48,7 @@ export default function RolesTab() {
         <h3 className="font-semibold">{editing ? `Edit ${editing.name}` : 'Create role'}</h3>
         <fieldset disabled={saving} className="space-y-3">
         <legend className="sr-only">Role settings</legend>
-        <input aria-label="Role name" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)}
+        <input aria-label="Role name" readOnly={Boolean(editing)} required maxLength={100} value={name} onChange={(e) => setName(e.target.value)}
                placeholder="Role name (e.g. Paralegal)" className="border px-3 py-2 rounded w-full" />
         <label className="block text-sm font-medium">View starting point
           <select aria-label="View starting point" value="" onChange={(e) => {
@@ -56,7 +56,7 @@ export default function RolesTab() {
             setPaths(VIEW_PRESETS[preset] ? [...VIEW_PRESETS[preset]] : preset === 'none' ? [] : null)
             if (!name && VIEW_PRESETS[preset]) setName(preset)
           }} className="mt-1 block w-full rounded border border-brand-line px-3 py-2">
-            <option value="" disabled>Choose a starting point…</option>
+            <option value="" disabled>Choose a starting pointâ€¦</option>
             <option value="all">No view restriction</option>
             {Object.keys(VIEW_PRESETS).map((preset) => <option key={preset}>{preset}</option>)}
             <option value="none">Hide all functions</option>
@@ -71,17 +71,17 @@ export default function RolesTab() {
         </fieldset>}
         <p className="text-xs text-brand-muted">Administration, profile, and sign out remain available to authorized staff. Users can hide and reorder their available functions with the navigation gear.</p>
         <h4 className="text-sm font-semibold">Access capabilities</h4>
-        <p className="text-xs text-brand-muted">View starting points only choose visible functions. Set the access capabilities needed for this role separately.</p>
+        <p className="text-xs text-brand-muted">View starting points only choose visible functions. Choose access capabilities when creating a role. Editing a view preserves the existing role name and access capabilities.</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {CAPABILITIES.map((c) => (
             <label key={c} className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={caps.includes(c)} onChange={() => toggleCap(c)} />
+              <input type="checkbox" disabled={Boolean(editing)} checked={caps.includes(c)} onChange={() => toggleCap(c)} />
               {c}
             </label>
           ))}
         </div>
         <button type="submit" className="bg-brand-ink text-white px-4 py-2 rounded">
-          {saving ? 'Saving…' : editing ? 'Save role' : 'Create role'}
+          {saving ? 'Savingâ€¦' : editing ? 'Save role' : 'Create role'}
         </button>
         {editing && <button type="button" className="ml-3 text-sm underline" onClick={() => { setEditing(null); setName(''); setCaps([]); setPaths(null) }}>Cancel edit</button>}
         </fieldset>

@@ -1,5 +1,34 @@
 import { test, expect } from '@playwright/test'
 
+test('administrator creates and edits a role view', async ({ page }) => {
+  const roles = []
+  const user = { id: 'admin', tenant_id: 'firm', role: 'admin', capabilities: ['manage_roles', 'admin_settings'], enabled_modules: ['admin'], full_name: 'Firm Administrator' }
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/auth/me') return route.fulfill({ json: user })
+    if (path === '/api/admin/roles') {
+      if (route.request().method() === 'POST') roles.push({ ...route.request().postDataJSON(), id: 'reception' })
+      return route.fulfill({ json: route.request().method() === 'GET' ? roles : roles[0] })
+    }
+    if (path === '/api/admin/roles/reception') {
+      roles[0] = { ...route.request().postDataJSON(), id: 'reception' }
+      return route.fulfill({ json: roles[0] })
+    }
+    if (path.includes('release')) return route.fulfill({ json: { releases: [] } })
+    return route.fulfill({ json: {} })
+  })
+  await page.goto('/admin?tab=roles')
+  await page.getByRole('combobox', { name: 'View starting point' }).selectOption('Receptionist')
+  await page.screenshot({ path: 'test-results/navigation-admin.png', fullPage: true })
+  await page.getByRole('button', { name: 'Create role', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('Role saved')
+  expect(roles[0].navigation_paths).toHaveLength(6)
+  await page.getByRole('button', { name: 'Edit Receptionist', exact: true }).click()
+  await page.getByRole('checkbox', { name: 'Calendar', exact: true }).uncheck()
+  await page.getByRole('button', { name: 'Save role', exact: true }).click()
+  await expect(page.getByRole('cell', { name: '5 functions', exact: true })).toBeVisible()
+})
+
 for (const width of [390, 1440]) {
   test(`role view and personal layout persist at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
