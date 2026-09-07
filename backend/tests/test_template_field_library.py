@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.dialects import postgresql
 
 from app.models.document_template import DocumentTemplate
@@ -200,10 +201,28 @@ async def test_database_usage_is_firm_scoped_complete_and_excludes_false_mapping
 
 
 @pytest.mark.asyncio
-async def test_field_library_requires_authentication(client):
-    for path in [
-        "/api/templates/field-library",
-        "/api/templates/field-library/usage?binding=client.name",
-    ]:
-        response = await client.get(path)
-        assert response.status_code == 401
+@pytest.mark.parametrize("authenticated", [False, True])
+async def test_field_library_requires_document_capability(monkeypatch, authenticated):
+    from app.services import access_control, rbac_service
+
+    app = FastAPI()
+    app.include_router(router.router)
+    app.dependency_overrides[router.get_db] = lambda: AsyncMock()
+    if authenticated:
+        monkeypatch.setattr(
+            access_control,
+            "get_current_user",
+            AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())),
+        )
+        monkeypatch.setattr(
+            rbac_service, "get_user_capabilities", AsyncMock(return_value=set())
+        )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        for path in [
+            "/api/templates/field-library",
+            "/api/templates/field-library/usage?binding=client.name",
+        ]:
+            response = await client.get(path)
+            assert response.status_code == (403 if authenticated else 401)
