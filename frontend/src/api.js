@@ -2259,6 +2259,9 @@ export const getTemplateOriginalSource = (id, filename = 'original-template.docx
     return new File([r.data], filename, { type: String(type).split(';')[0].trim() })
   })
 
+export const cleanupWordTemplateDraft = (id, data) =>
+  api.post(`/templates/${id}/cleanup-word-draft`, data).then(r => r.data)
+
 export const listTemplateVersions = (id, params = {}) =>
   api.get(`/templates/${id}/versions`, { params }).then(r => r.data)
 export const getTemplateVersion = (id, versionNo) =>

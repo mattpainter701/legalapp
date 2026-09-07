@@ -30,6 +30,7 @@ from app.services.docx_outline import docx_outline
 
 PLACEHOLDER_DERIVATION_VERSION = 1
 SOURCE_MODES = {"prose", "form"}
+_PLACEHOLDER_TOKEN = re.compile(r"\{\{[A-Za-z][A-Za-z0-9_.-]*\}\}")
 
 
 @dataclass(frozen=True)
@@ -289,3 +290,39 @@ def derived_source_is_current(
         and metadata.get("derived_sha256")
         == hashlib.sha256(derived_content).hexdigest()
     )
+
+
+def cleanup_docx_source(
+    content: bytes,
+    *,
+    paragraph_ordinal: int,
+    start: int,
+    end: int,
+    original_text: str,
+    replacement_text: str,
+) -> bytes:
+    """Apply one bounded prose cleanup while preserving every token."""
+    validate_docx_package(content)
+    if any(type(value) is not int for value in (paragraph_ordinal, start, end)):
+        raise TemplateDocxError("Word cleanup location is invalid")
+    if not original_text or len(replacement_text) > 10_000:
+        raise TemplateDocxError("Word cleanup text is invalid")
+    document = Document(io.BytesIO(content))
+    paragraphs = list(iter_docx_paragraphs(document))
+    if paragraph_ordinal < 0 or paragraph_ordinal >= len(paragraphs):
+        raise TemplateDocxError("Word cleanup location is invalid")
+    paragraph = paragraphs[paragraph_ordinal]
+    combined = "".join(run.text for run in paragraph.runs)
+    if start < 0 or end <= start or combined[start:end] != original_text:
+        raise TemplateDocxError("Word cleanup no longer matches the current source")
+    before = _PLACEHOLDER_TOKEN.findall(combined)
+    after_text = combined[:start] + replacement_text + combined[end:]
+    if _PLACEHOLDER_TOKEN.findall(after_text) != before:
+        raise TemplateDocxError("Word cleanup cannot alter placeholder tokens")
+    if not _replace_at_span(paragraph, start, end, replacement_text):
+        raise TemplateDocxError("Word cleanup could not be applied safely")
+    output = io.BytesIO()
+    document.save(output)
+    result = output.getvalue()
+    validate_docx_package(result)
+    return result

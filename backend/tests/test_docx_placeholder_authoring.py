@@ -11,6 +11,7 @@ from docx import Document
 
 from app.services.docx_outline import docx_outline
 from app.services.docx_placeholder_authoring import (
+    cleanup_docx_source,
     derived_source_is_current,
     derive_reviewed_docx_source,
     resolve_source_mode,
@@ -170,6 +171,34 @@ def test_conflicting_disposition_and_overlapping_mapping_fail_closed():
         )
     with pytest.raises(TemplateDocxError, match="same source span"):
         derive_reviewed_docx_source(content, fields=[field, {**field, "name": "other"}])
+
+
+def test_cleanup_preserves_tokens_and_rejects_token_edits():
+    doc = Document()
+    doc.add_paragraph("Clause {{client_name}} stray")
+    stream = io.BytesIO()
+    doc.save(stream)
+    content = stream.getvalue()
+    cleaned = cleanup_docx_source(
+        content,
+        paragraph_ordinal=0,
+        start=23,
+        end=28,
+        original_text="stray",
+        replacement_text="text",
+    )
+    assert "Clause {{client_name}} text" in "\n".join(
+        p.text for p in iter_docx_paragraphs(Document(io.BytesIO(cleaned)))
+    )
+    with pytest.raises(TemplateDocxError, match="placeholder tokens"):
+        cleanup_docx_source(
+            content,
+            paragraph_ordinal=0,
+            start=7,
+            end=22,
+            original_text="{{client_name}}",
+            replacement_text="removed",
+        )
 
 
 @pytest.mark.asyncio

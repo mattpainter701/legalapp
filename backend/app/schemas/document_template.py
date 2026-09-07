@@ -192,6 +192,14 @@ class DocumentTemplateWordDeriveRequest(BaseModel):
     source_mode: Literal["prose", "form"] | None = None
 
 
+class DocumentTemplateWordCleanupRequest(BaseModel):
+    paragraph_ordinal: int = Field(ge=0, le=2000)
+    start: int = Field(ge=0, le=20000)
+    end: int = Field(gt=0, le=20000)
+    original_text: str = Field(min_length=1, max_length=10000)
+    replacement_text: str = Field(max_length=10000)
+
+
 class DocumentTemplateVariableSuggestion(BaseModel):
     variable: str
     suggested_value: Optional[str] = None
