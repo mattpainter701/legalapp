@@ -1104,14 +1104,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - name: Checkout complete pull request history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
         with:
           fetch-depth: 0
       - name: Enforce PR attestations, SBOM impact, and action pinning
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           python scripts/verify_merge_policy.py
+          --live-pr
           --base "${{ github.event.pull_request.base.sha }}"
           --head "${{ github.event.pull_request.head.sha }}"
 

@@ -189,9 +189,8 @@ def test_production_acceptance_preflights_root_entrypoint_capability() -> None:
     assert "group: law-hand-ionos-production" in workflow
     assert "release_sha is not a forward update from the production tag" in workflow
     assert "Require successful CI and CodeQL for accepted release" in workflow
-    assert "for workflow in ci.yml codeql.yml" in workflow
-    assert '--commit "$RELEASE_SHA"' in workflow
-    assert "--event push" in workflow
+    assert "--workflow ci.yml --workflow codeql.yml" in workflow
+    assert '--sha "$RELEASE_SHA"' in workflow
     assert "Preflight root-owned acceptance entrypoint" in workflow
     assert 'if ! test -f "$entrypoint" || ! test -x "$entrypoint"' in workflow
     assert "if ! stat -c '%U:%G %a' \"$entrypoint\"" in workflow
@@ -233,20 +232,19 @@ def test_ionos_candidate_uses_pinned_main_without_runner_checkout_or_release_tag
     )
 
     assert "Require successful CI and CodeQL for mutation" in workflow
-    assert "for workflow in ci.yml codeql.yml" in workflow
-    assert '--commit "$RELEASE_SHA"' in workflow
-    assert "--event push" in workflow
+    assert "--workflow ci.yml --workflow codeql.yml" in workflow
+    assert '--sha "$RELEASE_SHA"' in workflow
     assert "runs-on: [self-hosted, Linux, X64, ionos, lawhand-prod]" in workflow
     assert "environment:" in workflow and "ionos-production" in workflow
     assert "- accept" not in workflow
     assert "ACCEPT-IONOS-PRODUCTION" not in workflow
-    assert "actions/checkout" not in workflow
+    assert "actions/checkout" not in workflow.split("  ionos:", 1)[1]
     assert "git/refs/tags/production" not in workflow
     assert "sudo -n /usr/local/sbin/lawhand-ionos-deploy-from-github" in workflow
     assert "Require successful QA acceptance when enabled" in workflow
     assert "vars.LAWHAND_QA_GATE_REQUIRED == 'true'" in workflow
     assert "--workflow qa-acceptance.yml" in workflow
-    assert "No successful QA acceptance exists" in workflow
+    assert "--event workflow_dispatch" in workflow
 
     assert "rev-parse 'origin/main^{commit}'" in entrypoint
     assert '[[ "$requested_sha" == "$main_sha" ]]' in entrypoint
@@ -270,7 +268,7 @@ def test_qa_acceptance_deploys_and_validates_exact_main() -> None:
     assert "QA acceptance must be dispatched from main" in workflow
     assert "release_sha must be a full lowercase commit SHA" in workflow
     assert "release_sha must equal the main SHA selected for this dispatch" in workflow
-    assert "for workflow in ci.yml codeql.yml" in workflow
+    assert "--workflow ci.yml --workflow codeql.yml" in workflow
     assert "runs-on: [self-hosted, Linux, X64, skynet, lawhand-prod]" in workflow
     assert "environment:" in workflow and "skynet-development" in workflow
     qa_deploy_block = workflow.split("  qa-deploy:", 1)[1].split(
@@ -294,7 +292,7 @@ def test_qa_acceptance_deploys_and_validates_exact_main() -> None:
     assert "QA_DEMO_ACCESS_CODE: ${{ secrets.LAWHAND_QA_DEMO_ACCESS_CODE }}" in workflow
     assert "if: secrets.LAWHAND_QA_DEMO_ACCESS_CODE" not in workflow
     assert "if: env.QA_DEMO_ACCESS_CODE != ''" in workflow
-    assert "Synthetic smoke: optional" in workflow
+    assert "SMOKE_OUTCOME: ${{ steps.synthetic.outcome }}" in workflow
 
     assert "vars.LAWHAND_DEV1_ENABLED == 'true'" in health
     assert "skynet-development" in health

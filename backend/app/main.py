@@ -1,7 +1,10 @@
+import asyncio
+import json
 import logging
 import os
 import shutil
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Request
@@ -553,8 +556,37 @@ async def health_check():
     }
 
 
+READINESS_PROBE_TIMEOUT_SECONDS = 10
+
+
 @app.get("/health/readiness", tags=["health"])
 async def health_readiness(request: Request):
+    """Fresh, non-sensitive readiness and build identity for release checks."""
+    # Timestamp the start of the observation, not merely response serialization.
+    checked_at = datetime.now(timezone.utc).isoformat()
+    try:
+        response = await asyncio.wait_for(
+            _probe_readiness(request), timeout=READINESS_PROBE_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        response = JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "components": {"probe": "timeout"},
+                **_build_metadata(),
+            },
+        )
+    content = json.loads(response.body)
+    content.update(schema_version=1, checked_at=checked_at)
+    return JSONResponse(
+        status_code=response.status_code,
+        content=content,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def _probe_readiness(request: Request):
     """Non-sensitive production readiness used by off-host monitoring.
 
     The response intentionally exposes only component states. Detailed errors,
@@ -575,13 +607,14 @@ async def health_readiness(request: Request):
     if settings.TEMPLATE_STUDIO_RENDER_ENABLED:
         states["studio_render"] = "unavailable"
         render_store = getattr(request.app.state, "studio_render_object_store", None)
-        if render_store is not None and render_store.worker_heartbeat_fresh(
+        if render_store is not None and await asyncio.to_thread(
+            render_store.worker_heartbeat_fresh,
             max_age_seconds=settings.TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS
         ):
             states["studio_render"] = "ok"
 
     try:
-        usage = shutil.disk_usage(settings.UPLOAD_DIR)
+        usage = await asyncio.to_thread(shutil.disk_usage, settings.UPLOAD_DIR)
         used_percent = (usage.used / usage.total * 100) if usage.total else 100
         states["disk"] = (
             "ok" if used_percent < settings.HEALTH_DISK_MAX_PERCENT else "full"
@@ -591,7 +624,8 @@ async def health_readiness(request: Request):
 
     if settings.HOST_DISK_STATUS_FILE:
         try:
-            states["host_disks"] = read_host_disk_status(
+            states["host_disks"] = await asyncio.to_thread(
+                read_host_disk_status,
                 settings.HOST_DISK_STATUS_FILE,
                 max_age_seconds=settings.HEALTH_HOST_DISK_MAX_AGE_SECONDS,
             )
@@ -601,7 +635,8 @@ async def health_readiness(request: Request):
 
     if settings.BACKUP_STATUS_FILE:
         try:
-            states["backups"] = read_backup_status(
+            states["backups"] = await asyncio.to_thread(
+                read_backup_status,
                 settings.BACKUP_STATUS_FILE,
                 max_age_seconds=settings.HEALTH_BACKUP_MAX_AGE_SECONDS,
             )

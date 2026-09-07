@@ -165,13 +165,33 @@ def checkbox_checked(body: str, label: str) -> bool:
     return bool(re.search(rf"(?im)^\s*-\s*\[x\]\s*{re.escape(label)}\s*$", body))
 
 
-def check_pr_template(event_path: str | None, files: set[str]) -> list[str]:
+def check_pr_template(
+    event_path: str | None, files: set[str], *, live_pr: bool = False
+) -> list[str]:
     if not event_path:
         return []
     event = json.loads(Path(event_path).read_text(encoding="utf-8"))
     if "pull_request" not in event:
         return []
-    body = event["pull_request"].get("body") or ""
+    pr = event["pull_request"]
+    if live_pr:
+        repo = event["repository"]["full_name"]
+        number = int(event["number"])
+        try:
+            result = subprocess.run(
+                ["gh", "api", f"repos/{repo}/pulls/{number}"],
+                capture_output=True, text=True, check=True, timeout=30,
+            )
+            current = json.loads(result.stdout)
+            if (current["head"]["sha"] != pr["head"]["sha"]
+                    or current["base"]["sha"] != pr["base"]["sha"]
+                    or current["number"] != number
+                    or current["base"]["repo"]["full_name"] != repo):
+                return ["PR changed since this run; validate the current head and base"]
+            pr = current
+        except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError):
+            return ["Could not retrieve current PR metadata; retry when GitHub is available"]
+    body = pr.get("body") or ""
     checked_docs = [
         choice for choice in DOC_CHOICES if f"- [x] {choice}".lower() in body.lower()
     ]
@@ -308,10 +328,11 @@ def main() -> int:
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
     parser.add_argument("--event-path", default=os.getenv("GITHUB_EVENT_PATH"))
+    parser.add_argument("--live-pr", action="store_true")
     args = parser.parse_args()
 
     files = changed_files(args.base, args.head)
-    errors = check_pr_template(args.event_path, files)
+    errors = check_pr_template(args.event_path, files, live_pr=args.live_pr)
     errors.extend(check_sbom_currency(files))
     errors.extend(check_added_workflow_actions(args.base, args.head))
     if errors:

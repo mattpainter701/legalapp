@@ -5,6 +5,16 @@ operations remain in [MCP hostname operations](mcp_hostname_operations.md).
 
 ## Security boundary
 
+Deployment checks use the main application `/health/readiness` API, not the
+dedicated MCP hostnames. Its additive schema version 1 includes `checked_at`
+(UTC observation start), existing build/commit metadata, and non-sensitive
+component states, with `Cache-Control: no-store`. An asynchronous probe exceeding
+ten seconds returns 503 with `components.probe=timeout`. No tenant identifiers,
+secret values, infrastructure addresses, or error text are added to this public
+response. Readiness does not prove MCP authorization correctness; the existing
+strict host/MCP acceptance checks remain required. See
+[release evidence and acceptance](GITHUB_DEPLOY_RUNNER.md#machine-readable-release-checks).
+
 Workspace MCP and research MCP are separate products and identities:
 
 - `mcp.getlawhand.com/api/mcp/workspace` accepts only an individual,

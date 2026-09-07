@@ -81,7 +81,46 @@ print, commit, or copy the populated file into a local backup. Repairing that
 host-managed file requires explicit operator authorization, a permissions-
 preserving on-host backup, and a fresh preflight.
 
-## Accepted-tag recovery
+## Machine-readable release checks
+
+`scripts/release_evidence.py --sha <sha> --workflow ci.yml --workflow codeql.yml`
+reads GitHub's workflow-runs REST API and emits versioned JSON plus an Actions
+summary. Each check includes SHA, workflow, event, run ID, attempt, URL, status,
+conclusion, and a stable reason. Only a completed successful **newest** matching
+run qualifies; an older green run never masks a newer failed, cancelled, or
+pending run. The selected run is fetched again to observe its latest attempt.
+QA uses the same policy with `--workflow qa-acceptance.yml --event workflow_dispatch`.
+API errors, missing runs, and indeterminate evidence block promotion.
+
+The helpers are checked out only on GitHub-hosted jobs. The self-hosted deploy
+jobs still invoke only the fixed root-owned entrypoint with a pinned main SHA.
+
+`scripts/check_readiness.py --origin https://getlawhand.com --sha <sha>` verifies
+readiness and commit identity from a single response, requires all core
+components to be healthy, and rejects observations older than 60 seconds or
+more than 30 seconds in the future. Requests have a 15-second timeout, bounded
+response size, and no redirect following. Cloudflare Access credentials are
+read from environment variables; neither credentials nor raw bodies are logged.
+This requires the readiness schema shipped with this change; older releases
+without freshness metadata cannot satisfy the new acceptance check.
+
+QA records the actual synthetic smoke outcome (`success`, `failure`, `skipped`,
+or `cancelled`) in its summary and the `qa-acceptance-evidence-<attempt>` JSON
+artifact. A skipped smoke is explicitly incomplete coverage, even when the
+optional-smoke policy allows the overall QA run to pass. No promotion switch or
+demo credential is enabled by this change.
+
+CI's PR policy check reads the current description through the pull-request
+REST API and validates it against the run's head and base. After correcting an
+attestation, rerun the failed policy job; no empty commit is required. If head
+or base moved, run fresh CI. API failure blocks the check instead of falling
+back to the stale event body. The token has only contents/read and PR/read
+permissions for this job, including untrusted PRs.
+
+API references: [workflow runs](https://docs.github.com/en/rest/actions/workflow-runs)
+and [pull requests](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request).
+
+## Accepted-tag recovery procedure
 
 The acceptance workflow uses the successful Git-ref update response as its
 release-marker evidence. If an older run reports a tag-recording failure after
