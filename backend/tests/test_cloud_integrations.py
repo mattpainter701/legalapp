@@ -22,6 +22,7 @@ from app.services.cloud_search import (
 )
 from app.services.cloud_sync import (
     _matter_folder_ids,
+    _sharepoint_object_id,
     _sharepoint_folder_refs,
     CloudSyncService,
 )
@@ -229,7 +230,8 @@ async def test_matter_metadata_search_falls_back_to_scoped_file_for_content_quer
     assert "file" in fallback_values
     assert "matter-root" in fallback_values
     assert "matter-documents" in fallback_values
-    assert "matter-validation" in fallback_values
+    assert "validation-file" in fallback_values
+    assert "matter-validation" not in fallback_values
     assert "foreign-tenant" not in fallback_values
     assert "foreign-matter-folder" not in fallback_values
     assert any(isinstance(value, datetime) for value in fallback_values)
@@ -439,6 +441,31 @@ def test_cloud_metadata_scope_folder_ids_extracts_all_matter_folders():
         "sp-documents",
         "sp-context",
     ]
+
+
+def test_sharepoint_document_scope_uses_drive_qualified_item_identity():
+    """A linked SharePoint item cannot match the same opaque ID in another drive."""
+    scope = MatterCloudDocumentScope(
+        object_ids={
+            ("microsoft", "sharepoint_file"): [
+                _sharepoint_object_id("drive-a", "item-1")
+            ]
+        }
+    )
+
+    predicate = cloud_search._matter_metadata_scope_condition(
+        {"sharepoint": {"drive_id": "drive-a", "matter_folder_id": "root-a"}},
+        scope,
+    )
+    params = list(predicate.compile().params.values())
+    values = [
+        item
+        for value in params
+        for item in (value if isinstance(value, (list, tuple, set)) else [value])
+    ]
+
+    assert "drive-a:item-1" in values
+    assert "item-1" not in values
 
 
 def test_matter_scoped_sync_extracts_primary_subfolders_and_context():

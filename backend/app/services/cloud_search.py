@@ -1283,9 +1283,11 @@ def _matter_metadata_scope_condition(
     """Return an index predicate limited to one matter's cloud files.
 
     Provisioned bindings cover the canonical folders.  Durable document
-    references cover product folders which were created after provisioning,
-    such as a user-created ``Validation`` folder.  Each provider/type pair is
-    kept together so an opaque ID from one provider cannot authorize another.
+    references cover files uploaded into product folders created after
+    provisioning, such as a user-created ``Validation`` folder. Those durable
+    references use exact file IDs: an uploaded file must not authorize its
+    untrusted siblings. Each provider/type pair is kept together so an opaque
+    ID from one provider cannot authorize another.
     """
     scopes: list[tuple[tuple[str, str], list[str]]] = [
         (
@@ -1312,9 +1314,6 @@ def _matter_metadata_scope_condition(
     for index_key, configured_parent_ids in scopes:
         provider, object_type = index_key
         parent_ids = list(configured_parent_ids)
-        for parent_id in document_scope.parent_ids.get(index_key, []):
-            if parent_id not in parent_ids:
-                parent_ids.append(parent_id)
         object_ids = document_scope.object_ids.get(index_key, [])
         if not parent_ids and not object_ids:
             continue

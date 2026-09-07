@@ -33,7 +33,6 @@ class MatterCloudDocumentScope:
 
     folder_ids: dict[str, list[str]] = field(default_factory=dict)
     object_ids: dict[tuple[str, str], list[str]] = field(default_factory=dict)
-    parent_ids: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     sharepoint_folder_refs: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -112,13 +111,19 @@ async def load_matter_document_cloud_scope(
         parent_id = str(parent_id or "").strip() or None
         if not object_id:
             continue
+        if backend == "sharepoint":
+            # The sync/index identity includes the document-library drive. A
+            # raw SharePoint item ID is not safe to use across drives.
+            if not drive_id:
+                continue
+            object_id = f"{drive_id}:{object_id}"
         _append_unique(scope.object_ids.setdefault(index_key, []), object_id)
-        if parent_id:
-            _append_unique(scope.parent_ids.setdefault(index_key, []), parent_id)
-            if backend in {"google_drive", "onedrive"}:
-                _append_unique(scope.folder_ids.setdefault(backend, []), parent_id)
-            elif backend == "sharepoint" and drive_id:
-                ref = (str(drive_id), parent_id)
-                if ref not in scope.sharepoint_folder_refs:
-                    scope.sharepoint_folder_refs.append(ref)
+        if not parent_id:
+            continue
+        if backend in {"google_drive", "onedrive"}:
+            _append_unique(scope.folder_ids.setdefault(backend, []), parent_id)
+        elif backend == "sharepoint":
+            ref = (str(drive_id), parent_id)
+            if ref not in scope.sharepoint_folder_refs:
+                scope.sharepoint_folder_refs.append(ref)
     return scope
