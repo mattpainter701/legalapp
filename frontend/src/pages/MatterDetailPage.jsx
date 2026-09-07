@@ -2388,7 +2388,8 @@ export function SignatureRequestsPanel({ matterId }) {
 
   const selectedDocument = docs.find(document => String(document.id) === String(docId))
   const initialFields = selectedDocument?.positioned_fields || EMPTY_SIGNING_FIELDS
-  const placementRoles = [...new Set([...initialFields.map(field => field.role), ...signers.map(signer => signer.role).filter(Boolean)])]
+  const requiredRoles = selectedDocument?.signing_roles || EMPTY_SIGNING_FIELDS
+  const placementRoles = [...new Set([...requiredRoles, ...initialFields.map(field => field.role), ...signers.map(signer => signer.role).filter(Boolean)])]
   const roleOptions = [...SIGNER_ROLE_OPTIONS, ...placementRoles.filter(role => !SIGNER_ROLE_OPTIONS.some(option => option.value === role)).map(role => ({ value: role, label: role }))]
   useEffect(() => {
     let cancelled = false
@@ -2438,6 +2439,7 @@ export function SignatureRequestsPanel({ matterId }) {
     if (selectedDocument?.signing_placement_required && !positionedFields.length) {
       setErr('Review signing positions on the final PDF and add the required fields before sending.'); return
     }
+    if (requiredRoles.some(role => !positionedFields.some(field => field.role === role))) { setErr('Add signing fields for every role required by this document.'); return }
     if (positionedFields.length && provider !== 'dropbox_sign') { setErr('Choose Dropbox Sign for positioned fields.'); return }
     if (positionedFields.some(field => preparedSigners.filter(signer => signer.role === field.role).length !== 1)) {
       setErr('Assign exactly one signer to each role used by a signing field.'); return

@@ -131,6 +131,7 @@ def validate_placements(
     *,
     source_sha256: str,
     signer_roles: set[str],
+    required_roles: Iterable[str] = (),
 ) -> list[PositionedField]:
     """Validate and freeze placements against the exact generated PDF digest."""
     if not isinstance(source_sha256, str) or not re.fullmatch(
@@ -184,6 +185,10 @@ def validate_placements(
                 page_height,
                 source_sha256.lower(),
             )
+        )
+    if set(required_roles) - {field.role for field in result}:
+        raise PlacementError(
+            "Add signing fields for every role required by the generated document"
         )
     return result
 

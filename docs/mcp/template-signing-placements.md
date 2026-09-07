@@ -17,7 +17,9 @@ not the Word source preview. Sending is the explicit dispatch action.
 
 ## Contract and integrity
 
-Matter documents expose `positioned_fields` and `signing_placement_required`.
+Matter documents expose `positioned_fields`, `signing_roles`, and `signing_placement_required`.
+Reflowed Word outputs retain required signer roles without preview coordinates;
+final placement review offers those roles and requires fields for each before dispatch.
 Each placement carries a unique field ID, type, signer role, one-based page,
 bottom-left PDF-point rectangle, page dimensions, and generated-source SHA-256.
 Migration 163 stores these fields on matter documents and signature requests.

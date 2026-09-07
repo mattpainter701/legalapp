@@ -408,6 +408,7 @@ async def create_signature_request(
                 placements,
                 source_sha256=req.source_document_sha256,
                 signer_roles=set(roles),
+                required_roles=doc.signing_roles or [],
             )
             validate_pdf_geometry(source_bytes, fields)
         except PlacementError as exc:

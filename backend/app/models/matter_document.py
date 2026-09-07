@@ -172,6 +172,7 @@ class MatterDocument(Base):
         Boolean, default=False, server_default="false"
     )
     positioned_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    signing_roles: Mapped[list | None] = mapped_column(JSON, nullable=True)
     signing_placement_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )

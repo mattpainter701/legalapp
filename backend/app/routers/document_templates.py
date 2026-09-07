@@ -4244,6 +4244,7 @@ async def render_template_endpoint(
     output_sha256 = hashlib.sha256(output_bytes).hexdigest()
     positioned_fields = []
     signing_required = False
+    signing_roles = []
     if matter is not None:
         suppressed = suppressed_fields(template.variable_schema, payload.variables)
         signing_schema = {
@@ -4254,7 +4255,12 @@ async def render_template_endpoint(
                 if field.get("name") not in suppressed
             ],
         }
-        signing_required = bool(signing_template_fields(signing_schema))
+        signing_fields = signing_template_fields(signing_schema)
+        signing_required = bool(signing_fields)
+        signing_roles = sorted(
+            {str(field.get("signer_role") or "").strip() for field in signing_fields}
+            - {""}
+        )
         if template_format == "pdf":
             try:
                 positioned_fields = template_positioned_fields(
@@ -4469,6 +4475,7 @@ async def render_template_endpoint(
         )
         doc.positioned_fields = positioned_fields
         doc.signing_placement_required = signing_required
+        doc.signing_roles = signing_roles
         event = MatterEvent(
             tenant_id=parsed_tenant_id,
             matter_id=parsed_matter_id,

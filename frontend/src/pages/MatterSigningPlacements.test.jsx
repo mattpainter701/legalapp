@@ -52,3 +52,19 @@ it('requires final placement review for a reflowed Word document before sending'
   expect(api.getMatterDocumentSigningSource).toHaveBeenCalledWith('matter', 'word-pdf')
   expect(api.createSignatureRequest.mock.calls[0][1].positioned_fields[0].source_sha256).toBe('verified-final')
 })
+
+
+it('retains custom Word roles and rejects a partial final placement review', async () => {
+  api.getMatterDocuments.mockResolvedValue({ items: [{ id: 'roles', filename: 'Roles.pdf', signing_placement_required: true, signing_roles: ['client', 'landlord'], positioned_fields: [] }] })
+  api.getMatterDocumentSigningSource.mockResolvedValue(new Blob(['final pdf']))
+  render(<MemoryRouter><SignatureRequestsPanel matterId="matter" /></MemoryRouter>)
+  await screen.findByRole('option', { name: 'Roles.pdf' })
+  fireEvent.change(screen.getByLabelText('Document to sign'), { target: { value: 'roles' } })
+  expect(screen.getByRole('option', { name: 'landlord' })).toBeInTheDocument()
+  await fillSigner()
+  fireEvent.click(screen.getByRole('button', { name: 'Review PDF signing positions' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Confirm final PDF placement' }))
+  fireEvent.submit(screen.getByPlaceholderText('Signer 1 full name').closest('form'))
+  expect(await screen.findByText('Add signing fields for every role required by this document.')).toBeInTheDocument()
+  expect(api.createSignatureRequest).not.toHaveBeenCalled()
+})

@@ -303,6 +303,7 @@ async def test_generated_pdf_persists_positioned_signing_descriptor_and_lists_it
     )
     assert document.positioned_fields and len(document.positioned_fields) == 3
     assert document.signing_placement_required is True
+    assert document.signing_roles == ["attorney", "client"]
     assert document.positioned_fields[0]["source_sha256"] == document.document_sha256
     assert document.document_sha256 == hashlib.sha256(preview.content).hexdigest()
     listed = await client.get(f"/api/matters/{matter.id}/documents")

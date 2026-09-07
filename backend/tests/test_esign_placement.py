@@ -202,3 +202,20 @@ def test_page_count_and_dimensions_are_verified_from_actual_pdf():
             validate_pdf_geometry(_pdf(), fields)
     with pytest.raises(PlacementError):
         validate_pdf_geometry(b"not pdf", [])
+
+
+def test_final_pdf_review_requires_all_original_signer_roles():
+    with pytest.raises(PlacementError, match="every role"):
+        validate_placements(
+            [_field()],
+            source_sha256=SHA,
+            signer_roles={"client", "witness"},
+            required_roles=["client", "witness"],
+        )
+    fields = validate_placements(
+        [_field(), _field(field_id="witness", role="witness")],
+        source_sha256=SHA,
+        signer_roles={"client", "witness"},
+        required_roles=["client", "witness"],
+    )
+    assert [field.role for field in fields] == ["client", "witness"]
