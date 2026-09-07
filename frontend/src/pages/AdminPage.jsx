@@ -22,6 +22,7 @@ import { format } from 'date-fns'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import PromptAdminPage from './PromptAdminPage'
 import RolesTab from './admin/RolesTab'
+import SupportTab from './admin/SupportTab'
 import { UserMcpAccessCell, UserMcpAccessDrawer } from './admin/UserMcpAccess'
 import UserAliases from './admin/UserAliases'
 import LicensingPanel from '../components/LicensingPanel'
@@ -66,6 +67,7 @@ const ADMIN_TABS = [
   { id: 'tenant', label: 'Tenant' },
   { id: 'prompts', label: 'Prompts' },
   { id: 'settings', label: 'Settings' },
+  { id: 'support', label: 'Support' },
 ]
 
 const ACCOUNTANT_TABS = ADMIN_TABS.filter((tab) =>
@@ -76,7 +78,7 @@ const ACCOUNTANT_TABS = ADMIN_TABS.filter((tab) =>
 // launch and operate a reception team. Unrelated platform integrations remain
 // hidden until the tenant upgrades.
 const INTAKE_ADMIN_TABS = ADMIN_TABS.filter((tab) =>
-  ['users', 'licensing', 'billing', 'usage', 'tenant', 'integrations', 'settings', 'guide'].includes(tab.id)
+  ['users', 'licensing', 'billing', 'usage', 'tenant', 'integrations', 'settings', 'guide', 'support'].includes(tab.id)
 )
 const INTAKE_ACCOUNTANT_TABS = INTAKE_ADMIN_TABS.filter((tab) =>
   ['licensing', 'billing', 'usage'].includes(tab.id)
@@ -1404,6 +1406,7 @@ export default function AdminPage() {
           {activeTab === 'tenant' && <TenantTab />}
           {activeTab === 'settings' && <SettingsTab />}
           {activeTab === 'prompts' && <PromptAdminPage />}
+          {activeTab === 'support' && <SupportTab />}
           {activeTab === 'integrations' && (
             <IntegrationsHub user={user} section={integrationSection} onSectionChange={selectIntegrationSection} />
           )}

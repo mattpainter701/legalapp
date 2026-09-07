@@ -61,6 +61,7 @@ export default function TrustCenterPage() {
                 <Download size={16} aria-hidden='true' /> Download security-review packet
               </a>
               <Link to='/privacy' className='inline-flex min-h-11 items-center rounded-xl border border-brand-line bg-brand-surface px-4 py-2 text-sm font-semibold hover:bg-brand-bg-soft'>Privacy policy</Link>
+              <Link to='/support' className='inline-flex min-h-11 items-center rounded-xl border border-brand-line bg-brand-surface px-4 py-2 text-sm font-semibold hover:bg-brand-bg-soft'>Support and response objectives</Link>
             </div>
           </div>
         </section>

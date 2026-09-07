@@ -37,6 +37,12 @@ export default function NotFoundPage() {
           >
             Sign in to your workspace
           </Link>
+          <Link
+            to="/support"
+            className="inline-flex min-h-12 items-center rounded-lg border border-brand-line-2 bg-brand-surface px-6 font-sans text-[14px] font-semibold text-brand-ink transition-colors hover:border-brand-ink"
+          >
+            Contact support
+          </Link>
         </div>
       </section>
 

@@ -98,6 +98,29 @@ const MARKETING_SHELLS = Object.freeze({
       { heading: 'No obligation', body: 'Pricing, onboarding scope, and any specialized service commitments are confirmed in writing before a firm commits.' },
     ],
   },
+  '/support': {
+    heading: 'Contact LawHand support.',
+    lead: 'Email support@getlawhand.com. Firm administrators can also file a severity-classified request from inside the workspace.',
+    sections: [
+      // Deliberately no hours and no acknowledgement numbers. Those are served
+      // live from the published support policy so this crawler shell can never
+      // become a second, stale copy of it.
+      { heading: 'How to reach us', body: 'Support requests are handled through support@getlawhand.com. Signed-in firm administrators can file a classified request from Administration, which records the acknowledgement clock and the policy version it was classified under.' },
+      { heading: 'Objectives, not an SLA', body: 'LawHand publishes coverage hours, S1-S4 impact definitions, acknowledgement objectives, and escalation routes. These are operating objectives, not an SLA, warranty, or service-credit promise unless incorporated into signed customer terms. Current values are published on the support page.' },
+      { heading: 'What to send', body: 'Include the firm name, what you expected, what happened, the approximate time and time zone, and how many people are affected. Do not send privileged client material, passwords, API keys, or authorization codes.' },
+    ],
+  },
+  '/requirements': {
+    heading: 'What your firm needs before day one.',
+    lead: 'LawHand platform requirements, the Microsoft 365 and Google Workspace integration matrix, the administrator consent each provider requests, and the onboarding sequence.',
+    sections: [
+      { heading: 'Platform requirements', body: 'LawHand runs in a current desktop browser with JavaScript and cookies enabled. There is no desktop client to install and no server for the firm to host. Each licensed user signs in with their own work account. The Microsoft Teams app and Office add-in are separate opt-in surfaces.' },
+      { heading: 'Microsoft 365', body: 'Tenant-wide consent is granted by an Entra Global Administrator and covers directory read, Outlook mail read and send, OneDrive and SharePoint file read/write, and calendar read/write. Firms can connect per user instead, which drops the directory scope and makes user matching manual. Microsoft Teams scopes are added only on explicit opt-in.' },
+      { heading: 'Google Workspace', body: 'Consent is approved by a Google Workspace Super Admin or a delegated administrator and covers read-only directory, Gmail read and send, Google Drive, and calendar. Individual users can connect their own account instead, which drops the directory scope.' },
+      { heading: 'Onboarding sequence', body: 'Agree the rollout scope, grant consent, verify the scopes actually granted, bind storage and prove one live read and write, then record the connection and test disconnect before go-live.' },
+      { heading: 'Current limits', body: 'Tenant-wide consent is presently a single broad bundle; narrower per-module consent and selected-site SharePoint access are planned, not current. SharePoint and Drive bindings are verified on write rather than assumed. Zoom Phone intake uses a separate customer-owned application, and QuickBooks Online is bound to a specific company.' },
+    ],
+  },
   '/pricing': {
     heading: 'One clear platform price. Controlled expansion.',
     lead: 'LawHand is $89 per user per month, billed annually. Research MCP is a controlled pilot for approved customers at a pilot price of $0.45 per successful tool call.',
