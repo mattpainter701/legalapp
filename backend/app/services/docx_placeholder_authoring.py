@@ -153,11 +153,13 @@ def _mapped_review_spans(
         # view.  Discovery candidates are useful evidence, but are not a
         # prerequisite for an exact user selection.
         decision = (decisions or {}).get(candidate_id)
-        if candidate_id in by_id and decision in {
-            "fixed",
-            "signature",
-            "not_applicable",
-        }:
+        signature_field = str(
+            field.get("field_type") or field.get("kind") or field.get("type") or ""
+        ).lower() in {"signature", "initials"}
+        disposition_conflicts = {"fixed", "not_applicable"}
+        if decision == "signature" and not signature_field:
+            disposition_conflicts.add("signature")
+        if candidate_id in by_id and decision in disposition_conflicts:
             raise TemplateDocxError(
                 f"Word field {name!r} conflicts with its source-review disposition"
             )

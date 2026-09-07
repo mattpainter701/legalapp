@@ -173,6 +173,32 @@ def test_conflicting_disposition_and_overlapping_mapping_fail_closed():
         derive_reviewed_docx_source(content, fields=[field, {**field, "name": "other"}])
 
 
+def test_signature_disposition_requires_signature_compatible_field():
+    content = _source()
+    candidate = next(
+        item
+        for item in docx_outline(content)["review_candidates"]
+        if item["source_text"] == "[AMOUNT]"
+    )
+    field = {
+        "name": "signer",
+        "source_text": "[AMOUNT]",
+        "docx_anchor": candidate["docx_anchor"],
+    }
+    with pytest.raises(TemplateDocxError, match="conflicts"):
+        derive_reviewed_docx_source(
+            content, fields=[field], decisions={candidate["id"]: "signature"}
+        )
+    result = derive_reviewed_docx_source(
+        content,
+        fields=[{**field, "field_type": "signature"}],
+        decisions={candidate["id"]: "signature"},
+    )
+    assert "{{signer}}" in "\n".join(
+        p.text for p in iter_docx_paragraphs(Document(io.BytesIO(result.content)))
+    )
+
+
 def test_cleanup_preserves_tokens_and_rejects_token_edits():
     doc = Document()
     doc.add_paragraph("Clause {{client_name}} stray")
