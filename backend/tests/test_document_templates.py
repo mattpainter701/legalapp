@@ -3304,6 +3304,7 @@ async def test_cover_only_pdf_completes_intake_activation_publish_generation(
     assert document is not None
     assert Path(document.storage_path).read_bytes().startswith(b"%PDF-")
 
+
 @pytest.mark.asyncio
 async def test_pdf_creation_rejects_unmapped_reviewed_body_and_json_shortcut(
     client, db_session, test_tenant, test_user, tmp_path, monkeypatch
