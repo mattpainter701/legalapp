@@ -6,12 +6,18 @@ authenticated webhook reconciler.
 """
 
 import hashlib
+import json
 import httpx  # pragma: no cover - provider integration module
 
 from app.config import get_settings  # pragma: no cover - provider integration module
 
 from app.services.esign.base import ESignProvider
-from app.services.esign.placement import PlacementError, PositionedField, validate_pdf_geometry, validate_placements, to_dropbox_form_field
+from app.services.esign.placement import (
+    PlacementError,
+    validate_pdf_geometry,
+    validate_placements,
+    to_dropbox_form_field,
+)
 
 
 class DropboxSignProvider(ESignProvider):
@@ -41,30 +47,31 @@ class DropboxSignProvider(ESignProvider):
             data[f"signers[{index}][name]"] = signer.name
             data[f"signers[{index}][order]"] = str(signer.sign_order)
         raw_fields = getattr(request, "positioned_fields", None) or []
+        validated = []
         if raw_fields:
-            roles = [((signer.role or "signer").strip() or "signer") for signer in signers]
+            roles = [
+                ((signer.role or "signer").strip() or "signer") for signer in signers
+            ]
             if len(roles) != len(set(roles)):
                 raise RuntimeError("Signer roles must be unique for positioned fields")
             try:
-                validated = validate_placements(raw_fields, source_sha256=expected_digest, signer_roles=set(roles))
+                validated = validate_placements(
+                    raw_fields, source_sha256=expected_digest, signer_roles=set(roles)
+                )
                 validate_pdf_geometry(source, validated)
             except PlacementError as exc:
                 raise RuntimeError(str(exc)) from exc
-        role_to_index = {signer.role: index for index, signer in enumerate(signers)}
-        for index, raw in enumerate(raw_fields):
-            try:
-                field = PositionedField(
-                    field_id=raw["field_id"], field_type=raw["field_type"],
-                    role=raw["role"], page=int(raw["page"]),
-                    rect=tuple(float(v) for v in raw["rect"]),
-                    page_width=float(raw["page_width"]), page_height=float(raw["page_height"]),
-                    source_sha256=raw["source_sha256"],
-                )
-                signer_index = role_to_index[field.role]
-            except (KeyError, TypeError, ValueError) as exc:
-                raise RuntimeError("Persisted signing placement manifest is invalid") from exc
-            for key, value in to_dropbox_form_field(field, signer_index=signer_index).items():
-                data[f"form_fields_per_document[{index}][{key}]"] = str(value).lower() if isinstance(value, bool) else str(value)
+        role_to_index = {
+            (signer.role or "signer").strip(): index
+            for index, signer in enumerate(signers)
+        }
+        if validated:
+            data["form_fields_per_document"] = json.dumps(
+                [
+                    to_dropbox_form_field(field, signer_index=role_to_index[field.role])
+                    for field in validated
+                ]
+            )
         files = {
             "file[0]": (
                 request.source_document_filename or "document.pdf",

@@ -19,6 +19,23 @@
       ]
     },
     {
+      "id": "2026.09.07.6",
+      "version": "2026.09.07.6",
+      "title": "See Word masters as printable pages in Studio",
+      "published_at": "2026-09-07",
+      "summary": "Inspect the saved Word source with page previews while retaining text field mapping.",
+      "highlights": [
+        {
+          "title": "Recognize your document",
+          "description": "Review letterhead, tables and page layout with thumbnails, zoom and page navigation."
+        },
+        {
+          "title": "Keep mapping when preview is unavailable",
+          "description": "Switch to Fields for text mapping, with a retry option when document conversion is busy or unavailable."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.5",
       "version": "2026.09.07.5",
       "title": "Prepare reusable Word templates with clearer source review",

@@ -162,7 +162,7 @@ async def complete_request_if_done(
     evidence_payload = {
         "request_id": str(request.id),
         "source_document_sha256": request.source_document_sha256,
-        "positioned_fields": request.positioned_fields or [],
+        "positioned_fields": getattr(request, "positioned_fields", None) or [],
         "signers": [s.audit for s in sorted(signers, key=lambda row: row.sign_order)],
     }
     evidence_sha256 = hashlib.sha256(
@@ -176,7 +176,7 @@ async def complete_request_if_done(
         request_id=str(request.id),
         source_sha256=request.source_document_sha256,
         evidence_sha256=evidence_sha256,
-        positioned_fields=request.positioned_fields or [],
+        positioned_fields=getattr(request, "positioned_fields", None) or [],
     )
     request.completion_artifact_sha256 = hashlib.sha256(content).hexdigest()
     filename = immutable_certificate_filename(

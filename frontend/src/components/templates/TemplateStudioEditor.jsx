@@ -688,7 +688,8 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                     onChange={(event) => updateField(selectedEntry.identity, { signer_role: event.target.value.trim() || undefined })}
                     className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
                   />
-                  <span className="mt-1 block text-[11px] text-brand-muted">This role is carried into the final generated PDF signing manifest.</span>
+                  <span className="mt-1 block text-[11px] text-brand-muted">Assign the matching role to the signer when sending. Word fields require position review after generation. Leave ordinary filled dates without a signer role.</span>
+                  {selected.field_type === 'signature' && <select aria-label="Signing field kind" value={selected.signing_type || 'signature'} onChange={event => updateField(selectedEntry.identity, { signing_type: event.target.value })} className="mt-2 w-full rounded border border-brand-line p-2 text-sm"><option value="signature">Signature</option><option value="initials">Initials</option></select>}
                 </PropertyRow>
               )}
               <PropertyRow label="Fills from">

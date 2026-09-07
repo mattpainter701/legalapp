@@ -50,7 +50,11 @@ from app.services.esign.notifications import (
     mark_signer_viewed,
     notify_actionable_signers,
 )
-from app.services.esign.placement import PlacementError, validate_pdf_geometry, validate_placements
+from app.services.esign.placement import (
+    PlacementError,
+    validate_pdf_geometry,
+    validate_placements,
+)
 from app.services.matter_file_store import (
     MatterFileAccessError,
     MatterFileIntegrityError,
@@ -315,6 +319,17 @@ async def create_signature_request(
         ) from exc
 
     provider_name = (body.provider or "internal").strip().lower()
+    placements = body.positioned_fields or doc.positioned_fields or []
+    if doc.signing_placement_required and not placements:
+        raise HTTPException(
+            status_code=422,
+            detail="Review signing field positions on the final generated PDF before sending.",
+        )
+    if placements and provider_name == "internal":
+        raise HTTPException(
+            status_code=422,
+            detail="Positioned signing fields require Dropbox Sign. The internal portal cannot place fields on the document.",
+        )
     external_ready = provider_name == "dropbox_sign" and bool(
         get_settings().DROPBOX_SIGN_API_KEY and get_settings().ESIGN_WEBHOOK_SECRET
     )
@@ -381,13 +396,16 @@ async def create_signature_request(
         reminders=_build_reminders(body),
         enforce_signing_order=bool(body.enforce_signing_order),
     )
-    if body.positioned_fields:
+    if placements:
         roles = [((s.role or "signer").strip() or "signer")[:100] for s in body.signers]
         if len(roles) != len(set(roles)):
-            raise HTTPException(status_code=422, detail="Signer roles must be unique when positioned fields are used")
+            raise HTTPException(
+                status_code=422,
+                detail="Signer roles must be unique when positioned fields are used",
+            )
         try:
             fields = validate_placements(
-                body.positioned_fields,
+                placements,
                 source_sha256=req.source_document_sha256,
                 signer_roles=set(roles),
             )

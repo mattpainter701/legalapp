@@ -1985,6 +1985,9 @@ export const getMatterDocumentDownloadUrl = (matterId, docId) => {
   return `${API_BASE_URL}/matters/${encodeURIComponent(ids[0])}/documents/${encodeURIComponent(ids[1])}/download`
 }
 
+export const getMatterDocumentSigningSource = (matterId, docId) =>
+  api.get(`/matters/${encodeURIComponent(matterId)}/documents/${encodeURIComponent(docId)}/download`, { responseType: 'blob' }).then(response => response.data)
+
 // Matter document revisions
 export const createMatterDocumentRevision = (matterId, sourceDocumentId, data) =>
   api.post(`/matters/${matterId}/documents/${sourceDocumentId}/revisions`, data).then(r => r.data)

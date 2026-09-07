@@ -27,7 +27,7 @@ class SignatureRequestCreate(BaseModel):
     enforce_signing_order: bool = False
     # Geometry is authored against the final generated PDF, never a DOCX
     # preview. It is validated and persisted when the request is created.
-    positioned_fields: list[dict] = Field(default_factory=list)
+    positioned_fields: list[dict] = Field(default_factory=list, max_length=100)
 
 
 class SignatureRequestVoid(BaseModel):

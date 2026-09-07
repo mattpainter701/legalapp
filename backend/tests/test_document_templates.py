@@ -224,39 +224,150 @@ async def _prepare_active_pdf_generation(
 async def test_generated_pdf_persists_positioned_signing_descriptor_and_lists_it(
     client, db_session, test_tenant, test_user, tmp_path, monkeypatch
 ):
-    """Exercise generation through MatterDocument serialization, not just the helper."""
+    """Publish, generate, list, create and dispatch the exact role-bound artifact."""
+    import hashlib
+    from unittest.mock import AsyncMock
+    import app.routers.esignature as esign
+    import app.services.esign.dropbox_sign as dropbox
     from app.models.document_template import DocumentTemplate
     from app.models.matter_document import MatterDocument
     from sqlalchemy import select
 
     template_id, matter, values, _ = await _prepare_active_pdf_generation(
-        client=client, db_session=db_session, test_tenant=test_tenant,
-        test_user=test_user, tmp_path=tmp_path, monkeypatch=monkeypatch,
+        client=client,
+        db_session=db_session,
+        test_tenant=test_tenant,
+        test_user=test_user,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
         slug="positioned-lifecycle",
     )
     template = await db_session.get(DocumentTemplate, uuid.UUID(template_id))
     schema = dict(template.variable_schema or {})
-    schema["pages"] = [{"page": 1, "width": 612, "height": 792}]
-    schema["fields"] = [{
-        "name": "client_signature", "field_type": "signature", "signer_role": "client",
-        "pdf_overlays": [{"page": 1, "rect": [72, 100, 216, 136]}],
-    }, {
-        "name": "attorney_signature", "field_type": "signature", "signer_role": "attorney",
-        "pdf_overlays": [{"page": 1, "rect": [300, 100, 444, 136]}],
-    }]
-    template.variable_schema = schema
-    await db_session.commit()
+    schema["fields"] = list(schema["fields"])
+    for index, role in enumerate(["client", "client", "attorney"]):
+        schema["fields"].append(
+            {
+                "name": f"signature_{index}",
+                "field_type": "signature",
+                "signer_role": role,
+                "pdf_source_key": f"manual:{uuid.uuid4()}",
+                "required": False,
+                "pdf_overlay": {
+                    "page": 1,
+                    "rect": [72 + 160 * index, 100, 216 + 160 * index, 136],
+                },
+            }
+        )
+    changed = await client.patch(
+        f"/api/templates/{template_id}", json={"variable_schema": schema}
+    )
+    assert changed.status_code == 200, changed.text
+    activation = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={"variables": values, "preview_purpose": "activation"},
+    )
+    assert activation.status_code == 200, activation.text
+    published = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert published.status_code == 200, published.text
+    preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": values,
+            "matter_id": str(matter.id),
+            "preview_purpose": "generation",
+        },
+    )
+    assert preview.status_code == 200, preview.text
     generated = await client.post(
         f"/api/templates/{template_id}/render",
-        json={"variables": values, "matter_id": str(matter.id), "preview_purpose": "generation", "preview_id": _},
+        json={
+            "variables": values,
+            "matter_id": str(matter.id),
+            "preview_id": preview.headers["x-clarity-preview-id"],
+        },
     )
     assert generated.status_code == 200, generated.text
-    document = (await db_session.execute(select(MatterDocument).where(MatterDocument.matter_id == matter.id).order_by(MatterDocument.created_at.desc()))).scalars().first()
-    assert document.positioned_fields and len(document.positioned_fields) == 2
+    document = (
+        (
+            await db_session.execute(
+                select(MatterDocument)
+                .where(MatterDocument.matter_id == matter.id)
+                .order_by(MatterDocument.created_at.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert document.positioned_fields and len(document.positioned_fields) == 3
+    assert document.signing_placement_required is True
     assert document.positioned_fields[0]["source_sha256"] == document.document_sha256
+    assert document.document_sha256 == hashlib.sha256(preview.content).hexdigest()
     listed = await client.get(f"/api/matters/{matter.id}/documents")
     assert listed.status_code == 200, listed.text
-    assert listed.json()["items"][0]["positioned_fields"]
+    manifest = next(
+        item for item in listed.json()["items"] if item["id"] == str(document.id)
+    )["positioned_fields"]
+    assert manifest == document.positioned_fields
+
+    settings = SimpleNamespace(
+        DROPBOX_SIGN_API_KEY="synthetic",
+        ESIGN_WEBHOOK_SECRET="synthetic",
+        ESIGN_PROVIDER_BASE_URL="https://sign.test",
+        DEV_MODE=True,
+    )
+    monkeypatch.setattr(esign, "get_settings", lambda: settings)
+    monkeypatch.setattr(dropbox, "get_settings", lambda: settings)
+    monkeypatch.setattr(esign, "notify_actionable_signers", AsyncMock())
+    sent_payloads = []
+
+    class ProviderClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, url, **kwargs):
+            sent_payloads.append(kwargs)
+            return SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {
+                    "signature_request": {"signature_request_id": "synthetic-envelope"}
+                },
+            )
+
+    monkeypatch.setattr(dropbox.httpx, "AsyncClient", lambda **kwargs: ProviderClient())
+    body = {
+        "document_id": str(document.id),
+        "signers": [
+            {"name": "Client", "email": "client@example.test", "role": "client"},
+            {"name": "Attorney", "email": "attorney@example.test", "role": "attorney"},
+        ],
+    }
+    internal = await client.post(f"/api/matters/{matter.id}/signatures", json=body)
+    assert internal.status_code == 422
+    # Omitting client-supplied placements cannot discard the server descriptor.
+    created = await client.post(
+        f"/api/matters/{matter.id}/signatures",
+        json={**body, "provider": "dropbox_sign"},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["positioned_fields"] == manifest
+    sent = await client.post(
+        f"/api/matters/{matter.id}/signatures/{created.json()['id']}/send"
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["status"] == "sent"
+    tabs = json.loads(sent_payloads[0]["data"]["form_fields_per_document"])
+    assert [tab["signer"] for tab in tabs] == [0, 0, 1]
+    assert all(tab["y"] == 656 and tab["page"] == 1 for tab in tabs)
+    assert (
+        hashlib.sha256(sent_payloads[0]["files"]["file[0]"][1]).hexdigest()
+        == document.document_sha256
+    )
 
 
 def test_render_template_preserves_unknown_variables():

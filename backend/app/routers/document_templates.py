@@ -133,7 +133,11 @@ from app.services.template_bindings import (
 )
 from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
-from app.services.esign.placement import template_positioned_fields
+from app.services.esign.placement import (
+    PlacementError,
+    signing_template_fields,
+    template_positioned_fields,
+)
 from app.services.access_control import require_capability, require_capabilities
 from app.utils.text_processing import extract_text
 from app.utils.sql_filters import escape_like
@@ -4238,6 +4242,26 @@ async def render_template_endpoint(
     else:
         output_bytes = rendered.encode("utf-8")
     output_sha256 = hashlib.sha256(output_bytes).hexdigest()
+    positioned_fields = []
+    signing_required = False
+    if matter is not None:
+        suppressed = suppressed_fields(template.variable_schema, payload.variables)
+        signing_schema = {
+            **(template.variable_schema or {}),
+            "fields": [
+                field
+                for field in (template.variable_schema or {}).get("fields", [])
+                if field.get("name") not in suppressed
+            ],
+        }
+        signing_required = bool(signing_template_fields(signing_schema))
+        if template_format == "pdf":
+            try:
+                positioned_fields = template_positioned_fields(
+                    signing_schema, source=output_bytes
+                )
+            except PlacementError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
     if (
         matter is None
         and payload.preview_purpose == "activation"
@@ -4442,10 +4466,8 @@ async def render_template_endpoint(
             document_category="generated",
             **_storage_document_fields(storage_result),
         )
-        if output_format == "pdf" and str(template.format or "").lower() == "pdf":
-            doc.positioned_fields = template_positioned_fields(
-                template.variable_schema, source_sha256=output_sha256
-            )
+        doc.positioned_fields = positioned_fields
+        doc.signing_placement_required = signing_required
         event = MatterEvent(
             tenant_id=parsed_tenant_id,
             matter_id=parsed_matter_id,

@@ -172,6 +172,9 @@ class MatterDocument(Base):
         Boolean, default=False, server_default="false"
     )
     positioned_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    signing_placement_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

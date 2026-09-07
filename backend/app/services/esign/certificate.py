@@ -82,7 +82,9 @@ def build_certificate(
         c.drawString(inch, y, f"Evidence SHA-256: {evidence_sha256 or 'unavailable'}")
         if positioned_fields:
             y -= 0.25 * inch
-            c.drawString(inch, y, f"Positioned fields bound to source: {len(positioned_fields)}")
+            c.drawString(
+                inch, y, f"Positioned fields bound to source: {len(positioned_fields)}"
+            )
         y -= 0.35 * inch
         c.setFont("Helvetica-Oblique", 8)
         c.drawString(
@@ -130,7 +132,8 @@ def build_certificate(
         safe_evidence_sha256 = html_escape(str(evidence_sha256 or "unavailable"))
         placement_note = (
             f"<p>Positioned fields bound to source: {len(positioned_fields)}</p>"
-            if positioned_fields else ""
+            if positioned_fields
+            else ""
         )
         html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Certificate of Completion</title></head><body>

@@ -50,11 +50,13 @@ class MatterDocumentResponse(BaseModel):
     storage_state: str | None = None
     document_sha256: str | None = None
     positioned_fields: list[dict] = Field(default_factory=list)
+    signing_placement_required: bool = False
 
     @field_validator("positioned_fields", mode="before")
     @classmethod
     def normalize_positioned_fields(cls, value):
         return value or []
+
     cloud_url: str | None = None
     created_at: datetime
     updated_at: datetime

@@ -11,6 +11,12 @@
 
 # Changelog
 
+## 2026.09.07.8 — Positioned signing fields
+
+- Bind template signing roles to the generated PDF digest and actual page geometry; retain placements on matter documents and signature requests.
+- Review final PDF signing positions before dispatch, including Word documents after reflow. Dropbox Sign receives explicit role-bound tabs; unsupported page geometry and internal portal placement fail before sending.
+- Migration 163 adds signing placement metadata. Source bytes, tenant boundaries, roles, and page geometry are revalidated before provider dispatch.
+
 ## 2026.09.07.6 - Word source page previews
 
 - Add a tenant-authorized, integrity-checked source preview endpoint using bounded LibreOffice conversion and a 64 MiB / 32-entry per-worker LRU.

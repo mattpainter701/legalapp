@@ -18,8 +18,10 @@ def upgrade():
         "matter_documents",
         sa.Column("positioned_fields", sa.JSON(), nullable=True),
     )
+    op.add_column("matter_documents", sa.Column("signing_placement_required", sa.Boolean(), server_default=sa.false(), nullable=False))
 
 
 def downgrade():
+    op.drop_column("matter_documents", "signing_placement_required")
     op.drop_column("signature_requests", "positioned_fields")
     op.drop_column("matter_documents", "positioned_fields")
