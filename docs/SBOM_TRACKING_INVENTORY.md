@@ -103,7 +103,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|psycopg2-binary|==2.9.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic|==2.11.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic-settings|==2.6.1|runtime/dev|backend/requirements.txt|
-|pypi|pypdf|==6.15.0|runtime/dev|backend/requirements.txt|
+|pypi|pypdf|==6.16.1|runtime/dev|backend/requirements.txt|
 |pypi|pypdfium2|==5.12.1|runtime/dev|backend/requirements.txt|
 |pypi|pytest|==9.0.3|runtime/dev|backend/requirements.txt|
 |pypi|pytest-asyncio|==1.4.0|runtime/dev|backend/requirements.txt|
