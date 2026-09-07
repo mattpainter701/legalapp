@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 
 import TemplateStudioEditor from './TemplateStudioEditor'
 import TemplateVersionHistory from './TemplateVersionHistory'
+import WordDeriveDraftAction from './WordDeriveDraftAction'
 
 const tabs = [
   { key: 'workspace', label: 'Workspace', suffix: '', icon: FileText },
@@ -25,6 +26,7 @@ export default function TemplateStudioWorkspace({
   sourceError = '',
   onSaveFields,
   onRestored,
+  onDerived,
 }) {
   const base = `/templates/${encodeURIComponent(String(template.id).toLowerCase())}/studio`
   const statusRef = useRef(null)
@@ -113,6 +115,15 @@ export default function TemplateStudioWorkspace({
               </div>
             )}
             <div className="md:col-span-3">
+              {template.format === 'docx' && template.variable_schema?.source_review_version === 1 && (
+                <WordDeriveDraftAction
+                  templateId={template.id}
+                  fields={template.variable_schema?.fields || []}
+                  sourceReview={template.variable_schema?.source_review || {}}
+                  suggestedMode={template.variable_schema?.source_mode_suggestion?.suggested_mode || 'prose'}
+                  onCreated={onDerived}
+                />
+              )}
               {sourceLoading ? (
                 <div className="flex items-center gap-2 rounded-xl border border-brand-line bg-brand-surface-2 px-5 py-10 text-sm text-brand-muted" role="status" aria-label="Document loading status">
                   <Loader2 size={16} className="animate-spin" aria-hidden="true" />
