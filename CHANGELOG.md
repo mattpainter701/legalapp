@@ -11,6 +11,12 @@
 
 # Changelog
 
+## 2026.09.07.9 - Word derived placeholder drafts
+
+- Convert explicitly confirmed Word source spans into literal placeholders in a new draft while retaining the immutable original upload and provenance chain.
+- Preserve field metadata, formatting and surrounding text across body, table, header and footer stories; reject stale, overlapping or ambiguous edits safely.
+- Add source mode choice, original evidence download, targeted token-preserving cleanup and edit-then-fill coverage in Template Studio.
+
 ## 2026.09.07.6 - Word source page previews
 
 - Add a tenant-authorized, integrity-checked source preview endpoint using bounded LibreOffice conversion and a 64 MiB / 32-entry per-worker LRU.
