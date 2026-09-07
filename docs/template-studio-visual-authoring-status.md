@@ -2,7 +2,7 @@
 
 Owner: Codex task `01a07c9f-098a-7e23-a39c-bf40851013f3`.
 Coordinating task: `Review customer template documents`, PR #352.
-Baseline reviewed: origin/main `519c4584`, 2026-09-07. Migration head is now 162.
+Integration baseline: origin/main `a1eefc26`, 2026-09-07. Migration head is 162.
 
 The [original proposal](https://github.com/mattpainter701/legalapp/blob/claude/libreoffice-template-studio-nz4xy1/docs/template-studio-visual-authoring-plan.md)
 is design input. Existing behavior and correctness take precedence over its
@@ -16,10 +16,10 @@ ordering or implementation suggestions.
 | Signature fields to e-sign tabs | Still pending. Positions must bind to the exact generated PDF digest and signer identity, not the DOCX source preview. |
 | Intake placeholder substitution | Hold implementation until the derived-source model preserves #352's immutable original, source review IDs, stable legacy anchors and generation evidence. |
 
-The agreed merge order is #352, then the preview PR. #352 remains under an
-explicit user merge hold. Its owner freezes the shared editor/router/API while
-this task adds only preview glue in a separate worktree. Release .5 belongs to
-#352; .6 belongs to preview. No migration is required for preview.
+The user authorized the merge sequence and remaining phases. PR #352 merged at
+`a1eefc26`; preview PR #354 is rebased onto it and must pass fresh CI before its
+merge. Release .5 belongs to #352; .6 belongs to preview. No migration is
+required for preview. Manual cover/eraser controls are the next phase.
 
 ## Decisions and remaining evidence
 

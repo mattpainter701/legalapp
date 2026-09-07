@@ -40,10 +40,10 @@ for simple invalidation and bounded private data retention.
 
 ## Integration and validation
 
-PR #352 owns source review, original-upload preservation, richer Word text
-mapping and the Field Library. Integrate it first after the user releases its
-merge hold, then rebase this preview change, preserving every DocxDocumentView
-prop and the source-review controls. Preview release .6 follows its .5.
+PR #352 supplies source review, original-upload preservation, richer Word text
+mapping and the Field Library. It merged at `a1eefc26`; this preview is rebased
+onto that commit, preserving every DocxDocumentView prop and the source-review
+controls. Preview release .6 follows its .5.
 
 Synthetic browser checks exercise the real pdf.js canvas at desktop and phone
 widths. They prove viewer behavior, not Word-to-LibreOffice fidelity. Converter
