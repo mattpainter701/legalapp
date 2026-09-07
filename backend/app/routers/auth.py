@@ -35,6 +35,7 @@ from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
 from app.models.user import User
+from app.models.user_alias import UserAliasAddress
 from app.models.demo_session import DemoSession
 from app.models.workspace_mcp_grant import WorkspaceMCPGrant
 from app.routers.billing import ensure_stripe_customer
@@ -73,6 +74,53 @@ CALENDAR_REQUIRED_SCOPES = {
 
 # OAuth state TTL in seconds
 _STATE_TTL = 600
+
+
+def _alias_token_is_valid(
+    row: UserAliasAddress, token: str, now: datetime | None = None
+) -> bool:
+    """Validate proof material without mutating the alias row."""
+    if (
+        row.is_verified
+        or not row.verification_token_hash
+        or not row.verification_expires_at
+    ):
+        return False
+    if row.verification_expires_at <= (now or datetime.now(timezone.utc)):
+        return False
+    return secrets.compare_digest(
+        row.verification_token_hash,
+        hashlib.sha256(token.encode("utf-8")).hexdigest(),
+    )
+
+
+@router.api_route("/verify-alias", methods=["GET", "POST"])
+async def verify_alias(
+    tenant_id: uuid.UUID, token: str, db: AsyncSession = Depends(get_db)
+):
+    """Consume the single-use proof token sent to a pending alias."""
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    await set_tenant_context(db, str(tenant_id))
+    row = await db.scalar(
+        select(UserAliasAddress)
+        .where(
+            UserAliasAddress.verification_token_hash == token_hash,
+            UserAliasAddress.tenant_id == tenant_id,
+            UserAliasAddress.is_verified.is_(False),
+        )
+        .with_for_update()
+    )
+    if row is None or not _alias_token_is_valid(row, token):
+        raise HTTPException(
+            status_code=400, detail="Alias verification link is invalid or expired"
+        )
+    row.is_verified = True
+    row.verification_method = "email_link"
+    row.verified_at = datetime.now(timezone.utc)
+    row.verification_token_hash = None
+    row.verification_expires_at = None
+    await db.commit()
+    return {"verified": True, "address": row.address}
 
 
 async def _active_demo_session(
@@ -652,6 +700,21 @@ async def _get_or_create_user(
         )
         user = result.scalar_one_or_none()
 
+        # A verified alias is an equivalent sign-in address, but never let a
+        # pending alias authenticate.  Primary addresses remain first above.
+        if user is None:
+            alias_result = await db.execute(
+                select(User)
+                .join(UserAliasAddress, UserAliasAddress.user_id == User.id)
+                .where(
+                    User.tenant_id == tenant_id,
+                    UserAliasAddress.tenant_id == tenant_id,
+                    UserAliasAddress.normalized_address == email.strip().lower(),
+                    UserAliasAddress.is_verified.is_(True),
+                )
+            )
+            user = alias_result.scalar_one_or_none()
+
         if user is None:
             if not allow_create:
                 raise HTTPException(
@@ -739,9 +802,21 @@ async def _resolve_existing_oauth_user(
     if not allow_verified_email_match:
         return None
 
+    primary = await _unique_match(
+        select(User).where(func.lower(User.email) == email.lower()), "email"
+    )
+    if primary is not None:
+        return primary
+
     return await _unique_match(
-        select(User).where(func.lower(User.email) == email.lower()),
-        "email",
+        select(User)
+        .join(UserAliasAddress, UserAliasAddress.user_id == User.id)
+        .where(
+            UserAliasAddress.normalized_address == email.strip().lower(),
+            UserAliasAddress.is_verified.is_(True),
+            UserAliasAddress.tenant_id == User.tenant_id,
+        ),
+        "verified-alias",
     )
 
 
@@ -788,6 +863,12 @@ async def _resolve_oauth_tenant_and_user(
             raise HTTPException(status_code=403, detail="Account tenant is unavailable")
 
         require_active_tenant(tenant)
+
+        if not existing_user.is_active:
+            # Deactivation must apply equally to provider-subject, primary
+            # email, and verified-alias matches.  Never mint a fresh token for
+            # an inactive account merely because its OAuth identity is known.
+            raise HTTPException(status_code=403, detail="This user account is inactive")
 
         user = await _get_or_create_user(
             db,

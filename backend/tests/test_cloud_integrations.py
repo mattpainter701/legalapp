@@ -6,6 +6,8 @@ These cover the pure logic and wiring that don't require a live database:
   - the Gmail live-search query no longer emits invalid ``{}`` syntax
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.services import cloud_search
@@ -39,6 +41,7 @@ def test_cloud_sync_agent_registered():
 @pytest.mark.asyncio
 async def test_cloud_sync_rebinds_tenant_context_around_each_provider(monkeypatch):
     service = CloudSyncService()
+    monkeypatch.setattr(service, "_latest_completed_migration", AsyncMock(return_value=None))
     tenant_id = "9ff4a695-826c-422c-bb7f-6037495a2c4e"
     scoped = False
     provider_calls: list[str] = []
@@ -87,7 +90,7 @@ async def test_cloud_sync_rebinds_tenant_context_around_each_provider(monkeypatc
         "sharepoint",
         "outlook",
     ]
-    assert rebinds == [tenant_id] * 10
+    assert rebinds == [tenant_id] * 11
     assert scoped is True
 
 
@@ -98,6 +101,7 @@ def test_index_source_map_targets_valid_fetch_sources():
         ("google", "file"),
         ("google", "email"),
         ("microsoft", "file"),
+        ("microsoft", "sharepoint_file"),
         ("microsoft", "email"),
     }
     assert all(v in valid_sources for v in _INDEX_SOURCE_MAP.values())
@@ -326,6 +330,7 @@ def test_matter_scoped_sync_extracts_sharepoint_drive_refs():
 @pytest.mark.asyncio
 async def test_sync_matter_folders_dispatches_only_folder_syncs(monkeypatch):
     service = CloudSyncService()
+    monkeypatch.setattr(service, "_latest_completed_migration", AsyncMock(return_value=None))
     calls: list[tuple[str, object]] = []
     tenant_id = "11111111-1111-1111-1111-111111111111"
 
@@ -426,7 +431,6 @@ async def test_cloud_root_provisions_both_connected_providers(monkeypatch):
 
     assert root["path"] == "claritylegal-records"
     assert root["subfolders"] == [
-        "emails",
         "client_uploads",
         "documents",
         "pleadings",
@@ -481,6 +485,8 @@ async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
     )
     monkeypatch.setattr(cloud_init, "_get_gdrive_folder_metadata", fake_gdrive_metadata)
 
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(cloud_init, "ensure_matter_marker", AsyncMock())
     metadata = await cloud_init.initialize_matter_folders(
         None,
         "tenant-1",
@@ -489,16 +495,16 @@ async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
             "onedrive": {"matters_folder_id": "od-matters"},
             "google_drive": {"matters_folder_id": "gd-matters"},
         },
+        matter_id="12345678-1234-4567-8123-123456789012",
     )
 
-    assert metadata["path"] == "claritylegal-records/acme-v-smith"
+    assert metadata["path"] == "claritylegal-records/acme-v-smith (12345678)"
     assert metadata["subfolder_paths"] == {
-        "emails": "claritylegal-records/acme-v-smith/emails",
-        "client_uploads": "claritylegal-records/acme-v-smith/client_uploads",
-        "documents": "claritylegal-records/acme-v-smith/documents",
-        "pleadings": "claritylegal-records/acme-v-smith/pleadings",
-        "correspondence": "claritylegal-records/acme-v-smith/correspondence",
-        "billing": "claritylegal-records/acme-v-smith/billing",
+        "client_uploads": "claritylegal-records/acme-v-smith (12345678)/client_uploads",
+        "documents": "claritylegal-records/acme-v-smith (12345678)/documents",
+        "pleadings": "claritylegal-records/acme-v-smith (12345678)/pleadings",
+        "correspondence": "claritylegal-records/acme-v-smith (12345678)/correspondence",
+        "billing": "claritylegal-records/acme-v-smith (12345678)/billing",
     }
     assert set(metadata["onedrive"]["subfolders"]) == set(metadata["subfolder_paths"])
     assert set(metadata["google_drive"]["subfolders"]) == set(

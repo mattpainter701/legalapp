@@ -66,6 +66,11 @@ class TenantCredential(Base):
     service_account_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )
+    account_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    account_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    account_detected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     granted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

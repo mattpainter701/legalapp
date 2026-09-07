@@ -92,6 +92,10 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         "/api/auth/reset-password",
     ): "authenticated by the emailed reset token",
     (
+        frozenset({"GET", "POST"}),
+        "/api/auth/verify-alias",
+    ): "authenticated by a tenant-scoped, expiring, single-use emailed alias token",
+    (
         frozenset({"POST"}),
         "/api/auth/signup/plan",
     ): "plan-signup entry point, precedes login",

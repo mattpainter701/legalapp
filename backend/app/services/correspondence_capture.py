@@ -33,7 +33,9 @@ from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact
 from app.models.matter_document import MatterDocument
 from app.models.matter_party import MatterParty
+from app.models.matter_assignment import MatterAssignment
 from app.models.plugin import Matter
+from app.models.user_alias import UserAliasAddress
 from app.services.email_agent import _extract_email_addresses
 from app.services.matter_file_store import MatterFileStore
 
@@ -151,6 +153,21 @@ async def _matter_party_addresses(
         client_email = client_q.scalar_one_or_none()
         if client_email:
             addresses.add(client_email.lower())
+
+    # Internal staff may correspond from a verified send-as address.  Include
+    # only aliases on active assignments and only after their ownership proof
+    # has completed; pending admin-entered aliases must not match mail.
+    alias_q = await db.execute(
+        select(UserAliasAddress.normalized_address)
+        .join(MatterAssignment, MatterAssignment.user_id == UserAliasAddress.user_id)
+        .where(
+            MatterAssignment.tenant_id == tenant_id,
+            MatterAssignment.matter_id == matter.id,
+            UserAliasAddress.tenant_id == tenant_id,
+            UserAliasAddress.is_verified.is_(True),
+        )
+    )
+    addresses.update(addr for (addr,) in alias_q.all() if addr)
 
     return addresses
 

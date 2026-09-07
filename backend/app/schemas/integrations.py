@@ -25,6 +25,10 @@ class IntegrationStatus(BaseModel):
     # prompt in the admin UI.
     teams_connected: bool = False
     teams_missing_scopes: list[str] = []
+    account_type: Optional[str] = None
+    account_label: Optional[str] = None
+    account_domain: Optional[str] = None
+    capabilities: dict = {}
 
 
 class OAuthRedirectResponse(BaseModel):

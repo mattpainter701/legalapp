@@ -16,6 +16,7 @@ import {
   getExternalImportTables,
   reconcileExternalImport,
 } from '../api'
+import StorageMigrationPanel from './StorageMigrationPanel'
 
 const SCOPE_LABELS_MS = {
   offline_access: 'Offline access (refresh tokens)',
@@ -43,6 +44,20 @@ const SCOPE_LABELS_GOOGLE = {
   'https://www.googleapis.com/auth/drive.readonly': 'Read Google Drive files (read-only)',
   'https://www.googleapis.com/auth/drive': 'Read & write Google Drive (folders + files)',
   'https://www.googleapis.com/auth/calendar': 'Read & write Google Calendar',
+}
+
+const CAPABILITY_LABELS = {
+  directory_sync: 'Directory / user sync',
+  cloud_storage: 'Cloud file storage',
+  email: 'Email',
+  calendar: 'Calendar',
+  teams: 'Microsoft Teams',
+}
+const CAP_BADGE = {
+  ok: { text: 'Available', cls: 'bg-green-100 text-green-700' },
+  needs_reauth: { text: 'Reconnect needed', cls: 'bg-amber-100 text-amber-700' },
+  error: { text: 'Error', cls: 'bg-red-100 text-red-700' },
+  unavailable: { text: 'Not on this tier', cls: 'bg-gray-100 text-gray-500' },
 }
 
 const CORE_READINESS_ENV_KEYS = new Set([
@@ -430,6 +445,8 @@ export default function IntegrationsPanel() {
         </div>
       </div>
 
+      <StorageMigrationPanel primaryProvider={primaryCloud} permissions={data} sharePointBinding={sharePointBinding} />
+
       <ReadinessCard readiness={readiness} />
 
       <SharePointBindingCard
@@ -697,7 +714,7 @@ function SharePointBindingCard({ binding, onSaved, flash, onFlashClear }) {
   )
 }
 
-function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTime, onSyncNow, syncing }) {
+export function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTime, onSyncNow, syncing }) {
   const healthText = {
     healthy: 'Healthy',
     missing_scopes: 'Missing Scopes',
@@ -724,10 +741,15 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
           }`}>
             {healthText}
           </span>
+          {info.account_label && (
+            <span className="inline-block mt-1 ml-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+              {info.account_label}
+            </span>
+          )}
           {info.connected && (
             <p className="mt-1 text-xs text-brand-ink-2 font-sans">
               {info.user_count ?? 0} users synced
-              {info.last_sync_status === 'failed' ? ' · last sync failed' : ` · last run ${relTime(info.last_sync_at)}`}
+              {info.last_sync_status === 'failed' ? ' · last sync failed' : info.last_sync_status === 'not_applicable' ? ' · directory sync not available on this tier' : ` · last run ${relTime(info.last_sync_at)}`}
             </p>
           )}
           {info.connected && (
@@ -735,7 +757,7 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
               Token refresh {info.last_refresh_at ? relTime(info.last_refresh_at) : 'not yet recorded'}
             </p>
           )}
-          {info.connected && info.last_sync_error && (
+          {info.connected && info.last_sync_error && info.last_sync_status === 'failed' && (
             <p className="mt-1 text-xs text-red-600 font-mono bg-red-50 px-2 py-1 rounded">
               {info.last_sync_error}
             </p>
@@ -838,6 +860,22 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
           <p className="text-brand-ink-2 font-sans text-sm py-2">Not connected. Grant access to enable integration features.</p>
         )}
       </div>
+      {info.connected && info.capabilities && (
+        <div className="mt-4 pt-4 border-t border-brand-line">
+          <p className="text-xs font-bold text-brand-ink mb-2 font-sans">Features on this account</p>
+          <div className="space-y-1.5">
+            {Object.entries(info.capabilities).map(([key, capability]) => {
+              const badge = CAP_BADGE[capability.status] || CAP_BADGE.unavailable
+              return (
+                <div key={key} className="flex items-center justify-between gap-3" title={capability.reason}>
+                  <span className="text-xs text-brand-ink-2 font-sans">{CAPABILITY_LABELS[key] || key}</span>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${badge.cls}`}>{badge.text}</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

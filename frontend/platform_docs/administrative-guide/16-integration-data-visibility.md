@@ -71,7 +71,9 @@ Drive synchronization reads file metadata and downloads supported files into ten
 
 Cloud search can query Gmail, Outlook, Google Drive, OneDrive, and SharePoint. A live result can expose title/subject, snippet or preview, owner/participants, dates, MIME type, size, and provider URL. LawHand can fetch the contents of selected relevant hits, subject to configured limits, for the active search or downstream capture/sync workflow.
 
-LawHand's cloud metadata record is intentionally lightweight. It can retain provider, object type and ID, parent, title/path, owner, participants, timestamps, MIME type, snippet, size, URL, and sync cursor. Imported documents, captured messages, and indexed text are separate retained records.
+LawHand's `cloud_metadata_index` record is routing metadata, not the full provider object. It can retain provider, object type and ID, parent, title/path, owner, participants, timestamps, MIME type, a bounded preview snippet of at most 500 characters, size, URL, and sync cursor. Imported documents, captured messages, and indexed text are separate retained records.
+
+The separate document corpus has a different boundary: when a firm explicitly enables an ingestion workflow, LawHand may retain full extracted document text in document chunks together with embeddings for that workflow's search and context features. The metadata-only description above applies to `cloud_metadata_index`; it does not describe every retained corpus or imply that all provider content is metadata-only. The final product decision on the platform-wide corpus posture remains pending.
 
 ## Zoom disclosure
 

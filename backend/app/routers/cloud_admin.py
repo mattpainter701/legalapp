@@ -365,6 +365,12 @@ async def save_sharepoint_binding(
     config["sharepoint_binding"] = binding
     settings_row.custom_config = config
     if body.is_primary:
+        from app.services.storage_migration import assert_provider_change_allowed
+
+        try:
+            await assert_provider_change_allowed(db, tenant_id, "sharepoint")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         settings_row.primary_cloud_provider = "sharepoint"
     await db.commit()
     return {"binding": binding}

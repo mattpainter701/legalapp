@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.database import set_tenant_context
 from app.models.user import User
 from app.services.token_vault import get_fresh_token
+from app.services import capabilities as cap
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -19,6 +20,40 @@ GOOGLE_DIRECTORY_BASE = "https://admin.googleapis.com/admin/directory/v1"
 
 
 class UserSyncService:
+    async def _directory_sync_blocked(
+        self, db: AsyncSession, tenant_id: str, provider: str
+    ) -> dict | None:
+        from app.models.tenant_credential import TenantCredential
+
+        row = (
+            await db.execute(
+                select(TenantCredential).where(
+                    TenantCredential.tenant_id == uuid.UUID(str(tenant_id)),
+                    TenantCredential.provider == provider,
+                )
+            )
+        ).scalar_one_or_none()
+        matrix = cap.resolve(
+            provider,
+            row.account_type if row else None,
+            row.scopes if row else None,
+            row.last_user_sync_status if row else None,
+        )
+        directory = matrix["directory_sync"]
+        if directory["available"]:
+            return None
+        await self._save_sync_state(
+            db, tenant_id, provider, status="not_applicable", error=directory["reason"]
+        )
+        return {
+            "created": 0,
+            "updated": 0,
+            "skipped": 0,
+            "total": 0,
+            "status": "not_applicable",
+            "reason": directory["reason"],
+        }
+
     async def _existing_users_by_email(
         self, db: AsyncSession, tenant_id: str
     ) -> dict[str, User]:
@@ -84,6 +119,9 @@ class UserSyncService:
         token = await get_fresh_token(db, tenant_id, "microsoft")
         if not token:
             raise RuntimeError("No Microsoft tenant-level OAuth token")
+        blocked = await self._directory_sync_blocked(db, tenant_id, "microsoft")
+        if blocked is not None:
+            return blocked
 
         created = 0
         updated = 0
@@ -193,6 +231,9 @@ class UserSyncService:
         token = await get_fresh_token(db, tenant_id, "google")
         if not token:
             raise RuntimeError("No Google tenant-level OAuth token")
+        blocked = await self._directory_sync_blocked(db, tenant_id, "google")
+        if blocked is not None:
+            return blocked
 
         created = 0
         updated = 0
@@ -340,14 +381,16 @@ class UserSyncService:
         except Exception as exc:
             logger.warning("Microsoft user sync failed: %s", exc)
             result["microsoft"] = {"error": str(exc)}
-            await self.record_sync_failure(db, tenant_id, "microsoft", str(exc))
+            if result["microsoft"].get("status") != "not_applicable":
+                await self.record_sync_failure(db, tenant_id, "microsoft", str(exc))
 
         try:
             result["google"] = await self.sync_google_users(db, tenant_id)
         except Exception as exc:
             logger.warning("Google user sync failed: %s", exc)
             result["google"] = {"error": str(exc)}
-            await self.record_sync_failure(db, tenant_id, "google", str(exc))
+            if result["google"].get("status") != "not_applicable":
+                await self.record_sync_failure(db, tenant_id, "google", str(exc))
 
         return result
 

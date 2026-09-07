@@ -117,6 +117,9 @@ class User(Base):
     user_memories = relationship(
         "UserMemory", back_populates="user", cascade="all, delete-orphan"
     )
+    alias_addresses = relationship(
+        "UserAliasAddress", back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class UserMemory(Base):

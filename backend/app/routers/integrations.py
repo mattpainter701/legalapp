@@ -28,6 +28,7 @@ from app.models.user_oauth_token import UserOAuthToken
 from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
 from app.services.teams import TEAMS_CONNECT_SCOPES
 from app.services.teams_gate import missing_teams_scopes
+from app.services import capabilities as cap, account_detect
 from app.services.token_vault import decrypt_token, encrypt_token, revoke_provider_token
 from app.services.integration_observability import apply_scope_audit, missing_scopes
 from app.services.durable_jobs import enqueue_job
@@ -496,6 +497,7 @@ async def microsoft_callback(
 
             # Resolve service account email from id_token (same approach as auth callback)
             service_email = None
+            claims = None
             id_token_raw = token_data.get("id_token")
             if id_token_raw:
                 try:
@@ -544,6 +546,8 @@ async def microsoft_callback(
                 )
                 db.add(cred_row)
             apply_scope_audit(cred_row, "microsoft", expected_scopes, _scope_is_granted)
+            account_type, account_domain = account_detect.detect_microsoft(claims)
+            account_detect.apply_detection(cred_row, account_type, account_domain)
         else:
             user_id, tenant_id = _require_state_user(meta, "user")
             await set_tenant_context(db, tenant_id)
@@ -694,6 +698,7 @@ async def google_callback(
 
             # Resolve service account email from Google id_token
             service_email = None
+            decoded = None
             id_token = token_data.get("id_token")
             if id_token:
                 try:
@@ -738,6 +743,8 @@ async def google_callback(
                 )
                 db.add(row)
             apply_scope_audit(row, "google", GOOGLE_ADMIN_SCOPES, _scope_is_granted)
+            account_type, account_domain = account_detect.detect_google(decoded)
+            account_detect.apply_detection(row, account_type, account_domain)
         else:
             user_id, tenant_id = _require_state_user(meta, "user")
             await set_tenant_context(db, tenant_id)
@@ -1714,6 +1721,12 @@ async def integration_status(
     )
     google_row = google_cred.scalar_one_or_none()
 
+    refreshed = await account_detect.backfill_unknown_credentials(
+        db, str(tenant_id), [row for row in (ms_row, google_row) if row]
+    )
+    ms_row = next((row for row in refreshed if row.provider == "microsoft"), None)
+    google_row = next((row for row in refreshed if row.provider == "google"), None)
+
     user_count = await db.execute(
         select(UserOAuthToken).where(UserOAuthToken.tenant_id == tenant_id)
     )
@@ -1729,6 +1742,12 @@ async def integration_status(
     ms_teams_missing = missing_teams_scopes(ms_row.scopes if ms_row else None)
     ms_teams_connected = (
         settings.TEAMS_FEATURE_ENABLED and ms_connected and not ms_teams_missing
+    )
+    ms_caps = cap.resolve(
+        "microsoft",
+        ms_row.account_type if ms_row else None,
+        ms_row.scopes if ms_row else None,
+        ms_row.last_user_sync_status if ms_row else None,
     )
 
     ms_status = IntegrationStatus(
@@ -1754,6 +1773,12 @@ async def integration_status(
         ),
         teams_connected=ms_teams_connected,
         teams_missing_scopes=ms_teams_missing,
+        account_type=ms_row.account_type if ms_row else None,
+        account_label=cap.account_label(
+            "microsoft", ms_row.account_type if ms_row else None
+        ),
+        account_domain=ms_row.account_domain if ms_row else None,
+        capabilities=ms_caps,
     )
     google_connected = google_row is not None and google_row.is_active
     google_missing = missing_scopes(
@@ -1784,6 +1809,17 @@ async def integration_status(
             google_row.last_user_sync_total
             if google_row and google_row.last_user_sync_total is not None
             else 0
+        ),
+        account_type=google_row.account_type if google_row else None,
+        account_label=cap.account_label(
+            "google", google_row.account_type if google_row else None
+        ),
+        account_domain=google_row.account_domain if google_row else None,
+        capabilities=cap.resolve(
+            "google",
+            google_row.account_type if google_row else None,
+            google_row.scopes if google_row else None,
+            google_row.last_user_sync_status if google_row else None,
         ),
     )
 
@@ -2199,7 +2235,7 @@ async def cloud_init_retry(
     try:
         fresh = await initialize_cloud_root_folder(db, str(tenant_id))
         if fresh:
-            cloud_root = {**cloud_root, **fresh}
+            cloud_root = {**fresh, **cloud_root}
             tenant.cloud_root_folder = cloud_root
             await db.commit()
     except Exception as exc:
@@ -2231,6 +2267,9 @@ async def cloud_init_retry(
                 tenant_id=str(tenant_id),
                 matter_slug=slug,
                 cloud_root=cloud_root,
+                matter_id=matter.id,
+                folder_name=matter.matter_name,
+                existing_folder=matter.cloud_folder,
             )
             if folder:
                 matter.cloud_folder = {**(matter.cloud_folder or {}), **folder}

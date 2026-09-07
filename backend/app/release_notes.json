@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.4",
+      "version": "2026.09.07.4",
+      "title": "Prepare provider changes with clearer account and storage controls",
+      "published_at": "2026-09-07",
+      "summary": "Use verified correspondence aliases, review provider tier limits, and manage storage migration discovery from Administration.",
+      "highlights": [
+        {
+          "title": "Match verified correspondence aliases",
+          "description": "Administrators can add a secondary address for a user; the address must complete email verification before it can identify a sign-in or match internal correspondence."
+        },
+        {
+          "title": "Review storage migration evidence",
+          "description": "Administrators can start a provider migration, reconcile matter and document bindings, review matched, missing, and ambiguous items, and explicitly confirm a clean cutover."
+        },
+        {
+          "title": "Understand account-tier limits",
+          "description": "The cloud support guide explains personal-account limits, directory-sync expectations, custom-domain aliases, and provider-bound file custody."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.3",
       "version": "2026.09.07.3",
       "title": "Search your firm's whole archive from one box",

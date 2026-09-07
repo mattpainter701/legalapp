@@ -48,6 +48,8 @@ from app.services.access_control import normalize_role
 from app.services.llm_routing import VALID_LLM_PROVIDERS
 from app.services.rbac_service import get_user_capabilities
 from app.services.automation_capabilities import capability_catalog
+from app.services import capabilities as provider_capabilities
+from app.services import account_detect
 from app.services.workspace_mcp_access import (
     lock_tenant_workspace_mcp_policy,
     tenant_workspace_mcp_default,
@@ -296,6 +298,9 @@ async def integration_health(
         select(TenantCredential).where(TenantCredential.tenant_id == tenant_id)
     )
     creds = cred_result.scalars().all()
+    creds = await account_detect.backfill_unknown_credentials(
+        db, tenant_id, list(creds)
+    )
     runs_result = await db.execute(
         select(IntegrationSyncRun)
         .where(IntegrationSyncRun.tenant_id == tenant_id)
@@ -741,6 +746,19 @@ async def update_tenant_settings(
     )
     # Update only provided fields
     update_data = body.model_dump(exclude_unset=True)
+    if (
+        "primary_cloud_provider" in update_data
+        and update_data["primary_cloud_provider"]
+        != settings_record.primary_cloud_provider
+    ):
+        from app.services.storage_migration import assert_provider_change_allowed
+
+        try:
+            await assert_provider_change_allowed(
+                db, str(admin.tenant_id), update_data["primary_cloud_provider"]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     for provider_field in ("default_llm_provider", "premium_llm_provider"):
         if provider_field in update_data and update_data[provider_field] is not None:
             if update_data[provider_field] not in VALID_LLM_PROVIDERS:
@@ -1617,6 +1635,22 @@ async def get_permissions_audit(
 
     def audit_provider(provider: str, required: list[str], user_count: int) -> dict:
         match = next((c for c in creds if c.provider == provider), None)
+        tier = {
+            "account_type": match.account_type if match else None,
+            "account_domain": match.account_domain if match else None,
+            "account_label": provider_capabilities.account_label(
+                provider, match.account_type if match else None
+            ),
+            "capabilities": provider_capabilities.resolve(
+                provider,
+                match.account_type if match else None,
+                match.scopes if match else None,
+                match.last_user_sync_status if match else None,
+            ),
+        }
+        effective_required = provider_capabilities.effective_required_scopes(
+            provider, required, match.account_type if match else None
+        )
         provider_runs = [
             {
                 "job_type": run.job_type,
@@ -1649,24 +1683,29 @@ async def get_permissions_audit(
         if not match or not match.scopes:
             return {
                 "connected": False,
-                "required_scopes": required,
+                "required_scopes": effective_required,
                 "granted_scopes": [],
-                "missing_required": required,
+                "missing_required": effective_required,
                 "extra_scopes": [],
                 "all_required": False,
                 "health": "disconnected",
                 "reconnect_required": False,
                 **freshness,
+                **tier,
             }
         granted = [s.strip() for s in match.scopes.split(" ") if s.strip()]
         granted_set = set(granted)
         missing = [
-            s for s in required if not _scope_is_granted(s, granted_set, provider)
+            s
+            for s in effective_required
+            if not _scope_is_granted(s, granted_set, provider)
         ]
         extra = [
             s
             for s in granted
-            if not any(_scope_is_granted(req, {s}, provider) for req in required)
+            if not any(
+                _scope_is_granted(req, {s}, provider) for req in effective_required
+            )
         ]
         token_health = match.health or "healthy"
         effective_health = token_health
@@ -1682,6 +1721,7 @@ async def get_permissions_audit(
             "health": effective_health,
             "reconnect_required": token_health == "revoked" or bool(missing),
             **freshness,
+            **tier,
         }
 
     ms_audit = audit_provider("microsoft", SCOPES_REQUIRED_MS, ms_count)

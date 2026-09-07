@@ -40,6 +40,31 @@ class _FakeClient:
 
 
 @pytest.mark.asyncio
+async def test_personal_google_sync_is_not_applicable_without_http_call(db_session, test_tenant):
+    db_session.add(TenantCredential(
+        tenant_id=test_tenant.id,
+        provider="google",
+        encrypted_access_token="enc",
+        scopes="https://www.googleapis.com/auth/drive",
+        account_type="personal",
+        is_active=True,
+    ))
+    await db_session.commit()
+    with (
+        patch("app.services.user_sync.get_fresh_token", new=AsyncMock(return_value="tok")),
+        patch("app.services.user_sync.httpx.AsyncClient") as http_client,
+    ):
+        result = await UserSyncService().sync_google_users(db_session, str(test_tenant.id))
+    assert result["status"] == "not_applicable"
+    http_client.assert_not_called()
+    cred = (await db_session.execute(select(TenantCredential).where(
+        TenantCredential.tenant_id == test_tenant.id, TenantCredential.provider == "google"
+    ))).scalar_one()
+    assert cred.last_user_sync_status == "not_applicable"
+    assert "personal" in cred.last_user_sync_error.lower()
+
+
+@pytest.mark.asyncio
 async def test_tenant_credential_has_sync_state_columns(db_session, test_tenant):
     cred = TenantCredential(
         tenant_id=test_tenant.id,
@@ -79,6 +104,7 @@ async def test_ms_sync_creates_free_tier_user_and_records_state(
             provider="microsoft",
             encrypted_access_token="enc",
             scopes="User.Read.All",
+            account_type="azure_ad",
             is_active=True,
         )
     )
@@ -134,6 +160,7 @@ async def test_ms_sync_loads_existing_users_and_workspace_default_once(
             provider="microsoft",
             encrypted_access_token="enc",
             scopes="User.Read.All",
+            account_type="azure_ad",
             is_active=True,
         )
     )
@@ -195,6 +222,7 @@ async def test_sync_does_not_relicense_existing_user(db_session, test_tenant):
             provider="microsoft",
             encrypted_access_token="enc",
             scopes="User.Read.All",
+            account_type="azure_ad",
             is_active=True,
         )
     )
@@ -229,6 +257,7 @@ async def test_ms_sync_skips_disabled_directory_users(db_session, test_tenant):
             provider="microsoft",
             encrypted_access_token="enc",
             scopes="User.Read.All",
+            account_type="azure_ad",
             is_active=True,
         )
     )
@@ -292,6 +321,7 @@ async def test_google_sync_avoids_directory_query_filter_and_skips_suspended(
             provider="google",
             encrypted_access_token="enc",
             scopes="https://www.googleapis.com/auth/admin.directory.user.readonly",
+            account_type="workspace",
             is_active=True,
         )
     )

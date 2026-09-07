@@ -1,9 +1,9 @@
 """Matter file store — routes document storage to customer's cloud storage.
 
 Files are stored in the customer's own cloud storage, not ours:
-  - MS365 customers → OneDrive: /claritylegal-records/{matter_slug}/{category}/{filename}
+  - MS365 customers → OneDrive: bound matter folder/category/filename
   - SharePoint customers → selected document library/folder
-  - Google Workspace → Google Drive: claritylegal-records/{matter_slug}/ folder
+  - Google Workspace → Google Drive: bound matter folder/category/filename
   - Legacy callers may allow local fallback; accountable automation passes
     ``require_cloud=True`` and fails closed instead.
 
@@ -250,7 +250,7 @@ class MatterFileStore:
             if backend == "google_drive":
                 token_provider = "google"
                 provider_label = "Google Drive"
-                url = f"{GOOGLE_DOWNLOAD_BASE}/files/{encoded_item_id}?alt=media"
+                url = f"{GOOGLE_DOWNLOAD_BASE}/files/{encoded_item_id}?alt=media&supportsAllDrives=true"
             elif backend in ("onedrive", "sharepoint"):
                 token_provider = "microsoft"
                 provider_label = "Microsoft Graph"
@@ -318,7 +318,7 @@ class MatterFileStore:
             provider_label = "Google Drive"
             metadata_url = (
                 f"{GOOGLE_DOWNLOAD_BASE}/files/{encoded_item_id}"
-                "?fields=id,webViewLink,modifiedTime,sha256Checksum,version,trashed"
+                "?supportsAllDrives=true&fields=id,webViewLink,modifiedTime,sha256Checksum,version,trashed"
             )
         else:
             token_provider = "microsoft"
@@ -411,7 +411,9 @@ class MatterFileStore:
         if backend == "google_drive":
             token_provider = "google"
             provider_label = "Google Drive"
-            delete_url = f"{GOOGLE_DOWNLOAD_BASE}/files/{encoded_item_id}"
+            delete_url = (
+                f"{GOOGLE_DOWNLOAD_BASE}/files/{encoded_item_id}?supportsAllDrives=true"
+            )
         elif backend in {"onedrive", "sharepoint"}:
             token_provider = "microsoft"
             provider_label = (
@@ -565,6 +567,12 @@ class MatterFileStore:
         actually sees; without it the historical category layout is unchanged.
         """
         segments = normalize_folder_path(folder_path)
+        # A pending provisioner owns matter identity. Never create a second tree
+        # from a slug while its provider IDs have not yet reached the database.
+        if hasattr(db, "execute"):
+            matter_cloud_folder = await self._ready_cloud_binding(
+                db, tenant_id, matter_slug, matter_cloud_folder
+            )
         logger.info(
             "Storing %s/%s/%s (%d bytes) for tenant %s via preferred=%s",
             matter_slug,
@@ -653,8 +661,10 @@ class MatterFileStore:
                     content_type,
                     folder_id=sharepoint_folder_id,
                     drive_id=sharepoint_drive_id,
-                    folder_path=segments,
+                    folder_path=segments
+                    or ([canonical_folder] if not sharepoint_folder_id else None),
                     matter_folder_id=sharepoint_matter_folder_id,
+                    matter_slug=matter_slug,
                 )
                 if result and result.succeeded:
                     return result
@@ -691,6 +701,79 @@ class MatterFileStore:
     # Chunk size for upload sessions.
     _CHUNK_SIZE = 2 * 1024 * 1024  # 2 MiB
 
+    async def _ready_cloud_binding(self, db, tenant_id, matter_slug, metadata):
+        from app.models.plugin import Matter
+
+        for attempt in range(11):
+            if attempt or not metadata:
+                metadata = (
+                    await db.execute(
+                        select(Matter.cloud_folder).where(
+                            Matter.tenant_id == uuid.UUID(str(tenant_id)),
+                            Matter.slug == matter_slug,
+                        )
+                    )
+                ).scalar_one_or_none()
+            status = (metadata or {}).get("_status")
+            if status == "failed":
+                raise MatterFileStoragePolicyError(
+                    "Matter folder provisioning failed. Retry provisioning in File Shares before uploading."
+                )
+            if status != "provisioning":
+                return metadata
+            if attempt < 10:
+                await asyncio.sleep(0.5)
+        raise MatterFileStoragePolicyError(
+            "Matter folders are still being prepared. Retry this upload shortly; no file was stored."
+        )
+
+    async def _lock_write_binding(
+        self, db, tenant_id, matter_slug, provider, matter_folder_id
+    ):
+        """Serialize provider writes with cutover after token refresh commits.
+
+        Keep the tenant lock through the caller's document commit. A request
+        that waited behind cutover must retry with the new binding, never write
+        through its earlier in-memory folder metadata.
+        """
+        if not hasattr(db, "execute"):
+            return
+        from app.database import set_tenant_context
+        from app.models.plugin import Matter
+        from app.models.tenant import Tenant, TenantSettings
+
+        await set_tenant_context(db, tenant_id)
+        await db.execute(
+            select(Tenant)
+            .where(Tenant.id == uuid.UUID(str(tenant_id)))
+            .with_for_update()
+        )
+        primary = (
+            await db.execute(
+                select(TenantSettings.primary_cloud_provider).where(
+                    TenantSettings.tenant_id == uuid.UUID(str(tenant_id)),
+                )
+            )
+        ).scalar_one_or_none()
+        if primary and primary != provider:
+            raise MatterFileStoragePolicyError(
+                "The firm's storage provider changed. Retry this upload with the current provider."
+            )
+        if matter_slug and matter_folder_id:
+            current = (
+                await db.execute(
+                    select(Matter.cloud_folder).where(
+                        Matter.tenant_id == uuid.UUID(str(tenant_id)),
+                        Matter.slug == matter_slug,
+                    )
+                )
+            ).scalar_one_or_none()
+            actual = _extract_provider_field(current, provider, "matter_folder_id")
+            if actual != matter_folder_id:
+                raise MatterFileStoragePolicyError(
+                    "The matter folder binding changed. Refresh File Shares and retry this upload."
+                )
+
     async def _try_store_onedrive(
         self,
         db: AsyncSession,
@@ -714,20 +797,23 @@ class MatterFileStore:
                     error="Microsoft token unavailable",
                 )
 
+            await self._lock_write_binding(
+                db, tenant_id, matter_slug, "onedrive", matter_folder_id
+            )
             segments = normalize_folder_path(folder_path)
-            if segments:
-                parent_id = (
-                    await _ensure_onedrive_path(token, segments, matter_folder_id)
-                    if matter_folder_id
-                    else await _ensure_onedrive_path(
-                        token, ["claritylegal-records", matter_slug, *segments]
-                    )
-                )
-            elif folder_id:
-                parent_id = folder_id
-            else:
+            if segments and matter_folder_id:
                 parent_id = await _ensure_onedrive_path(
-                    token, ["claritylegal-records", matter_slug, category]
+                    token, segments, matter_folder_id
+                )
+            elif folder_id and not segments:
+                parent_id = folder_id
+            elif matter_folder_id and not segments:
+                parent_id = await _ensure_onedrive_path(
+                    token, [category], matter_folder_id
+                )
+            else:
+                raise MatterFileStoragePolicyError(
+                    "Matter folder is not bound to OneDrive. Provision or remap it in File Shares, then retry."
                 )
 
             if len(content) > self._CHUNK_THRESHOLD_ONEDRIVE:
@@ -906,20 +992,21 @@ class MatterFileStore:
                     error="Google token unavailable",
                 )
 
+            await self._lock_write_binding(
+                db, tenant_id, matter_slug, "google_drive", matter_folder_id
+            )
             segments = normalize_folder_path(folder_path)
-            if segments:
-                parent_id = (
-                    await _ensure_gdrive_path(token, segments, matter_folder_id)
-                    if matter_folder_id
-                    else await _ensure_gdrive_path(
-                        token, ["claritylegal-records", matter_slug, *segments]
-                    )
-                )
-            elif folder_id:
+            if segments and matter_folder_id:
+                parent_id = await _ensure_gdrive_path(token, segments, matter_folder_id)
+            elif folder_id and not segments:
                 parent_id = folder_id
-            else:
+            elif matter_folder_id and not segments:
                 parent_id = await _ensure_gdrive_path(
-                    token, ["claritylegal-records", matter_slug, category]
+                    token, [category], matter_folder_id
+                )
+            else:
+                raise MatterFileStoragePolicyError(
+                    "Matter folder is not bound to Google Drive. Provision or remap it in File Shares, then retry."
                 )
 
             # Reuse an earlier crash/retry object only when Google confirms the
@@ -986,8 +1073,8 @@ class MatterFileStore:
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
                     (
-                        f"{GOOGLE_UPLOAD_BASE}/files?uploadType=multipart&"
-                        "fields=id,webViewLink,parents,version,modifiedTime,"
+                        f"{GOOGLE_UPLOAD_BASE}/files?uploadType=multipart&supportsAllDrives=true&"
+                        "fields=id,webViewLink,parents,driveId,version,modifiedTime,"
                         "sha256Checksum,headRevisionId"
                     ),
                     content=body,
@@ -1012,6 +1099,7 @@ class MatterFileStore:
                         or data.get("headRevisionId"),
                         provider_modified_at=data.get("modifiedTime"),
                         provider_checksum=data.get("sha256Checksum"),
+                        drive_id=data.get("driveId"),
                     )
                     logger.info("Stored %s in Google Drive: %s", filename, web_link)
                     return result
@@ -1054,8 +1142,10 @@ class MatterFileStore:
                     headers={"Authorization": f"Bearer {token}"},
                     params={
                         "q": query,
-                        "fields": "files(id,webViewLink,parents,version,modifiedTime,sha256Checksum,headRevisionId)",
+                        "fields": "files(id,webViewLink,parents,driveId,version,modifiedTime,sha256Checksum,headRevisionId)",
                         "pageSize": 1,
+                        "supportsAllDrives": True,
+                        "includeItemsFromAllDrives": True,
                     },
                 )
                 if resp.status_code == 200:
@@ -1081,7 +1171,7 @@ class MatterFileStore:
                 init_resp = await client.post(
                     (
                         "https://www.googleapis.com/upload/drive/v3/files?"
-                        "uploadType=resumable&fields=id,webViewLink,parents,version,"
+                        "uploadType=resumable&supportsAllDrives=true&fields=id,webViewLink,parents,driveId,version,"
                         "modifiedTime,sha256Checksum,headRevisionId"
                     ),
                     json=metadata,
@@ -1150,6 +1240,7 @@ class MatterFileStore:
                             or data.get("headRevisionId"),
                             provider_modified_at=data.get("modifiedTime"),
                             provider_checksum=data.get("sha256Checksum"),
+                            drive_id=data.get("driveId"),
                         )
                     elif chunk_resp.status_code == 308:
                         # 308 Resume Incomplete — continue.
@@ -1194,11 +1285,14 @@ class MatterFileStore:
         drive_id: str | None,
         folder_path: list[str] | None = None,
         matter_folder_id: str | None = None,
+        matter_slug: str | None = None,
     ) -> StorageResult | None:
         """Try to store in a configured SharePoint document library."""
         segments = normalize_folder_path(folder_path)
         # An explorer folder is only reachable when the matter folder itself is
         # known; without it there is no anchor to create the path under.
+        if not segments and not folder_id and matter_folder_id:
+            segments = ["documents"]
         target_folder_id = folder_id if not segments else matter_folder_id
         if not target_folder_id or not drive_id:
             return StorageResult(
@@ -1219,6 +1313,9 @@ class MatterFileStore:
                     parent_id=folder_id,
                     error="Microsoft token unavailable",
                 )
+            await self._lock_write_binding(
+                db, tenant_id, matter_slug, "sharepoint", matter_folder_id
+            )
             if segments:
                 folder_id = await _ensure_sharepoint_path(
                     token, drive_id, segments, folder_id

@@ -18,16 +18,28 @@ class _ScalarRows:
 class _Result:
     rowcount = 1
 
-    def __init__(self, rows=()):
+    def __init__(self, rows=(), scalar=None):
         self._rows = rows
+        self._scalar = scalar
 
     def scalars(self):
         return _ScalarRows(self._rows)
 
+    def scalar_one_or_none(self):
+        return self._scalar
+
 
 class _DB:
-    def __init__(self, users):
+    def __init__(self, users, provider):
         self.users = users
+        self.credential = type("Credential", (), {
+            "account_type": "workspace" if provider == "google" else "azure_ad",
+            "scopes": (
+                "https://www.googleapis.com/auth/admin.directory.user.readonly"
+                if provider == "google" else "User.Read.All"
+            ),
+            "last_user_sync_status": None,
+        })()
         self.added = []
         self.execute_calls = 0
         self.statements = []
@@ -35,7 +47,11 @@ class _DB:
     async def execute(self, statement, *args, **kwargs):
         self.execute_calls += 1
         self.statements.append(statement)
-        return _Result(self.users) if self.execute_calls == 1 else _Result()
+        if self.execute_calls == 1:
+            return _Result(scalar=self.credential)
+        if self.execute_calls == 2:
+            return _Result(self.users)
+        return _Result()
 
     def add(self, value):
         self.added.append(value)
@@ -92,7 +108,7 @@ async def test_sync_existing_user_does_not_lookup_workspace_default(provider, pa
         full_name="Existing",
         is_active=False,
     )
-    db = _DB([existing])
+    db = _DB([existing], provider)
     service = UserSyncService()
 
     with (
@@ -112,8 +128,8 @@ async def test_sync_existing_user_does_not_lookup_workspace_default(provider, pa
     assert result["created"] == 0
     assert result["updated"] == 1
     assert existing.is_active is True
-    assert db.execute_calls == 2  # one bulk user read and one sync-state update
-    query = db.statements[0].compile()
+    assert db.execute_calls == 3  # capability, one bulk user read, and sync-state update
+    query = db.statements[1].compile()
     assert "users.tenant_id =" in str(query)
     assert uuid.UUID(tenant_id) in query.params.values()
 
@@ -147,7 +163,7 @@ async def test_sync_existing_user_does_not_lookup_workspace_default(provider, pa
 @pytest.mark.parametrize("enabled", [False, True])
 async def test_sync_new_users_reads_directory_and_default_once(provider, payload, enabled):
     tenant_id = str(uuid.uuid4())
-    db = _DB([])
+    db = _DB([], provider)
     default = AsyncMock(return_value=enabled)
 
     with (
@@ -167,4 +183,4 @@ async def test_sync_new_users_reads_directory_and_default_once(provider, payload
     assert len(db.added) == 2
     assert all(user.workspace_mcp_enabled is enabled for user in db.added)
     assert all(user.tenant_id == uuid.UUID(tenant_id) for user in db.added)
-    assert db.execute_calls == 2
+    assert db.execute_calls == 3  # capability, one bulk user read, and sync-state update

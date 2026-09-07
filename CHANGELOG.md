@@ -11,6 +11,13 @@
 
 # Changelog
 
+## 2026.09.07.4 — Cloud provider portability remediation
+
+- Add verified user aliases with tenant-scoped uniqueness, one-time email proof, primary-address-first OAuth matching, and correspondence matching for verified aliases on assigned matters.
+- Add administrator storage migration controls for connected target roots, server-side discovery evidence, matching-rung review, explicit cutover confirmation, durable status refresh, and pending reindex visibility.
+- Preserve the canonical `claritylegal-records` matter-folder root, route captured EML files to `correspondence`, and retain the configured cloud root when onboarding setup is re-entered.
+- Document account-tier limits and distinguish bounded cloud routing metadata from full text and embeddings retained for explicitly ingested document workflows. The platform-wide corpus posture decision remains pending.
+
 ## 2026.09.07.3
 
 - Lead Firm Memory with one query box and a scope control; move matter, source, file-type and date filters behind a collapsed Refine panel and surface any active refinement as a removable chip. The matter selector becomes an optional narrowing filter rather than the first control a reader meets.
@@ -19,6 +26,7 @@
 - Match research questions with `default_operator: OR` and `minimum_should_match` (`2<70%`, tunable through `OpenSearchLimits`) instead of a blanket AND; retry an OpenSearch parse error once with the query escaped as literal text. Explicit `AND`/`OR`/`NOT` and quoted phrases still bind as typed.
 - Replace `plainto_tsquery` with `websearch_to_tsquery` on the SaaS metadata fallback and widen a syntax-free question to an OR over its terms, matching the RAG retrieval path's recall.
 - State coverage positively when a search is complete and name the administrator action behind `matter_binding_required` and `no_authorized_matter_scope`. No authorization change: ACL, deny-token, path-scope and matter-binding clauses are untouched, and an unbound SMB share is still never searched.
+
 ## 2026.09.07.2
 
 - Add portal multi-file/folder transfer with bounded relative paths, preserved subfolders, per-file retry results and deterministic source/content identities for replay. Reject storage failures and prevent same-name physical file overwrites.

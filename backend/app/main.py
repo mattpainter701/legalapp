@@ -23,6 +23,8 @@ from app.middleware.access_log import ApiAccessLogMiddleware
 from app.middleware.demo_quota import DemoQuotaMiddleware
 from app.middleware.platform_audit import PlatformAuditMiddleware
 from app.middleware.platform_key_auth import PlatformKeyAuthMiddleware
+from app.routers.user_aliases import router as user_aliases_router
+from app.routers.storage_migration import router as storage_migration_router
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.chat_artifacts import router as chat_artifacts_router
@@ -495,6 +497,9 @@ app.include_router(client_portal_firm_router)
 app.include_router(esignature_router)
 app.include_router(esignature_portal_router)
 app.include_router(document_templates_router)
+
+app.include_router(user_aliases_router, prefix="/api")
+app.include_router(storage_migration_router)
 app.include_router(onboarding_router)
 app.include_router(compliance_router)
 app.include_router(operating_contract_router)
