@@ -420,6 +420,13 @@ export const downloadRenderedText = (rendered, title) => {
   triggerBlobDownload(new Blob([String(rendered || '')], { type: 'text/markdown;charset=utf-8' }), filename)
 }
 
+function replaceSourceText(body, sourceText, token) {
+  // Existing placeholders are template instructions, not sample wording.
+  // A selected literal placeholder may be replaced as a whole, never in part.
+  return body.split(/(\{\{[\s\S]*?\}\})/g).map(part => part === sourceText ? token
+    : part.startsWith('{{') ? part : part.split(sourceText).join(token)).join('')
+}
+
 function UploadTemplateForm({ onCreated, onCancel }) {
   const [file, setFile] = useState(null)
   const [title, setTitle] = useState('')
@@ -749,7 +756,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     for (let suffix = 2; fields.some(field => field.name === name); suffix += 1) name = `${base}_${suffix}`
     const field = { name, label: options.label || sourceText.slice(0, 60), field_type: options.field_type || 'text', source_text: sourceText, example: sourceText, included: true, confidence: 1, review_required: true, _bodyName: name }
     setMappedFields(current => [...current, field])
-    setDraftBody(current => current.split(sourceText).join(`{{${name}}}`))
+    setDraftBody(current => replaceSourceText(current, sourceText, `{{${name}}}`))
     setReviewConfirmed(false)
     setError(null)
   }
@@ -770,7 +777,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       return
     }
     setReviewConfirmed(false)
-    setDraftBody((current) => current.split(sourceText).join(`{{${field.name}}}`))
+    setDraftBody((current) => replaceSourceText(current, sourceText, `{{${field.name}}}`))
     setError(null)
   }
 
