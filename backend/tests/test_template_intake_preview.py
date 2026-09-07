@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from io import BytesIO
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
@@ -7,6 +9,29 @@ import pytest
 
 from app.routers import template_intake_preview as preview
 from app.services.docx_to_pdf import DocxToPdfError
+
+
+@pytest.mark.asyncio
+async def test_word_analysis_http_response_preserves_anchored_page_context(monkeypatch):
+    from docx import Document
+    from app.routers import document_templates as intake
+
+    document = Document()
+    document.add_paragraph("Client name: ___")
+    source = BytesIO()
+    document.save(source)
+    app = FastAPI()
+    app.include_router(intake.router)
+    app.dependency_overrides[intake.get_current_user] = lambda: SimpleNamespace(id=uuid4(), tenant_id=uuid4())
+    app.dependency_overrides[intake.get_db] = lambda: SimpleNamespace()
+    monkeypatch.setattr(intake, "set_tenant_context", AsyncMock())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/templates/intake/analyze", files={"file": ("sample.docx", source.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["source_paragraphs"][0] == {"ordinal": 0, "text": "Client name: ___"}
+    assert payload["suggested_variable_schema"]["fields"][0]["docx_anchor"] == {"paragraph_ordinal": 0, "start": 13, "end": 16}
+    assert "source_paragraphs" not in payload["suggested_variable_schema"]
 
 
 @pytest.fixture

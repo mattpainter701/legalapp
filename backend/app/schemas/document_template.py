@@ -241,6 +241,7 @@ class DocumentTemplateUploadAnalysisResponse(BaseModel):
     body: str
     body_preview: str
     extracted_text: str
+    source_paragraphs: list[dict[str, Any]] = Field(default_factory=list)
     # Opaque, short-lived handoff from analysis to creation.  Reusing it keeps
     # an expensive OCR pass from running a second time while the reviewed
     # schema is still validated against the server-discovered field map.
