@@ -6,6 +6,8 @@ These cover the pure logic and wiring that don't require a live database:
   - the Gmail live-search query no longer emits invalid ``{}`` syntax
 """
 
+from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -41,7 +43,9 @@ def test_cloud_sync_agent_registered():
 @pytest.mark.asyncio
 async def test_cloud_sync_rebinds_tenant_context_around_each_provider(monkeypatch):
     service = CloudSyncService()
-    monkeypatch.setattr(service, "_latest_completed_migration", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        service, "_latest_completed_migration", AsyncMock(return_value=None)
+    )
     tenant_id = "9ff4a695-826c-422c-bb7f-6037495a2c4e"
     scoped = False
     provider_calls: list[str] = []
@@ -119,6 +123,101 @@ def test_parse_index_date_is_timezone_aware():
     assert parsed is not None and parsed.tzinfo is not None
 
 
+@pytest.mark.asyncio
+async def test_matter_metadata_search_falls_back_to_scoped_file_for_content_queries(
+    monkeypatch,
+):
+    """A filename need not repeat a fact the user asks its body to answer."""
+    service = CloudSearchService()
+    execute_calls = 0
+    statements = []
+
+    indexed_file = SimpleNamespace(
+        provider="microsoft",
+        object_type="file",
+        object_id="validation-file",
+        title="lawhand-onedrive-validation.txt",
+        snippet="lawhand-onedrive-validation.txt - plain",
+        web_url="https://onedrive.example/validation-file",
+        modified_time=None,
+        mime_type="text/plain",
+        participants=None,
+    )
+
+    class _Scalars:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return _Scalars(self._rows)
+
+    class _Db:
+        async def execute(self, _stmt):
+            nonlocal execute_calls
+            execute_calls += 1
+            statements.append(_stmt)
+            # The keyword query cannot match the body-only project number;
+            # the scoped fallback gets the indexed file for live fetching.
+            return _Result([] if execute_calls == 1 else [indexed_file])
+
+    monkeypatch.setattr(cloud_search, "set_tenant_context", AsyncMock())
+
+    hits = await service._search_index_impl(
+        _Db(),
+        plan={
+            "sources": ["onedrive"],
+            "keywords": ["project", "number"],
+            "date_after": "2026-01-01",
+        },
+        tenant_id="tenant-1",
+        matter_cloud_folder={
+            "onedrive": {
+                "matter_folder_id": "matter-root",
+                "subfolders": {"documents": "matter-documents"},
+            },
+            "context_folders": [
+                {
+                    "provider": "onedrive",
+                    "matter_folder_id": "matter-validation",
+                }
+            ],
+        },
+    )
+
+    assert execute_calls == 2
+    initial_params = list(statements[0].compile().params.values())
+    fallback_params = list(statements[1].compile().params.values())
+    fallback_values = [
+        item
+        for value in fallback_params
+        for item in (value if isinstance(value, (list, tuple, set)) else [value])
+    ]
+    assert "%project%" in initial_params
+    assert "%number%" in initial_params
+    assert "%project%" not in fallback_params
+    assert "%number%" not in fallback_params
+    assert "tenant-1" in fallback_values
+    assert "microsoft" in fallback_values
+    assert "file" in fallback_values
+    assert "matter-root" in fallback_values
+    assert "matter-documents" in fallback_values
+    assert "matter-validation" in fallback_values
+    assert "foreign-tenant" not in fallback_values
+    assert "foreign-matter-folder" not in fallback_values
+    assert any(isinstance(value, datetime) for value in fallback_values)
+    assert statements[1]._limit_clause.value == 3
+    assert [(hit.object_id, hit.source, hit.relevance_score) for hit in hits] == [
+        ("validation-file", "onedrive", 0.25)
+    ]
+
+
 def test_gmail_query_helpers_present():
     """Guard against re-introducing the curly-brace Gmail query bug.
 
@@ -192,8 +291,14 @@ async def test_cloud_search_scopes_to_primary_and_context_folders(monkeypatch):
         tenant_id="tenant-1",
         user_id="user-1",
         matter_cloud_folder={
-            "google_drive": {"matter_folder_id": "gd-primary"},
-            "onedrive": {"matter_folder_id": "od-primary"},
+            "google_drive": {
+                "matter_folder_id": "gd-primary",
+                "subfolders": {"documents": "gd-documents"},
+            },
+            "onedrive": {
+                "matter_folder_id": "od-primary",
+                "subfolders": {"documents": "od-documents"},
+            },
             "context_folders": [
                 {
                     "provider": "google_drive",
@@ -205,8 +310,8 @@ async def test_cloud_search_scopes_to_primary_and_context_folders(monkeypatch):
         },
     )
 
-    assert drive_folder_ids == ["gd-primary", "gd-context"]
-    assert graph_folder_ids == ["od-primary", "od-context"]
+    assert drive_folder_ids == ["gd-primary", "gd-documents", "gd-context"]
+    assert graph_folder_ids == ["od-primary", "od-documents", "od-context"]
 
 
 @pytest.mark.asyncio
@@ -243,10 +348,14 @@ def test_cloud_metadata_scope_folder_ids_extracts_all_matter_folders():
     assert _cloud_metadata_scope_folder_ids(
         {
             "google_drive": {"matter_folder_id": "gd-primary"},
-            "onedrive": {"matter_folder_id": "od-primary"},
+            "onedrive": {
+                "matter_folder_id": "od-primary",
+                "subfolders": {"documents": "od-documents"},
+            },
             "sharepoint": {
                 "matter_folder_id": "sp-primary",
                 "drive_id": "drive-1",
+                "subfolders": {"documents": "sp-documents"},
             },
             "context_folders": [
                 {"provider": "google_drive", "matter_folder_id": "gd-context"},
@@ -262,8 +371,10 @@ def test_cloud_metadata_scope_folder_ids_extracts_all_matter_folders():
         "gd-primary",
         "gd-context",
         "od-primary",
+        "od-documents",
         "od-context",
         "sp-primary",
+        "sp-documents",
         "sp-context",
     ]
 
@@ -330,7 +441,9 @@ def test_matter_scoped_sync_extracts_sharepoint_drive_refs():
 @pytest.mark.asyncio
 async def test_sync_matter_folders_dispatches_only_folder_syncs(monkeypatch):
     service = CloudSyncService()
-    monkeypatch.setattr(service, "_latest_completed_migration", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        service, "_latest_completed_migration", AsyncMock(return_value=None)
+    )
     calls: list[tuple[str, object]] = []
     tenant_id = "11111111-1111-1111-1111-111111111111"
 
@@ -486,6 +599,7 @@ async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
     monkeypatch.setattr(cloud_init, "_get_gdrive_folder_metadata", fake_gdrive_metadata)
 
     from unittest.mock import AsyncMock
+
     monkeypatch.setattr(cloud_init, "ensure_matter_marker", AsyncMock())
     metadata = await cloud_init.initialize_matter_folders(
         None,

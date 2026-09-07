@@ -2384,9 +2384,12 @@ async def _send_message_under_generation_lock(
         )
         or 0
     )
+    # A matter folder is a live external corpus.  Its metadata and content can
+    # change between turns without changing the database corpus revision, so
+    # do not reuse a cached no-hit (or stale-hit) RAG result for this scope.
     cached_rag = (
         None
-        if public_general
+        if public_general or context_matter_cloud_folder
         else await cache_manager.get_cached_rag_results(
             question=body.content,
             tenant_id=str(user.tenant_id),
@@ -3109,9 +3112,11 @@ async def _stream_message_under_generation_lock(
             )
             or 0
         )
+        # See the non-streaming path: a matter cloud folder is live data and
+        # must be retrieved for each private turn.
         cached_rag = (
             None
-            if public_general
+            if public_general or context_matter_cloud_folder
             else await cache_manager.get_cached_rag_results(
                 question=body.content,
                 tenant_id=str(user.tenant_id),

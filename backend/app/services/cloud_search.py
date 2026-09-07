@@ -316,6 +316,13 @@ class CloudSearchService:
                 CloudMetadata.object_type == "file",
                 CloudMetadata.parent_id.in_(matter_folder_ids),
             )
+        if date_after:
+            parsed = _parse_index_date(date_after)
+            if parsed:
+                stmt = stmt.where(CloudMetadata.modified_time >= parsed)
+
+        scoped_metadata_stmt = stmt
+
         if keywords:
             kw_clauses = []
             for kw in keywords:
@@ -323,16 +330,26 @@ class CloudSearchService:
                 kw_clauses.append(CloudMetadata.title.ilike(like))
                 kw_clauses.append(CloudMetadata.snippet.ilike(like))
             stmt = stmt.where(or_(*kw_clauses))
-        if date_after:
-            parsed = _parse_index_date(date_after)
-            if parsed:
-                stmt = stmt.where(CloudMetadata.modified_time >= parsed)
 
         stmt = stmt.order_by(CloudMetadata.modified_time.desc().nullslast()).limit(
             max_hits * 3
         )
 
         rows = (await db.execute(stmt)).scalars().all()
+
+        # The metadata index deliberately contains no document bodies.  A
+        # matter-scoped question such as "what is the project number in the
+        # uploaded file?" therefore cannot match title-only metadata before
+        # the provider content has been fetched.  Fall back to a bounded set
+        # of files that are already authorized by this matter's folder scope,
+        # so the normal live-content fetch can answer such questions.  This
+        # is intentionally unavailable for tenant-wide searches.
+        if not rows and keywords and matter_cloud_folder is not None:
+            fallback_limit = min(max_hits, 3)
+            fallback_stmt = scoped_metadata_stmt.order_by(
+                CloudMetadata.modified_time.desc().nullslast()
+            ).limit(fallback_limit)
+            rows = (await db.execute(fallback_stmt)).scalars().all()
 
         hits: list[CloudHit] = []
         for row in rows:
@@ -346,6 +363,11 @@ class CloudSearchService:
                 for kw in keywords
             )
             score = 0.5 + min(matches, 10) * 0.05  # 0.5–1.0 band, below live hits
+            if not matches and keywords:
+                # Bounded fallback candidates are useful only after their
+                # live body has been fetched, so keep them below metadata
+                # keyword matches and provider-native search hits.
+                score = 0.25
             participants = (
                 list(row.participants.values())
                 if isinstance(row.participants, dict)
@@ -1140,7 +1162,7 @@ def _source_enabled(sources: list[str] | None, name: str) -> bool:
 def _cloud_folder_ids_for_provider(
     matter_cloud_folder: dict | None, provider: str
 ) -> list[str]:
-    """Return primary and context folder IDs for a matter/provider mapping."""
+    """Return primary, provider subfolder, and context folder IDs for a matter."""
     if not isinstance(matter_cloud_folder, dict):
         return []
 
@@ -1149,6 +1171,13 @@ def _cloud_folder_ids_for_provider(
     primary_id = _cloud_folder_id(primary, allow_id=True)
     if primary_id:
         ids.append(primary_id)
+
+    if isinstance(primary, dict):
+        ids.extend(
+            str(folder_id)
+            for folder_id in (primary.get("subfolders") or {}).values()
+            if folder_id
+        )
 
     for folder in matter_cloud_folder.get("context_folders") or []:
         if not isinstance(folder, dict) or folder.get("provider") != provider:
@@ -1185,6 +1214,14 @@ def _cloud_folder_refs_for_provider(
     refs: list[dict[str, str]] = []
     primary = matter_cloud_folder.get(provider)
     _append_cloud_folder_ref(refs, primary, allow_id=True)
+    if isinstance(primary, dict):
+        for folder_id in (primary.get("subfolders") or {}).values():
+            if not folder_id:
+                continue
+            ref = {"folder_id": str(folder_id)}
+            if primary.get("drive_id"):
+                ref["drive_id"] = str(primary["drive_id"])
+            refs.append(ref)
 
     for folder in matter_cloud_folder.get("context_folders") or []:
         if not isinstance(folder, dict) or folder.get("provider") != provider:

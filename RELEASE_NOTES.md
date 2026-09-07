@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.7 — Find answers inside connected matter documents
+
+Released September 7, 2026.
+
+Ask a question about a connected matter document even when the answer appears only inside the file, not in its name.
+
+- **Search every matter folder.** Assistant searches include the matter's Documents and other provisioned subfolders, so files remain available wherever they were organized.
+- **Read a matching document.** When a question names a detail found only in a document, Assistant can use a small set of authorized matter files to locate and read that detail.
+
 ## 2026.09.07.6 — See Word masters as printable pages in Studio
 
 Released September 7, 2026.

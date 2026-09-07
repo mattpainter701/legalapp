@@ -11,6 +11,11 @@
 
 # Changelog
 
+## 2026.09.07.7
+
+- Include provisioned matter subfolders in OneDrive, Google Drive, SharePoint, and metadata-index retrieval scopes, matching the per-matter sync inventory.
+- When a private matter question asks for a fact found only inside an authorized document, fetch a bounded set of matter-scoped metadata candidates after title/snippet matching has no result. Do not reuse cached RAG results for live matter cloud folders.
+
 ## 2026.09.07.6 - Word source page previews
 
 - Add a tenant-authorized, integrity-checked source preview endpoint using bounded LibreOffice conversion and a 64 MiB / 32-entry per-worker LRU.
