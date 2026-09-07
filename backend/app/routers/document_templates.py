@@ -3062,7 +3062,12 @@ async def get_template_outline(
         outline = await asyncio.to_thread(docx_outline, source)
     except TemplateDocxError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return DocumentTemplateOutlineResponse(template_id=str(template.id), **outline)
+    suggestion = await asyncio.to_thread(suggest_source_mode, source)
+    return DocumentTemplateOutlineResponse(
+        template_id=str(template.id),
+        **outline,
+        source_mode_suggestion=suggestion.as_dict(),
+    )
 
 
 @router.post(

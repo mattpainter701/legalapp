@@ -148,6 +148,9 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [regions, setRegions] = useState(() => schemaRegions(template))
   const [sourceReview, setSourceReview] = useState(template.variable_schema?.source_review || {})
   const [cleanupSelection, setCleanupSelection] = useState(null)
+  const [sourceModeSuggestion, setSourceModeSuggestion] = useState(
+    template.variable_schema?.source_mode_suggestion || null,
+  )
   const [selectedIdentity, setSelectedIdentity] = useState(
     () => fieldIdentity(schemaFields(template)[0], 0),
   )
@@ -419,7 +422,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
             fields={deriveSchema.fields}
             sourceReview={deriveSchema.source_review || {}}
             reviewedSchema={deriveSchema}
-            suggestedMode={template.variable_schema?.source_mode_suggestion?.suggested_mode || 'prose'}
+            suggestedMode={sourceModeSuggestion?.suggested_mode || 'prose'}
             onCreated={onDerived}
           />
         </div>
@@ -517,6 +520,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
             regions={regions}
             sourceReview={sourceReview}
             onSelectText={(selection) => setCleanupSelection({ paragraph_ordinal: selection.ordinal, start: selection.start, end: selection.end, original_text: selection.text })}
+            onModeSuggestion={setSourceModeSuggestion}
             onReviewChange={template.variable_schema?.source_review_version === 1 ? (next) => {
               undoStack.current = [...undoStack.current.slice(-49), { fields, regions, sourceReview }]
               redoStack.current = []

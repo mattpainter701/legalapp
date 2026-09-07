@@ -174,6 +174,7 @@ function ParagraphRow({
   selectedName,
   onSelectField,
   onSelectText,
+  onModeSuggestion,
   onPickParagraph,
   onRemoveRegion,
 }) {
@@ -308,7 +309,9 @@ export default function DocxDocumentView({
           blocks: outline?.blocks,
           reviewCandidates: outline?.review_candidates || [],
           reviewTruncated: outline?.review_truncated,
+          sourceModeSuggestion: outline?.source_mode_suggestion || null,
         })
+        onModeSuggestion?.(outline?.source_mode_suggestion || null)
       })
       .catch((error) => {
         if (cancelled) return

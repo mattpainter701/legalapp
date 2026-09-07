@@ -357,3 +357,4 @@ class DocumentTemplateOutlineResponse(BaseModel):
         default_factory=list
     )
     review_truncated: bool = False
+    source_mode_suggestion: Optional[dict[str, Any]] = None
