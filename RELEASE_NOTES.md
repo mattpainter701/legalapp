@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.7 — Cover source details in PDF templates
+
+Released September 7, 2026.
+
+Place value-less white cover regions over ruled lines or stale source values while preparing a PDF template.
+
+- **Cover what is underneath.** Add, move, resize and remove visible cover regions in Template Studio without creating automation variables.
+- **Keep source-backed fields clean.** Choose whether an editable field paints over its source before the generated PDF is flattened.
+
 ## 2026.09.07.6 — See Word masters as printable pages in Studio
 
 Released September 7, 2026.

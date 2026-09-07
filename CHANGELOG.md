@@ -11,6 +11,12 @@
 
 # Changelog
 
+## 2026.09.07.7 - PDF source cover regions
+
+- Add value-less, tenant-reviewed PDF cover regions in Template Studio. Authors can add, move, resize, remove, undo and redo white cover rectangles without introducing automation variables.
+- Preserve the existing source overlay controls with an explicit “Cover what is underneath” option and flatten covers before generated PDF field content is drawn.
+- Validate cover geometry, page bounds and flattened output requirements; original source bytes remain integrity checked and unchanged.
+
 ## 2026.09.07.6 - Word source page previews
 
 - Add a tenant-authorized, integrity-checked source preview endpoint using bounded LibreOffice conversion and a 64 MiB / 32-entry per-worker LRU.
