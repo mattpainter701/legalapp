@@ -4456,6 +4456,7 @@ async def render_template_endpoint(
 
         doc = MatterDocument(
             id=doc_id,
+            document_sha256=output_sha256,
             matter_id=parsed_matter_id,
             tenant_id=parsed_tenant_id,
             uploaded_by_user_id=current_user.id,
