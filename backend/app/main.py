@@ -609,7 +609,7 @@ async def _probe_readiness(request: Request):
         render_store = getattr(request.app.state, "studio_render_object_store", None)
         if render_store is not None and await asyncio.to_thread(
             render_store.worker_heartbeat_fresh,
-            max_age_seconds=settings.TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS
+            max_age_seconds=settings.TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS,
         ):
             states["studio_render"] = "ok"
 
