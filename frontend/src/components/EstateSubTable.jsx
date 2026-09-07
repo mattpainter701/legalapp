@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { format, parseISO } from 'date-fns'
 import { Plus, Trash2, Pencil, X, Check } from 'lucide-react'
 import { listEstateChildren, createEstateChild, updateEstateChild, deleteEstateChild } from '../api'
@@ -46,26 +46,33 @@ export function fmtDate(v) {
   try { return format(parseISO(v), 'MMM d, yyyy') } catch { return v }
 }
 
-export default function EstateSubTable({ estateId, resource, title, columns, fields, emptyText, onChanged, headerSlot }) {
+export default function EstateSubTable(props) {
+  return <EstateEntries key={`${props.estateId}:${props.resource}`} {...props} />
+}
+
+function EstateEntries({ estateId, resource, title, columns, fields, emptyText, onChanged, headerSlot }) {
   const formId = React.useId()
   const confirmAction = useConfirm()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [loadError, setLoadError] = useState(null)
+  const [actionError, setActionError] = useState(null)
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState(emptyForm(fields))
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const requestSeq = useRef(0)
 
   const load = useCallback(() => {
+    const seq = ++requestSeq.current
     setLoading(true)
     listEstateChildren(estateId, resource)
-      .then((data) => setRows(Array.isArray(data) ? data : []))
-      .catch(() => setError('Failed to load.'))
-      .finally(() => setLoading(false))
+      .then((data) => { if (seq === requestSeq.current) { setRows(Array.isArray(data) ? data : []); setLoadError(null) } })
+      .catch(() => { if (seq === requestSeq.current) setLoadError('Failed to load.') })
+      .finally(() => { if (seq === requestSeq.current) setLoading(false) })
   }, [estateId, resource])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load(); return () => { requestSeq.current += 1 } }, [load])
 
   const buildPayload = (f) => {
     const payload = {}
@@ -81,15 +88,17 @@ export default function EstateSubTable({ estateId, resource, title, columns, fie
 
   const handleCreate = async () => {
     const required = fields.filter((fld) => fld.required)
-    if (required.some((fld) => !form[fld.key])) return
+    const missing = required.find((fld) => !String(form[fld.key] ?? '').trim())
+    if (missing) { setActionError(`${missing.label} is required.`); return }
     setSaving(true)
+    setActionError(null)
     try {
       await createEstateChild(estateId, resource, buildPayload(form))
       setForm(emptyForm(fields))
       setAdding(false)
       load()
       onChanged && onChanged()
-    } catch { setError('Failed to save.') } finally { setSaving(false) }
+    } catch { setActionError('Failed to save.') } finally { setSaving(false) }
   }
 
   const startEdit = (row) => {
@@ -101,23 +110,28 @@ export default function EstateSubTable({ estateId, resource, title, columns, fie
   }
 
   const handleUpdate = async () => {
+    const required = fields.filter((fld) => fld.required)
+    const missing = required.find((fld) => !String(form[fld.key] ?? '').trim())
+    if (missing) { setActionError(`${missing.label} is required.`); return }
     setSaving(true)
+    setActionError(null)
     try {
       await updateEstateChild(estateId, resource, editingId, buildPayload(form))
       setEditingId(null)
       setForm(emptyForm(fields))
       load()
       onChanged && onChanged()
-    } catch { setError('Failed to save.') } finally { setSaving(false) }
+    } catch { setActionError('Failed to save.') } finally { setSaving(false) }
   }
 
   const handleDelete = async (id) => {
     if (!await confirmAction({ title: 'Delete entry?', message: 'This entry will be permanently removed.', confirmLabel: 'Delete entry', destructive: true })) return
+    setSaving(true); setActionError(null)
     try {
       await deleteEstateChild(estateId, resource, id)
       setRows((prev) => prev.filter((r) => r.id !== id))
       onChanged && onChanged()
-    } catch { setError('Failed to delete.') }
+    } catch { setActionError('Failed to delete.') } finally { setSaving(false) }
   }
 
   const renderFormFields = () => (
@@ -151,7 +165,7 @@ export default function EstateSubTable({ estateId, resource, title, columns, fie
       <div className="px-6 py-5 border-b border-brand-line flex items-center justify-between bg-brand-bg-soft/50 rounded-t-2xl">
         <h2 className="font-serif font-bold text-xl text-brand-ink">{title}</h2>
         {!adding && editingId === null && (
-          <button onClick={() => { setAdding(true); setForm(emptyForm(fields)) }} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink hover:bg-brand-bg-soft transition-colors shadow-sm">
+          <button onClick={() => { setActionError(null); setAdding(true); setForm(emptyForm(fields)) }} disabled={saving} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink hover:bg-brand-bg-soft transition-colors shadow-sm disabled:opacity-50">
             <Plus size={16} /> Add
           </button>
         )}
@@ -162,10 +176,10 @@ export default function EstateSubTable({ estateId, resource, title, columns, fie
       {(adding || editingId !== null) && (
         <div className="p-6 bg-brand-bg border-b border-brand-line">
           <h3 className="text-sm font-bold font-sans text-brand-ink uppercase tracking-widest mb-4">{editingId ? 'Edit Entry' : 'New Entry'}</h3>
-          {renderFormFields()}
-          {error && <p className="text-brand-rose text-sm font-sans mt-3">{error}</p>}
+          <fieldset disabled={saving}>{renderFormFields()}</fieldset>
+          {actionError && <p role="alert" className="text-brand-rose text-sm font-sans mt-3">{actionError}</p>}
           <div className="flex gap-3 justify-end mt-5">
-            <button onClick={() => { setAdding(false); setEditingId(null); setForm(emptyForm(fields)) }} className="px-4 py-2 text-brand-ink-2 text-sm font-sans font-medium hover:text-brand-ink flex items-center gap-1.5"><X size={15} /> Cancel</button>
+            <button onClick={() => { setAdding(false); setEditingId(null); setForm(emptyForm(fields)); setActionError(null) }} disabled={saving} className="px-4 py-2 text-brand-ink-2 text-sm font-sans font-medium hover:text-brand-ink flex items-center gap-1.5 disabled:opacity-50"><X size={15} /> Cancel</button>
             <button onClick={editingId ? handleUpdate : handleCreate} disabled={saving} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 disabled:bg-brand-line disabled:text-brand-muted transition-all shadow-sm flex items-center gap-1.5">
               <Check size={15} /> {saving ? 'Saving…' : editingId ? 'Update' : 'Save'}
             </button>
@@ -174,14 +188,16 @@ export default function EstateSubTable({ estateId, resource, title, columns, fie
       )}
 
       <div className="p-2">
+        {loadError && <div role="alert" className="px-4 py-3 text-brand-rose font-sans text-sm">{loadError} <button type="button" onClick={load} disabled={loading} className="underline">Retry</button></div>}
         {loading ? (
           <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
-        ) : rows.length === 0 ? (
+        ) : loadError && rows.length === 0 ? null : rows.length === 0 ? (
           <div className="text-center py-12 px-6">
             <p className="text-brand-ink-2 font-sans text-sm">{emptyText || 'No entries yet.'}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
+            {actionError && !adding && editingId === null && <p role="alert" className="px-4 py-2 text-sm text-brand-rose">{actionError}</p>}
             <table className="min-w-full text-left">
               <thead>
                 <tr className="border-b border-brand-line">
@@ -198,9 +214,9 @@ export default function EstateSubTable({ estateId, resource, title, columns, fie
                       <td key={c.key} className="px-4 py-3 text-[13px] font-sans text-brand-ink-2 whitespace-nowrap">{fmtCell(c, row)}</td>
                     ))}
                     <td className="px-4 py-3 text-right">
-                      <div className="flex gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => startEdit(row)} className="text-brand-muted hover:text-brand-ink p-1"><Pencil size={15} /></button>
-                        <button onClick={() => handleDelete(row.id)} className="text-brand-muted hover:text-brand-rose p-1"><Trash2 size={15} /></button>
+                      <div className="flex gap-1.5 justify-end opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
+                        <button aria-label={`Edit ${title} entry`} disabled={saving} onClick={() => { setActionError(null); startEdit(row) }} className="text-brand-muted hover:text-brand-ink p-1 disabled:opacity-40"><Pencil size={15} /></button>
+                        <button aria-label={`Delete ${title} entry`} disabled={saving} onClick={() => handleDelete(row.id)} className="text-brand-muted hover:text-brand-rose p-1 disabled:opacity-40"><Trash2 size={15} /></button>
                       </div>
                     </td>
                   </tr>

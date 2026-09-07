@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   getTasks,
   getTaskBoard,
@@ -205,7 +205,7 @@ function useDialogFocus(onClose) {
   return dialogRef
 }
 
-function CreateTaskModal({ onClose, onCreate }) {
+function CreateTaskModal({ onClose, onCreate, matterId = '' }) {
   const dialogRef = useDialogFocus(onClose)
   const [form, setForm] = useState({
     title: '',
@@ -214,6 +214,7 @@ function CreateTaskModal({ onClose, onCreate }) {
     due_date: '',
     description: '',
     contact_id: null,
+    matter_id: matterId || '',
   })
   const [assignee, setAssignee] = useState(null)
   const [assignmentNote, setAssignmentNote] = useState('')
@@ -232,6 +233,7 @@ function CreateTaskModal({ onClose, onCreate }) {
       if (!payload.due_date) delete payload.due_date
       if (!payload.description) delete payload.description
       if (!payload.contact_id) delete payload.contact_id
+      if (!payload.matter_id) delete payload.matter_id
       if (assignee) payload.assigned_to_user_id = assignee.id
       if (assignee && assignmentNote.trim()) payload.assignment_note = assignmentNote.trim()
       const task = await createTask(payload)
@@ -329,6 +331,44 @@ function CreateTaskModal({ onClose, onCreate }) {
       </div>
     </div>
   )
+}
+
+function EditTaskModal({ task, onClose, onSaved }) {
+  const [form, setForm] = useState({ title: task.title || '', description: task.description || '', due_date: task.due_date || '', priority: task.priority || 'medium', task_type: task.task_type || 'general' })
+  const [saving, setSaving] = useState(false)
+  const dialogRef = useDialogFocus(() => { if (!saving) onClose() })
+  const [error, setError] = useState(null)
+  const submitRef = useRef(false)
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const submit = async (event) => {
+    event.preventDefault()
+    if (!form.title.trim()) { setError('Title is required'); return }
+    if (submitRef.current) return
+    submitRef.current = true
+    setSaving(true); setError(null)
+    try {
+      const updated = await updateTask(task.id, { title: form.title.trim(), description: form.description.trim() || null, due_date: form.due_date || null, ...(!form.due_date ? { due_time: null } : {}), priority: form.priority, task_type: form.task_type, ...(task.version != null ? { expected_version: task.version } : {}) })
+      onSaved(updated)
+    } catch (e) {
+      const detail = e?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : typeof detail?.message === 'string' ? detail.message : 'Task could not be updated.')
+      setSaving(false)
+      submitRef.current = false
+    }
+  }
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" role="presentation">
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="edit-task-title" className="mx-4 w-full max-w-md rounded-lg bg-white shadow-xl">
+      <div className="flex items-center justify-between border-b border-brand-line px-6 py-4"><h2 id="edit-task-title" className="font-semibold">Edit Task</h2><button type="button" onClick={onClose} disabled={saving} aria-label="Close dialog">✕</button></div>
+      <form onSubmit={submit} className="space-y-4 px-6 py-4">
+        <label className="block text-xs font-bold uppercase text-brand-muted">Title<input aria-label="Task title" value={form.title} onChange={(e) => update('title', e.target.value)} disabled={saving} className="mt-1 w-full rounded border p-2 text-sm" /></label>
+        <div className="grid grid-cols-2 gap-3"><label className="text-xs font-bold uppercase text-brand-muted">Priority<select aria-label="Task priority" value={form.priority} onChange={(e) => update('priority', e.target.value)} disabled={saving} className="mt-1 w-full rounded border p-2 text-sm"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></label><label className="text-xs font-bold uppercase text-brand-muted">Type<select aria-label="Task type" value={form.task_type} onChange={(e) => update('task_type', e.target.value)} disabled={saving} className="mt-1 w-full rounded border p-2 text-sm">{TASK_TYPES.map((type) => <option key={type} value={type}>{type.replace('_', ' ')}</option>)}</select></label></div>
+        <label className="block text-xs font-bold uppercase text-brand-muted">Due date<input aria-label="Task due date" type="date" value={form.due_date} onChange={(e) => update('due_date', e.target.value)} disabled={saving} className="mt-1 w-full rounded border p-2 text-sm" /></label>
+        <label className="block text-xs font-bold uppercase text-brand-muted">Notes<textarea aria-label="Task notes" value={form.description} onChange={(e) => update('description', e.target.value)} disabled={saving} rows={3} className="mt-1 w-full rounded border p-2 text-sm" /></label>
+        {error && <AlertBanner type="error" title="Task was not updated">{error}</AlertBanner>}
+        <div className="flex justify-end gap-3"><button type="button" onClick={onClose} disabled={saving} className="px-4 py-2 text-sm text-brand-muted">Cancel</button><button type="submit" disabled={saving} className="rounded bg-brand-ink px-4 py-2 text-sm text-white">{saving ? 'Saving…' : 'Save changes'}</button></div>
+      </form>
+    </div>
+  </div>
 }
 
 function QualifyIntakeModal({ task, onClose, onQualified }) {
@@ -913,6 +953,7 @@ function TaskRow({
   onLogContact,
   onReassign,
   onCloseTask,
+  onEdit,
 }) {
   const label = dueDateLabel(task.due_date)
   const isClosed = task.status === 'completed' || task.status === 'cancelled'
@@ -1040,6 +1081,7 @@ function TaskRow({
         )}
         {!isClosed && (
           <>
+            <button onClick={() => onEdit(task)} aria-label={`Edit task: ${task.title}`} className="text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1">Edit</button>
             <button
               onClick={() => onReassign(task)}
               title="Reassign this task to another staff member"
@@ -1121,6 +1163,7 @@ function SectionHeader({ title, count, icon: Icon, color = '' }) {
 export default function TasksPage() {
   const { user } = useAuth()
   const { taskId } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const [tasks, setTasks] = useState([])
   const [overdue, setOverdue] = useState([])
@@ -1138,19 +1181,28 @@ export default function TasksPage() {
   const [logContactTask, setLogContactTask] = useState(null)
   const [reassignTask, setReassignTask] = useState(null)
   const [closeTask, setCloseTask] = useState(null)
+  const [editTask, setEditTask] = useState(null)
   const [viewMode, setViewMode] = useState(() => {
     try { return window.localStorage.getItem('tasks:view-mode') === 'board' ? 'board' : 'list' } catch { return 'list' }
   })
   const [boardScope, setBoardScope] = useState('mine')
   const [boardDueWindow, setBoardDueWindow] = useState('')
   const [boardAssignee, setBoardAssignee] = useState(null)
-  const [boardMatterId, setBoardMatterId] = useState(() => new URLSearchParams(window.location.search).get('matter_id') || '')
+  const boardMatterId = searchParams.get('matter_id') || ''
   const [boardMatters, setBoardMatters] = useState([])
   const [boardData, setBoardData] = useState(null)
   const [boardEnabled, setBoardEnabled] = useState(null)
   const [boardLoading, setBoardLoading] = useState(false)
   const [boardError, setBoardError] = useState(null)
+  const taskLoadSequence = useRef(0)
+  const boardLoadSequence = useRef(0)
   const createTaskButtonRef = useRef(null)
+
+  const setMatterFilter = (value) => setSearchParams((current) => {
+    const next = new URLSearchParams(current)
+    if (value) next.set('matter_id', value); else next.delete('matter_id')
+    return next
+  })
 
   const closeCreate = useCallback(() => {
     setShowCreate(false)
@@ -1170,21 +1222,24 @@ export default function TasksPage() {
   }), [boardScope, boardAssignee, boardMatterId, filterPriority, filterType, boardDueWindow])
 
   const loadBoard = useCallback(async () => {
+    const sequence = ++boardLoadSequence.current
     setBoardLoading(true)
     setBoardError(null)
     try {
       const data = await getTaskBoard(boardParams())
+      if (sequence !== boardLoadSequence.current) return null
       setBoardData(data)
       return data
     } catch (e) {
-      setBoardError(e?.response?.data?.detail || 'Failed to load the work board')
+      if (sequence === boardLoadSequence.current) setBoardError(typeof e?.response?.data?.detail === 'string' ? e.response.data.detail : 'Failed to load the work board')
       return null
     } finally {
-      setBoardLoading(false)
+      if (sequence === boardLoadSequence.current) setBoardLoading(false)
     }
   }, [boardParams])
 
   const loadTasks = useCallback(async () => {
+    const sequence = ++taskLoadSequence.current
     setLoading(true)
     setError(null)
     try {
@@ -1197,28 +1252,30 @@ export default function TasksPage() {
         getTasks(params),
         getOverdueTasks(boardMatterId ? { matter_id: boardMatterId } : {}),
       ])
-      const allTasks = tasksData.items || []
+      if (sequence !== taskLoadSequence.current) return []
+      const allTasks = [...(tasksData.items || [])]
       if (taskId && !allTasks.some(t => t.id === taskId)) {
         try {
           const linkedTask = await getTask(taskId)
           allTasks.unshift(linkedTask)
         } catch {
-          setActionError('That task link could not be opened. It may have been deleted or you may not have access.')
+          if (sequence === taskLoadSequence.current) setActionError('That task link could not be opened. It may have been deleted or you may not have access.')
         }
       }
       const overdueIds = new Set((overdueData.items || []).map(t => t.id))
+      if (sequence !== taskLoadSequence.current) return []
       setTasks(allTasks.filter(t => !overdueIds.has(t.id)))
       setOverdue(overdueData.items || [])
       return [...allTasks, ...(overdueData.items || [])]
     } catch (e) {
-      setError(e?.response?.data?.detail || 'Failed to load tasks')
+      if (sequence === taskLoadSequence.current) setError(typeof e?.response?.data?.detail === 'string' ? e.response.data.detail : 'Failed to load tasks')
       return []
     } finally {
-      setLoading(false)
+      if (sequence === taskLoadSequence.current) setLoading(false)
     }
   }, [filterStatus, filterPriority, filterType, taskId, boardMatterId])
 
-  useEffect(() => { loadTasks() }, [loadTasks])
+  useEffect(() => { loadTasks(); return () => { taskLoadSequence.current += 1 } }, [loadTasks])
   useEffect(() => {
     let active = true
     getTaskBoardConfig()
@@ -1370,6 +1427,7 @@ export default function TasksPage() {
     onLogContact: setLogContactTask,
     onReassign: setReassignTask,
     onCloseTask: setCloseTask,
+    onEdit: setEditTask,
   }
 
   return (
@@ -1447,7 +1505,7 @@ export default function TasksPage() {
             </select>
           )}
           {canOpenMatters && (
-            <select aria-label="Filter tasks by matter" value={boardMatterId} onChange={e => setBoardMatterId(e.target.value)} className="min-h-10 max-w-56 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
+            <select aria-label="Filter tasks by matter" value={boardMatterId} onChange={e => setMatterFilter(e.target.value)} className="min-h-10 max-w-56 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
               <option value="">All matters</option>
               {boardMatterId && !boardMatters.some(matter => matter.id === boardMatterId) && <option value={boardMatterId}>Linked matter</option>}
               {boardMatters.map(matter => <option key={matter.id} value={matter.id}>{matter.matter_name}{matter.case_number ? ` · ${matter.case_number}` : ''}</option>)}
@@ -1459,7 +1517,7 @@ export default function TasksPage() {
             </div>
           )}
           {viewMode === 'board' && (filterPriority || filterType || boardDueWindow || boardMatterId || boardAssignee) && (
-            <button type="button" onClick={() => { setFilterPriority(''); setFilterType(''); setBoardDueWindow(''); setBoardMatterId(''); setBoardAssignee(null) }} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink">Clear filters</button>
+            <button type="button" onClick={() => { setFilterPriority(''); setFilterType(''); setBoardDueWindow(''); setMatterFilter(''); setBoardAssignee(null) }} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink">Clear filters</button>
           )}
         </FilterToolbar>
 
@@ -1587,6 +1645,7 @@ export default function TasksPage() {
 
       {showCreate && (
         <CreateTaskModal
+          matterId={boardMatterId}
           onClose={closeCreate}
           onCreate={() => {
             closeCreate()
@@ -1594,6 +1653,8 @@ export default function TasksPage() {
           }}
         />
       )}
+
+      {editTask && <EditTaskModal task={editTask} onClose={() => setEditTask(null)} onSaved={() => { setEditTask(null); reloadWorkspace() }} />}
 
       {qualifyTask && (
         <QualifyIntakeModal

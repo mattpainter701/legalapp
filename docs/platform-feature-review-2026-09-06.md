@@ -62,7 +62,60 @@ migration chain, and test same-primary/different-opposing submissions plus
 concurrent duplicate submissions. This PR does not modify that schema or claim
 to fix this issue.
 
-## Validation boundary
+## Customer-workflow UX remediation
+
+The follow-up compares the interface with the two first-customer profiles:
+mediation with Microsoft 365, and probate/property work with Google. It does
+not assume a jurisdiction, Google account edition, or that the mediation
+attorney acts as counsel rather than a neutral.
+
+Confirmed friction corrected in this PR:
+
+- Matter sections are stored in the `tab` query parameter. Direct links,
+  refresh, and browser Back restore the section; document revision returns to
+  Documents. Switching matters isolates pending responses and local drafts.
+- Dashboard tasks have links to their full task workspace, a scoped task-list
+  link, visible failed-completion feedback, and load retry. Empty pending lists
+  no longer imply that waiting or review work is complete.
+- The task workspace follows the current route's matter filter. New tasks
+  inherit that matter. An Edit action corrects task details without recreating
+  the task or changing status/assignment approval flows. Explicitly clearing
+  optional dates and notes is persisted; omitted values remain unchanged.
+- Estate entries distinguish missing data from failed loads, show required
+  field errors, retain drafts after save failure, and expose correction actions
+  to touch and keyboard users. Clearing optional dates or values is supported.
+
+Evidence: `MatterNavigation.test.jsx`, `MatterDetailNote.test.jsx`,
+`DocumentRevisionPage.test.jsx`, `TasksPage.test.jsx`, estate regression tests,
+`test_task_tracking.py`, and the mobile browser journey that returns from tasks
+to Documents using Back and refresh. These use synthetic fixtures.
+
+The initial hypothesis of a mandatory probate sequence was not confirmed:
+estate creation already accepts incomplete information, and sections can be
+opened independently. Mediation stages are already editable. These existing
+behaviors are retained, rather than adding another workflow system.
+
+### Mediation ownership handoff and remaining acceptance
+
+The active `addon-module-review` worktree owns mediation changes, so this PR
+does not modify those files. Read-only review found:
+
+- Only `our_client` invitations create native client-account access; other
+  roles use scoped portal invitations. A neutral need not label either
+  participant as the firm's client, but the UI needs clearer role guidance.
+- The generic party form initializes its role select as blank and sends null
+  if unchanged, which does not use the API's non-null default. The owning task
+  should require an explicit participant role and explain its invitation path.
+- Party-management and invitation routes need an authorization review against
+  intended matter-manager capabilities. Do not broaden recipient visibility or
+  reinterpret `opposing_party` decisions to solve a labeling problem.
+
+Customer-specific mediation participation, probate forms/deadlines, and the
+exact real-estate/oil-and-gas deliverables still need customer acceptance.
+This PR does not claim live Microsoft/Google validation or oil-and-gas-specific
+workflow support.
+
+## Test environment
 
 Frontend regressions use synthetic data and delayed promises. Backend unit
 regressions mock external providers; PostgreSQL integration checks run in CI.

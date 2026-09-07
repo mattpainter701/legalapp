@@ -15,6 +15,14 @@ const EVENT_TYPES = ['drafting', 'review', 'filing', 'funding', 'distribution', 
 const STATUS_OPTIONS = ['active', 'in_probate', 'draft', 'closed']
 const ESTATE_TYPES = ['Probate', 'Trust Administration', 'Estate Planning', 'Guardianship', 'Conservatorship', 'Small Estate']
 
+const normalizeEstateUpdatePayload = (data) => {
+  const payload = { ...data }
+  for (const key of ['date_of_death', 'gross_estate_value', 'net_estate_value']) {
+    if (payload[key] === '') payload[key] = null
+  }
+  return payload
+}
+
 const TABS = [
   'Overview', 'Fiduciaries', 'Beneficiaries', 'Assets', 'Claims',
   'Distributions', 'Accounting', 'Deadlines', 'Activity',
@@ -33,7 +41,7 @@ function Field({ label, children, bold = false }) {
     <div className="py-3 border-b border-brand-line/50 last:border-0">
       <dt className="text-[11px] font-bold text-brand-muted font-sans uppercase tracking-widest mb-1.5">{label}</dt>
       <dd className={`text-[14px] font-sans ${bold ? 'font-semibold text-brand-ink' : 'text-brand-ink-2'}`}>
-        {children || <span className="text-brand-line-2">—</span>}
+        {children ?? <span className="text-brand-line-2">—</span>}
       </dd>
     </div>
   )
@@ -235,7 +243,7 @@ export default function EstateDetailPage() {
     setSaving(true)
     setSaveError(null)
     try {
-      const updated = await updateEstate(id, editData)
+      const updated = await updateEstate(id, normalizeEstateUpdatePayload(editData))
       setEstate(updated.estate || updated)
       setEditing(false)
     } catch { setSaveError('Failed to save changes.') } finally { setSaving(false) }

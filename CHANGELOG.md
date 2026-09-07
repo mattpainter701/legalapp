@@ -8,6 +8,10 @@
 
 ## 2026.09.06.8
 
+- Preserve matter sections in URLs and return document review to Documents; expose scoped task links and completion/load recovery on the dashboard.
+- Add general task corrections, explicit date/note clearing, matter-scoped task creation and current-route filter synchronization.
+- Keep estate drafts after failures, expose required-field validation and load retry, make correction controls accessible, and permit clearing optional dates/values.
+
 - Limit Assistant list requests to its workspace; preserve independent list success and ignore late navigation results.
 - Add intake load retry and stage failure feedback; protect communications and research navigation from stale responses; serialize portal message polling.
 - Preserve both field and region state in Studio undo/redo. Isolate Workspace and Research MCP consent state by request ID.

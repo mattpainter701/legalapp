@@ -4,17 +4,17 @@
     {
       "id": "2026.09.06.8",
       "version": "2026.09.06.8",
-      "title": "Smoother everyday work with fewer background requests",
+      "title": "Correct everyday work and keep your place",
       "published_at": "2026-09-06",
-      "summary": "Improve intake recovery, workspace navigation and Studio editing while reducing unnecessary background work.",
+      "summary": "Edit task details, return to the right matter section, and recover from estate-entry errors while reducing unnecessary background work.",
       "highlights": [
         {
           "title": "Keep the selected work in view",
-          "description": "Communications and research workspaces ignore stale responses when you change views. Connected-assistant approval screens keep each application's review separate."
+          "description": "Return to the right matter section with bookmarks and browser Back. Document review returns to Documents, and new tasks inherit the selected matter."
         },
         {
-          "title": "Recover from interruptions",
-          "description": "Intake shows load and stage-update errors with a retry for failed loads. Studio Undo and Redo restore region edits along with fields."
+          "title": "Correct work and recover from interruptions",
+          "description": "Correct task details and clear dates without recreating work. Estate forms explain errors and retain failed drafts. Intake recovery and Studio Undo are more reliable."
         },
         {
           "title": "Use fewer resources",

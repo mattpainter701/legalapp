@@ -248,7 +248,7 @@ export default function DocumentRevisionPage() {
       <header className="sticky top-0 z-20 border-b border-brand-line bg-brand-surface/95 px-4 py-3 backdrop-blur sm:px-6">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <Link to={`/matters/${matterId}`} className="tap-target -ml-2 flex shrink-0 items-center justify-center rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink" aria-label="Back to matter">
+            <Link to={`/matters/${matterId}?tab=documents`} className="tap-target -ml-2 flex shrink-0 items-center justify-center rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink" aria-label="Back to matter documents">
               <ArrowLeft size={19} aria-hidden="true" />
             </Link>
             <div className="min-w-0">

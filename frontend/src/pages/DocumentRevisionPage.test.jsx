@@ -97,6 +97,7 @@ describe('DocumentRevisionPage', () => {
     await user.click(screen.getAllByRole('button', { name: 'Preview' })[0])
 
     expect(screen.getByRole('link', { name: 'Open exact DOCX' })).toHaveAttribute('href', readyRevision.artifact_url)
+    expect(screen.getByRole('link', { name: 'Back to matter documents' })).toHaveAttribute('href', '/matters/matter-1?tab=documents')
     expect(screen.getByText(/Content preview — not page-faithful/i)).toBeInTheDocument()
     const approveButton = screen.getByRole('button', { name: 'Approve reviewed revision' })
     expect(approveButton).toBeDisabled()

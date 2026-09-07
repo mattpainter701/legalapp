@@ -39,6 +39,13 @@ matter/contact links, legal due date, review state, pending action, and source
 provenance. Outlook and Google calendar events are projections. They help users
 work in familiar clients but do not become a second task database.
 
+The Tasks UI supports correcting title, notes, type, priority, and due date on
+an open task. The PATCH contract distinguishes omitted optional fields (retain
+their current values) from explicit null for description, due date, due time,
+and optional reference links (clear those values). Corrections use the existing
+authorization, version checks, history, and calendar projection path. Editing
+details does not approve a pending action or change task status.
+
 The `task_events` table is append-only history for creation, assignment,
 reassignment, status changes, review, automation outcomes, and other meaningful
 transitions. `task_automation_runs` is the durable/idempotent execution claim
