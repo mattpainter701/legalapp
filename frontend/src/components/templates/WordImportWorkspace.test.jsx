@@ -37,3 +37,23 @@ it('shows detected source text and edits the selected field’s label and inclus
   fireEvent.click(screen.getByLabelText('Include this field'))
   expect(change).toHaveBeenLastCalledWith([fields[0], { ...fields[1], included: false }])
 })
+
+it('rejects a selection spanning paragraphs before it can create a broken mapping', () => {
+  const add = vi.fn()
+  render(<WordImportWorkspace file={file} analysis={{ extracted_text: 'First paragraph\nSecond paragraph' }} fields={[]} onAddField={add} />)
+  const source = screen.getByLabelText('Select source text')
+  const range = document.createRange()
+  range.selectNodeContents(source)
+  window.getSelection().removeAllRanges()
+  window.getSelection().addRange(range)
+  fireEvent.mouseUp(source)
+  expect(screen.getByRole('button', { name: 'Make selection a field' })).toBeDisabled()
+  expect(add).not.toHaveBeenCalled()
+})
+
+it('preserves choice-field types and respects source review confirmation', () => {
+  render(<WordImportWorkspace file={file} analysis={{ extracted_text: 'Yes' }} fields={[{ name: 'answer', label: '', field_type: 'checkbox', docx_choice: { group: 'g', option: 'Yes' }, review_required: true }]} reviewConfirmed />)
+  expect(screen.getByLabelText('Imported field type')).toBeDisabled()
+  expect(screen.getByLabelText('Imported field label')).toHaveValue('')
+  expect(screen.getByText('Reviewed against source')).toBeVisible()
+})

@@ -42,7 +42,8 @@ export default function WordImportWorkspace({ file, analysis, fields, onFieldsCh
           {selection && <div className="sticky bottom-0 mt-3 rounded border border-brand-accent bg-brand-surface-2 p-3">
             <p className="text-sm">Selected: <strong>{selection}</strong></p>
             <p className="mt-1 text-xs text-brand-muted">Matching occurrences of this exact text will use the same value.</p>
-            <button type="button" onClick={() => { onAddField(selection); setSelection(''); globalThis.getSelection?.()?.removeAllRanges() }} className="mt-2 rounded bg-brand-ink px-3 py-2 text-sm font-semibold text-white">Make selection a field</button>
+            {/[\r\n]/.test(selection) && <p role="alert" className="mt-2 text-sm">Select words within one paragraph to create a field.</p>}
+            <button type="button" disabled={/[\r\n]/.test(selection)} onClick={() => { onAddField(selection); setSelection(''); globalThis.getSelection?.()?.removeAllRanges() }} className="mt-2 rounded bg-brand-ink px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">Make selection a field</button>
           </div>}
         </div>
       </WordDocumentPreview>
@@ -58,8 +59,8 @@ export default function WordImportWorkspace({ file, analysis, fields, onFieldsCh
         </ul>
         {analysis && !fields.length && <p className="mt-3 text-sm text-brand-muted">No fields found automatically. Use Add field from text to choose the first replacement.</p>}
         {active && <div className="mt-4 space-y-3 border-t border-brand-line pt-4">
-          <label className="block text-sm">Field label<input aria-label="Imported field label" value={active.field.label || active.field.name} onChange={event => update({ label: event.target.value })} className="mt-1 w-full rounded border border-brand-line bg-brand-bg p-2" /></label>
-          <label className="block text-sm">Field type<select aria-label="Imported field type" value={active.field.field_type || 'text'} onChange={event => update({ field_type: event.target.value })} className="mt-1 w-full rounded border border-brand-line bg-brand-bg p-2">{['text', 'date', 'number', 'currency', 'checkbox', 'signature'].map(type => <option key={type} value={type}>{type}</option>)}</select></label>
+          <label className="block text-sm">Field label<input aria-label="Imported field label" value={active.field.label ?? active.field.name} onChange={event => update({ label: event.target.value })} className="mt-1 w-full rounded border border-brand-line bg-brand-bg p-2" /></label>
+          <label className="block text-sm">Field type<select aria-label="Imported field type" disabled={Boolean(active.field.docx_choice)} value={active.field.field_type || 'text'} onChange={event => update({ field_type: event.target.value })} className="mt-1 w-full rounded border border-brand-line bg-brand-bg p-2">{['text', 'date', 'number', 'currency', 'checkbox', 'signature'].map(type => <option key={type} value={type}>{type}</option>)}</select></label>
           <label className="flex gap-2 text-sm"><input type="checkbox" checked={active.field.included !== false} onChange={event => update({ included: event.target.checked })} />Include this field</label>
           <label className="flex gap-2 text-sm"><input type="checkbox" checked={Boolean(active.field.required)} onChange={event => update({ required: event.target.checked })} />Require a value</label>
           <p className="text-xs text-brand-muted">Replaces: {active.field.source_text || active.field.example}</p>
