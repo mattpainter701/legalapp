@@ -22,6 +22,7 @@ from sqlalchemy.orm import selectinload
 from app.config import get_settings
 from app.database import enable_rls_bypass, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
+from app.services.navigation import resolve_navigation
 from app.services.module_visibility import resolve_enabled_modules, resolve_plan_meta
 from app.services.plugin_entitlements import active_plugin_names
 from app.services.rbac_service import get_user_capabilities
@@ -1863,6 +1864,9 @@ async def get_me(
     enabled_modules, default_route = await resolve_enabled_modules(
         db, user.tenant_id, user=user
     )
+    navigation_paths, navigation_preferences, default_route = await resolve_navigation(
+        db, user, enabled_modules, default_route
+    )
     active_addons = await active_plugin_names(db, user.tenant_id)
     capabilities = sorted(await get_user_capabilities(db, user.id))
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
@@ -1887,6 +1891,8 @@ async def get_me(
         enabled_modules=enabled_modules,
         active_addons=active_addons,
         capabilities=capabilities,
+        navigation_paths=navigation_paths,
+        navigation_preferences=navigation_preferences,
         default_route=default_route,
         plan=plan_id,
         upsell_target=upsell_target,
@@ -1998,6 +2004,9 @@ async def update_me(
     enabled_modules, default_route = await resolve_enabled_modules(
         db, user.tenant_id, user=user
     )
+    navigation_paths, navigation_preferences, default_route = await resolve_navigation(
+        db, user, enabled_modules, default_route
+    )
     active_addons = await active_plugin_names(db, user.tenant_id)
     capabilities = sorted(await get_user_capabilities(db, user.id))
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
@@ -2021,6 +2030,8 @@ async def update_me(
         enabled_modules=enabled_modules,
         active_addons=active_addons,
         capabilities=capabilities,
+        navigation_paths=navigation_paths,
+        navigation_preferences=navigation_preferences,
         default_route=default_route,
         plan=plan_id,
         upsell_target=upsell_target,

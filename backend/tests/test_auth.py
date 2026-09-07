@@ -286,6 +286,9 @@ class TestAuthMe:
         async def enabled_modules(_db, _tenant_id, *, user):
             return ["chat"], "/chat"
 
+        async def navigation(_db, _user, _modules, route):
+            return None, {}, route
+
         async def plan_meta(_db, _tenant_id):
             return "full-platform", None
 
@@ -298,6 +301,7 @@ class TestAuthMe:
         monkeypatch.setattr(auth, "get_current_user", current_user)
         monkeypatch.setattr(auth, "set_tenant_context", tenant_context)
         monkeypatch.setattr(auth, "resolve_enabled_modules", enabled_modules)
+        monkeypatch.setattr(auth, "resolve_navigation", navigation)
         monkeypatch.setattr(auth, "resolve_plan_meta", plan_meta)
         monkeypatch.setattr(auth, "active_plugin_names", addons)
         monkeypatch.setattr(auth, "get_user_capabilities", capabilities)
@@ -383,6 +387,9 @@ class TestAuthMe:
         async def enabled_modules(_db, _tenant_id, *, user):
             return ["chat"], "/chat"
 
+        async def navigation(_db, _user, _modules, route):
+            return None, {}, route
+
         async def plan_meta(_db, _tenant_id):
             return "full-platform", None
 
@@ -397,6 +404,7 @@ class TestAuthMe:
         monkeypatch.setattr(auth, "get_current_user", current_user)
         monkeypatch.setattr(auth, "set_tenant_context", tenant_context)
         monkeypatch.setattr(auth, "resolve_enabled_modules", enabled_modules)
+        monkeypatch.setattr(auth, "resolve_navigation", navigation)
         monkeypatch.setattr(auth, "resolve_plan_meta", plan_meta)
         monkeypatch.setattr(auth, "active_plugin_names", addons)
         monkeypatch.setattr(auth, "get_user_capabilities", capabilities)

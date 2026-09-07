@@ -3,6 +3,7 @@ from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.schemas.demo import DemoInfo
+from app.schemas.navigation import NavigationPreferences
 
 from app.utils.password_policy import is_common_password
 
@@ -93,6 +94,10 @@ class UserInfo(BaseModel):
     enabled_modules: list[str] = []
     active_addons: list[str] = []
     capabilities: list[str] = []
+    navigation_paths: list[str] | None = None
+    navigation_preferences: NavigationPreferences = Field(
+        default_factory=NavigationPreferences
+    )
     default_route: str = "/matters"
     plan: str = "full-platform"
     upsell_target: Optional[str] = None
@@ -110,6 +115,7 @@ class UserInfo(BaseModel):
 class UserProfileUpdate(BaseModel):
     """Fields a user may manage for their verified professional profile."""
 
+    navigation_preferences: NavigationPreferences | None = None
     professional_role: Optional[str] = Field(default=None, max_length=120)
     job_title: Optional[str] = Field(default=None, max_length=160)
     office_location: Optional[str] = Field(default=None, max_length=255)

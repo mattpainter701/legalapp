@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.rbac import Role, UserRole
 from app.services.access_control import require_capability
+from app.schemas.navigation import validate_navigation_paths
 from app.services.capabilities import is_valid_capability
 from app.services.rbac_service import count_admin_capable_users
 
@@ -20,6 +21,12 @@ class RoleIn(BaseModel):
     name: str
     description: str | None = None
     capabilities: list[str] = []
+    navigation_paths: list[str] | None = None
+
+    @field_validator("navigation_paths")
+    @classmethod
+    def _valid_paths(cls, value):
+        return validate_navigation_paths(value) if value is not None else None
 
     @field_validator("capabilities")
     @classmethod
@@ -36,6 +43,7 @@ class RoleOut(BaseModel):
     description: str | None
     capabilities: list[str]
     is_system: bool
+    navigation_paths: list[str] | None = None
 
 
 class AssignIn(BaseModel):
@@ -72,6 +80,7 @@ async def create_role(
         description=body.description,
         capabilities=body.capabilities,
         is_system=False,
+        navigation_paths=body.navigation_paths,
     )
     db.add(role)
     await db.commit()
@@ -92,6 +101,8 @@ async def update_role(
     role.name = body.name
     role.description = body.description
     role.capabilities = body.capabilities
+    if "navigation_paths" in body.model_fields_set:
+        role.navigation_paths = body.navigation_paths
     await db.commit()
     await db.refresh(role)
     return role

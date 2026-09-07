@@ -36,6 +36,7 @@ class Role(Base):
     capabilities: Mapped[list] = mapped_column(
         JSONB, default=list, server_default="[]", nullable=False
     )
+    navigation_paths: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     is_system: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )

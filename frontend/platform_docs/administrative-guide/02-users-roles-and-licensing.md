@@ -51,3 +51,13 @@ Monitor inactive licensed users and avoid using shared accounts to conserve seat
 - **Leaver:** deactivate promptly, preserve authored records, transfer owned work, revoke connected access — including Workspace MCP assistants — and verify completion.
 
 Never send temporary passwords, tokens, or recovery material through the invitation notes or guide content.
+
+## Set role view profiles
+
+Under **Administration > Roles**, create or edit a role and choose a view starting point: Receptionist, Finance, Secretary, Paralegal, Attorney, or Partner. Check the functions that role should see, then save. Assign the role to staff under **Users** using the existing role assignments.
+
+Receptionist starts with Intake, Call Intake, Conflict Search, Clients & CRM, Tasks, and Calendar. Partner includes the Attorney functions plus Invoices, Trust Accounting, and Reports. Starting points configure visibility only; review access capabilities separately. Hiding a function does not revoke permission or block a direct link.
+
+When a person has multiple configured roles, their view combines those functions. Roles without a configured view do not widen that combined view. If none of their roles has a view profile, the existing navigation remains available. An empty configured view hides all ordinary functions. Plan and license restrictions always apply. Staff see administrator changes after reloading the workspace.
+
+Each person can open the **Customize navigation** gear at the bottom of navigation to hide available functions or move them up and down, then **Save layout**. Their layout follows their account across devices and controls desktop navigation, the mobile shortcuts, and the My Matters header shortcut. **Reset to role defaults** clears personal hiding and ordering when saved. The gear, profile, sign out, and authorized administration controls remain reachable even with an empty view.
