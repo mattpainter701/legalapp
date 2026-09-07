@@ -171,10 +171,14 @@ test('Firm Memory capability enables firm-wide query-first research with honest 
 
   await signIn(page)
   await page.goto('/firm-memory')
-  await expect(page.getByRole('heading', { name: 'Research across your firm’s authorized knowledge.' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Search everything your firm knows.' })).toBeVisible()
+  // The archive this searches is mostly not matter-linked, so a matter must be
+  // a refinement the reader opts into, never a control standing in their way.
+  await expect(page.getByLabel('Matter filter')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Refine' }).click()
   await expect(page.getByLabel('Matter filter')).toHaveValue('')
   await page.getByLabel('Research query').fill('prior indemnification advice')
-  await page.getByRole('button', { name: 'Search firm memory' }).click()
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'No matches in available sources' })).toBeVisible()
   await expect(page.getByText('Source offline')).toBeVisible()
