@@ -50,6 +50,7 @@ from app.services.esign.notifications import (
     mark_signer_viewed,
     notify_actionable_signers,
 )
+from app.services.esign.placement import PlacementError, validate_pdf_geometry, validate_placements
 from app.services.matter_file_store import (
     MatterFileAccessError,
     MatterFileIntegrityError,
@@ -113,6 +114,7 @@ async def _to_response(
         source_document_sha256=req.source_document_sha256,
         completion_artifact_sha256=req.completion_artifact_sha256,
         evidence_sha256=req.evidence_sha256,
+        positioned_fields=req.positioned_fields or [],
         signers=[
             SignerResponse(
                 id=str(s.id),
@@ -379,6 +381,32 @@ async def create_signature_request(
         reminders=_build_reminders(body),
         enforce_signing_order=bool(body.enforce_signing_order),
     )
+    if body.positioned_fields:
+        roles = [((s.role or "signer").strip() or "signer")[:100] for s in body.signers]
+        if len(roles) != len(set(roles)):
+            raise HTTPException(status_code=422, detail="Signer roles must be unique when positioned fields are used")
+        try:
+            fields = validate_placements(
+                body.positioned_fields,
+                source_sha256=req.source_document_sha256,
+                signer_roles=set(roles),
+            )
+            validate_pdf_geometry(source_bytes, fields)
+        except PlacementError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        req.positioned_fields = [
+            {
+                "field_id": field.field_id,
+                "field_type": field.field_type,
+                "role": field.role,
+                "page": field.page,
+                "rect": list(field.rect),
+                "page_width": field.page_width,
+                "page_height": field.page_height,
+                "source_sha256": field.source_sha256,
+            }
+            for field in fields
+        ]
     db.add(req)
     for i, s in enumerate(body.signers):
         role = (s.role or "signer").strip() or "signer"

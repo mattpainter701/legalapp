@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class MatterDocumentTagResponse(BaseModel):
@@ -49,6 +49,12 @@ class MatterDocumentResponse(BaseModel):
     document_status: str | None = None
     storage_state: str | None = None
     document_sha256: str | None = None
+    positioned_fields: list[dict] = Field(default_factory=list)
+
+    @field_validator("positioned_fields", mode="before")
+    @classmethod
+    def normalize_positioned_fields(cls, value):
+        return value or []
     cloud_url: str | None = None
     created_at: datetime
     updated_at: datetime

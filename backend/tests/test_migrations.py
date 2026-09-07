@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["162_storage_migrations"]
+    assert heads == ["163_signature_placements"]
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():

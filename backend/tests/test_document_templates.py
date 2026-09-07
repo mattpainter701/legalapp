@@ -220,6 +220,45 @@ async def _prepare_active_pdf_generation(
     return template_id, matter, values, generation.headers["x-clarity-preview-id"]
 
 
+@pytest.mark.asyncio
+async def test_generated_pdf_persists_positioned_signing_descriptor_and_lists_it(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    """Exercise generation through MatterDocument serialization, not just the helper."""
+    from app.models.document_template import DocumentTemplate
+    from app.models.matter_document import MatterDocument
+    from sqlalchemy import select
+
+    template_id, matter, values, _ = await _prepare_active_pdf_generation(
+        client=client, db_session=db_session, test_tenant=test_tenant,
+        test_user=test_user, tmp_path=tmp_path, monkeypatch=monkeypatch,
+        slug="positioned-lifecycle",
+    )
+    template = await db_session.get(DocumentTemplate, uuid.UUID(template_id))
+    schema = dict(template.variable_schema or {})
+    schema["pages"] = [{"page": 1, "width": 612, "height": 792}]
+    schema["fields"] = [{
+        "name": "client_signature", "field_type": "signature", "signer_role": "client",
+        "pdf_overlays": [{"page": 1, "rect": [72, 100, 216, 136]}],
+    }, {
+        "name": "attorney_signature", "field_type": "signature", "signer_role": "attorney",
+        "pdf_overlays": [{"page": 1, "rect": [300, 100, 444, 136]}],
+    }]
+    template.variable_schema = schema
+    await db_session.commit()
+    generated = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={"variables": values, "matter_id": str(matter.id), "preview_purpose": "generation", "preview_id": _},
+    )
+    assert generated.status_code == 200, generated.text
+    document = (await db_session.execute(select(MatterDocument).where(MatterDocument.matter_id == matter.id).order_by(MatterDocument.created_at.desc()))).scalars().first()
+    assert document.positioned_fields and len(document.positioned_fields) == 2
+    assert document.positioned_fields[0]["source_sha256"] == document.document_sha256
+    listed = await client.get(f"/api/matters/{matter.id}/documents")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["items"][0]["positioned_fields"]
+
+
 def test_render_template_preserves_unknown_variables():
     rendered = document_templates.render_template(
         "Dear {{ client_name }}, matter {{case_number}} remains {{unknown}}.",

@@ -2415,9 +2415,15 @@ function SignatureRequestsPanel({ matterId }) {
       .filter((value) => Number.isInteger(value) && value > 0)
     setBusy(true)
     try {
+      const selectedDocument = docs.find((document) => String(document.id) === String(docId))
       const req = await createSignatureRequest(matterId, {
         document_id: docId,
         signers: preparedSigners,
+        // Generated-PDF placement metadata is attached by the final-PDF
+        // generation flow. Never derive this from a DOCX preview here.
+        positioned_fields: Array.isArray(selectedDocument?.positioned_fields)
+          ? selectedDocument.positioned_fields
+          : [],
         expires_at: expiresOn ? new Date(`${expiresOn}T23:59:59`).toISOString() : null,
         reminder_days: parsedReminderDays,
         enforce_signing_order: enforceSigningOrder,

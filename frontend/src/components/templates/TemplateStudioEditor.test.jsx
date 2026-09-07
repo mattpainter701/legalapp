@@ -354,6 +354,19 @@ describe('TemplateStudioEditor', () => {
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/^Saved /))
   })
 
+  it('keeps signer role with unsaved field edits until save', async () => {
+    const onSave = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Signature' }))
+    fireEvent.change(screen.getByDisplayValue('field_1'), { target: { value: 'client_signature' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Signer role' }), { target: { value: 'client' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    const field = onSave.mock.calls[0][0].fields[0]
+    expect(field.name).toBe('client_signature')
+    expect(field.signer_role).toBe('client')
+  })
+
   it('reports a failed save and keeps the work in the editor', async () => {
     const onSave = vi.fn().mockRejectedValue(new Error('Template is locked'))
     render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)

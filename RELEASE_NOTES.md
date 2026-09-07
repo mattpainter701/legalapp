@@ -5,14 +5,14 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.07.6 — See Word masters as printable pages in Studio
+## 2026.09.07.8 — Place signature fields on generated PDFs
 
 Released September 7, 2026.
 
-Inspect the saved Word source with page previews while retaining text field mapping.
+Template Studio can bind signature, date, and initials fields to signer roles and preserve their positions through provider dispatch.
 
-- **Recognize your document.** Review letterhead, tables and page layout with thumbnails, zoom and page navigation.
-- **Keep mapping when preview is unavailable.** Switch to Fields for text mapping, with a retry option when document conversion is busy or unavailable.
+- **Bind fields to signer roles.** Signature, date, and initials fields retain their assigned signer role and are validated against the exact generated PDF revision.
+- **Preserve provider placement.** Dropbox Sign requests receive positioned tabs with explicit page and coordinate conversion; unsupported internal portal placement fails closed.
 
 ## 2026.09.07.5 — Prepare reusable Word templates with clearer source review
 

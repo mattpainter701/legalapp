@@ -679,6 +679,18 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                   {FIELD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
                 </select>
               </PropertyRow>
+              {['signature', 'date', 'initials'].includes(String(selected.field_type || '').toLowerCase()) && (
+                <PropertyRow label="Signer role">
+                  <input
+                    aria-label="Signer role"
+                    value={selected.signer_role || ''}
+                    placeholder="e.g. client or attorney"
+                    onChange={(event) => updateField(selectedEntry.identity, { signer_role: event.target.value.trim() || undefined })}
+                    className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
+                  />
+                  <span className="mt-1 block text-[11px] text-brand-muted">This role is carried into the final generated PDF signing manifest.</span>
+                </PropertyRow>
+              )}
               <PropertyRow label="Fills from">
                 <select
                   value={selected.binding || ''}

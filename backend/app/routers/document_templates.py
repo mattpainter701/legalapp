@@ -133,6 +133,7 @@ from app.services.template_bindings import (
 )
 from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
+from app.services.esign.placement import template_positioned_fields
 from app.services.access_control import require_capability, require_capabilities
 from app.utils.text_processing import extract_text
 from app.utils.sql_filters import escape_like
@@ -4441,6 +4442,10 @@ async def render_template_endpoint(
             document_category="generated",
             **_storage_document_fields(storage_result),
         )
+        if output_format == "pdf" and str(template.format or "").lower() == "pdf":
+            doc.positioned_fields = template_positioned_fields(
+                template.variable_schema, source_sha256=output_sha256
+            )
         event = MatterEvent(
             tenant_id=parsed_tenant_id,
             matter_id=parsed_matter_id,

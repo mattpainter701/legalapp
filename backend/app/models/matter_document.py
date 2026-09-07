@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    JSON,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -170,6 +171,7 @@ class MatterDocument(Base):
     portal_visible: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    positioned_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

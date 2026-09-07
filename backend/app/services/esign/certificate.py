@@ -35,6 +35,7 @@ def build_certificate(
     request_id: str = "",
     source_sha256: str | None = None,
     evidence_sha256: str | None = None,
+    positioned_fields: list[dict] | None = None,
 ) -> tuple[bytes, str, str]:
     """Return (content_bytes, filename, content_type) for the signed certificate.
 
@@ -79,6 +80,9 @@ def build_certificate(
         c.drawString(inch, y, f"Source SHA-256: {source_sha256 or 'unavailable'}")
         y -= 0.25 * inch
         c.drawString(inch, y, f"Evidence SHA-256: {evidence_sha256 or 'unavailable'}")
+        if positioned_fields:
+            y -= 0.25 * inch
+            c.drawString(inch, y, f"Positioned fields bound to source: {len(positioned_fields)}")
         y -= 0.35 * inch
         c.setFont("Helvetica-Oblique", 8)
         c.drawString(
@@ -124,6 +128,10 @@ def build_certificate(
         safe_request_id = html_escape(str(request_id))
         safe_source_sha256 = html_escape(str(source_sha256 or "unavailable"))
         safe_evidence_sha256 = html_escape(str(evidence_sha256 or "unavailable"))
+        placement_note = (
+            f"<p>Positioned fields bound to source: {len(positioned_fields)}</p>"
+            if positioned_fields else ""
+        )
         html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Certificate of Completion</title></head><body>
 <h1>Signature Acknowledgment Certificate</h1>
@@ -132,7 +140,7 @@ def build_certificate(
 <b>Generated:</b> {generated}<br/><b>Request ID:</b> {safe_request_id}<br/>
 <b>Source SHA-256:</b> {safe_source_sha256}<br/>
 <b>Evidence SHA-256:</b> {safe_evidence_sha256}</p>
-<p><i>This artifact records acknowledgments; it is not a signed copy of the source document.</i></p>
+{placement_note}<p><i>This artifact records acknowledgments; it is not a signed copy of the source document.</i></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <thead><tr><th>Signer</th><th>Signature</th><th>Signed at</th><th>IP</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
