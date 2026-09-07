@@ -24,6 +24,7 @@ from typing import Any
 from docx.oxml.ns import qn
 
 from app.services.docx_templates import _open_docx, iter_docx_paragraphs
+from app.services.docx_display import display_blocks, paragraph_numbering
 
 #: Paragraphs are capped so a pathological template cannot return an unbounded
 #: document to the browser. Templates far past this are not hand-authorable
@@ -113,14 +114,28 @@ def docx_outline(content: bytes) -> dict[str, Any]:
     document = _open_docx(content)
     paragraphs: list[dict[str, Any]] = []
     truncated = False
+    source_paragraphs = list(iter_docx_paragraphs(document))
+    by_element = {paragraph._p: paragraph for paragraph in source_paragraphs}
+    ordered = [
+        by_element[node]
+        for node in document.element.body.iter(qn("w:p"))
+        if node in by_element
+    ]
+    ordered_ids = {paragraph._p for paragraph in ordered}
+    ordered.extend(
+        paragraph for paragraph in source_paragraphs if paragraph._p not in ordered_ids
+    )
+    numbers = paragraph_numbering(document, ordered)
+    ordinals = {}
 
-    for ordinal, paragraph in enumerate(iter_docx_paragraphs(document)):
+    for ordinal, paragraph in enumerate(source_paragraphs):
         if ordinal >= MAX_OUTLINE_PARAGRAPHS:
             truncated = True
             break
         text = paragraph.text or ""
         if len(text) > MAX_PARAGRAPH_CHARACTERS:
             text = text[:MAX_PARAGRAPH_CHARACTERS]
+            truncated = True
         entry: dict[str, Any] = {
             "ordinal": ordinal,
             "text": text,
@@ -128,16 +143,36 @@ def docx_outline(content: bytes) -> dict[str, Any]:
             or "Normal",
             "container": _container_of(paragraph),
             "runs": _runs_of(paragraph),
+            "alignment": str(paragraph.alignment).split(" ")[0].lower()
+            if paragraph.alignment is not None
+            else "left",
         }
+        ordinals[paragraph._p] = ordinal
+        if paragraph._p in numbers:
+            entry["numbering"] = numbers[paragraph._p]
+        instructions = " ".join(
+            node.text or "" for node in paragraph._p.iter(qn("w:instrText"))
+        )
+        instructions += " " + " ".join(
+            node.get(qn("w:instr"), "") for node in paragraph._p.iter(qn("w:fldSimple"))
+        )
+        if re.search(r"\b(?:PAGE|NUMPAGES|SECTIONPAGES)\b", instructions):
+            entry["dynamic_field"] = True
         marker = _marker_of(text)
         if marker:
             entry["marker"] = marker
         paragraphs.append(entry)
 
+    from app.services.docx_source_review import source_review_candidates
+
+    candidates, review_truncated = source_review_candidates(paragraphs)
     return {
         "paragraphs": paragraphs,
         "paragraph_count": len(paragraphs),
         "truncated": truncated,
+        "blocks": display_blocks(document, ordinals),
+        "review_candidates": candidates,
+        "review_truncated": review_truncated or truncated,
     }
 
 
@@ -149,11 +184,11 @@ def validate_visual_field_map(content: bytes, current: dict, proposed: dict) -> 
     if {
         key: value
         for key, value in current.items()
-        if key not in {"fields", "regions", "applicability"}
+        if key not in {"fields", "regions", "applicability", "source_review"}
     } != {
         key: value
         for key, value in proposed.items()
-        if key not in {"fields", "regions", "applicability"}
+        if key not in {"fields", "regions", "applicability", "source_review"}
     }:
         raise TemplateDocxError(
             "Source metadata cannot be changed in the visual editor"
@@ -161,9 +196,15 @@ def validate_visual_field_map(content: bytes, current: dict, proposed: dict) -> 
     fields = proposed.get("fields")
     if not isinstance(fields, list) or len(fields) > 200:
         raise TemplateDocxError("Use at most 200 Word fields")
-    paragraphs = {
-        item["ordinal"]: item["text"] for item in docx_outline(content)["paragraphs"]
-    }
+    outline = docx_outline(content)
+    from app.services.docx_source_review import (
+        validate_review_decisions,
+        validate_value_links,
+    )
+
+    validate_review_decisions(outline, proposed.get("source_review", {}))
+    validate_value_links(fields)
+    paragraphs = {item["ordinal"]: item["text"] for item in outline["paragraphs"]}
     existing = {field.get("name"): field for field in current.get("fields", [])}
     names = set()
     spans = {}
@@ -179,6 +220,7 @@ def validate_visual_field_map(content: bytes, current: dict, proposed: dict) -> 
         "docx_anchor",
         "binding",
         "logic",
+        "value_from",
     }
     for field in fields:
         name = field.get("name", "") if isinstance(field, dict) else ""
@@ -186,12 +228,39 @@ def validate_visual_field_map(content: bytes, current: dict, proposed: dict) -> 
             raise TemplateDocxError("Each Word field needs a unique generated name")
         names.add(name)
         old = existing.get(name)
+        if old is None:
+            old = next(
+                (
+                    item
+                    for item in current.get("fields", [])
+                    if item.get("docx_source_key")
+                    and item.get("docx_source_key") == field.get("docx_source_key")
+                ),
+                None,
+            )
+        if old and not old.get("docx_anchor") and not field.get("docx_anchor"):
+            editable = {
+                "label",
+                "description",
+                "binding",
+                "logic",
+                "value_from",
+                "included",
+                "required",
+                "field_type",
+            }
+            if {key: value for key, value in old.items() if key not in editable} == {
+                key: value for key, value in field.items() if key not in editable
+            }:
+                continue
         if old and is_semantic_only_change({"fields": [old]}, {"fields": [field]}):
             # Previously reviewed fields without anchors remain source-backed.
             if not field.get("docx_anchor"):
                 continue
-        elif set(field) - allowed:
+        elif set(field) - allowed - (set(old) if old else set()):
             raise TemplateDocxError("New Word fields must come from a text selection")
+        if old and field.get("docx_choice") != old.get("docx_choice"):
+            raise TemplateDocxError("Preserve the source-backed Word choice options")
         anchor = field.get("docx_anchor")
         if (
             not isinstance(anchor, dict)

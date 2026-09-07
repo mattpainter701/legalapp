@@ -103,11 +103,70 @@ describe('segmentsFor', () => {
   })
 
   it('returns the whole paragraph when nothing is anchored', () => {
-    expect(segmentsFor('plain text', [])).toEqual([{ text: 'plain text' }])
+    expect(segmentsFor('plain text', [])).toEqual([{ text: 'plain text', start: 0 }])
   })
 })
 
 describe('DocxDocumentView', () => {
+  it.each(['table', 'footer'])('selects Unicode source offsets in a %s without including UI labels', async (container) => {
+    getTemplateOutline.mockResolvedValue(outline([{ text: '😀 Fee: ___', container }]))
+    const onCreateField = vi.fn()
+    render(<DocxDocumentView templateId="t1" fields={[]} onCreateField={onCreateField} />)
+    await screen.findByText('😀 Fee: ___')
+    const source = document.querySelector('[data-source-text]')
+    expect(source.textContent).toBe('😀 Fee: ___')
+    const node = document.createTreeWalker(source, NodeFilter.SHOW_TEXT).nextNode()
+    const range = document.createRange()
+    range.setStart(node, 8)
+    range.setEnd(node, 11)
+    globalThis.getSelection().removeAllRanges()
+    globalThis.getSelection().addRange(range)
+    fireEvent.mouseUp(source)
+    fireEvent.click(screen.getByRole('button', { name: 'Add field' }))
+    expect(onCreateField).toHaveBeenCalledWith({ ordinal: 0, start: 7, end: 10, text: '___' })
+  })
+
+  it('renders source-order tables, styles, numbering and global token highlights', async () => {
+    const data = outline([{ text: 'First' }, { text: 'Last' }, { text: '[AMOUNT]', container: 'table' }])
+    data.paragraphs[0].numbering = '1.'
+    data.paragraphs[0].runs = [{ start: 0, end: 5, bold: true, italic: true, underline: true }]
+    data.paragraphs[1].dynamic_field = true
+    data.blocks = [{ kind: 'paragraph', ordinal: 0 }, { kind: 'table', rows: [{ cells: [{ colspan: 2, rowspan: 2, blocks: [{ kind: 'paragraph', ordinal: 2 }] }] }] }, { kind: 'paragraph', ordinal: 1 }]
+    getTemplateOutline.mockResolvedValue(data)
+    render(<DocxDocumentView templateId="t1" fields={[{ name: 'amount', source_text: '[AMOUNT]' }]} />)
+    const token = await screen.findByRole('button', { name: '[AMOUNT]' })
+    expect(token.closest('td')).toHaveAttribute('colspan', '2')
+    expect([...document.querySelectorAll('[data-ordinal]')].map(node => node.dataset.ordinal)).toEqual(['0', '2', '1'])
+    expect(screen.getByText('First')).toHaveStyle({ fontWeight: 'bold', fontStyle: 'italic', textDecoration: 'underline' })
+    expect(screen.getByText('1.')).toBeInTheDocument()
+    expect(screen.getByText(/Page fields update/)).toBeInTheDocument()
+  })
+
+  it('records a source disposition and creates a field from its verified span', async () => {
+    const candidate = { id: 'source-id', kind: 'blank', source_text: '___', context: 'Signature: ___', docx_anchor: { paragraph_ordinal: 0, start: 11, end: 14 } }
+    getTemplateOutline.mockResolvedValue({ ...outline([{ text: candidate.context }]), review_candidates: [candidate] })
+    const onReviewChange = vi.fn()
+    const onCreateField = vi.fn()
+    const { rerender } = render(<DocxDocumentView templateId="t1" fields={[]} onReviewChange={onReviewChange} onCreateField={onCreateField} />)
+    expect(await screen.findByText('Source review: 1 details to review')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', { name: /Review blank/ }), { target: { value: 'signature' } })
+    expect(onReviewChange).toHaveBeenCalledWith({ 'source-id': 'signature' })
+    fireEvent.click(screen.getByRole('button', { name: 'Make field' }))
+    expect(onCreateField).toHaveBeenCalledWith({ ordinal: 0, start: 11, end: 14, text: '___' })
+    rerender(<DocxDocumentView templateId="t1" fields={[]} sourceReview={{ 'source-id': 'signature' }} onReviewChange={onReviewChange} />)
+    expect(screen.getByText('Source review: 0 details to review')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Show reviewed details'))
+    fireEvent.change(screen.getByRole('combobox', { name: /Review blank/ }), { target: { value: '' } })
+    expect(onReviewChange).toHaveBeenLastCalledWith({})
+  })
+
+  it('highlights global tokens using Python character offsets and excludes overlapping maps', () => {
+    const paragraphs = [{ ordinal: 0, text: '😀[DATE] [DATE]' }]
+    const fields = [{ name: 'first', docx_anchor: { paragraph_ordinal: 0, start: 1, end: 7 } }, { name: 'all', source_text: '[DATE]' }, { name: 'excluded', included: false, source_text: '[DATE]' }]
+    const spans = anchorsByParagraph(fields, paragraphs).get(0)
+    expect(spans.map(span => [span.field.name, span.start, span.end])).toEqual([['first', 1, 7], ['all', 8, 14]])
+    expect(segmentsFor(paragraphs[0].text, spans).map(segment => segment.text).join('')).toBe(paragraphs[0].text)
+  })
   it('renders the document with mapped fields highlighted', async () => {
     getTemplateOutline.mockResolvedValue(outline([
       { text: 'ENGAGEMENT LETTER', style: 'Heading 1' },

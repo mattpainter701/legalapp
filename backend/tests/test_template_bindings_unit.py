@@ -168,7 +168,7 @@ class TestSemanticMetadata:
         )
 
     def test_semantic_keys_are_the_documented_set(self):
-        assert SEMANTIC_FIELD_KEYS == {"binding", "label", "description", "logic"}
+        assert SEMANTIC_FIELD_KEYS == {"binding", "label", "description", "logic", "value_from"}
 
     def test_unknown_binding_is_rejected(self):
         with pytest.raises(TemplateSemanticsError):

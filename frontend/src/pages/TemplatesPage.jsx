@@ -5,6 +5,7 @@ import PrepareFormWorkspace from '../components/templates/PrepareFormWorkspace'
 import TemplateStudioHome from '../components/templates/TemplateStudioHome'
 import TemplateStudioWorkspace from '../components/templates/TemplateStudioWorkspace'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
+import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
   getTemplate,
@@ -67,6 +68,7 @@ const CATEGORY_LABELS = {
 
 const TABS = [
   { key: 'templates', label: 'Templates', icon: FileText },
+  { key: 'fields', label: 'Field Library', icon: Layers3 },
   { key: 'generate', label: 'Generate / Smart Fill', icon: Wand2 },
 ]
 
@@ -1015,6 +1017,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
                     return (
                       <div key={`${index}-${field.name}`} className="rounded border border-brand-line bg-brand-surface-2 p-3 text-xs">
                         <p className="font-semibold text-brand-ink">{field.label || `Detail ${index + 1}`}</p>
+                        {field.context && <p className="mt-1 whitespace-pre-wrap text-brand-muted">{field.context}</p>}
                         <div className="mt-1 flex flex-wrap gap-1.5">
                           <span className={`rounded border px-2 py-0.5 ${Number(field.confidence || 0) >= 0.75 ? 'border-brand-green/30 bg-brand-green/10 text-brand-ink' : 'border-brand-amber/40 bg-brand-amber/10 text-brand-ink'}`}>
                             {Number(field.confidence || 0) >= 0.75 ? 'Location found · verify value' : 'Please verify location'}
@@ -1203,7 +1206,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const isPdfOutput = isPdfTemplate || (isDocxTemplate && convertDocxToPdf)
   const canSaveToMatter = Boolean(template?.is_active)
   const fillableNames = useMemo(
-    () => names.filter((name) => fieldDefinitions[name]?.field_type !== 'signature'),
+    () => names.filter((name) => fieldDefinitions[name]?.field_type !== 'signature' && !fieldDefinitions[name]?.value_from),
     [names, fieldDefinitions],
   )
   const requiredUnresolvedNames = fillableNames.filter((name) => {
@@ -1272,7 +1275,19 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const setVariable = (name, value) => {
     setSaved(false)
     invalidatePreview()
-    setVariables((prev) => ({ ...prev, [name]: value }))
+    setVariables((prev) => {
+      const next = { ...prev, [name]: value }
+      const choice = fieldDefinitions[name]?.docx_choice
+      if (choice?.exclusive && value === 'true') {
+        for (const [other, field] of Object.entries(fieldDefinitions)) {
+          if (other !== name && field.docx_choice?.group === choice.group) next[other] = 'false'
+        }
+      }
+      for (const [other, field] of Object.entries(fieldDefinitions)) {
+        if (field.value_from) next[other] = next[field.value_from] || ''
+      }
+      return next
+    })
   }
 
   const normalizeDiscovery = (res) => {
@@ -1605,7 +1620,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                   )}
                   {fieldSources[name] && <p className="mb-1 text-xs text-brand-muted">{fieldSources[name].suggested_value == null ? 'Missing: review or enter a value' : `From ${fieldSources[name].provenance?.binding_label || fieldSources[name].source_type || 'record'} · verify current accuracy`}{fieldSources[name].provenance?.updated_at ? ` · Updated ${new Date(fieldSources[name].provenance.updated_at).toLocaleDateString()}` : ''}</p>}
                   {fieldSources[name]?.provenance?.source_document_id && <a className="block mb-1 text-xs underline" href={getMatterDocumentDownloadUrl(matterId, fieldSources[name].provenance.source_document_id)} target="_blank" rel="noreferrer">Open reviewed source document</a>}
-                  {fieldType === 'signature' ? (
+                  {field.value_from ? <p id={inputId} className="text-sm text-brand-muted">Uses {fieldDefinitions[field.value_from]?.label || field.value_from}</p> : fieldType === 'signature' ? (
                     <p className="text-sm text-brand-muted">
                       Signature area is left blank for signing; it is not populated during document generation.
                       {field.pdf_field_name ? ` PDF field: ${field.pdf_field_name}.` : ''}
@@ -1818,6 +1833,7 @@ export default function TemplatesPage() {
   const [matterLoading, setMatterLoading] = useState(true)
   const [error, setError] = useState(null)
   const [activeTab, setActiveTab] = useState('templates')
+  const [fieldLibraryRefresh, setFieldLibraryRefresh] = useState(0)
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -2169,6 +2185,10 @@ export default function TemplatesPage() {
   }
 
   const refreshActiveView = async () => {
+    if (activeTab === 'fields') {
+      setFieldLibraryRefresh((value) => value + 1)
+      return
+    }
     if (activeTab === 'generate') {
       await Promise.all([load(), loadGenerationTemplates()])
       return
@@ -2617,7 +2637,7 @@ export default function TemplatesPage() {
       <TemplateStudioHome templates={templates} summary={libraryMeta.summary} queues={studioQueues} />
 
       <div className="my-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div role="tablist" aria-label="Template Studio views" className="inline-flex w-fit rounded-xl border border-brand-line bg-brand-surface-2 p-1 shadow-sm">
+        <div role="tablist" aria-label="Template Studio views" className="inline-flex w-fit max-w-full flex-wrap rounded-xl border border-brand-line bg-brand-surface-2 p-1 shadow-sm">
           {TABS.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -2654,6 +2674,7 @@ export default function TemplatesPage() {
       )}
 
       {activeTab === 'templates' && renderTemplatesPanel()}
+      {activeTab === 'fields' && <TemplateFieldLibrary refreshKey={fieldLibraryRefresh} />}
       {activeTab === 'generate' && renderGeneratePanel()}
 
       {(showCreate || (isNewRoute && new URLSearchParams(location.search).get('mode') === 'manual')) && (

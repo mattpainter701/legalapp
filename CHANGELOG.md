@@ -11,6 +11,15 @@
 
 # Changelog
 
+## 2026.09.07.5
+
+- Add the searchable Field Library using existing built-in and tenant custom definitions, distinct current-template counts, paginated usage and Studio links. Document explicit Word placeholder conventions and the difference between shared data sources and template-local value links.
+
+- Separate repeated generic Word placeholders by source span, support explicit same-value links and leading choice marks, and preserve legal definitions when replacing labelled names.
+- Require source-backed review decisions for unresolved candidate blanks and sample values on new Word masters before publication; preserve legacy published mappings.
+- Render source-order tables, common numbering, direct run styles and existing field highlights in Studio; exclude UI labels from Unicode selection offsets. Avoid creating missing header/footer parts during inspection and preserve formatting on unchanged replacements.
+- Add synthetic backend/browser regressions and document local validation of five customer sources (38 unchanged rendered pages); customer files remain outside Git.
+
 ## 2026.09.07.4 — Cloud provider portability remediation
 
 - Add verified user aliases with tenant-scoped uniqueness, one-time email proof, primary-address-first OAuth matching, and correspondence matching for verified aliases on assigned matters.

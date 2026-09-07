@@ -27,6 +27,8 @@ vi.mock('../api', () => ({
   getTemplateSource: vi.fn().mockRejectedValue(new Error('source unavailable in tests')),
   getTemplates: vi.fn().mockResolvedValue({ items: [{ id: 'template-1', title: 'Engagement Letter', body: 'Dear {{client_name}}', category: 'engagement_letter', is_active: true }] }),
   getTemplateQueues: vi.fn().mockRejectedValue(new Error('queue fixture not configured')),
+  getTemplateFieldLibrary: vi.fn().mockResolvedValue({ fields: [] }),
+  getTemplateFieldUsage: vi.fn(),
   getMattersV2: vi.fn().mockResolvedValue({ items: [{ id: 'matter-1', matter_name: 'Smith Matter', client_name: 'Smith' }] }),
   analyzeTemplateUpload: vi.fn(),
   proposeTemplateFieldsWithAi: vi.fn(),
@@ -110,6 +112,8 @@ describe('document template workflow', () => {
     render(<TemplatesPage />)
 
     expect(await screen.findByRole('tab', { name: 'Templates' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('tab', { name: 'Field Library' }))
+    expect(await screen.findByRole('heading', { name: 'Field Library' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: 'Generate / Smart Fill' }))
     await waitFor(() => expect(getTemplates).toHaveBeenLastCalledWith(expect.objectContaining({
       include_inactive: false,
@@ -986,6 +990,30 @@ describe('document template workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Preview' }))
 
     expect(await screen.findByText('This PDF has no fillable AcroForm fields.')).toBeInTheDocument()
+  })
+
+  it('uses linked Word values and clears the other answer in an exclusive choice group', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{
+      id: 'word-choices', title: 'Word choices', body: '', category: 'other', format: 'docx', source_filename: 'synthetic.docx', source_sha256: 'abc', is_active: true,
+      variable_schema: { fields: [
+        { name: 'amount', label: 'Amount', field_type: 'text', required: true },
+        { name: 'copy', label: 'Repeated amount', value_from: 'amount', required: true },
+        { name: 'yes', label: 'Yes answer', field_type: 'checkbox', docx_choice: { group: 'question', option: 'Yes', exclusive: true } },
+        { name: 'no', label: 'No answer', field_type: 'checkbox', docx_choice: { group: 'question', option: 'No', exclusive: true } },
+      ] },
+    }] })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    expect(screen.getByText('Uses Amount')).toBeInTheDocument()
+    expect(screen.getByText(/1 required field still need review/)).toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: /^Amount/ }), '500')
+    const answers = screen.getAllByRole('checkbox').filter(input => input.id.startsWith('template-variable-'))
+    await user.click(answers[0])
+    expect(answers[0]).toBeChecked()
+    await user.click(answers[1])
+    expect(answers[0]).not.toBeChecked()
+    expect(answers[1]).toBeChecked()
   })
 
   it('renders PDF fields from schema metadata and blocks only missing required values', async () => {

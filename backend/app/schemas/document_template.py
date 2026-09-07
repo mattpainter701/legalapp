@@ -245,6 +245,36 @@ class DocumentTemplateCollectionOption(BaseModel):
     item_fields: list[str]
 
 
+class DocumentTemplateLibraryField(DocumentTemplateBindingOption):
+    template_count: int
+    suggested_name: str | None = None
+
+
+class DocumentTemplateFieldLibrary(BaseModel):
+    fields: list[DocumentTemplateLibraryField]
+
+
+class DocumentTemplateFieldUsagePlacement(BaseModel):
+    name: str
+    label: str | None = None
+
+
+class DocumentTemplateFieldUsageItem(BaseModel):
+    template_id: uuid.UUID
+    title: str
+    status: str | None = None
+    current_version_no: int
+    fields: list[DocumentTemplateFieldUsagePlacement]
+
+
+class DocumentTemplateFieldUsage(BaseModel):
+    items: list[DocumentTemplateFieldUsageItem]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class DocumentTemplateBindingCatalogue(BaseModel):
     """The closed vocabulary a template author may draw on.
 
@@ -279,6 +309,17 @@ class DocumentTemplateOutlineParagraph(BaseModel):
     container: str
     runs: list[DocumentTemplateOutlineRun] = Field(default_factory=list)
     marker: Optional[DocumentTemplateOutlineMarker] = None
+    alignment: str = "left"
+    numbering: Optional[str] = None
+    dynamic_field: bool = False
+
+
+class DocumentTemplateSourceReviewCandidate(BaseModel):
+    id: str
+    source_text: str
+    docx_anchor: dict[str, int]
+    kind: str
+    context: str
 
 
 class DocumentTemplateOutlineResponse(BaseModel):
@@ -292,3 +333,8 @@ class DocumentTemplateOutlineResponse(BaseModel):
     paragraphs: list[DocumentTemplateOutlineParagraph]
     paragraph_count: int
     truncated: bool = False
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    review_candidates: list[DocumentTemplateSourceReviewCandidate] = Field(
+        default_factory=list
+    )
+    review_truncated: bool = False

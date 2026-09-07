@@ -314,6 +314,9 @@ class IntakeField:
     confidence: float = 0.6
     source_text: str | None = None
     docx_anchor: dict | None = None
+    field_type: str | None = None
+    docx_choice: dict | None = None
+    context: str | None = None
 
     def as_dict(self) -> dict:
         data = {
@@ -324,6 +327,9 @@ class IntakeField:
             "confidence": self.confidence,
             "source_text": self.source_text,
             "docx_anchor": self.docx_anchor,
+            "field_type": self.field_type,
+            "docx_choice": self.docx_choice,
+            "context": self.context,
             "required": False,
             "review_required": True,
         }
@@ -621,6 +627,7 @@ def analyze_template_upload(
             "source": schema_source,
             "fields": fields_for_schema,
             "pages": _pdf_pages_metadata(pdf_reader) if is_pdf else [],
+            **({"source_review_version": 1} if is_docx else {}),
             "detection": _detection_summary(
                 fmt=fmt,
                 fields=fields_for_schema,
@@ -975,6 +982,27 @@ def _suggest_docx_template(
     warnings: list[str] = []
     anchored_blank_count = 0
     has_authored_placeholders = False
+    paragraphs = list(iter_docx_paragraphs_with_anchors(document))
+    generic = {
+        "amount",
+        "date",
+        "vin_number",
+        "account_number",
+        "creditor_name",
+        "lender_name",
+        "policy_number",
+        "insurance_company",
+        "balance",
+        "name",
+    }
+    bracket_counts = {}
+    for _, paragraph in paragraphs:
+        for match in DOCX_BRACKET_PLACEHOLDER_PATTERN.finditer(paragraph.text):
+            bracket_counts[match[0]] = bracket_counts.get(match[0], 0) + 1
+    choice_pattern = re.compile(
+        r"(?P<blank>_{3,})[ \t]*(?P<option>yes|no|husband|wife|both)\b", re.I
+    )
+    context_ordinal, context_text = 0, "Answer"
 
     def add_field(field: IntakeField) -> None:
         base_name = field.name
@@ -997,8 +1025,41 @@ def _suggest_docx_template(
         field.label = _label_from_name(field.name)
         fields[field.name] = field
 
-    for ordinal, paragraph in iter_docx_paragraphs_with_anchors(document):
+    for ordinal, paragraph in paragraphs:
         paragraph_text = paragraph.text or ""
+        choices = list(choice_pattern.finditer(paragraph_text))
+        if choices:
+            prefix = paragraph_text[: choices[0].start()].strip()
+            question = prefix if len(prefix) > 5 else context_text
+            group = f"choice_{ordinal if prefix else context_ordinal}"
+            for choice in choices:
+                option = choice["option"].capitalize()
+                name = _normalize_name(question)[:65] or "answer"
+                if not name[0].isalpha():
+                    name = f"answer_{name}"
+                add_field(
+                    IntakeField(
+                        name=f"{name}_{option.lower()}",
+                        label=f"{question[:110]} — {option}",
+                        source_text=choice["blank"],
+                        confidence=0.9,
+                        field_type="checkbox",
+                        docx_anchor={
+                            "paragraph_ordinal": ordinal,
+                            "start": choice.start("blank"),
+                            "end": choice.end("blank"),
+                        },
+                        docx_choice={
+                            "group": group,
+                            "option": option,
+                            "exclusive": option in {"Yes", "No"}
+                            or not re.search(r"check all", question, re.I),
+                        },
+                        context=question[:160],
+                    )
+                )
+        elif paragraph_text.strip() and not paragraph_text.lstrip().startswith("_"):
+            context_ordinal, context_text = ordinal, paragraph_text.strip()[-120:]
         for match in PLACEHOLDER_PATTERN.finditer(paragraph_text):
             has_authored_placeholders = True
             name = _normalize_name(match.group(1))
@@ -1019,15 +1080,36 @@ def _suggest_docx_template(
             normalized = _normalize_name(raw_name)
             name = DOCX_PLACEHOLDER_ALIASES.get(normalized, normalized)
             if name:
+                split = normalized in generic and bracket_counts[match[0]] > 1
                 add_field(
                     IntakeField(
                         name=name,
                         label=_label_from_name(name),
                         confidence=1.0,
                         source_text=match.group(0),
+                        docx_anchor=(
+                            {
+                                "paragraph_ordinal": ordinal,
+                                "start": match.start(),
+                                "end": match.end(),
+                            }
+                            if split
+                            else None
+                        ),
+                        context=paragraph_text[
+                            max(0, match.start() - 65) : match.end() + 65
+                        ]
+                        if split
+                        else None,
                     )
                 )
         for match in DOCX_LABELED_BLANK_PATTERN.finditer(paragraph_text):
+            if any(
+                match.start("blank") < choice.end()
+                and choice.start() < match.end("blank")
+                for choice in choices
+            ):
+                continue
             raw_label = re.sub(r"^\d+\.\s*", "", match.group("label")).strip()
             normalized = _normalize_name(raw_label)
             name = LABELED_FIELD_ALIASES.get(normalized, normalized)
@@ -1066,6 +1148,27 @@ def _suggest_docx_template(
             warnings.append(
                 "This Word file has no authored placeholders. Review every detected value and replace the client-specific sample with an approved master before activation."
             )
+        else:
+            warnings.append(
+                "This Word sample may contain fixed names, fees, dates, and wording. Review the remaining source details in Studio before publishing."
+            )
+
+    if any(
+        count > 1 and _normalize_name(token[1:-1]) in generic
+        for token, count in bracket_counts.items()
+    ):
+        warnings.append(
+            "Repeated generic placeholders were separated by location. Review their context and link only fields that should use the same value."
+        )
+    blank_total = sum(len(re.findall(r"_{3,}", p.text)) for _, p in paragraphs)
+    mapped_blanks = sum(
+        bool(f.docx_anchor) and bool(re.fullmatch(r"_{3,}", f.source_text or ""))
+        for f in fields.values()
+    )
+    if blank_total > mapped_blanks:
+        warnings.append(
+            f"{blank_total - mapped_blanks} of {blank_total} underscore areas remain unmapped. Review them in Studio; some may intentionally remain for signatures or handwritten responses."
+        )
 
     if fields:
         if anchored_blank_count:
@@ -1127,8 +1230,11 @@ def _replace_labeled_values(
     def repl(match: re.Match) -> str:
         label = match.group(1).strip()
         value = match.group(2).strip()
+        original_value = value
         label_key = _normalize_name(label)
         name = LABELED_FIELD_ALIASES.get(label_key)
+        if name and (name.endswith("_name") or name == "client_name"):
+            value = re.split(r"\s*\(\s*hereinafter\b", value, flags=re.I)[0].rstrip()
         if name is None and allow_custom_labels:
             name = label_key
         if (
@@ -1149,7 +1255,7 @@ def _replace_labeled_values(
                 confidence=0.76,
             ),
         )
-        return f"{label}: {{{{{name}}}}}"
+        return f"{label}: {{{{{name}}}}}{original_value[len(value):]}"
 
     return LABELED_VALUE_PATTERN.sub(repl, body)
 

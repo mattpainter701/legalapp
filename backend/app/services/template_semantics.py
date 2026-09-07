@@ -21,7 +21,9 @@ from typing import Any
 from app.services.template_bindings import is_valid_binding
 
 #: Per-field keys a customer may change without re-deriving the field map.
-SEMANTIC_FIELD_KEYS = frozenset({"binding", "label", "description", "logic"})
+SEMANTIC_FIELD_KEYS = frozenset(
+    {"binding", "label", "description", "logic", "value_from"}
+)
 
 #: Top-level schema keys that are likewise authored, not derived. Regions
 #: address paragraphs the reviewed source already has; marking one changes no
@@ -90,6 +92,12 @@ def validate_semantic_metadata(variable_schema: Any) -> None:
     fields = variable_schema.get("fields")
     if not isinstance(fields, list):
         return
+    from app.services.docx_source_review import validate_value_links, TemplateDocxError
+
+    try:
+        validate_value_links(fields)
+    except TemplateDocxError as exc:
+        raise TemplateSemanticsError(str(exc)) from exc
     names = {
         str(field.get("name") or "").strip()
         for field in fields
