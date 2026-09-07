@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import PortalDocumentTransfer from '../components/PortalDocumentTransfer'
 import ClientIntakeChecklist from '../components/ClientIntakeChecklist'
 import {
   getClientPortalSession,
@@ -9,7 +10,6 @@ import {
   sendClientPortalMessage,
   markClientPortalMessagesRead,
   listClientPortalDocuments,
-  uploadClientPortalDocument,
   downloadClientPortalDocumentUrl,
   listClientPortalInvoices,
   createClientPortalInvoicePayment,
@@ -20,8 +20,8 @@ import {
 } from '../api'
 import {
   ShieldCheck, MessageSquare, FileText, Receipt, Send,
-  Upload, Download, AlertTriangle, Scale, PenLine, CheckCircle2, LockKeyhole,
-  LogOut, CalendarClock, CreditCard, RefreshCw, Paperclip, Clock, Handshake,
+  Download, AlertTriangle, Scale, PenLine, CheckCircle2, LockKeyhole,
+  LogOut, CalendarClock, CreditCard, RefreshCw, Clock, Handshake,
 } from 'lucide-react'
 
 const TABS = [
@@ -823,15 +823,10 @@ export function MessagesTab({ onSessionError, onChanged }) {
 
 // ── Documents ───────────────────────────────────────────────────────────────
 
-function DocumentsTab({ onSessionError, onChanged }) {
+function DocumentsTab({ matter, onSessionError, onChanged }) {
   const [docs, setDocs] = useState([])
-  const [uploading, setUploading] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [description, setDescription] = useState('')
-  const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
-  const inputRef = useRef(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -847,36 +842,6 @@ function DocumentsTab({ onSessionError, onChanged }) {
 
   useEffect(() => { load() }, [load])
 
-  const upload = useCallback(
-    async (file) => {
-      if (!file || uploading) return
-      setUploading(true)
-      setProgress(0)
-      setErr('')
-      try {
-        await uploadClientPortalDocument(file, description.trim() || undefined, setProgress)
-        setDescription('')
-        await load()
-        onChanged()
-      } catch (e2) {
-        if (!onSessionError(e2)) {
-          setErr(errorMessage(e2, 'Upload failed. Please try again.'))
-        }
-      } finally {
-        setUploading(false)
-        setProgress(0)
-        if (inputRef.current) inputRef.current.value = ''
-      }
-    },
-    [description, load, onChanged, onSessionError, uploading],
-  )
-
-  const onDrop = (e) => {
-    e.preventDefault()
-    setDragging(false)
-    upload(e.dataTransfer.files?.[0])
-  }
-
   const { fromFirm, fromClient } = useMemo(
     () => ({
       fromFirm: docs.filter((d) => !d.uploaded_by_client),
@@ -890,53 +855,11 @@ function DocumentsTab({ onSessionError, onChanged }) {
       <ErrorBanner message={err} onRetry={() => load()} />
 
       <Card>
-        <CardHeading>Send a document to your legal team</CardHeading>
-        <label htmlFor="portal-doc-description" className="sr-only">
-          Description of the document
-        </label>
-        <input
-          id="portal-doc-description"
-          value={description}
-          onChange={(e) => setDescription(e.target.value.slice(0, 500))}
-          placeholder="What is this document? (optional)"
-          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans mb-3 focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-        />
-        <div
-          onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-          className={`border-2 border-dashed rounded-xl px-4 py-8 text-center transition-colors ${
-            dragging ? 'border-brand-accent bg-brand-accent/5' : 'border-brand-line'
-          }`}
-        >
-          <Paperclip size={22} className="mx-auto text-brand-ink-2 mb-2" />
-          <p className="text-sm text-brand-ink-2 mb-3">
-            Drag a file here, or choose one from your device.
-          </p>
-          <label className="inline-flex items-center gap-2 px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all cursor-pointer disabled:opacity-50">
-            <Upload size={16} /> {uploading ? `Uploading… ${progress}%` : 'Choose file'}
-            <input
-              ref={inputRef}
-              type="file"
-              className="hidden"
-              onChange={(e) => upload(e.target.files?.[0])}
-              disabled={uploading}
-            />
-          </label>
-          {uploading && (
-            <div className="mt-3 h-1.5 bg-brand-bg-soft rounded-full overflow-hidden">
-              <div
-                className="h-full bg-brand-accent transition-all"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          )}
-          <p className="text-xs text-brand-ink-2 mt-3">
-            PDFs, documents, spreadsheets, images, and emails are supported.
-          </p>
-        </div>
+        <CardHeading>Send documents to your legal team</CardHeading>
+        <PortalDocumentTransfer matterName={matter?.matter_name} onSessionError={onSessionError} onUploaded={async () => { await load(); onChanged() }} />
       </Card>
 
+      <button type="button" className="border rounded-lg px-4 py-2" disabled={loading} onClick={load}>Refresh document list</button>
       {loading ? (
         <Card><Spinner label="Loading documents…" /></Card>
       ) : docs.length === 0 ? (

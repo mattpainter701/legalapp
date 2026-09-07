@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.2 — Transfer client folders through the portal
+
+Released September 7, 2026.
+
+Send multiple files and folders with per-file results, share cloud transfer links, and refresh matter document lists.
+
+- **Bring a folder of documents.** Clients can select or drop files and folders into their invited matter, preserve subfolders, and retry failed files. Reselecting unchanged source files avoids duplicate uploads.
+- **Use a shared folder.** Clients can send a source link for legal-team review. Staff can explicitly publish a client-safe upload-folder link in the portal.
+- **Refresh the document list.** Refresh saved document lists after uploads. Connected cloud-folder sync remains separate; saving or refreshing files does not mean content indexing or OCR is complete.
+
 ## 2026.09.07.1 — A workspace view for every role
 
 Released September 7, 2026.

@@ -16,6 +16,7 @@ import {
 } from '../api'
 
 vi.mock('../api', () => ({
+  getClientPortalUploadLink: vi.fn().mockResolvedValue({ url: null }),
   getClientIntake: vi.fn().mockRejectedValue({ response: { status: 404 } }),
   submitClientIntake: vi.fn(),
   getClientPortalSession: vi.fn(),

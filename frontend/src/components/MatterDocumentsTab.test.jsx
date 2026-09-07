@@ -7,6 +7,8 @@ import { ConfirmProvider } from './dialog/ConfirmProvider'
 import { ToastProvider } from './toast/ToastProvider'
 
 const apiMocks = vi.hoisted(() => ({
+  getMatterPortalUploadLink: vi.fn().mockResolvedValue({ url: null }),
+  setMatterPortalUploadLink: vi.fn(),
   createDocumentTag: vi.fn(),
   createMatterDocumentFolder: vi.fn(),
   deleteMatterDocument: vi.fn(),
@@ -210,6 +212,21 @@ describe('MatterDocumentsTab document explorer', () => {
     expect(
       within(rail).queryByRole('button', { name: 'Delete Client Uploads' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('keeps documents and the refresh control available after a transient refresh failure', async () => {
+    const user = userEvent.setup()
+    renderDocuments()
+    const refresh = await screen.findByRole('button', { name: 'Refresh document list' })
+    await screen.findAllByText('Contract.docx')
+    apiMocks.getMatterDocuments.mockRejectedValueOnce(new Error('offline'))
+    await user.click(refresh)
+    expect(await screen.findByText('Could not refresh documents')).toBeInTheDocument()
+    expect(screen.getAllByText('Contract.docx').length).toBeGreaterThan(0)
+    await waitFor(() => expect(refresh).toBeEnabled())
+    await user.click(refresh)
+    await waitFor(() => expect(apiMocks.getMatterDocuments).toHaveBeenCalledTimes(3))
+    expect(screen.getByRole('navigation', { name: 'Document folders' })).toBeInTheDocument()
   })
 
   it('scopes the listing to the folder the user opens', async () => {
