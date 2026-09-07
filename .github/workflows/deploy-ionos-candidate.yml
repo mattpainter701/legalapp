@@ -59,27 +59,20 @@ jobs:
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout release evidence helper on GitHub-hosted runner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - name: Require successful CI and CodeQL for mutation
         if: inputs.operation == 'stage'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          set -Eeuo pipefail
-          for workflow in ci.yml codeql.yml; do
-            conclusion="$(gh run list \
-              --repo "$GITHUB_REPOSITORY" \
-              --workflow "$workflow" \
-              --commit "$RELEASE_SHA" \
-              --event push \
-              --limit 20 \
-              --json conclusion \
-              --jq '.[0].conclusion // ""')"
-            [[ "$conclusion" == success ]] || {
-              echo "::error::$workflow for $RELEASE_SHA is '$conclusion'; IONOS was not changed."
-              exit 1
-            }
-          done
+          python scripts/release_evidence.py --sha "$RELEASE_SHA" \
+            --workflow ci.yml --workflow codeql.yml
 
       - name: Require successful QA acceptance when enabled
         if: inputs.operation == 'stage' && vars.LAWHAND_QA_GATE_REQUIRED == 'true'
@@ -87,19 +80,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          set -Eeuo pipefail
-          accepted_runs="$(gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow qa-acceptance.yml \
-            --commit "$RELEASE_SHA" \
-            --event workflow_dispatch \
-            --limit 20 \
-            --json conclusion \
-            --jq '[.[] | select(.conclusion == "success")] | length')"
-          [[ "$accepted_runs" -ge 1 ]] || {
-            echo "::error::No successful QA acceptance exists for $RELEASE_SHA; IONOS was not changed."
-            exit 1
-          }
+          python scripts/release_evidence.py --sha "$RELEASE_SHA" \
+            --workflow qa-acceptance.yml --event workflow_dispatch
 
   ionos:
     name: ${{ inputs.operation }} on IONOS Cube M

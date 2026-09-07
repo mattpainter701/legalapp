@@ -54,26 +54,19 @@ jobs:
           }
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout release evidence helper on GitHub-hosted runner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - name: Require successful CI and CodeQL for the QA release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
-          set -Eeuo pipefail
-          for workflow in ci.yml codeql.yml; do
-            conclusion="$(gh run list \
-              --repo "$GITHUB_REPOSITORY" \
-              --workflow "$workflow" \
-              --commit "$RELEASE_SHA" \
-              --event push \
-              --limit 20 \
-              --json conclusion \
-              --jq '.[0].conclusion // ""')"
-            [[ "$conclusion" == success ]] || {
-              echo "::error::$workflow for $RELEASE_SHA is '$conclusion'; QA was not changed."
-              exit 1
-            }
-          done
+          python scripts/release_evidence.py --sha "$RELEASE_SHA" \
+            --workflow ci.yml --workflow codeql.yml
 
   qa-deploy:
     name: Deploy exact release to isolated Skynet QA
@@ -116,6 +109,12 @@ jobs:
       QA_DEMO_ACCESS_CODE: ${{ secrets.LAWHAND_QA_DEMO_ACCESS_CODE }}
     timeout-minutes: 10
     steps:
+      - name: Checkout exact QA API smoke harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
+        with:
+          ref: ${{ needs.release-gate.outputs.release_sha }}
+          persist-credentials: false
+
       - name: Require authenticated readiness and exact version evidence
         env:
           RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
@@ -138,9 +137,7 @@ jobs:
             --header "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID"
             --header "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"
           )
-          curl --fail --silent --show-error --max-time 30 "${access_headers[@]}" \
-            "$origin/health/readiness" \
-            | jq -e '.status == "ok"' >/dev/null
+          python scripts/check_readiness.py --origin "$origin" --sha "$RELEASE_SHA"
           curl --fail --silent --show-error --max-time 30 "${access_headers[@]}" \
             "$origin/api/version" \
             | jq -e --arg expected "$RELEASE_SHA" \
@@ -150,12 +147,8 @@ jobs:
             -servername "$QA_HOSTNAME" </dev/null 2>/dev/null \
             | openssl x509 -checkend 1209600 -noout
 
-      - name: Checkout exact QA API smoke harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
-        with:
-          ref: ${{ needs.release-gate.outputs.release_sha }}
-
       - name: Exercise normal authenticated QA APIs with synthetic demo data
+        id: synthetic
         if: env.QA_DEMO_ACCESS_CODE != ''
         env:
           DEMO_BASE_URL: https://${{ vars.LAWHAND_QA_HOSTNAME }}
@@ -176,6 +169,7 @@ jobs:
         env:
           RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
           QA_HOSTNAME: ${{ vars.LAWHAND_QA_HOSTNAME }}
+          SMOKE_OUTCOME: ${{ steps.synthetic.outcome }}
         run: |
           {
             echo "## LawHand QA acceptance"
@@ -183,5 +177,17 @@ jobs:
             echo "- Commit: \`$RELEASE_SHA\`"
             echo "- Hostname: \`https://$QA_HOSTNAME\`"
             echo "- Gate: Cloudflare Access, readiness, exact version, and TLS"
-            echo "- Synthetic smoke: optional; runs when LAWHAND_QA_DEMO_ACCESS_CODE is configured"
+            echo "- Synthetic smoke outcome: $SMOKE_OUTCOME (optional when no demo code is configured)"
           } >> "$GITHUB_STEP_SUMMARY"
+          jq -n --arg sha "$RELEASE_SHA" --arg smoke "$SMOKE_OUTCOME" \
+            --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            '{schema_version:1,sha:$sha,run_id:$run,attempt:$attempt,synthetic_smoke:$smoke}' \
+            > "$RUNNER_TEMP/qa-acceptance-evidence.json"
+
+      - name: Upload QA acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qa-acceptance-evidence-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qa-acceptance-evidence.json
+          if-no-files-found: error

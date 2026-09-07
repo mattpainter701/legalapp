@@ -53,24 +53,19 @@ jobs:
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout release evidence helper on GitHub-hosted runner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - name: Require successful CI for the exact deploy commit
         if: inputs.operation == 'deploy'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          conclusion="$(gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow ci.yml \
-            --commit "$RELEASE_SHA" \
-            --event push \
-            --limit 20 \
-            --json conclusion \
-            --jq '.[0].conclusion // ""')"
-          [[ "$conclusion" == success ]] || {
-            echo "::error::CI for $RELEASE_SHA is '$conclusion'; dev1 was not changed."
-            exit 1
-          }
+          python scripts/release_evidence.py --sha "$RELEASE_SHA" --workflow ci.yml
 
   dev1:
     needs: release-gate
