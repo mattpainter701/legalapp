@@ -316,3 +316,135 @@ def test_failed_draft_save_removes_only_request_owned_files(tmp_path):
     assert not owned.exists()
     assert not retained.exists()
     assert unrelated.read_bytes() == b"keep"
+
+
+def _route_template(content, *, evidence_path=None):
+    tenant = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id=tenant,
+        format="docx",
+        source_storage_path="master.docx",
+        source_filename="master.docx",
+        source_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        source_sha256=hashlib.sha256(content).hexdigest(),
+        title="Master",
+        body="",
+        category="other",
+        description=None,
+        visibility="tenant",
+        layer=None,
+        module=None,
+        stage=None,
+        jurisdiction=None,
+        kind=None,
+        variable_schema={"source_review": {}},
+        signer_roles=None,
+        branding_profile=None,
+        source_evidence_storage_path=str(evidence_path) if evidence_path else None,
+        source_evidence_filename="original.docx" if evidence_path else None,
+        source_evidence_sha256=hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+        if evidence_path
+        else None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_derive_second_storage_failure_removes_first_file_and_keeps_original(
+    tmp_path, monkeypatch
+):
+    from app.routers import document_templates as router
+    from app.schemas.document_template import DocumentTemplateWordDeriveRequest
+
+    content = _source()
+    template = _route_template(content)
+    candidate = next(
+        item
+        for item in docx_outline(content)["review_candidates"]
+        if item["source_text"] == "[AMOUNT]"
+    )
+    first = tmp_path / "derived.docx"
+    original = tmp_path / "master.docx"
+    original.write_bytes(content)
+    calls = 0
+
+    async def persist(**kwargs):
+        nonlocal calls
+        calls += 1
+        first.write_bytes(kwargs["content"])
+        if calls == 2:
+            raise OSError("evidence write failed")
+        return str(first)
+
+    db = AsyncMock()
+    db.add = Mock()
+    db.scalar.return_value = template
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        router, "_verified_template_source", AsyncMock(return_value=content)
+    )
+    monkeypatch.setattr(router, "_persist_template_source", persist)
+    with pytest.raises(Exception, match="source could not be saved"):
+        await router.derive_word_draft(
+            template.id,
+            DocumentTemplateWordDeriveRequest(
+                fields=[
+                    {
+                        "name": "amount",
+                        "source_text": "[AMOUNT]",
+                        "docx_anchor": candidate["docx_anchor"],
+                    }
+                ]
+            ),
+            current_user=SimpleNamespace(tenant_id=template.tenant_id),
+            db=db,
+        )
+    assert not first.exists()
+    assert original.read_bytes() == content
+
+
+@pytest.mark.asyncio
+async def test_cleanup_commit_failure_removes_new_files_and_keeps_original(
+    tmp_path, monkeypatch
+):
+    from app.routers import document_templates as router
+    from app.schemas.document_template import DocumentTemplateWordCleanupRequest
+
+    content = _source()
+    evidence = tmp_path / "original.docx"
+    evidence.write_bytes(content)
+    template = _route_template(content, evidence_path=evidence)
+    monkeypatch.setattr(router, "_template_source_dir", lambda *_: str(tmp_path))
+    paths = []
+
+    async def persist(**kwargs):
+        path = tmp_path / f"new-{len(paths)}.docx"
+        path.write_bytes(kwargs["content"])
+        paths.append(path)
+        return str(path)
+
+    db = AsyncMock()
+    db.add = Mock()
+    db.scalar.return_value = template
+    db.commit.side_effect = RuntimeError("db failed")
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        router, "_verified_template_source", AsyncMock(return_value=content)
+    )
+    monkeypatch.setattr(router, "_persist_template_source", persist)
+    payload = DocumentTemplateWordCleanupRequest(
+        paragraph_ordinal=0,
+        start=0,
+        end=9,
+        original_text="Car value",
+        replacement_text="Car value",
+    )
+    with pytest.raises(Exception, match="cleaned Word draft could not be saved"):
+        await router.cleanup_word_draft(
+            template.id,
+            payload,
+            current_user=SimpleNamespace(tenant_id=template.tenant_id),
+            db=db,
+        )
+    assert all(not path.exists() for path in paths)
+    assert evidence.read_bytes() == content
