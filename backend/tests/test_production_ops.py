@@ -1705,7 +1705,7 @@ def test_litellm_release_contract_is_pinned_and_fail_closed() -> None:
             "litellm-schema-migrator": {"condition": "service_completed_successfully"}
         }
         expected_start_period = (
-            "240s" if compose_name == "docker-compose.hypervisor.yml" else "90s"
+            "480s" if compose_name == "docker-compose.hypervisor.yml" else "90s"
         )
         assert proxy["healthcheck"]["start_period"] == expected_start_period
         assert proxy["healthcheck"]["retries"] == 5
