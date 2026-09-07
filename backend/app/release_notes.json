@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.12",
+      "version": "2026.09.07.12",
+      "title": "Reliable cloud folder recovery",
+      "published_at": "2026-09-07",
+      "summary": "Cloud setup can finish the rest of a firm's matters when one folder is temporarily busy.",
+      "highlights": [
+        {
+          "title": "Retry the matters that need it",
+          "description": "A temporary lock on one matter no longer stops setup for every other matter in the firm. Retry later to finish only the affected matter."
+        },
+        {
+          "title": "See partial results clearly",
+          "description": "The integrations page now reports how many matter folders were set up and how many still need another retry."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.11",
       "version": "2026.09.07.11",
       "title": "More reliable Template Studio AI proposals",

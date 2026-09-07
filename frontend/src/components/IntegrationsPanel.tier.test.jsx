@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { ProviderCard } from './IntegrationsPanel'
+import { CloudRetryStatus, ProviderCard } from './IntegrationsPanel'
 
 vi.mock('../api', () => ({
   getAdminPermissions: vi.fn(),
@@ -60,5 +60,19 @@ describe('ProviderCard tier status', () => {
     render(<ProviderCard {...props} info={{ ...baseInfo, last_sync_status: 'failed' }} />)
     expect(screen.getByText(baseInfo.last_sync_error)).toBeTruthy()
     expect(screen.getByText(/last sync failed/)).toBeTruthy()
+  })
+})
+
+describe('CloudRetryStatus', () => {
+  it('reports a partial retry instead of claiming every matter is ready', () => {
+    render(<CloudRetryStatus result={{ matters_initialized: 2, matters_failed: 1, status: 'partial' }} />)
+    expect(screen.getByText(/partially ready/)).toBeTruthy()
+    expect(screen.getByText(/2 matters set up/)).toBeTruthy()
+    expect(screen.getByText(/1 needs retry/)).toBeTruthy()
+  })
+
+  it('reports a fully successful retry', () => {
+    render(<CloudRetryStatus result={{ matters_initialized: 1, matters_failed: 0, status: 'ready' }} />)
+    expect(screen.getByText('Cloud folders ready · 1 matter set up')).toBeTruthy()
   })
 })
