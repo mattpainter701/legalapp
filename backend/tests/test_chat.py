@@ -1611,8 +1611,10 @@ async def test_stalled_upload_blocks_relink_and_delete_until_document_is_committ
     class StalledUpload:
         filename = "locked-contract.txt"
         content_type = "text/plain"
+        read_sizes = []
 
-        async def read(self):
+        async def read(self, size=-1):
+            self.read_sizes.append(size)
             upload_started.set()
             await finish_upload.wait()
             return b"locked contract terms"
@@ -1682,6 +1684,9 @@ async def test_stalled_upload_blocks_relink_and_delete_until_document_is_committ
     assert document.storage_path
     assert os.path.exists(document.storage_path)
     assert response.id == str(document.id)
+    assert StalledUpload.read_sizes == [
+        chat_router.settings.MAX_FILE_SIZE_MB * 1024 * 1024 + 1
+    ]
 
 
 @pytest.mark.asyncio

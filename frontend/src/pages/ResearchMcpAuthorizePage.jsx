@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   decideResearchMcpAuthorizationRequest,
@@ -11,21 +11,30 @@ function Shell({ children }) {
 
 export default function ResearchMcpAuthorizePage() {
   const [search] = useSearchParams()
-  const navigate = useNavigate()
   const requestId = search.get('request_id')
+  return <ResearchConsent key={requestId || ''} requestId={requestId} />
+}
+
+function ResearchConsent({ requestId }) {
+  const navigate = useNavigate()
+  const mounted = useRef(false)
   const [request, setRequest] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [decision, setDecision] = useState(null)
 
   useEffect(() => {
+    let active = true
+    mounted.current = true
+    const cleanup = () => { active = false; mounted.current = false }
     if (!requestId) {
       setError('This authorization link is missing its request ID.')
-      return
+      return cleanup
     }
     getResearchMcpAuthorizationRequest(requestId)
-      .then(setRequest)
-      .catch((err) => setError(err?.response?.data?.detail || 'This research authorization request is unavailable or has expired.'))
+      .then((data) => { if (active) setRequest(data) })
+      .catch((err) => { if (active) setError(err?.response?.data?.detail || 'This research authorization request is unavailable or has expired.') })
+    return cleanup
   }, [requestId])
 
   const complete = (result) => {
@@ -34,14 +43,16 @@ export default function ResearchMcpAuthorizePage() {
   }
 
   const handleDecision = async (approved) => {
-    if (!requestId) return
+    if (!requestId || !request || busy) return
     setBusy(true)
     setError(null)
     try {
       const result = await decideResearchMcpAuthorizationRequest(requestId, approved)
+      if (!mounted.current) return
       setDecision(approved ? 'approved' : 'denied')
       complete(result)
     } catch (err) {
+      if (!mounted.current) return
       setError(err?.response?.data?.detail || 'We could not record your research decision. Please try again.')
       setBusy(false)
     }

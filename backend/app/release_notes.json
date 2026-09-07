@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.06.8",
+      "version": "2026.09.06.8",
+      "title": "Smoother everyday work with fewer background requests",
+      "published_at": "2026-09-06",
+      "summary": "Improve intake recovery, workspace navigation and Studio editing while reducing unnecessary background work.",
+      "highlights": [
+        {
+          "title": "Keep the selected work in view",
+          "description": "Communications and research workspaces ignore stale responses when you change views. Connected-assistant approval screens keep each application's review separate."
+        },
+        {
+          "title": "Recover from interruptions",
+          "description": "Intake shows load and stage-update errors with a retry for failed loads. Studio Undo and Redo restore region edits along with fields."
+        },
+        {
+          "title": "Use fewer resources",
+          "description": "Assistant lists load where they are used, portal message polling waits for pending reads, directory sync reuses user lookups, and oversized chat attachment reads are bounded."
+        }
+      ]
+    },
+    {
       "id": "2026.09.06.7",
       "version": "2026.09.06.7",
       "title": "Keep new-client intake moving from paperwork to meeting",

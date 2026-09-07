@@ -6,6 +6,14 @@
 
 # Changelog
 
+## 2026.09.06.8
+
+- Limit Assistant list requests to its workspace; preserve independent list success and ignore late navigation results.
+- Add intake load retry and stage failure feedback; protect communications and research navigation from stale responses; serialize portal message polling.
+- Preserve both field and region state in Studio undo/redo. Isolate Workspace and Research MCP consent state by request ID.
+- Batch tenant user lookup and cache new-user MCP defaults during Microsoft/Google sync. Bound chat attachment reads before rejecting oversized files.
+- Record feature coverage, regression evidence and scoped follow-ups in `docs/platform-feature-review-2026-09-06.md`; no migration or deployment change.
+
 ## 2026.09.06.7
 
 - Add matter intake packets with independently verified fee agreement and questionnaire completion, encrypted portal invitations, connected Microsoft/Google email and storage, existing Twilio SMS delivery, seven-day document follow-up and scheduling tasks due within 24 hours.

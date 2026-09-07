@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.06.8 — Smoother everyday work with fewer background requests
+
+Released September 6, 2026.
+
+Improve intake recovery, workspace navigation and Studio editing while reducing unnecessary background work.
+
+- **Keep the selected work in view.** Communications and research workspaces ignore stale responses when you change views. Connected-assistant approval screens keep each application's review separate.
+- **Recover from interruptions.** Intake shows load and stage-update errors with a retry for failed loads. Studio Undo and Redo restore region edits along with fields.
+- **Use fewer resources.** Assistant lists load where they are used, portal message polling waits for pending reads, directory sync reuses user lookups, and oversized chat attachment reads are bounded.
+
 ## 2026.09.06.7 — Keep new-client intake moving from paperwork to meeting
 
 Released September 6, 2026.

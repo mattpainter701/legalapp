@@ -83,10 +83,20 @@ from app.utils.guardrails import (
 from app.services.error_tracker import capture_chat_error
 from app.services.usage_limits import check_token_budget
 from app.services.compliance import chat_attachment_ttl_days
+from app.services.upload_guard import reject_oversized_request
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+
+async def _read_bounded_upload(
+    request: Request, file: UploadFile, max_bytes: int, max_mb: int
+) -> bytes:
+    """Reject declared oversized bodies and cap reads for chunked uploads."""
+    reject_oversized_request(request, max_bytes, max_mb)
+    return await file.read(max_bytes + 1)
+
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ANCHOR_TEXT_RE = re.compile(r"<a\b[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
@@ -1957,7 +1967,9 @@ async def upload_chat_attachment(
             raise HTTPException(status_code=400, detail="Filename is required")
 
         max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
-        file_bytes = await file.read()
+        file_bytes = await _read_bounded_upload(
+            request, file, max_bytes, settings.MAX_FILE_SIZE_MB
+        )
         if len(file_bytes) > max_bytes:
             raise HTTPException(
                 status_code=413,
