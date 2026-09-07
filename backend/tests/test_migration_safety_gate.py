@@ -214,6 +214,8 @@ def test_production_acceptance_preflights_root_entrypoint_capability() -> None:
     assert "main moved during acceptance; production tag was not changed" in workflow
     assert "production tag moved during acceptance" in workflow
     assert "git/refs/tags/production" in workflow
+    assert "--jq '.object.sha'" in workflow
+    assert "production tag update did not return the accepted release SHA" in workflow
     assert "  verify|stage|deploy|accept) ;;" in entrypoint
 
 

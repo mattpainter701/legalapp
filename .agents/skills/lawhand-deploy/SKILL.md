@@ -19,7 +19,8 @@ workflow-level procedure and the safety rules.
 
 ## The pipeline
 
-1. `ci.yml` must be `success` for the exact commit.
+1. `ci.yml` must be `success` for the exact commit. An IONOS stage also requires
+   `codeql.yml` to be `success` for that commit.
 2. `deploy-dev1.yml` (`operation=deploy`, confirmation `DEPLOY-SKYNET-DEV1`) —
    plain dev1 deploy, or
    `qa-acceptance.yml` (`release_sha=<40-hex>`) — deploys the same commit to dev1
@@ -46,6 +47,25 @@ Every workflow refuses to run from anything but `main` and pins the exact SHA.
    confirm it equals the intended SHA. Report failures with their real output.
 5. Never enable the promotion gate as part of a deploy. That is a separate,
    deliberate change (see below).
+
+### IONOS host configuration preflight
+
+Before a mutating IONOS stage, run the non-secret preflight with the exact Cube
+M Compose pair. A generic profile applies the standard capacity floor and is
+not evidence for the Cube M release path.
+
+```bash
+ENV_FILE=/etc/lawhand/core.env \
+COMPOSE_FILES="/srv/lawhand/app/docker-compose.hypervisor.yml /srv/lawhand/app/docker-compose.cube-m.yml" \
+  bash /srv/lawhand/app/scripts/prod_env_preflight.sh
+```
+
+The host file must explicitly set `TEMPLATE_STUDIO_RENDER_ENABLED=false`. When
+`MCP_SERVER_URL` is set, it must also contain a dedicated 32+-character
+`MCP_CITATOR_SCOPE_ASSERTION_SECRET` distinct from the other MCP and token
+encryption secrets. Never print or copy the production `.env`; repair it only
+with explicit authorization, a permissions-preserving on-host backup, and a
+fresh preflight.
 
 ## Commands
 
@@ -156,6 +176,10 @@ Each switch defaults off, so dev1 work never changes IONOS behaviour until step 
   the HTTPS call instead and reads as “dev1 is down”.
 - dev1 uses isolated dev-only volumes. Fixtures and tenants from other
   environments do not exist there and must be seeded locally.
+- If an older acceptance run passes the IONOS gate but fails while advancing the
+  `production` tag, read the Git ref directly. When the ref already equals the
+  accepted SHA and `main` is unchanged, rerun production acceptance for that
+  same SHA; it is idempotent. Do not move the tag manually.
 - Never copy production customer data into dev1 to make it look realistic. This is
   a legal product; that content is client matter data and likely privileged, and
   dev1 fronts a public unauthenticated demo endpoint. Enrich the demo fixture

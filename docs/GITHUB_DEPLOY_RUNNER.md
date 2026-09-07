@@ -55,6 +55,38 @@ rechecks that neither `main` nor the previous release marker moved and advances
 the `production` tag. Provider configuration and secret values are never
 printed or copied by the workflow.
 
+## IONOS environment preflight
+
+Before dispatching a mutating IONOS stage, validate the protected host
+environment with the exact Cube M Compose pair. Do not use a generic Compose
+profile: it selects the standard capacity floor instead of the reviewed Cube M
+profile.
+
+```bash
+cd /srv/lawhand/app
+ENV_FILE=/etc/lawhand/core.env \
+COMPOSE_FILES="/srv/lawhand/app/docker-compose.hypervisor.yml /srv/lawhand/app/docker-compose.cube-m.yml" \
+  bash scripts/prod_env_preflight.sh
+```
+
+`TEMPLATE_STUDIO_RENDER_ENABLED=false` must be present explicitly. If
+`MCP_SERVER_URL` is configured, `MCP_CITATOR_SCOPE_ASSERTION_SECRET` must be a
+dedicated 32+-character secret, distinct from the other MCP secrets and all
+token-encryption keys. Keep both values in `/etc/lawhand/core.env`; do not
+print, commit, or copy the populated file into a local backup. Repairing that
+host-managed file requires explicit operator authorization, a permissions-
+preserving on-host backup, and a fresh preflight.
+
+## Accepted-tag recovery
+
+The acceptance workflow uses the successful Git-ref update response as its
+release-marker evidence. If an older run reports a tag-recording failure after
+the IONOS acceptance job has passed, first read
+`repos/mattpainter701/legalapp/git/ref/tags/production`. If it already resolves
+to the accepted SHA and `main` is unchanged, rerun **Production acceptance**
+for that exact SHA to obtain a clean, idempotent record. Do not move the tag by
+hand or accept a different SHA.
+
 Before invoking `accept`, the workflow performs a non-secret host preflight. It
 requires the fixed entrypoint to be an executable `root:root` file with mode
 `0755` and to advertise the `verify|stage|deploy|accept` operation set. If this
