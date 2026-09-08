@@ -94,6 +94,9 @@ async def test_list_tools_and_call_tool_cover_success_denial_and_errors(monkeypa
         "find_matter",
         "search_matters",
         "propose_task",
+        "propose_workflow_run",
+        "get_workflow_run",
+        "resume_workflow_run",
     }
 
     async def successful(**kwargs):
