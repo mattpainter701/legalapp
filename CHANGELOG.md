@@ -1,5 +1,11 @@
 # 2026.09.06.4 - Durable workflow preparation
 
+## 2026.09.08.5
+
+- Add explicit tenant-scoped firm profile template bindings for name, address, phone, email, and website, reusing existing branding settings and fallbacks without a migration.
+- Show configured/missing shared values in the Field Library and distinguish saved profile values from suggestion confidence in document fill review.
+- Preserve manual entries, require explicit firm source mappings, and keep saved generated documents independent of later profile changes.
+
 ## 2026.09.08.3 - Template variations and matter completion
 
 - Add tenant-scoped template copying with independent source/evidence files and draft-only lifecycle state.

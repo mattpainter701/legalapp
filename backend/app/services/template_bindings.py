@@ -42,6 +42,12 @@ class TemplateBinding:
 
 
 _CATALOGUE: tuple[TemplateBinding, ...] = (
+    # Shared within the current firm, independent of the selected matter.
+    TemplateBinding("firm.name", "firm_name", "Firm name", "Firm profile"),
+    TemplateBinding("firm.address", "firm_address", "Firm address", "Firm profile"),
+    TemplateBinding("firm.phone", "firm_phone", "Firm phone", "Firm profile"),
+    TemplateBinding("firm.email", "firm_email", "Firm email", "Firm profile"),
+    TemplateBinding("firm.website", "firm_website", "Firm website", "Firm profile"),
     # Matter
     TemplateBinding("matter.name", "matter_name", "Matter name", "Matter"),
     TemplateBinding("matter.type", "matter_type", "Matter type", "Matter"),

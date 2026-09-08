@@ -77,6 +77,7 @@ from app.services import (
     template_custom_fields,
     template_fact_review,
     template_field_library,
+    template_firm_fields,
 )
 from app.services.template_intake import (
     TemplateAnalysis,
@@ -2350,8 +2351,12 @@ async def build_variable_suggestions(
     bindings = declared_bindings(getattr(template, "variable_schema", None))
 
     custom = await template_custom_fields.suggestions(db, tenant_id, matter, bindings)
+    firm = await template_firm_fields.suggestions(db, tenant_id, bindings)
     suggestions: list[DocumentTemplateVariableSuggestion] = []
     for variable in variables:
+        if variable in firm:
+            suggestions.append(firm[variable])
+            continue
         if variable in custom:
             suggestions.append(custom[variable])
             continue

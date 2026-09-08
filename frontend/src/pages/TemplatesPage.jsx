@@ -8,7 +8,7 @@ import WordImportWorkspace from '../components/templates/WordImportWorkspace'
 import TemplateTestSummary from '../components/templates/TemplateTestSummary'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
 import TemplateFillProgress from '../components/templates/TemplateFillProgress'
-import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues } from '../components/templates/templateFillReview'
+import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues, suggestionConfidenceLabel } from '../components/templates/templateFillReview'
 import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
@@ -1288,6 +1288,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     [names, fieldDefinitions],
   )
   const progress = fillReview(names, fieldDefinitions, variables, fieldSources, reviewedValues)
+  const hasFirmFields = fillableNames.some(name => fieldDefinitions[name]?.binding?.startsWith('firm.'))
   const visibleNames = fieldFilter === 'all' ? names : (fieldFilter === 'remaining' ? progress.remaining : progress.review).map(row => row.name)
   const nextField = () => {
     const name = progress.remaining[0]?.name || progress.review[0]?.name
@@ -1399,7 +1400,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   }
 
   const handleSmartFill = async () => {
-    if (!matterId.trim()) {
+    if (!matterId.trim() && !hasFirmFields) {
       setSmartFillState('error')
       setSmartFillMessage('Choose a matter before smart fill.')
       return
@@ -1407,7 +1408,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     const requestGeneration = smartFillRequestGenerationRef.current + 1
     smartFillRequestGenerationRef.current = requestGeneration
     const requestRevision = formRevisionRef.current
-    const requestMatterId = matterId.trim()
+    const requestMatterId = matterId.trim() || null
     setSmartFillState('loading')
     setSmartFillMessage('')
     try {
@@ -1437,7 +1438,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       invalidatePreview()
       setSaved(false)
       setSmartFillState('ready')
-      setSmartFillMessage('Matter values refreshed. Your entries were kept.')
+      setSmartFillMessage('Available values refreshed. Your entries were kept.')
     } catch (err) {
       if (smartFillRequestGenerationRef.current !== requestGeneration) return
       if ([404, 405, 501].includes(err?.response?.status)) {
@@ -1647,16 +1648,16 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             <div>
               <p className="text-sm font-medium text-brand-ink">Smart fill</p>
               <p className="text-xs text-brand-muted">
-                Fill from the selected matter. Refresh after its details change; your entries are kept and changed suggestions appear beside them.
+                {hasFirmFields ? 'Fill shared firm details now; select a matter for client and matter values. ' : 'Fill from the selected matter. '}Refresh after details change; your entries are kept and changed suggestions appear beside them.
               </p>
             </div>
             <button
               onClick={handleSmartFill}
-              disabled={saving || smartFillState === 'loading' || !matterId.trim()}
+              disabled={saving || smartFillState === 'loading' || (!matterId.trim() && !hasFirmFields)}
               className="flex shrink-0 items-center justify-center gap-2 whitespace-nowrap px-3 py-2 text-sm text-brand-ink border border-brand-line rounded hover:bg-brand-surface-2 disabled:opacity-50"
             >
               <Wand2 size={15} />
-              {smartFillState === 'loading' ? 'Filling...' : smartFillState === 'ready' ? 'Refresh matter values' : 'Smart Fill'}
+              {smartFillState === 'loading' ? 'Filling...' : smartFillState === 'ready' ? (matterId.trim() ? 'Refresh matter values' : 'Refresh firm values') : 'Smart Fill'}
             </button>
           </div>
         )}
@@ -1705,13 +1706,14 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                     </label>
                   )}
                   {fieldSources[name] && <p className="mb-1 text-xs text-brand-muted">{fieldSources[name].suggested_value == null ? 'Missing: review or enter a value' : `From ${fieldSources[name].provenance?.binding_label || fieldSources[name].source_type || 'record'} · verify current accuracy`}{fieldSources[name].provenance?.updated_at ? ` · Updated ${new Date(fieldSources[name].provenance.updated_at).toLocaleDateString()}` : ''}</p>}
+                  {field.binding?.startsWith('firm.') && <p className="mb-1 text-xs text-brand-muted">Shared firm profile. Missing or outdated details can be updated once by a firm administrator in Firm settings, then refreshed here with Smart Fill.</p>}
                   {fieldSources[name]?.provenance?.source_document_id && <a className="block mb-1 text-xs underline" href={getMatterDocumentDownloadUrl(matterId, fieldSources[name].provenance.source_document_id)} target="_blank" rel="noreferrer">Open reviewed source document</a>}
                   {review?.source && <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-                    <span>{review.confidence == null ? 'Confidence unavailable' : `${review.confidence}% match confidence`}</span>
+                    <span>{suggestionConfidenceLabel(review)}</span>
                     {review.needsReview ? <button type="button" disabled={saving} className="rounded border border-brand-line px-2 py-1" onClick={() => setReviewedValues(prev => ({ ...prev, [name]: fillValue(variables[name]) }))}>Confirm {label}</button> : <span className="text-brand-green">Reviewed</span>}
                   </div>}
                   {changedSuggestion && <div className="mb-2 rounded border border-brand-amber/40 bg-brand-amber/10 p-2 text-xs">
-                    <p>Matter now suggests: {fillValue(changedSuggestion.suggested_value)}</p>
+                    <p>{changedSuggestion.source_type === 'firm_profile' ? 'Firm profile now suggests' : 'Matter now suggests'}: {fillValue(changedSuggestion.suggested_value)}</p>
                     <button type="button" disabled={saving} className="mt-1 rounded border border-brand-line px-2 py-1" onClick={() => { setVariable(name, fillValue(changedSuggestion.suggested_value)); setFieldSources(prev => ({ ...prev, [name]: changedSuggestion })); setReviewedValues(prev => ({ ...prev, [name]: undefined })) }}>Use updated {label}</button>
                   </div>}
                   {field.value_from ? <p id={inputId} className="text-sm text-brand-muted">Uses {fieldDefinitions[field.value_from]?.label || field.value_from}</p> : fieldType === 'signature' ? (

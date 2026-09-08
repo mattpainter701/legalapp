@@ -3,9 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import TemplateFieldLibrary from './TemplateFieldLibrary'
-import { getTemplateFieldLibrary, getTemplateFieldUsage } from '../../api'
+import { getTemplateFieldLibrary, getTemplateFieldUsage, getFirmBranding } from '../../api'
 
-vi.mock('../../api', () => ({ getTemplateFieldLibrary: vi.fn(), getTemplateFieldUsage: vi.fn() }))
+vi.mock('../../api', () => ({ getTemplateFieldLibrary: vi.fn(), getTemplateFieldUsage: vi.fn(), getFirmBranding: vi.fn() }))
 const fields = [
   { path: 'client.name', label: 'Client name', group: 'Client', suggested_name: 'client_name', template_count: 23 },
   { path: 'matter.court', label: 'Court', group: 'Matter', suggested_name: 'court', template_count: 0 },
@@ -21,6 +21,18 @@ beforeEach(() => {
   getTemplateFieldUsage.mockResolvedValue(empty)
 })
 afterEach(cleanup)
+
+it('shows firm-wide values separately from client and matter fields', async () => {
+  getTemplateFieldLibrary.mockResolvedValue({ fields: [...fields, { path: 'firm.name', label: 'Firm name', group: 'Firm profile', suggested_name: 'firm_name', template_count: 2 }] })
+  getFirmBranding.mockResolvedValue({ firm_name: 'Example Firm' })
+  setup()
+  const user = userEvent.setup()
+  await user.selectOptions(await screen.findByLabelText('Data source'), 'Firm profile')
+  await user.click(screen.getByRole('button', { name: /Firm name/ }))
+  expect(await screen.findByText('Example Firm')).toBeInTheDocument()
+  expect(getTemplateFieldUsage).toHaveBeenCalledWith({ binding: 'firm.name', limit: 20, offset: 0 })
+  expect(screen.getByText(/Custom client and matter fields are managed/)).toBeInTheDocument()
+})
 
 it('searches the shared catalog and explains explicit Word conventions', async () => {
   setup()

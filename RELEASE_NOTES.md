@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.5 — Reuse shared firm details in templates
+
+Released September 8, 2026.
+
+Map template fields to the firm profile and maintain common contact details once across matters.
+
+- **Maintain firm details once.** Choose firm name, address, phone, email, or website as a template source. Smart Fill reads the current firm profile, even before a matter is selected.
+- **See shared values and missing setup.** The field library shows configured firm values and their template usage. Profile values are distinguished from AI confidence estimates, and personal document edits remain separate.
+
 ## 2026.09.08.3 — Reuse templates and finish matter fields faster
 
 Released September 8, 2026.
