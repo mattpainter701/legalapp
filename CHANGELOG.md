@@ -17,6 +17,11 @@
 - Live synthetic evidence is retained locally at `validation-artifacts/2026-09-07-chat-rag/calendar-roundtrip.json`: Graph returned an offset-less UTC time that reproduced the five-hour display shift. The fixture's 15-minute provider-default reminder is not evidence that LawHand sent or delivered an alert.
 - Add mocked Graph regressions for UTC, offset, malformed, all-day, and UTC-cross-midnight inputs. No provider writes, calendar-item mutation, or migration.
 
+## 2026.09.07.20 - Preserve legacy cloud root bindings
+
+- Preserve valid saved OneDrive, SharePoint, and Google root IDs on retry, OAuth reconnect, and matter-folder provisioning; initialize only absent provider roots.
+- Flag malformed saved root bindings for administrator repair without rebinding tenant or matter folders. Add regression coverage for legacy and secondary-provider paths. No migration.
+
 ## 2026.09.07.19 - Assistant retrieval continuity and source honesty
 
 - Restore only ready, unexpired same-tenant, same-conversation, same-matter attachments for follow-up turns; preserve explicit subsets and enforce the private-route gate for implicit attachments.

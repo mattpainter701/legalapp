@@ -19,6 +19,23 @@
       ]
     },
     {
+      "id": "2026.09.07.20",
+      "version": "2026.09.07.20",
+      "title": "Preserved cloud folder connections",
+      "published_at": "2026-09-07",
+      "summary": "Cloud reconnect and retry now preserve existing folder IDs while adding newly connected storage providers.",
+      "highlights": [
+        {
+          "title": "Keep established folders linked",
+          "description": "Existing OneDrive, SharePoint, and Google roots stay linked even when they have a legacy name, keeping matter folders aligned."
+        },
+        {
+          "title": "Flag incomplete root records",
+          "description": "Setup now reports incomplete saved root records for administrator repair instead of silently switching to a new folder."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.19",
       "version": "2026.09.07.19",
       "title": "More reliable assistant document context",

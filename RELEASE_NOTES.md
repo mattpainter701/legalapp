@@ -14,6 +14,15 @@ Microsoft Calendar events now show at their actual local time and all-day events
 - **See the right appointment time.** Connected Microsoft Calendar events include their timezone when LawHand displays them, so a UTC event is shown at the correct local time.
 - **Keep all-day events on their date.** All-day Microsoft Calendar events remain on the calendar date chosen in Outlook instead of shifting when you view them in LawHand.
 
+## 2026.09.07.20 — Preserved cloud folder connections
+
+Released September 7, 2026.
+
+Cloud reconnect and retry now preserve existing folder IDs while adding newly connected storage providers.
+
+- **Keep established folders linked.** Existing OneDrive, SharePoint, and Google roots stay linked even when they have a legacy name, keeping matter folders aligned.
+- **Flag incomplete root records.** Setup now reports incomplete saved root records for administrator repair instead of silently switching to a new folder.
+
 ## 2026.09.07.19 — More reliable assistant document context
 
 Released September 7, 2026.

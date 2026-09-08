@@ -673,6 +673,168 @@ async def test_cloud_root_provisions_both_connected_providers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cloud_root_preserves_legacy_provider_and_adds_missing_provider(
+    monkeypatch,
+):
+    """A legacy OneDrive root must not trigger a canonical replacement."""
+    from app.services import cloud_init
+
+    async def fake_token(_db, _tenant_id, provider):
+        return {"microsoft": "ms-token", "google": "g-token"}.get(provider)
+
+    ensure_onedrive = AsyncMock(return_value="new-onedrive-root")
+    ensure_google = AsyncMock(return_value="google-root")
+
+    async def fake_google_metadata(_token, folder_id):
+        return {
+            "id": folder_id,
+            "name": "claritylegal-records",
+            "webViewLink": f"https://drive/{folder_id}",
+        }
+
+    monkeypatch.setattr(cloud_init, "get_fresh_token", fake_token)
+    monkeypatch.setattr(cloud_init, "_ensure_onedrive_folder", ensure_onedrive)
+    monkeypatch.setattr(cloud_init, "_ensure_gdrive_folder", ensure_google)
+    monkeypatch.setattr(cloud_init, "_get_gdrive_folder_metadata", fake_google_metadata)
+    monkeypatch.setattr(
+        cloud_init, "_get_sharepoint_binding", AsyncMock(return_value=None)
+    )
+
+    legacy_root = {
+        "onedrive": {
+            "id": "01GIDQVHIWKMVSL5RS3FD34HJJGAQHK5RO",
+            "folder_name": "CyberSafeadvisor",
+        },
+        "path": "CyberSafeadvisor",
+        "subfolders": ["legacy-files"],
+    }
+    fresh = await cloud_init.initialize_cloud_root_folder(
+        None, "tenant-1", existing_root=legacy_root
+    )
+
+    ensure_onedrive.assert_not_awaited()
+    ensure_google.assert_awaited_once_with(
+        "g-token", cloud_init.ROOT_FOLDER_NAME, "root"
+    )
+    assert fresh["google_drive"]["id"] == "google-root"
+    assert "path" not in fresh
+    assert "subfolders" not in fresh
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed_root", ["bad-root", []])
+async def test_cloud_root_does_not_provision_for_malformed_top_level_binding(
+    malformed_root, monkeypatch
+):
+    """A malformed root record must not be normalized into a new provider root."""
+    from app.services import cloud_init
+
+    async def should_not_fetch_tokens(*_args, **_kwargs):
+        raise AssertionError("malformed root must not start provider provisioning")
+
+    monkeypatch.setattr(cloud_init, "get_fresh_token", should_not_fetch_tokens)
+
+    fresh = await cloud_init.initialize_cloud_root_folder(
+        None, "tenant-1", existing_root=malformed_root
+    )
+
+    assert fresh == {}
+
+
+@pytest.mark.asyncio
+async def test_reauth_preserves_legacy_root_and_adds_missing_provider(
+    db_session, test_tenant, monkeypatch
+):
+    """OAuth reconnect must retain provider IDs used by existing matters."""
+    from app.routers import integrations
+    from app.services import cloud_init
+
+    legacy_root = {
+        "onedrive": {
+            "id": "01GIDQVHIWKMVSL5RS3FD34HJJGAQHK5RO",
+            "folder_name": "CyberSafeadvisor",
+        }
+    }
+    test_tenant.cloud_root_folder = legacy_root
+    await db_session.commit()
+    calls = []
+
+    async def add_google(_db, _tenant_id, *, existing_root=None):
+        calls.append(existing_root)
+        return {"google_drive": {"id": "google-root"}}
+
+    monkeypatch.setattr(cloud_init, "initialize_cloud_root_folder", add_google)
+
+    await integrations._ensure_cloud_root(db_session, str(test_tenant.id))
+
+    assert calls == [legacy_root]
+    await db_session.refresh(test_tenant)
+    assert test_tenant.cloud_root_folder == {
+        "onedrive": legacy_root["onedrive"],
+        "google_drive": {"id": "google-root"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_matter_root_repair_preserves_legacy_provider_binding(
+    db_session, test_tenant, monkeypatch
+):
+    """Matter provisioning must not create another OneDrive root."""
+    from app.routers import matters
+
+    legacy_root = {
+        "onedrive": {
+            "id": "01GIDQVHIWKMVSL5RS3FD34HJJGAQHK5RO",
+            "folder_name": "CyberSafeadvisor",
+        }
+    }
+    test_tenant.cloud_root_folder = legacy_root
+    await db_session.commit()
+    calls = []
+
+    async def add_google(_db, _tenant_id, *, existing_root=None):
+        calls.append(existing_root)
+        return {"google_drive": {"id": "google-root"}}
+
+    monkeypatch.setattr(matters, "initialize_cloud_root_folder", add_google)
+
+    repaired = await matters._repair_tenant_cloud_root(
+        db_session, test_tenant, test_tenant.id
+    )
+
+    assert calls == [legacy_root]
+    assert repaired == {
+        "onedrive": legacy_root["onedrive"],
+        "google_drive": {"id": "google-root"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed_root", ["bad-root", []])
+async def test_matter_root_repair_preserves_malformed_top_level_binding(
+    db_session, test_tenant, monkeypatch, malformed_root
+):
+    """Matter provisioning returns no usable root without writing a replacement."""
+    from app.routers import matters
+
+    test_tenant.cloud_root_folder = malformed_root
+    await db_session.commit()
+
+    async def should_not_initialize(*_args, **_kwargs):
+        raise AssertionError("malformed root must not start provider provisioning")
+
+    monkeypatch.setattr(matters, "initialize_cloud_root_folder", should_not_initialize)
+
+    repaired = await matters._repair_tenant_cloud_root(
+        db_session, test_tenant, test_tenant.id
+    )
+
+    assert repaired == {}
+    await db_session.refresh(test_tenant)
+    assert test_tenant.cloud_root_folder == malformed_root
+
+
+@pytest.mark.asyncio
 async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
     """Matter metadata records the platform-created canonical storage paths."""
     from app.services import cloud_init

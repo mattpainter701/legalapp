@@ -36,6 +36,7 @@ from app.services.cloud_init import (
     ROOT_FOLDER_NAME,
     canonical_matter_folder_name,
     build_matter_folder_metadata,
+    cloud_root_binding_repair_needed,
     ensure_matter_marker,
     initialize_cloud_root_folder,
     initialize_matter_folders,
@@ -2568,11 +2569,23 @@ async def _repair_tenant_cloud_root(
     db: AsyncSession, tenant: Tenant, tenant_id: uuid.UUID
 ) -> dict:
     """Refresh tenant root metadata so matter reconnects use the discovered root."""
-    cloud_root = tenant.cloud_root_folder or {}
+    existing_root = tenant.cloud_root_folder
+    repair_needed = cloud_root_binding_repair_needed(existing_root)
+    if repair_needed:
+        logger.warning(
+            "Tenant cloud root binding requires administrator repair for %s: %s",
+            tenant_id,
+            ", ".join(repair_needed),
+        )
+        return existing_root if isinstance(existing_root, dict) else {}
+
+    cloud_root = existing_root or {}
     try:
-        fresh = await initialize_cloud_root_folder(db, str(tenant_id))
+        fresh = await initialize_cloud_root_folder(
+            db, str(tenant_id), existing_root=cloud_root
+        )
         if fresh:
-            cloud_root = {**fresh, **cloud_root}
+            cloud_root = {**cloud_root, **fresh}
             tenant.cloud_root_folder = cloud_root
     except Exception as exc:
         logger.warning("Tenant cloud root repair failed for %s: %s", tenant_id, exc)

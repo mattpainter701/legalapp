@@ -205,6 +205,12 @@ store a selected site/library/folder binding and route matter files there, but
 operators must verify the returned provider object, drive, parent, and web URL.
 A successful local fallback is not proof that SharePoint storage succeeded.
 
+## Cloud root preservation and repair
+
+A saved provider root ID is authoritative, even when its folder has a legacy name. Reconnect, cloud setup retry, and matter-folder provisioning add roots only for newly connected providers; they do not replace an existing provider ID or move its folder.
+
+If cloud setup reports `repair_needed`, do not rename, move, delete, or recreate the existing root. Record the tenant, provider, saved root ID and folder URL without tokens or secrets, then have an administrator review the tenant root and affected matter mappings before any manual repair.
+
 ## Integration acceptance record
 
 For each enabled provider, record without secrets:
