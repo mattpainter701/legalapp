@@ -3,6 +3,7 @@
 ## Purpose
 
 - [Artifact review and approved document delivery](artifact-review-and-delivery.md): exact-revision human review, firm policy, and separately approved email attachments.
+- [Durable capability workflows](../durable-capability-workflows.md): shared Chat/MCP plans, encrypted checkpoints, missing-input and review continuation, and verified cloud-write recovery.
 - [Configuration suggestions from firm history](../workflow-configuration-synthesis.md): native/imported observations, ordinary draft versions and rules, human approval, and immutable proposal evidence. The current synthesis controls are authenticated UI/API controls; no MCP approval authority is added.
 
 This directory is the stable entry point for LawHand MCP documentation. The current Markdown corpus is the source material for a later wiki and user guide; it is not temporary implementation commentary.

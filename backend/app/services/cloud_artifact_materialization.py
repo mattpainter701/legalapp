@@ -117,7 +117,9 @@ def render_revision_docx(*, title: str, content: str) -> bytes:
         document.add_paragraph(clean)
     output = io.BytesIO()
     document.save(output)
-    return output.getvalue()
+    from app.services.document_template_workspace import _canonical_docx_bytes
+
+    return _canonical_docx_bytes(output.getvalue())
 
 
 def _configured_provider(settings: TenantSettings | None) -> str:
@@ -225,6 +227,7 @@ class CloudArtifactMaterializer:
         uploaded_by_user_id: uuid.UUID,
         supersedes_document_id: uuid.UUID | None = None,
         source_docx_bytes: bytes | None = None,
+        runtime_checkpoint: Any = None,
     ) -> MaterializedArtifact:
         artifact = await db.scalar(
             select(GeneratedArtifact)
@@ -301,6 +304,17 @@ class CloudArtifactMaterializer:
             revision_no=revision.revision_no,
             artifact_id=artifact.id,
         )
+        prior_operation = await db.scalar(
+            select(DocumentStorageOperation).where(
+                DocumentStorageOperation.tenant_id == tenant_id,
+                DocumentStorageOperation.artifact_revision_id == revision.id,
+            )
+        )
+        expected_size = len(content)
+        if prior_operation is not None:
+            digest = prior_operation.content_sha256
+            expected_size = prior_operation.content_size
+
         operation = await ensure_document_storage_operation(
             db,
             tenant_id=tenant_id,
@@ -310,7 +324,7 @@ class CloudArtifactMaterializer:
             artifact_revision_id=revision.id,
             actor_user_id=uploaded_by_user_id,
             content_sha256=digest,
-            content_size=len(content),
+            content_size=expected_size,
             target_provider=("google" if backend == "google_drive" else "microsoft"),
             target_backend=backend,
             target_drive_id=folder.drive_id,
@@ -337,7 +351,9 @@ class CloudArtifactMaterializer:
                 expected_sha256=digest,
                 task=task,
             )
-        if operation.status in {"writing", "provider_accepted", "ambiguous"}:
+        if operation.status in {"writing", "ambiguous"} or (
+            operation.status == "provider_accepted" and not runtime_checkpoint
+        ):
             raise CloudReconciliationRequired(
                 "A prior cloud write may have reached the provider; reconcile it "
                 "before retrying"
@@ -347,61 +363,92 @@ class CloudArtifactMaterializer:
                 "The cloud operation is linked but its matter document is unavailable"
             )
 
-        operation.status = "writing"
-        operation.delivery_certainty = "unknown"
-        operation.attempts += 1
-        operation.error_code = None
-        operation.error_message = None
-        await db.flush()
-
-        storage = await self._upload(
-            tenant_id=tenant_id,
-            matter=matter,
-            backend=backend,
-            filename=filename,
-            content=content,
-        )
-        if (
-            not storage.succeeded
-            or storage.backend not in _CLOUD_BACKENDS
-            or not storage.provider_item_id
-        ):
-            operation.status = "ambiguous"
+        if operation.status == "provider_accepted":
+            if not operation.provider_object_id:
+                raise CloudReconciliationRequired(
+                    "Accepted cloud identity is unavailable"
+                )
+            storage = StorageResult(
+                provider=operation.target_provider,
+                backend=operation.target_backend,
+                provider_item_id=operation.provider_object_id,
+                provider_etag=operation.provider_etag,
+                provider_version_id=operation.provider_version_id,
+                drive_id=operation.target_drive_id,
+                parent_id=operation.target_parent_id,
+                storage_path=operation.provider_object_id,
+            )
+        else:
+            if (
+                hashlib.sha256(content).hexdigest() != digest
+                or len(content) != expected_size
+            ):
+                raise CloudIntegrityError(
+                    "Retry bytes differ from the checkpointed cloud write"
+                )
+            operation.status = "writing"
             operation.delivery_certainty = "unknown"
-            operation.error_code = "cloud_write_unconfirmed"
-            operation.error_message = (
-                storage.error or "Cloud provider did not return a durable item"
-            )[:1_000]
-            await append_document_integrity_event(
-                db,
-                tenant_id=tenant_id,
-                matter_id=artifact.matter_id,
-                task_id=task.id,
-                artifact_id=artifact.id,
-                artifact_revision_id=revision.id,
-                operation_id=operation.id,
-                event_type="cloud_write_unconfirmed",
-                actor_type="service",
-                actor_user_id=uploaded_by_user_id,
-                content_sha256=digest,
-                metadata={
-                    "storage_backend": backend,
-                    "attempt": operation.attempts,
-                },
-            )
-            raise CloudUploadError(
-                "The tenant cloud write could not be confirmed; the draft is blocked "
-                "for reconciliation"
-            )
+            operation.attempts += 1
+            operation.error_code = None
+            operation.error_message = None
+            await db.flush()
+            if runtime_checkpoint:
+                await runtime_checkpoint(
+                    phase="cloud_write_started", operation_id=operation.id
+                )
 
-        operation.status = "provider_accepted"
-        operation.delivery_certainty = "provider_accepted"
-        operation.provider_object_id = storage.provider_item_id
-        operation.provider_etag = storage.provider_etag
-        operation.provider_version_id = storage.provider_version_id
-        operation.target_drive_id = storage.drive_id or folder.drive_id
-        operation.target_parent_id = storage.parent_id or folder.parent_id
-        await db.flush()
+            storage = await self._upload(
+                tenant_id=tenant_id,
+                matter=matter,
+                backend=backend,
+                filename=filename,
+                content=content,
+            )
+            if (
+                not storage.succeeded
+                or storage.backend not in _CLOUD_BACKENDS
+                or not storage.provider_item_id
+            ):
+                operation.status = "ambiguous"
+                operation.delivery_certainty = "unknown"
+                operation.error_code = "cloud_write_unconfirmed"
+                operation.error_message = (
+                    storage.error or "Cloud provider did not return a durable item"
+                )[:1_000]
+                await append_document_integrity_event(
+                    db,
+                    tenant_id=tenant_id,
+                    matter_id=artifact.matter_id,
+                    task_id=task.id,
+                    artifact_id=artifact.id,
+                    artifact_revision_id=revision.id,
+                    operation_id=operation.id,
+                    event_type="cloud_write_unconfirmed",
+                    actor_type="service",
+                    actor_user_id=uploaded_by_user_id,
+                    content_sha256=digest,
+                    metadata={
+                        "storage_backend": backend,
+                        "attempt": operation.attempts,
+                    },
+                )
+                raise CloudUploadError(
+                    "The tenant cloud write could not be confirmed; the draft is blocked "
+                    "for reconciliation"
+                )
+
+            operation.status = "provider_accepted"
+            operation.delivery_certainty = "provider_accepted"
+            operation.provider_object_id = storage.provider_item_id
+            operation.provider_etag = storage.provider_etag
+            operation.provider_version_id = storage.provider_version_id
+            operation.target_drive_id = storage.drive_id or folder.drive_id
+            operation.target_parent_id = storage.parent_id or folder.parent_id
+            await db.flush()
+            if runtime_checkpoint:
+                await runtime_checkpoint(
+                    phase="cloud_provider_accepted", operation_id=operation.id
+                )
 
         document = MatterDocument(
             tenant_id=tenant_id,
@@ -413,7 +460,7 @@ class CloudArtifactMaterializer:
             uploaded_by_user_id=uploaded_by_user_id,
             filename=filename,
             content_type=_DOCX_CONTENT_TYPE,
-            file_size=len(content),
+            file_size=expected_size,
             storage_path=storage.web_url or storage.storage_path,
             storage_provider=storage.provider,
             provider_object_id=storage.provider_item_id,
@@ -444,7 +491,7 @@ class CloudArtifactMaterializer:
                     tenant_id=tenant_id,
                     document=document,
                     expected_sha256=digest,
-                    expected_size=len(content),
+                    expected_size=expected_size,
                 )
                 if not hashlib.sha256(readback).hexdigest() == digest:
                     raise CloudIntegrityError(
@@ -503,9 +550,13 @@ class CloudArtifactMaterializer:
                     },
                 )
         except Exception as exc:
-            compensated = await self._compensate(
-                tenant_id=tenant_id,
-                storage=storage,
+            compensated = (
+                False
+                if runtime_checkpoint
+                else await self._compensate(
+                    tenant_id=tenant_id,
+                    storage=storage,
+                )
             )
             operation.status = "failed" if compensated else "ambiguous"
             operation.delivery_certainty = "not_delivered" if compensated else "unknown"

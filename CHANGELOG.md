@@ -1,3 +1,10 @@
+## 2026.09.08.10 - Durable capability workflows
+
+- Add bounded Chat/MCP workflow plans, encrypted step payloads, missing-input/review continuation, current authority checks and firm/matter evidence views.
+- Persist artifact and provider checkpoints around cloud I/O; verify original folder and exact bytes when reconciling an uncertain write. Keep final delivery in existing reviewed task workers.
+- Replace durable-job dispatch branches with an explicit handler registry, preserve legacy transaction modes, and account for runtime MCP steps in existing grant budgets.
+- Add migration 168 with forced RLS and immutable evidence guards; rehearse actual process termination, one cloud upload, retained artifact identity and one normal attorney approval.
+
 ## 2026.09.08.9 - Signing-aware template completion
 
 - Exclude signatures and signer-linked dates from Smart Fill and pre-signing completion while preserving ordinary required dates.

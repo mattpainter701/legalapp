@@ -104,6 +104,25 @@ _WORKSPACE_SMS_IDEMPOTENCY_NAMESPACE = "workspace-mcp:sms"
 _WORKSPACE_SMS_IDEMPOTENCY_KIND = "workspace_mcp_sms_proposal"
 
 
+async def propose_workflow_run(context, args):
+    from app.services.workflow_run_ledger import submit_run
+
+    return await submit_run(context, args)
+
+
+async def get_workflow_run(context, args):
+    from app.services.workflow_run_ledger import load_run, describe_run
+
+    run = await load_run(context, args.run_id)
+    return await describe_run(context.db, run)
+
+
+async def resume_workflow_run(context, args):
+    from app.services.workflow_run_ledger import resume_run
+
+    return await resume_run(context, args.run_id, args)
+
+
 def _normalize_task_title(value: str) -> str:
     return " ".join(value.casefold().split())
 
@@ -1418,6 +1437,17 @@ async def propose_client_sms(
 async def _propose_matter_document(
     context: ChatToolContext,
     args: ProposeMatterDocumentArgs,
+    **kwargs,
+) -> dict[str, Any]:
+    if context.runtime_checkpoint:
+        return await _propose_matter_document_impl(context, args, **kwargs)
+    async with context.db.begin_nested():
+        return await _propose_matter_document_impl(context, args, **kwargs)
+
+
+async def _propose_matter_document_impl(
+    context: ChatToolContext,
+    args: ProposeMatterDocumentArgs,
     *,
     source_docx_bytes: bytes | None = None,
     template_id: uuid.UUID | None = None,
@@ -1578,46 +1608,55 @@ async def _propose_matter_document(
                     "The existing review task has different reviewer bindings",
                 )
 
-        try:
-            materialized = await cloud_artifact_materializer.materialize(
-                db=context.db,
-                tenant_id=context.tenant_id,
-                artifact_id=artifact.id,
-                revision_id=revision.id,
-                task_id=task.id,
-                uploaded_by_user_id=context.actor_user_id,
-                source_docx_bytes=source_docx_bytes,
-            )
-        except CloudArtifactMaterializationError as exc:
-            raise ChatToolError(
-                exc.code,
-                "The draft could not be written and verified in tenant storage",
-            ) from exc
-
-        document = materialized.document
-        action = MatterDocumentDraftAction(
-            type="matter_document_draft",
-            matter_id=args.matter_id,
-            title=artifact.title,
-            body=revision.content_text,
+    if context.runtime_checkpoint:
+        await context.runtime_checkpoint(
+            phase="artifact_identity_checkpointed",
             artifact_id=artifact.id,
-            artifact_revision_id=revision.id,
-            artifact_revision_no=revision.revision_no,
-            artifact_sha256=revision.content_sha256,
-            document_id=document.id,
-            document_sha256=document.document_sha256,
-            document_storage_backend=document.storage_backend,
-            document_provider_etag=document.provider_etag,
-            document_provider_version_id=document.provider_version_id,
-            document_preview_truncated=document_preview_truncated,
-            source_ids=args.source_ids[:10],
-            sources=chips,
+            revision_id=revision.id,
+            task_id=task.id,
         )
-        task.pending_action = action.model_dump(mode="json")
-        await ensure_review_requirements(
-            context.db, task, binding=(artifact, revision, document)
+
+    try:
+        materialized = await cloud_artifact_materializer.materialize(
+            db=context.db,
+            tenant_id=context.tenant_id,
+            artifact_id=artifact.id,
+            revision_id=revision.id,
+            task_id=task.id,
+            uploaded_by_user_id=context.actor_user_id,
+            source_docx_bytes=source_docx_bytes,
+            runtime_checkpoint=context.runtime_checkpoint,
         )
-        await context.db.flush()
+    except CloudArtifactMaterializationError as exc:
+        raise ChatToolError(
+            exc.code,
+            "The draft could not be written and verified in tenant storage",
+        ) from exc
+
+    document = materialized.document
+    action = MatterDocumentDraftAction(
+        type="matter_document_draft",
+        matter_id=args.matter_id,
+        title=artifact.title,
+        body=revision.content_text,
+        artifact_id=artifact.id,
+        artifact_revision_id=revision.id,
+        artifact_revision_no=revision.revision_no,
+        artifact_sha256=revision.content_sha256,
+        document_id=document.id,
+        document_sha256=document.document_sha256,
+        document_storage_backend=document.storage_backend,
+        document_provider_etag=document.provider_etag,
+        document_provider_version_id=document.provider_version_id,
+        document_preview_truncated=document_preview_truncated,
+        source_ids=args.source_ids[:10],
+        sources=chips,
+    )
+    task.pending_action = action.model_dump(mode="json")
+    await ensure_review_requirements(
+        context.db, task, binding=(artifact, revision, document)
+    )
+    await context.db.flush()
 
     return {
         "artifact_id": str(artifact.id),

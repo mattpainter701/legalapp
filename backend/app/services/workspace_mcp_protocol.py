@@ -98,6 +98,9 @@ class WorkspaceMCPIdentity:
 # checked independently so removing a user's role takes effect immediately,
 # even while a short-lived access token remains cryptographically valid.
 _APP_CAPABILITIES_BY_TOOL: dict[str, frozenset[str]] = {
+    "propose_workflow_run": frozenset({"manage_matters"}),
+    "get_workflow_run": frozenset({"manage_matters"}),
+    "resume_workflow_run": frozenset({"manage_matters"}),
     "search_clients": frozenset({"manage_matters"}),
     "get_client": frozenset({"manage_matters"}),
     "search_intakes": frozenset({"manage_intake"}),
@@ -298,6 +301,10 @@ def _workspace_idempotency_key(
 def _success_audit_metadata(spec: CapabilitySpec, result: dict[str, Any]) -> dict:
     """Keep tool audit useful without retaining private search text or snippets."""
     metadata: dict[str, Any] = {"effect": spec.effect.value}
+    if spec.name in {"propose_workflow_run", "get_workflow_run", "resume_workflow_run"}:
+        metadata["run_id"] = str(uuid.UUID(result["run_id"]))
+        metadata["plan_sha256"] = str(result["plan_sha256"])[:64]
+        metadata["run_status"] = str(result["status"])[:30]
     if spec.name == "search_firm_memory":
         metadata.update(
             {
@@ -416,6 +423,8 @@ async def execute_workspace_capability(
                     require_explicit=spec.name == "propose_client_sms",
                 ),
                 granted_scopes=identity.scopes,
+                grant_id=uuid.UUID(identity.grant_id),
+                client_id=identity.client_id,
                 redis=getattr(
                     getattr(request.scope.get("app"), "state", None), "redis", None
                 ),

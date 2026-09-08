@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.08.10",
+      "version": "2026.09.08.10",
+      "title": "Continue bounded workflows across review and interruptions",
+      "published_at": "2026-09-08",
+      "summary": "Start a matter workflow in LawHand Chat or a connected assistant, supply missing information, and continue from durable review checkpoints.",
+      "highlights": [
+        {
+          "title": "Continue work after review",
+          "description": "Inspect workflow steps from the matter or firm view. Completed work stays recorded, and each proposal uses the existing LawHand review controls."
+        },
+        {
+          "title": "Recover without duplicate documents",
+          "description": "Interrupted cloud writes retain the original artifact and provider evidence. Verify the existing file before continuing instead of uploading another copy."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.9",
       "version": "2026.09.08.9",
       "title": "Keep signing fields ready for e-signing",

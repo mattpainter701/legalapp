@@ -17,6 +17,7 @@ import {
   getContacts, getAdminUsers,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
+import WorkflowRunsPanel from '../components/workflows/WorkflowRunsPanel'
 import MatterCorrespondenceTab from '../components/MatterCorrespondenceTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
 import MatterSmbSharesTab from '../components/MatterSmbSharesTab'
@@ -1387,6 +1388,7 @@ function MatterWorkspace() {
         )}
 
         {activeTab === 'workflow' && (
+          <>
           <MatterWorkflowPanel
             matterId={id}
             user={user}
@@ -1395,6 +1397,8 @@ function MatterWorkspace() {
               loadDashboard()
             }}
           />
+          <WorkflowRunsPanel matterId={id} />
+          </>
         )}
 
         {/* ── Correspondence Tab (archived emails) ─────────────────────────────── */}

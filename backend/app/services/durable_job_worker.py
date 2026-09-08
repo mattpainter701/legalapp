@@ -18,6 +18,7 @@ from app.models.durable_job import DurableJob
 from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.models.tenant_oauth_app import TenantOAuthApp
+from app.services.durable_job_handlers import JOB_HANDLERS, resolve_job_handler
 from app.services.durable_jobs import (
     claim_job,
     enqueue_job,
@@ -620,9 +621,10 @@ async def _run_teams_voice_reconcile(row: DurableJob) -> dict:
 
 
 WORKFLOW_PLANNING_JOB_KINDS = {
-    "matter_workflow_plan",
-    "workflow_lifecycle_plan",
-    "workflow_configuration_synthesis",
+    kind for kind, handler in JOB_HANDLERS.items() if handler.atomic_completion
+}
+WORKFLOW_REDACTED_JOB_KINDS = {
+    kind for kind, handler in JOB_HANDLERS.items() if handler.redact_failure
 }
 
 
@@ -634,7 +636,7 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
             .where(
                 DurableJob.id == job_id,
                 DurableJob.tenant_id == tenant_id,
-                DurableJob.kind.in_(WORKFLOW_PLANNING_JOB_KINDS),
+                DurableJob.kind.in_(WORKFLOW_REDACTED_JOB_KINDS),
                 DurableJob.status == "running",
                 DurableJob.attempts >= DurableJob.max_attempts,
                 DurableJob.leased_at
@@ -643,6 +645,10 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
             .with_for_update(skip_locked=True)
         )
         if exhausted:
+            if exhausted.kind == "workflow_run":
+                from app.services.workflow_runtime import block_exhausted_run
+
+                await block_exhausted_run(db, exhausted)
             await fail_job(
                 db,
                 exhausted,
@@ -654,6 +660,7 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
         if not row:
             return False
         workflow_planning_job = row.kind in WORKFLOW_PLANNING_JOB_KINDS
+        redact_failure = row.kind in WORKFLOW_REDACTED_JOB_KINDS
         claim_token = (row.attempts, row.leased_at)
         try:
             # claim_job commits; restore transaction-local tenant context.
@@ -683,6 +690,7 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
             )
             if not tenant_active and row.kind not in {
                 "mcp_stripe_meter",
+                "workflow_run",
                 *VOICE_JOB_KINDS,
             }:
                 result = (
@@ -690,48 +698,28 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                     if workflow_planning_job
                     else {"ignored": "inactive_tenant"}
                 )
-            elif row.kind == "matter_workflow_plan":
-                from app.services.durable_workflow_automations import run_planning_job
-
-                result = await run_planning_job(db, row)
-            elif row.kind == "workflow_lifecycle_plan":
-                from app.services.workflow_lifecycle import run_lifecycle_job
-
-                result = await run_lifecycle_job(db, row)
-            elif row.kind == "workflow_configuration_synthesis":
-                from app.services.workflow_synthesis import run_synthesis_job
-
-                result = await run_synthesis_job(db, row)
-            elif row.kind == "document_ingest":
-                result = await _run_document_ingest(row)
-            elif row.kind == "cloud_sync":
-                result = await _run_cloud_sync(row)
-            elif row.kind == "mcp_stripe_meter":
-                from app.services.mcp_product import deliver_mcp_meter_event
-
-                result = await deliver_mcp_meter_event(row.payload)
-            elif row.kind == "user_sync":
-                result = await _run_user_sync(row)
-            elif row.kind == TASK_AUTOMATION_JOB:
-                from app.services.task_automation import run_task_automation_job
-
-                result = await run_task_automation_job(row)
-            elif row.kind == ZOOM_PHONE_CALL_JOB:
-                result = await _run_zoom_phone_call_import(row)
-            elif row.kind == ZOOM_PHONE_RECONCILE_JOB:
-                result = await _run_zoom_phone_reconcile(row)
-            elif row.kind == TEAMS_VOICE_CALL_JOB:
-                result = await _run_teams_voice_call_import(row)
-            elif row.kind == TEAMS_VOICE_RECONCILE_JOB:
-                result = await _run_teams_voice_reconcile(row)
             else:
-                raise ValueError(f"Unsupported durable job kind: {row.kind}")
+                result = await resolve_job_handler(row.kind).execute(db, row)
             await set_tenant_context(db, str(tenant_id))
-            row = await db.get(DurableJob, job_id)
+            row = await db.scalar(
+                select(DurableJob)
+                .where(
+                    DurableJob.id == job_id,
+                    DurableJob.tenant_id == tenant_id,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if (
+                row is None
+                or row.status != "running"
+                or (row.attempts, row.leased_at) != claim_token
+            ):
+                return False
             await finish_job(db, row, result=result)
         except Exception as exc:
             failure = exc
-            if workflow_planning_job:
+            if redact_failure:
                 # Never persist SQL parameters or source content in job errors.
                 await db.rollback()
                 failure = RuntimeError(
@@ -747,7 +735,7 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
             )
 
             await set_tenant_context(db, str(tenant_id))
-            if workflow_planning_job:
+            if redact_failure:
                 row = await db.scalar(
                     select(DurableJob)
                     .where(
@@ -765,6 +753,10 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                     return False
             else:
                 row = await db.get(DurableJob, job_id)
+            if row.kind == "workflow_run" and row.attempts >= row.max_attempts:
+                from app.services.workflow_runtime import block_exhausted_run
+
+                await block_exhausted_run(db, row)
             await fail_job(
                 db,
                 row,
