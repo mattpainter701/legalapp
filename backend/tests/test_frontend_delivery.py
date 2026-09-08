@@ -287,7 +287,8 @@ def test_nginx_operator_routes_and_pdf_csp_are_consistent() -> None:
     assert "script-src 'self'$csp_analytics_script;" in csp_lines[0]
     assert "'unsafe-inline'" not in csp_lines[0].split("style-src")[0]
     public_routes = (
-        "privacy|terms|pricing|request-demo|trust-center|product(?:/(?:chat|mcp))?"
+        "privacy|terms|pricing|request-demo|trust-center|support|requirements"
+        "|product(?:/(?:chat|mcp))?"
     )
     assert nginx.count(f"location ~ ^/({public_routes})/?$ {{") == 2
     assert nginx.count(f"rewrite ^/({public_routes})/?$ /$1/index.html break;") == 2
