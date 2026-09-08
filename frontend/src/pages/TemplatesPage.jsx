@@ -445,7 +445,12 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const [sourceReviewReady, setSourceReviewReady] = useState(false)
   const [aiConsent, setAiConsent] = useState(false)
   const [aiAnalyzing, setAiAnalyzing] = useState(false)
+  const [aiRequirements, setAiRequirements] = useState('')
   const analysisRequestRef = useRef(0)
+
+  const aiDraftRevision = JSON.stringify([title, category, aiRequirements, draftBody, mappedFields, analysis?.analysis_token])
+  const aiDraftRevisionRef = useRef(aiDraftRevision)
+  aiDraftRevisionRef.current = aiDraftRevision
 
   const fileKey = file ? `${file.name}:${file.size}:${file.lastModified}` : ''
   const isWordUpload = /\.docx$/i.test(file?.name || '')
@@ -529,19 +534,42 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       return
     }
     const requestId = analysisRequestRef.current
+    const requestedRevision = aiDraftRevisionRef.current
     setAiAnalyzing(true)
     setError(null)
     try {
       const form = buildFormData({ includeAnalysisToken: true })
       form.append('consent_to_external_ai', 'true')
+      form.append('template_context', JSON.stringify({
+        action: 'suggest_fields', title, category, requirements: aiRequirements,
+        draft_body: draftBody,
+        fields: mappedFields.map(field => ({
+          name: field.name || '', label: field.label || '',
+          source_text: field.source_text || field.example || '', field_type: field.field_type || 'text',
+          binding: field.binding || '', included: field.included !== false,
+          required: Boolean(field.required), page: field.page || null,
+          paragraph_ordinal: field.docx_anchor?.paragraph_ordinal ?? null,
+        })),
+      }))
       const result = await proposeTemplateFieldsWithAi(form)
       if (analysisRequestRef.current !== requestId) return
-      const proposals = result?.suggested_variable_schema?.fields || []
+      if (aiDraftRevisionRef.current !== requestedRevision) {
+        setError('Your template changed while AI was working. Your edits are kept; run suggestions again for the current draft.')
+        return
+      }
+      const proposals = (result?.suggested_variable_schema?.fields || []).filter(field =>
+        field.ai_suggested && field.ai_update_kind !== 'updated'
+        && !mappedFields.some(current => current.name === field.name
+          || (current.source_text && field.source_text && (current.source_text.includes(field.source_text) || field.source_text.includes(current.source_text)))))
       // The proposal token proves this is the same uploaded source. Preserve
       // its local paragraph geometry even when an AI response omits it.
       setAnalysis({ ...result, source_paragraphs: analysis.source_paragraphs })
-      setDraftBody(result.body || result.extracted_text || '')
-      setMappedFields(proposals.map((field) => ({ ...field, _bodyName: field.name })))
+      let nextBody = draftBody
+      for (const field of proposals) {
+        if (field.source_text) nextBody = replaceSourceText(nextBody, field.source_text, `{{${field.name}}}`)
+      }
+      setDraftBody(nextBody)
+      setMappedFields([...mappedFields, ...proposals.map(field => ({ ...field, review_required: true, _bodyName: field.name }))])
       setReviewConfirmed(false)
       setSourceReviewReady(false)
       if (!proposals.some((field) => field?.ai_suggested)) {
@@ -557,6 +585,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const selectFile = (selectedFile) => {
     analysisRequestRef.current += 1
     setFile(selectedFile)
+    setAiRequirements('')
     setTitle('')
     setAnalysis(null)
     setAnalysisFileKey('')
@@ -891,20 +920,23 @@ function UploadTemplateForm({ onCreated, onCancel }) {
         />
       </div>
 
-      <div className="sticky bottom-0 z-10 -mx-2 flex flex-col gap-3 border-t border-brand-line bg-brand-surface-2/95 px-2 py-3 backdrop-blur sm:flex-row">
         {analysis && (
-          <div className="order-first rounded border border-brand-accent/30 bg-brand-accent/5 p-3 text-left sm:order-none sm:flex-1">
+          <div className="rounded border border-brand-accent/30 bg-brand-accent/5 p-3 text-left">
             <p className="text-sm font-semibold text-brand-ink">Optional premium AI field proposal</p>
-            <p className="mt-1 text-xs text-brand-muted">Only extracted text and field metadata are sent after local redaction; the original file and page images stay here. AI suggestions are review-only and never save or activate a template.</p>
+            <p className="mt-1 text-xs text-brand-muted">Your document text, current draft, title, category, requirements and field choices are sent after local redaction, along with supported data-field definitions. The original file and page images stay here. AI suggestions are review-only and never save or activate a template.</p>
+            <label htmlFor="template-ai-requirements" className="mt-2 block text-xs font-medium text-brand-ink">What should this template do? (optional)</label>
+            <textarea id="template-ai-requirements" value={aiRequirements} maxLength={2000} onChange={event => setAiRequirements(event.target.value)} rows={2} placeholder="Example: Reusable fee agreement. Include client name and address; keep the fee terms unchanged." className="mt-1 w-full rounded border border-brand-line bg-brand-bg p-2 text-sm text-brand-ink" />
+            <p className="mt-1 text-xs text-brand-muted">Suggestions use the current setup and preserve your edits and excluded fields. Missing requirements are reported for review; AI does not certify completeness.</p>
             <label className="mt-2 flex items-start gap-2 text-xs text-brand-muted">
               <input type="checkbox" checked={aiConsent} onChange={(event) => { setAiConsent(event.target.checked); setError(null) }} className="mt-0.5" />
-              I consent to sending extracted text to the configured premium AI provider for this proposal.
+              I consent to sending extracted text and the template context described above to the configured premium AI provider for this proposal.
             </label>
             <button type="button" onClick={handleAiProposal} disabled={aiAnalyzing || !aiConsent} className="mt-2 rounded border border-brand-accent/40 px-3 py-1.5 text-xs text-brand-ink hover:bg-brand-bg disabled:opacity-50">
               {aiAnalyzing ? 'Proposing fields…' : 'Suggest fields with premium AI'}
             </button>
           </div>
         )}
+      <div className="sticky bottom-0 z-10 -mx-2 flex flex-col gap-3 border-t border-brand-line bg-brand-surface-2/95 px-2 py-3 backdrop-blur sm:flex-row">
         <button
           type="button"
           onClick={() => handleAnalyze()}

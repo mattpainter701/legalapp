@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.16",
+      "version": "2026.09.07.16",
+      "title": "Template-aware AI field suggestions",
+      "published_at": "2026-09-07",
+      "summary": "AI field suggestions now use your current template setup and optional requirements while preserving your edits.",
+      "highlights": [
+        {
+          "title": "Explain what the template needs",
+          "description": "Add optional requirements before requesting AI suggestions. The proposal considers your title, category, current fields and supported data-field definitions."
+        },
+        {
+          "title": "Keep your changes",
+          "description": "AI suggestions add new fields without replacing your draft or reintroducing excluded fields. Results for an older draft are discarded with a clear explanation."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.15",
       "version": "2026.09.07.15",
       "title": "Reliable cloud folder retries",

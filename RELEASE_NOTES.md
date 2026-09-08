@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.16 — Template-aware AI field suggestions
+
+Released September 7, 2026.
+
+AI field suggestions now use your current template setup and optional requirements while preserving your edits.
+
+- **Explain what the template needs.** Add optional requirements before requesting AI suggestions. The proposal considers your title, category, current fields and supported data-field definitions.
+- **Keep your changes.** AI suggestions add new fields without replacing your draft or reintroducing excluded fields. Results for an older draft are discarded with a clear explanation.
+
 ## 2026.09.07.15 — Reliable cloud folder retries
 
 Released September 7, 2026.

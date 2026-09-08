@@ -719,6 +719,72 @@ describe('document template workflow', () => {
     expect(screen.queryByDisplayValue('Stale AI Source')).not.toBeInTheDocument()
   })
 
+  it('sends the current setup and requirements and preserves edits and exclusions when adding AI fields', async () => {
+    analyzeTemplateUpload.mockResolvedValue({
+      title: 'Client agreement', format: 'docx', analysis_token: 'original',
+      body: 'Client: {{client_name}}. Reference REF-42',
+      suggested_variable_schema: { source: 'docx_source', fields: [
+        { name: 'client_name', label: 'Client name', source_text: 'Ada Lovelace', binding: 'client.name', required: true },
+        { name: 'excluded', label: 'Excluded date', source_text: '2026-01-01', included: false },
+      ] }, warnings: [],
+    })
+    proposeTemplateFieldsWithAi.mockResolvedValue({
+      format: 'docx', analysis_token: 'reviewed', body: 'AI must not replace my body',
+      suggested_variable_schema: { source: 'docx_source', fields: [
+        { name: 'client_name', label: 'Wrong label', source_text: 'Ada Lovelace', ai_suggested: true, ai_update_kind: 'updated' },
+        { name: 'date_reintroduced', source_text: '2026-01-01', ai_suggested: true },
+        { name: 'reference', label: 'Reference', source_text: 'REF-42', ai_suggested: true, ai_update_kind: 'added' },
+      ] }, warnings: ['Address requirement is absent from the source.'],
+    })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    fireEvent.change(screen.getByLabelText('Sample document'), { target: { files: [new File(['word'], 'agreement.docx')] } })
+    await screen.findByDisplayValue('Client agreement')
+    fireEvent.change(screen.getByLabelText('Imported field label'), { target: { value: 'My client label' } })
+    fireEvent.change(screen.getByLabelText(/What should this template do/), { target: { value: 'Include address; preserve fee terms.' } })
+    await user.click(screen.getByRole('checkbox', { name: /I consent to sending extracted text/ }))
+    await user.click(screen.getByRole('button', { name: 'Suggest fields with premium AI' }))
+    await screen.findByRole('button', { name: 'Select Reference' })
+    const context = JSON.parse(proposeTemplateFieldsWithAi.mock.calls[0][0].get('template_context'))
+    expect(context).toMatchObject({ action: 'suggest_fields', title: 'Client agreement', category: 'other', requirements: 'Include address; preserve fee terms.', draft_body: 'Client: {{client_name}}. Reference REF-42' })
+    expect(context.fields[0]).toMatchObject({ label: 'My client label', binding: 'client.name', required: true })
+    expect(context.fields[1].included).toBe(false)
+    expect(screen.getByRole('button', { name: 'Select My client label' })).toBeInTheDocument()
+    expect(screen.queryByText('Wrong label')).not.toBeInTheDocument()
+    expect(screen.getByText('Address requirement is absent from the source.')).toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: 'Confirm source comparison' }))
+    await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
+    await waitFor(() => expect(createTemplateFromUpload).toHaveBeenCalledTimes(1))
+    const saved = createTemplateFromUpload.mock.calls[0][0]
+    expect(saved.get('reviewed_body')).toBe('Client: {{client_name}}. Reference {{reference}}')
+    expect(JSON.parse(saved.get('variable_schema')).fields).toEqual([
+      expect.objectContaining({ label: 'My client label', binding: 'client.name', required: true }),
+      expect.objectContaining({ name: 'excluded', included: false }),
+      expect.objectContaining({ name: 'reference', ai_suggested: true }),
+    ])
+  })
+
+  it('discards AI results when requirements change on the same document', async () => {
+    let finishAi
+    analyzeTemplateUpload.mockResolvedValue({ title: 'Current draft', format: 'docx', body: 'Reference REF-42', suggested_variable_schema: { source: 'docx_source', fields: [] }, warnings: [] })
+    proposeTemplateFieldsWithAi.mockImplementationOnce(() => new Promise(resolve => { finishAi = resolve }))
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    fireEvent.change(screen.getByLabelText('Sample document'), { target: { files: [new File(['word'], 'current.docx')] } })
+    await screen.findByDisplayValue('Current draft')
+    await user.click(screen.getByRole('checkbox', { name: /I consent to sending extracted text/ }))
+    await user.click(screen.getByRole('button', { name: 'Suggest fields with premium AI' }))
+    fireEvent.change(screen.getByLabelText(/What should this template do/), { target: { value: 'New requirements' } })
+    await act(async () => finishAi({ analysis_token: 'stale', body: '{{stale}}', suggested_variable_schema: { fields: [{ name: 'stale', label: 'Stale suggestion', ai_suggested: true }] } }))
+    expect(await screen.findByText(/Your template changed while AI was working/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Select Stale suggestion' })).not.toBeInTheDocument()
+    expect(screen.getByDisplayValue('New requirements')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Sample document'), { target: { files: [new File(['second'], 'second.docx')] } })
+    await waitFor(() => expect(screen.getByLabelText(/What should this template do/)).toHaveValue(''))
+  })
+
   it('adopts the signed AI analysis and keeps every proposal review-only', async () => {
     analyzeTemplateUpload.mockResolvedValue({
       title: 'AI Assisted Source',

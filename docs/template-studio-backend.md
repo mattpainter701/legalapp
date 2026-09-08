@@ -266,3 +266,43 @@ Required Phase 4 behavior:
 This change therefore affects the future Workspace MCP template/artifact/review
 workflow documentation, but it does not expose or authorize an MCP endpoint in
 this phase.
+
+
+## Intake AI context (2026.09.07.16)
+
+The existing consented `POST /api/templates/intake/ai-propose` accepts optional
+`template_context` JSON in multipart form data. This is an additive field-suggestion
+action, not the future Phase 4 proposal API or a section-generation endpoint.
+The platform retains control of premium model routing and billing.
+
+The context contains `action: "suggest_fields"`, the current title/category,
+optional requirements (2,000 characters), current draft body (100,000 characters
+accepted; first 12,000 shared), and up to 200 current field definitions. Field
+metadata includes name, label, source text, type, binding, included/required flags,
+and optional page/paragraph identifiers. Unknown properties/actions and invalid
+limits return 422 before any model work. The context JSON is limited to 150,000
+characters. The server adds its supported binding catalogue (definitions only),
+source mode, and manual-input findings. It does not retrieve client/matter records
+or arbitrary tenant data. No custom-field inventory or jurisdiction/stage is
+inferred when the import UI has not supplied one.
+
+All user-authored context strings use the same local identifier redaction as
+source evidence. Document and draft truncation are disclosed to the model;
+redaction remains pattern based, not a guarantee of anonymization. The sharing
+notice covers the added context. It remains ephemeral: context does not enter
+the signed source schema, usage metadata, or persisted template schema. Requirements
+are scoped to the current upload and reset on file replacement.
+
+For context-aware requests, existing fields and exclusions are locked. Model
+updates and proposals overlapping their source text are discarded before source
+reconciliation. New fields still require independently located source evidence.
+The client appends only new suggestions, preserves the current body and metadata,
+and requires review. It discards responses if the source, requirements, title,
+category, body, fields, or analysis token changed while the request ran. A
+stale response still incurred model usage; it is not automatically retried.
+Requests omitting context retain the older API contract for compatibility.
+
+Missing requirements may be explained in warnings, but this action does not
+certify completeness, generate clauses, apply data bindings, or promote a
+template. Other AI actions must declare their own bounded action contract rather
+than reuse the field-suggestion operation to perform unrelated edits.
