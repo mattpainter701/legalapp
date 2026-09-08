@@ -41,6 +41,7 @@ attorney approval. Legacy compatibility is not accepted for a document attachmen
 ## Separate delivery approval
 
 `propose_client_email` accepts an optional `artifact_id`. LawHand resolves the
+artifact identity exposed by `list_matter_documents` and binds the
 current approved revision, attorney decision, document, filename, and byte hash
 on the same matter. The assistant cannot provide a storage path, substitute
 attachment bytes, or invent recipient addresses. Recipients remain server-resolved

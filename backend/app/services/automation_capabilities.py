@@ -405,7 +405,8 @@ CAPABILITY_SPECS: tuple[CapabilitySpec, ...] = (
         description=(
             "Draft a client email as reviewable work on the board. The "
             "assigned reviewer edits and approves it; approval sends it. Recipients "
-            "must come from list_matter_recipients."
+            "must come from list_matter_recipients. Optionally attach an artifact_id "
+            "from list_matter_documents; only the current attorney-approved file is accepted."
         ),
         args_model=ProposeClientEmailArgs,
         handler_name="propose_client_email",

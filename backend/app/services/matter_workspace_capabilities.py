@@ -384,6 +384,13 @@ def _document_summary(document: MatterDocument) -> dict[str, Any]:
     backend = settings.BACKEND_URL.rstrip("/")
     return {
         "document_id": str(document.id),
+        "artifact_id": str(document.generated_artifact_id)
+        if getattr(document, "generated_artifact_id", None)
+        else None,
+        "artifact_revision_id": str(document.generated_artifact_revision_id)
+        if getattr(document, "generated_artifact_revision_id", None)
+        else None,
+        "document_status": getattr(document, "document_status", None),
         "filename": document.filename,
         "description": document.description,
         "document_category": document.document_category,
