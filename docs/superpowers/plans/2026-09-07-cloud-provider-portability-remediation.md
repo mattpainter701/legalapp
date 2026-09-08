@@ -285,3 +285,11 @@ The preview cap uses an additive `char_length(snippet) <= 500` database check
 with a scoped cleanup of legacy oversized previews. It preserves the existing
 TEXT type for rolling-release compatibility and passes the tenant migration
 safety gate without an in-place type change.
+
+## Live-validation follow-up — 2026-09-07
+
+The existing CyberSafeAdvisor Microsoft 365 production tenant was exercised with synthetic matter files and a no-attendee calendar event. Direct OneDrive upload/read and provider discovery worked. The deployed `c52cb84b` release exposed multipart import failures, missing fetched-content display, matter content retrieval gaps, a calendar time mismatch, and an SMTP-only matter-email route. The approved synthetic self-email failed before delivery.
+
+The corrections from PRs #357, #358, and #360 are consolidated with connected-mail and captured `.eml` identity corrections in [PR #361](https://github.com/mattpainter701/legalapp/pull/361). Focused tests cover provider/matter boundaries, drive-qualified SharePoint identities, calendar deletion outcomes, and capture followed by cloud-file reads. Final-head CI, deployment, and the complete live roundtrip remain separate acceptance steps; local tests do not establish production success.
+
+D1 and D3 remain pending the owner's corpus-policy decision. No public support page, provider migration, root rename, or SharePoint team site was introduced by this validation follow-up.

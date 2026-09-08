@@ -5,6 +5,99 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.16 — Template-aware AI field suggestions
+
+Released September 7, 2026.
+
+AI field suggestions now use your current template setup and optional requirements while preserving your edits.
+
+- **Explain what the template needs.** Add optional requirements before requesting AI suggestions. The proposal considers your title, category, current fields and supported data-field definitions.
+- **Keep your changes.** AI suggestions add new fields without replacing your draft or reintroducing excluded fields. Results for an older draft are discarded with a clear explanation.
+
+## 2026.09.07.15 — Reliable cloud folder retries
+
+Released September 7, 2026.
+
+Cloud setup can now lock and repair an unbound matter folder in PostgreSQL.
+
+- **Repair unbound matter folders.** Retry cloud setup now handles matters that do not yet have a cloud folder, including matters without a partner attorney.
+- **Keep retries moving.** Matter folder repair locks only the matter record, so a nullable relationship cannot stop the rest of the firm's setup.
+
+## 2026.09.07.14 — Clearer document-first Template Studio
+
+Released September 7, 2026.
+
+See Word pages during upload, add fields from source text, and understand test results before publishing.
+
+- **See the document immediately.** Word page previews begin when you choose a file, before saving a template. Select words directly on the page to create a named field, or click a visible field box to edit it.
+- **Know what needs attention.** Field lists show replacement text and review status. Test results identify missing values and generation failures, and separate successful generation from visual approval.
+
+## 2026.09.07.13 — Verified cloud folder recovery
+
+Released September 7, 2026.
+
+Cloud folder recovery now has a database-level check that covers a temporarily busy matter.
+
+- **Keep the rest of setup moving.** When one matter folder is temporarily busy, setup continues for the other matters and reports the one that needs another retry.
+- **Check real database behavior.** Release checks now verify recovery from a database failure without relying on the order matters happen to be returned.
+
+## 2026.09.07.12 — Reliable cloud folder recovery
+
+Released September 7, 2026.
+
+Cloud setup can finish the rest of a firm's matters when one folder is temporarily busy.
+
+- **Retry the matters that need it.** A temporary lock on one matter no longer stops setup for every other matter in the firm. Retry later to finish only the affected matter.
+- **See partial results clearly.** The integrations page now reports how many matter folders were set up and how many still need another retry.
+
+## 2026.09.07.11 — More reliable Template Studio AI proposals
+
+Released September 7, 2026.
+
+Premium AI field suggestions now reuse the completed local document analysis for the exact uploaded source.
+
+- **Keep your reviewed scan.** Template Studio securely carries the completed local analysis into the optional Premium AI suggestion step, avoiding a duplicate document scan.
+- **Keep source checks in place.** AI suggestions still require the same user, tenant, file name, and uploaded bytes. If the source changed, analyze it again before requesting suggestions.
+
+## 2026.09.07.10 — Reliable connected matter workflows
+
+Released September 7, 2026.
+
+Import matter files, retrieve connected content, keep calendar times aligned, and send and reopen matter email.
+
+- **Import and find matter files.** ZIP and folder imports preserve their files and paths. Private matter retrieval includes uploaded files in custom folders, and Cloud Search displays fetched content.
+- **Keep calendar times aligned.** New scheduled events preserve the selected local time across LawHand and the connected calendar. Open event details, return to the provider, or delete the event from LawHand.
+- **Send and reopen matter email.** Matter email uses the connected mailbox. Newly captured messages retain their cloud identity so their archived .eml can be reopened.
+- **Review delivery outcomes.** Failed and unconfirmed attempts are labeled in correspondence. Unconfirmed delivery asks you to check Sent Items before sending again.
+
+## 2026.09.07.9 — Turn reviewed Word spans into safe placeholders
+
+Released September 7, 2026.
+
+Reviewed Word source spans can become selectable placeholders while the original upload remains available as evidence.
+
+- **Keep the original upload as evidence.** Studio records separate original and derived source digests so a changed upload invalidates older review and test evidence.
+- **Preserve Word formatting.** Confirmed spans become literal placeholders across split runs, tables, headers, and footers without rebuilding the document as plain text.
+- **Review prose and forms explicitly.** Studio suggests a source mode while allowing a deliberate override; ambiguous or inferred text stays available for review.
+
+## 2026.09.07.8 — Place signature fields on generated PDFs
+
+Released September 7, 2026.
+
+Template Studio can bind signature, date, and initials fields to signer roles and preserve their positions through provider dispatch.
+
+- **Bind fields to signer roles.** Signature, date, and initials fields retain their assigned signer role and are validated against the exact generated PDF revision.
+- **Preserve provider placement.** Dropbox Sign requests receive positioned tabs with explicit page and coordinate conversion; unsupported internal portal placement fails closed.
+
+## 2026.09.07.7 — Cover source details in PDF templates
+
+Released September 7, 2026.
+
+Place value-less white cover regions over ruled lines or stale source values while preparing a PDF template.
+
+- **Cover what is underneath.** Add, move, resize and remove visible cover regions in Template Studio without creating automation variables.
+- **Keep source-backed fields clean.** Choose whether an editable field paints over its source before the generated PDF is flattened.
+
 ## 2026.09.07.6 — See Word masters as printable pages in Studio
 
 Released September 7, 2026.
@@ -455,6 +548,36 @@ The LawHand platform tour now shows how legal work moves from intake and conflic
 - **See every role's handoff.** Compare what attorneys, paralegals, intake staff, billing staff, and clients need from the same matter record.
 - **Evaluate the complete platform.** Review expanded capability, practice-area, integration, and control sections with clear rollout labels and concrete workflow details.
 
+## 2026.08.27.12 — Product claims now show rollout and research boundaries
+
+Released August 27, 2026.
+
+LawHand product and pricing pages now distinguish shipped behavior, controlled pilots, planned work, and provider-dependent connections.
+
+- **See the rollout state.** Capability cards identify implemented behavior, controlled pilots, and connections that require a separate provider account or approval.
+- **Evaluate Research MCP as a pilot.** Research MCP pricing and product pages now state the controlled-pilot gate and the configured public-authority coverage boundary.
+- **Keep research claims precise.** LawHand explains that source links support attorney review without claiming Westlaw replacement, comprehensive coverage, or a good-law determination.
+
+## 2026.08.27.11 — Agreement evidence and safer retention controls
+
+Released August 27, 2026.
+
+Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.
+
+- **Know what was accepted.** Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence.
+- **Retention with guardrails.** Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion.
+
+## 2026.08.27.10 — Research API keys put staff access and spend under firm control
+
+Released August 27, 2026.
+
+Firm administrators can provision LawHand Research keys for staff, bound their lifetime and budget, and see usage and charges from the MCP portal.
+
+- **Issue keys with clear custody.** Name each key, record its purpose, assign it to a LawHand staff profile, and choose exactly which Research tools it may use.
+- **Bound time and spend.** Set an expiration, monthly dollar budget, call cap, and burst limit; the gateway stops successful calls before they exceed either hard monthly boundary.
+- **See the complete key ledger.** The portal shows active, expired, and revoked keys with creator, custodian, last use, successful and failed calls, current-month charges, and remaining budget.
+- **Connect standard API clients.** LawHand Research keys work as standard Bearer credentials while the existing custom header remains supported for compatible clients.
+
 ## 2026.08.27.9 — Document automation is faster, safer, and easier to manage
 
 Released August 27, 2026.
@@ -535,36 +658,6 @@ Staff can save and close a conflict review, and clients can download a firm-bran
 - **Conflict searches keep their evidence.** The new Conflict Search workspace saves the terms and results the reviewer saw, records notes and a decision, and locks the record after closing.
 - **Restricted matters stay restricted.** A reviewer is warned when a potential match exists on a matter they cannot access without exposing that matter's identity.
 - **Clients can download branded invoices.** A client-visible invoice is rendered with firm branding and streamed as a PDF; LawHand records download metadata and a hash without retaining another PDF copy.
-
-## 2026.08.27.12 — Product claims now show rollout and research boundaries
-
-Released August 27, 2026.
-
-LawHand product and pricing pages now distinguish shipped behavior, controlled pilots, planned work, and provider-dependent connections.
-
-- **See the rollout state.** Capability cards identify implemented behavior, controlled pilots, and connections that require a separate provider account or approval.
-- **Evaluate Research MCP as a pilot.** Research MCP pricing and product pages now state the controlled-pilot gate and the configured public-authority coverage boundary.
-- **Keep research claims precise.** LawHand explains that source links support attorney review without claiming Westlaw replacement, comprehensive coverage, or a good-law determination.
-
-## 2026.08.27.11 — Agreement evidence and safer retention controls
-
-Released August 27, 2026.
-
-Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.
-
-- **Know what was accepted.** Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence.
-- **Retention with guardrails.** Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion.
-
-## 2026.08.27.10 — Research API keys put staff access and spend under firm control
-
-Released August 27, 2026.
-
-Firm administrators can provision LawHand Research keys for staff, bound their lifetime and budget, and see usage and charges from the MCP portal.
-
-- **Issue keys with clear custody.** Name each key, record its purpose, assign it to a LawHand staff profile, and choose exactly which Research tools it may use.
-- **Bound time and spend.** Set an expiration, monthly dollar budget, call cap, and burst limit; the gateway stops successful calls before they exceed either hard monthly boundary.
-- **See the complete key ledger.** The portal shows active, expired, and revoked keys with creator, custodian, last use, successful and failed calls, current-month charges, and remaining budget.
-- **Connect standard API clients.** LawHand Research keys work as standard Bearer credentials while the existing custom header remains supported for compatible clients.
 
 ## 2026.08.27.1 — Prepare document templates with a guided review workspace
 

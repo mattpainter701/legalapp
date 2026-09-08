@@ -230,6 +230,14 @@ export default function PrepareFormWorkspace({
     )))
   }
 
+  const setCoverSource = (entry, enabled) => updateField(entry.identity, {
+    erase_source: enabled,
+    pdf_overlay: entry.field.pdf_overlay ? { ...entry.field.pdf_overlay, erase_source: enabled } : entry.field.pdf_overlay,
+    pdf_overlays: Array.isArray(entry.field.pdf_overlays)
+      ? entry.field.pdf_overlays.map((overlay) => ({ ...overlay, erase_source: enabled }))
+      : entry.field.pdf_overlays,
+  })
+
   const canvasWidth = viewport?.width
     || (Number(page.rotation || 0) % 180 ? Number(page.height) : Number(page.width)) * zoom
   const canvasHeight = viewport?.height
@@ -568,6 +576,7 @@ export default function PrepareFormWorkspace({
               </select>
             </label>
             <label className="mt-2 flex items-center gap-2 text-xs text-brand-ink"><input type="checkbox" checked={Boolean(selected.required)} onChange={(event) => updateField(selectedEntry.identity, { required: event.target.checked })} /> Required</label>
+            {placementsFor(selected).length > 0 && <label className="mt-2 flex items-start gap-2 text-xs text-brand-ink"><input type="checkbox" aria-label="Cover what is underneath" checked={Boolean(selected.erase_source ?? placementsFor(selected)[0]?.overlay?.erase_source)} onChange={(event) => setCoverSource(selectedEntry, event.target.checked)} className="mt-0.5" /><span>Cover what is underneath<p className="text-[11px] text-brand-muted">Paints a white rectangle over the source when this PDF is generated.</p></span></label>}
             <label className="mt-2 flex items-start gap-2 text-xs text-brand-ink"><input type="checkbox" checked={selected.included !== false} onChange={(event) => updateField(selectedEntry.identity, { included: event.target.checked })} className="mt-0.5" /><span>Include in template{selected.included === false && <span className="mt-0.5 block text-[11px] text-brand-muted">The original value will still be cleared from generated files.</span>}</span></label>
             <p className="mt-2 rounded bg-brand-surface-2 px-2 py-1.5 text-[11px] text-brand-muted">{sourceKind(selected)} · {selected.pdf_field_name ? 'Original PDF position locked' : `${placementsFor(selected).length} editable placement${placementsFor(selected).length === 1 ? '' : 's'}`}</p>
             {(selected.pdf_field_name || placementsFor(selected).length > 0) && (

@@ -13,6 +13,7 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
   })
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
+  const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false)
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
@@ -36,6 +37,7 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
       }
       onSent(result)
     } catch (err) {
+      if (err?.response?.status === 409) setDeliveryUnconfirmed(true)
       const msg = err?.response?.data?.detail || 'Failed to send email.'
       setError(msg)
     } finally {
@@ -100,7 +102,7 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
             </button>
             <button
               type="submit"
-              disabled={sending || !form.subject.trim() || !form.body.trim()}
+              disabled={sending || deliveryUnconfirmed || !form.subject.trim() || !form.body.trim()}
               className="min-h-11 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 disabled:opacity-50 transition-all flex items-center gap-2"
             >
               {sending ? (

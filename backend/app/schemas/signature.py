@@ -25,6 +25,9 @@ class SignatureRequestCreate(BaseModel):
     reminders: dict | None = None
     reminder_days: list[int] = Field(default_factory=list)
     enforce_signing_order: bool = False
+    # Geometry is authored against the final generated PDF, never a DOCX
+    # preview. It is validated and persisted when the request is created.
+    positioned_fields: list[dict] = Field(default_factory=list, max_length=100)
 
 
 class SignatureRequestVoid(BaseModel):
@@ -77,6 +80,7 @@ class SignatureRequestResponse(BaseModel):
     source_document_sha256: str | None = None
     completion_artifact_sha256: str | None = None
     evidence_sha256: str | None = None
+    positioned_fields: list[dict] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 

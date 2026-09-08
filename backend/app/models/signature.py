@@ -88,6 +88,8 @@ class SignatureRequest(Base):
     enforce_signing_order: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    # Immutable, generated-PDF-bound field manifest used by provider adapters.
+    positioned_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
     declined_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

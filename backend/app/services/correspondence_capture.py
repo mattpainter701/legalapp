@@ -245,6 +245,9 @@ async def capture_email_for_matter(
     # email_agent._auto_log_and_task).
     await set_tenant_context(db, str(tenant_id))
 
+    # Provider token refresh may commit and expire the authorized matter.
+    matter_id, matter_slug, cloud_folder = matter.id, matter.slug, matter.cloud_folder
+
     message_id = email.get("id")
     if not message_id:
         return False
@@ -254,10 +257,10 @@ async def capture_email_for_matter(
     if message_id != external_ref:
         possible_refs.append(message_id)
 
-    if await _already_captured(db, tenant_id, matter.id, possible_refs):
+    if await _already_captured(db, tenant_id, matter_id, possible_refs):
         logger.info(
             "Correspondence already captured for matter %s: %s",
-            matter.id,
+            matter_id,
             external_ref,
         )
         return False
@@ -282,7 +285,7 @@ async def capture_email_for_matter(
         logger.warning(
             "Failed to fetch raw email %s for matter %s: %s",
             message_id,
-            matter.id,
+            matter_id,
             exc,
         )
         return False
@@ -294,6 +297,7 @@ async def capture_email_for_matter(
     # Load tenant cloud preference for storage routing.
     from app.models.tenant import TenantSettings
 
+    await set_tenant_context(db, str(tenant_id))
     ts_result = await db.execute(
         select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
     )
@@ -301,34 +305,41 @@ async def capture_email_for_matter(
     preferred_provider = ts.primary_cloud_provider if ts else None
 
     try:
-        storage_path = await matter_file_store.store_matter_file(
+        storage_result = await matter_file_store.store_matter_file_result(
             db=db,
             tenant_id=str(tenant_id),
-            matter_slug=matter.slug,
+            matter_slug=matter_slug,
             category="correspondence",
             filename=filename,
             content=eml_bytes,
             content_type="message/rfc822",
-            matter_cloud_folder=matter.cloud_folder,
+            matter_cloud_folder=cloud_folder,
             preferred_provider=preferred_provider,
         )
     except Exception as exc:
         logger.warning(
             "Failed to store .eml for matter %s message %s: %s",
-            matter.id,
+            matter_id,
             message_id,
             exc,
         )
         return False
 
+    await set_tenant_context(db, str(tenant_id))
     doc = MatterDocument(
         tenant_id=tenant_id,
-        matter_id=matter.id,
+        matter_id=matter_id,
         uploaded_by_user_id=user_id,
         filename=filename,
         content_type="message/rfc822",
         file_size=len(eml_bytes),
-        storage_path=storage_path,
+        storage_path=storage_result.storage_path,
+        storage_provider=storage_result.provider,
+        storage_backend=storage_result.backend,
+        provider_object_id=storage_result.provider_item_id,
+        provider_drive_id=storage_result.drive_id,
+        provider_parent_id=storage_result.parent_id,
+        storage_error=storage_result.error,
         description=f"Email: {(email.get('subject') or '(no subject)')[:400]}",
         document_category="correspondence",
     )
@@ -342,7 +353,7 @@ async def capture_email_for_matter(
         status="sent" if is_outbound else "received",
         subject=(email.get("subject") or "(no subject)")[:500],
         body=email.get("body_preview"),
-        matter_id=matter.id,
+        matter_id=matter_id,
         created_by_user_id=user_id,
         occurred_at=_email_occurred_at(email),
         external_ref=external_ref,
@@ -358,7 +369,7 @@ async def capture_email_for_matter(
     await db.commit()
     logger.info(
         "Captured correspondence for matter %s: %s (%s)",
-        matter.id,
+        matter_id,
         external_ref,
         filename,
     )

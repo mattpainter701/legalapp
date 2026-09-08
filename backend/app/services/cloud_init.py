@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import lazyload
 
 from app.config import get_settings
 from app.models.tenant import TenantSettings
@@ -149,6 +150,32 @@ async def initialize_cloud_root_folder(
     return result
 
 
+async def get_matter_provisioning_tokens(
+    db: AsyncSession,
+    tenant_id: str,
+    cloud_root: dict,
+) -> dict[str, str | None]:
+    """Refresh provider credentials before a matter-folder transaction begins.
+
+    Token refresh intentionally commits its own credential update. Callers that
+    isolate matter provisioning in a savepoint must resolve these credentials
+    first, because committing inside a savepoint would invalidate that isolation.
+    """
+    tokens: dict[str, str | None] = {}
+    for auth_provider in ("google", "microsoft"):
+        has_provider_root = any(
+            cloud_root.get(provider)
+            for provider in (
+                ("google_drive",)
+                if auth_provider == "google"
+                else ("onedrive", "sharepoint")
+            )
+        )
+        if has_provider_root:
+            tokens[auth_provider] = await get_fresh_token(db, tenant_id, auth_provider)
+    return tokens
+
+
 async def initialize_matter_folders(
     db: AsyncSession,
     tenant_id: str,
@@ -158,6 +185,7 @@ async def initialize_matter_folders(
     *,
     matter_id=None,
     existing_folder: dict | None = None,
+    tokens: dict[str, str | None] | None = None,
 ) -> dict:
     """Ensure one named, marked folder per matter/provider, retaining saved bindings.
 
@@ -168,18 +196,10 @@ async def initialize_matter_folders(
         raise ValueError("Matter identity is required to provision cloud folders")
     name = canonical_matter_folder_name(folder_name, matter_id, matter_slug)
     # Refresh credentials before acquiring the matter lock: token refresh commits
-    # its own state. The network operations below use these already-fresh tokens.
-    tokens = {}
-    for auth_provider in ("google", "microsoft"):
-        if any(
-            cloud_root.get(p)
-            for p in (
-                ("google_drive",)
-                if auth_provider == "google"
-                else ("onedrive", "sharepoint")
-            )
-        ):
-            tokens[auth_provider] = await get_fresh_token(db, tenant_id, auth_provider)
+    # its own state. The retry route supplies pre-resolved tokens so each matter
+    # can run inside an independent savepoint.
+    if tokens is None:
+        tokens = await get_matter_provisioning_tokens(db, tenant_id, cloud_root)
     locked_matter = None
     if db is not None:
         from app.database import set_tenant_context
@@ -201,11 +221,15 @@ async def initialize_matter_folders(
         locked_matter = (
             await db.execute(
                 select(Matter)
+                # Matter.partner_attorney normally uses joined loading. Do not
+                # include its nullable user join in this locking query: Postgres
+                # cannot apply FOR UPDATE to the nullable side of an outer join.
+                .options(lazyload(Matter.partner_attorney))
                 .where(
                     Matter.id == uuid.UUID(str(matter_id)),
                     Matter.tenant_id == uuid.UUID(str(tenant_id)),
                 )
-                .with_for_update()
+                .with_for_update(of=Matter)
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()

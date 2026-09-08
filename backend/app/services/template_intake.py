@@ -22,6 +22,7 @@ from app.services.docx_templates import (
     iter_docx_paragraphs_with_anchors,
     validate_docx_package,
 )
+from app.services.docx_outline import docx_outline
 from app.services.template_ocr import TemplateOcrError, ocr_pdf, reconstruct_ocr_text
 
 
@@ -362,6 +363,7 @@ class TemplateAnalysis:
         default=None, repr=False, compare=False
     )
     evidence_fragments: list[dict] | None = None
+    source_paragraphs: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -373,6 +375,7 @@ class TemplateAnalysis:
             "suggested_variable_schema": self.variable_schema,
             "detected_branding_profile": self.branding_profile,
             "warnings": self.warnings,
+            "source_paragraphs": self.source_paragraphs,
         }
 
 
@@ -498,9 +501,33 @@ def analyze_template_upload(
 
     if is_docx:
         body, fields, body_warnings = _suggest_docx_template(file_bytes, cleaned)
+        outline = docx_outline(file_bytes)
+        # This metadata also travels with the short-lived analysis snapshot.
+        # Bound it to the intake text budget; partial context cannot establish
+        # uniqueness and must never position an anchored field on a page.
+        complete_outline = (
+            not outline.get("truncated")
+            and sum(
+                len(item.get("text") or "") for item in outline.get("paragraphs", [])
+            )
+            <= 20_000
+        )
+        source_paragraphs = (
+            []
+            if not complete_outline
+            else [
+                {"ordinal": item["ordinal"], "text": item.get("text") or ""}
+                for item in outline.get("paragraphs", [])
+            ]
+        )
+        if not complete_outline:
+            warnings.append(
+                "Some Word field boxes cannot be located on the page because the source outline exceeds the preview limit. Use Fields to review their exact source locations."
+            )
         warnings.extend(_docx_coverage_warnings(file_bytes))
     else:
         body, fields, body_warnings = _suggest_template_body(cleaned)
+        source_paragraphs = []
     if not is_pdf:
         warnings.extend(body_warnings)
     if is_pdf and pdf_fields:
@@ -642,6 +669,7 @@ def analyze_template_upload(
         _normalized_source_filename=prepared.filename,
         _normalized_source_content_type=prepared.content_type,
         evidence_fragments=ocr_result.fragments() if ocr_result else None,
+        source_paragraphs=source_paragraphs,
     )
 
 

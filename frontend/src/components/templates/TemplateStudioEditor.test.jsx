@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import TemplateStudioEditor, { mergedVariableSchema, schemaFields } from './TemplateStudioEditor'
 
+vi.mock('./WordDocumentPreview', () => ({ default: ({ children, onCreateField, onUpdateField, fields }) => <>{children}<button onClick={() => onCreateField({ text: 'Ada Lovelace', label: 'Client name' })}>Create from document page</button><button onClick={() => onUpdateField(`${fields[0].name}:0`, { label: 'Edited on page' })}>Edit document box</button></> }))
+
 // pdf.js cannot rasterize in jsdom, so the shared canvas module is stubbed with
 // deterministic page geometry. Everything under test here is placement state,
 // not rasterization.
@@ -24,11 +26,12 @@ vi.mock('./PdfDocumentCanvas', () => ({
 // The binding catalogue is static server-owned vocabulary; the editor only
 // needs it to populate the picker.
 vi.mock('./DocxDocumentView', () => ({
-  default: ({ fields, regions, onCreateField, onCreateRegion, onRemoveRegion, sourceReview, onReviewChange }) => (
+  default: ({ fields, regions, onCreateField, onCreateRegion, onRemoveRegion, sourceReview, onReviewChange, onParagraphs }) => (
     <div data-testid="docx-view">
       <span>{fields.length} mapped</span>
       <span>{(regions || []).length} regions</span>
       <span>{Object.keys(sourceReview || {}).length} reviewed</span>
+      <button onClick={() => onParagraphs([{ ordinal: 2, text: 'Dear Ada Lovelace,' }])}>Load source outline</button>
       {onReviewChange && <button onClick={() => onReviewChange({ synthetic: 'fixed' })}>Keep sample fixed</button>}
       <button
         type="button"
@@ -254,6 +257,39 @@ describe('TemplateStudioEditor', () => {
     expect('regions' in onSave.mock.calls[0][0]).toBe(false)
   })
 
+  it('saves, undoes, and redoes a value-less PDF cover region', async () => {
+    const onSave = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Cover' }))
+    expect(screen.getByRole('button', { name: 'Remove cover region' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(screen.queryByRole('button', { name: 'Remove cover region' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Redo' }))
+    expect(screen.getByRole('button', { name: 'Remove cover region' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(onSave.mock.calls[0][0].cover_regions).toEqual([
+      expect.objectContaining({ page: 1, erase_source: true, source_kind: 'manual' }),
+    ])
+  })
+
+  it('removes the cover on its own page without shifting another page cover', () => {
+    const template = templateWith([], {
+      cover_regions: [
+        { page: 1, rect: [40, 700, 180, 720], source_kind: 'manual', erase_source: true },
+        { page: 2, rect: [40, 700, 180, 720], source_kind: 'manual', erase_source: true },
+      ],
+    })
+    const onSave = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={template} source={pdfSource()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Show page 2' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove cover region' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save fields' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      cover_regions: [expect.objectContaining({ page: 1 })],
+    }))
+  })
+
   it('renders the document view for a Word template', () => {
     render(
       <TemplateStudioEditor
@@ -263,6 +299,17 @@ describe('TemplateStudioEditor', () => {
       />,
     )
     expect(screen.getByTestId('docx-view')).toBeInTheDocument()
+  })
+
+  it('creates a named field from the rendered page, edits it and saves its exact Word anchor', async () => {
+    const save = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={{ id: 'word', format: 'docx', variable_schema: { fields: [] } }} onSave={save} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Load source outline' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create from document page' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit document box' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save fields' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+    expect(save.mock.calls[0][0].fields).toEqual([expect.objectContaining({ name: 'client_name', label: 'Edited on page', source_text: 'Ada Lovelace', docx_anchor: { paragraph_ordinal: 2, start: 5, end: 17 } })])
   })
 
   it('keeps fields editable for a non-PDF template instead of dead-ending', () => {
@@ -352,6 +399,19 @@ describe('TemplateStudioEditor', () => {
     expect(schema.fields[0].field_type).toBe('date')
     expect(schema.fields[0].pdf_overlay.page).toBe(1)
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/^Saved /))
+  })
+
+  it('keeps signer role with unsaved field edits until save', async () => {
+    const onSave = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Signature' }))
+    fireEvent.change(screen.getByDisplayValue('field_1'), { target: { value: 'client_signature' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Signer role' }), { target: { value: 'client' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save fields/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    const field = onSave.mock.calls[0][0].fields[0]
+    expect(field.name).toBe('client_signature')
+    expect(field.signer_role).toBe('client')
   })
 
   it('reports a failed save and keeps the work in the editor', async () => {

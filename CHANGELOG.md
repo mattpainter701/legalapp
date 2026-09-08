@@ -11,13 +11,71 @@
 
 # Changelog
 
-## 2026.09.07.7 - Public support path and requirements matrix
+## 2026.09.07.17 - Public support path and requirements matrix
 
 - Publish `/support`, rendering the existing versioned support policy (coverage hours, S1-S4 definitions, acknowledgement objectives, escalation) live from `GET /api/public/support-policy` so published response times cannot drift from the security-review packet. Contact is `mailto:support@getlawhand.com`; the email path and the objectives-not-an-SLA boundary render without a successful fetch.
 - Publish `/requirements` with platform prerequisites, the Microsoft 365 and Google Workspace matrix, the administrator role each provider needs, the exact scopes requested for tenant-wide and per-user consent, the onboarding sequence, and current limits including the presently broad consent bundle.
 - Add `frontend/src/marketing/integration-scopes.json` as the canonical published scope list, asserted against the router and Teams scope constants by `backend/tests/test_public_integration_scopes.py` so narrowing a scope fails a test rather than leaving a stale public claim.
 - Activate the built-but-unused tenant support workflow as an admin-only Administration → Support tab: severity picker backed by the published policy, acknowledgement clock and policy version returned on filing, request history, and the backend's unsafe-content rejection surfaced verbatim. Accountant roles do not see the tab.
 - Wire both routes through routing, SEO metadata, sitemap, no-JavaScript prerender shells, nginx rewrites and analytics CSP maps, and the marketing footer. The `/support` shell deliberately carries no hours or acknowledgement figures so it cannot become a second stale copy of the policy.
+
+## 2026.09.07.16 - Context-aware intake AI suggestions
+
+- Verify the real LLM HTTP boundary and retain provider-reported model identity separately from the requested alias, including fallback responses.
+- Add a bounded, redacted current-editor context to premium field proposals, including optional requirements and server-owned binding definitions. Retain existing model routing, billing and source reconciliation.
+- Preserve draft text, field edits and exclusions when appending proposals; reject stale responses after same-document edits. Add context contract, privacy, HTTP validation and UI regression coverage. No migration.
+
+## 2026.09.07.15 - Matter cloud-folder lock repair
+
+- Override Matter's nullable joined partner-attorney relationship while selecting a row for cloud-folder repair, and lock only the Matter table. PostgreSQL can now initialize an unbound matter without rejecting `FOR UPDATE` on an outer join.
+- Add a PostgreSQL retry-route regression for a matter with no cloud folder and no partner attorney.
+
+## 2026.09.07.14 - Document-first Studio import and clear test results
+
+- Start bounded, tenant-scoped DOCX page preview on file selection, before analysis or persistence; retain explicit Fields/failure fallback.
+- Select rendered Word text to create a named field and click a persistent field box to edit it beside the page. Resolve saved Word selections to exact paragraph anchors; retain the text view for ambiguous locations. Keep saved PDF field labels visible.
+- Expose test evidence, missing values and exact render errors separately from visual approval; keep cleanup controls from displacing the Word field inspector.
+
+## 2026.09.07.13 - Cloud folder recovery test order
+
+- Make the cloud-folder retry regression deliberately fail the first attempted matter, then verify the next one proceeds. PostgreSQL does not guarantee query row order, so the check now validates savepoint recovery without assuming a particular matter is first.
+
+## 2026.09.07.12 - Cloud folder retry isolation
+
+- Resolve cloud provider tokens before each retry pass, then isolate every matter-folder initialization in its own database savepoint. A lock failure now rolls back only that matter's work and leaves the next matter eligible to proceed.
+- Commit each successful matter binding before the next one to release locks promptly. Report partial setup accurately through `matters_failed` and a `partial` status, and show the retry count in Integrations.
+
+## 2026.09.07.11 - Template Studio AI proposal handoff
+
+- Reuse the short-lived, signed local-analysis snapshot when Template Studio requests an explicitly consented Premium AI field proposal. The snapshot remains bound to the exact tenant, user, file name, and source bytes; stale or changed inputs require a new local analysis.
+- Avoid a second full PDF/DOCX/OCR analysis before the AI request while preserving the existing source normalization and local proposal reconciliation safeguards.
+
+## 2026.09.07.10 - Connected matter workflow corrections
+
+- Submit ZIP and folder import file/path payloads as multipart data; render Cloud Search fetch_content_results.
+- Scope live matter retrieval to provisioned folders and exact tenant/matter document references; never authorize siblings from a linked file. Use a bounded metadata fallback and bypass stale live-matter RAG caches. New SharePoint index item and parent identities include the drive; legacy unqualified rows require normal resync and are excluded from scoped fallback without purging unrelated metadata.
+- Preserve scheduled-event instants across browser and provider timezones with DST tests. Add event details, provider links, and delete controls; failed deletes retain the event and already-absent Microsoft events remain idempotent.
+- Route Email Client through the existing actor/firm Microsoft and Google mailbox delivery service; retain SMTP only when no cloud-mail grant exists. Restore tenant context after token refresh and record recipient/provider with the delivery outcome.
+- Preserve provider item, drive, parent, and backend identity on newly captured .eml records; restore tenant scope after token refresh. Capture/read regressions cover OneDrive, SharePoint, and Google Drive. Disconnected scans now give reconnection instructions.
+- Escape text in HTML email and label failed/unconfirmed correspondence. Prevent blind composer retries after an ambiguous provider outcome.
+
+## 2026.09.07.9 - Word derived placeholder drafts
+
+- Convert explicitly confirmed Word source spans into literal placeholders in a new draft while retaining the immutable original upload and provenance chain.
+- Preserve field metadata, formatting and surrounding text across body, table, header and footer stories; reject stale, overlapping or ambiguous edits safely.
+- Add source mode choice, original evidence download, targeted token-preserving cleanup and edit-then-fill coverage in Template Studio.
+
+## 2026.09.07.8 — Positioned signing fields
+
+- Bind template signing roles to the generated PDF digest and actual page geometry; retain placements on matter documents and signature requests.
+- Review final PDF signing positions before dispatch, including Word documents after reflow. Dropbox Sign receives explicit role-bound tabs; unsupported page geometry and internal portal placement fail before sending.
+- Migration 163 adds signing placement metadata. Source bytes, tenant boundaries, roles, and page geometry are revalidated before provider dispatch.
+
+## 2026.09.07.7 - PDF source cover regions
+
+- Add value-less, tenant-reviewed PDF cover regions in Template Studio. Authors can add, move, resize, remove, undo and redo white cover rectangles without introducing automation variables.
+- Preserve the existing source overlay controls with an explicit “Cover what is underneath” option and flatten covers before generated PDF field content is drawn.
+- Validate cover geometry, page bounds and flattened output requirements; original source bytes remain integrity checked and unchanged.
 
 ## 2026.09.07.6 - Word source page previews
 

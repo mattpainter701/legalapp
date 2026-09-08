@@ -41,7 +41,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "162_storage_migrations"
+EXPECTED_HEAD = "164_word_derived_source_evidence"
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 REQUIRED_REVISION = "148_configurable_workflows"

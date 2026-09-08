@@ -3,11 +3,12 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ConfirmProvider } from './dialog/ConfirmProvider'
-import { InboundEmailPanel } from './MatterCorrespondenceTab'
+import MatterCorrespondenceTab, { InboundEmailPanel } from './MatterCorrespondenceTab'
 import {
   acceptMatterInboundEmail,
   getMatterInboundAlias,
   getMatterInboundEmail,
+  getMatterCorrespondence,
 } from '../api'
 
 vi.mock('../api', () => ({
@@ -42,6 +43,24 @@ const taggedEmail = {
     calendar_sync: true,
   },
 }
+
+describe('Outbound delivery status', () => {
+  afterEach(() => { cleanup(); vi.clearAllMocks() })
+  it('distinguishes failed and uncertain attempts from ordinary correspondence', async () => {
+    getMatterInboundAlias.mockResolvedValue({ enabled: false, alias: null })
+    getMatterInboundEmail.mockResolvedValue({ items: [], total: 0 })
+    getMatterCorrespondence.mockResolvedValue({ total: 2, items: [
+      { id: 'failed', direction: 'outbound', status: 'failed', subject: 'Failed test',
+        occurred_at: '2026-09-07T17:00:00Z', participants: { to: ['self@example.com'] } },
+      { id: 'unknown', direction: 'outbound', status: 'delivery_unknown', subject: 'Uncertain test',
+        occurred_at: '2026-09-07T17:01:00Z', participants: { to: ['self@example.com'] } },
+    ] })
+    render(<ConfirmProvider><MatterCorrespondenceTab matterId="matter-1" /></ConfirmProvider>)
+    expect(await screen.findByText('Delivery failed — review before retrying')).toBeInTheDocument()
+    expect(await screen.findByText('Delivery unconfirmed — check Sent Items before retrying')).toBeInTheDocument()
+    expect(screen.getAllByText(/self@example.com/)).toHaveLength(2)
+  })
+})
 
 describe('InboundEmailPanel subject-tag review', () => {
   afterEach(() => {

@@ -28,7 +28,9 @@ async def gmail_read_mail(
 ) -> list[dict]:
     token = await _google_get_user_token(db, tenant_id, user_id)
     if not token:
-        raise RuntimeError(f"No Google OAuth token for user {user_id}")
+        raise RuntimeError(
+            "Connect or reconnect Google in Integrations before reading mail."
+        )
 
     after = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y/%m/%d")
     query = f"after:{after}"
@@ -104,7 +106,9 @@ async def gmail_read_raw(
     """
     token = await _google_get_user_token(db, tenant_id, user_id)
     if not token:
-        raise RuntimeError(f"No Google OAuth token for user {user_id}")
+        raise RuntimeError(
+            "Connect or reconnect Google in Integrations before reading mail."
+        )
 
     resp = await gmail_request(
         "GET",

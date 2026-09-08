@@ -1985,6 +1985,9 @@ export const getMatterDocumentDownloadUrl = (matterId, docId) => {
   return `${API_BASE_URL}/matters/${encodeURIComponent(ids[0])}/documents/${encodeURIComponent(ids[1])}/download`
 }
 
+export const getMatterDocumentSigningSource = (matterId, docId) =>
+  api.get(`/matters/${encodeURIComponent(matterId)}/documents/${encodeURIComponent(docId)}/download`, { responseType: 'blob' }).then(response => response.data)
+
 // Matter document revisions
 export const createMatterDocumentRevision = (matterId, sourceDocumentId, data) =>
   api.post(`/matters/${matterId}/documents/${sourceDocumentId}/revisions`, data).then(r => r.data)
@@ -2120,6 +2123,14 @@ export const analyzeTemplateUpload = (formData) =>
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then(r => r.data)
 
+export const previewWordUpload = (file) => {
+  const form = new FormData()
+  form.append('file', file)
+  return api.post('/templates/intake/preview-render', form, {
+    headers: { 'Content-Type': 'multipart/form-data' }, responseType: 'blob',
+  }).then(r => r.data)
+}
+
 export const proposeTemplateFieldsWithAi = (formData) =>
   api.post('/templates/intake/ai-propose', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -2249,6 +2260,18 @@ export const getTemplateFieldUsage = (params) =>
 // rather than a rectangle on a page.
 export const getTemplateOutline = (id) =>
   api.get(`/templates/${id}/outline`).then(r => r.data)
+
+export const deriveWordTemplateDraft = (id, data) =>
+  api.post(`/templates/${id}/derive-word-draft`, data).then(r => r.data)
+
+export const getTemplateOriginalSource = (id, filename = 'original-template.docx') =>
+  api.get(`/templates/${id}/original-source`, { responseType: 'blob' }).then((r) => {
+    const type = r.data?.type || r.headers?.['content-type'] || 'application/octet-stream'
+    return new File([r.data], filename, { type: String(type).split(';')[0].trim() })
+  })
+
+export const cleanupWordTemplateDraft = (id, data) =>
+  api.post(`/templates/${id}/cleanup-word-draft`, data).then(r => r.data)
 
 export const listTemplateVersions = (id, params = {}) =>
   api.get(`/templates/${id}/versions`, { params }).then(r => r.data)

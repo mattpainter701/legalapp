@@ -5,6 +5,18 @@ letterhead, tables, headers and footers. Use page thumbnails, Previous/Next,
 zoom, and Fit document width to inspect the page. Select **Fields** to map text;
 switching views preserves the page and zoom. Mapping state stays in the editor.
 
+Literal `{{field_name}}` placeholders in the saved source are highlighted in
+Document view. Select a highlight with a click or the keyboard to edit that
+field in the existing inspector. Repeated occurrences select the same field;
+pdf.js text runs split by font changes are joined only when their measured
+rectangles are contiguous on one line. Zoom and page changes rebuild the text
+layer against the current page. Changing sources discards old highlights.
+
+Unknown tokens, conflicting field definitions, disconnected fragments and
+tokens spanning lines remain available in Fields. A missing text layer never
+blocks the source preview. These positions are authoring aids for the saved
+source, and are not signing coordinates for a filled document.
+
 This is the retained **source**, before values are filled. A long value or a
 repeating clause can change pagination. Review the generated PDF before saving
 or sending it; viewing the source does not test, approve, or publish a master.
@@ -12,6 +24,45 @@ or sending it; viewing the source does not test, approve, or publish a master.
 If conversion is busy or unavailable, the text mapping view stays available
 with Retry document preview. Source-integrity and access failures have distinct
 notices and never return a cached preview instead of an error.
+
+Word uploads now start a rendered page preview immediately when a file is
+selected, in parallel with field detection and before creating a template.
+The Document view remains selected while conversion runs; choose Fields to
+start mapping early or use the explicit fallback if conversion fails.
+
+The import sidebar lists detected and added fields with source text, inclusion,
+type and review status. Drag across words directly on the rendered page, enter
+a field name and type, and choose **Create field**. Named boxes stay visible;
+click one to edit its name, type or automation key beside the document. Matching
+occurrences in an upload share the same replacement value, as disclosed in the
+selection editor. No upload is persisted just to show a preview.
+
+DOCX analysis includes ephemeral `source_paragraphs` (Word ordinal and text),
+so detected blanks and choices can be boxed before the first save. The metadata
+uses the existing bounded outline and is omitted if truncated or over 20,000
+characters. Local paragraph context survives the optional AI proposal response;
+it is not added to the saved variable schema.
+
+For saved Word documents, selections resolve to an exact, unique source paragraph
+and Unicode character span. Anchored field boxes require unique paragraph context
+and matching source text. Repeated/ambiguous text, incomplete outlines and fields
+whose page location cannot be established remain available in **Fields**; no
+guessed PDF positions are stored as Word anchors. The Fields view also supports
+longer selections, source review and conditional/repeating paragraphs. Saved PDF
+boxes keep their names visible while preserving drag/resize placement.
+
+Test results separate source availability, field definitions, missing sample
+values, generation errors/success and human visual review. A successful render
+is not visual approval; a stale version or diagnostic PDF is not publication
+evidence. Review every generated page before publishing.
+
+`POST /api/templates/intake/preview-render` accepts multipart `file` and returns
+PDF bytes for an unsaved DOCX. It requires `manage_documents`, applies the existing
+upload limit and bounded conversion/cache settings, keys private cached output
+by tenant and source digest, and returns no-store/nosniff headers. It does not
+create a template, a saved source, or testing/publication evidence. Invalid types
+return 422, invalid/empty uploads 400, oversized inputs 413 and unavailable
+conversion 503. Existing saved-source integrity checks remain unchanged.
 
 ## API and operations
 

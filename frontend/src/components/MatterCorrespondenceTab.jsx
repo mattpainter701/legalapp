@@ -680,6 +680,12 @@ export default function MatterCorrespondenceTab({ matterId }) {
                           <p className="text-xs text-brand-muted mt-0.5 truncate">
                             <span className="font-medium">{who.from}</span> → {who.to}
                           </p>
+                          {it.status === 'failed' && (
+                            <p className="text-xs font-medium text-brand-rose mt-1">Delivery failed — review before retrying</p>
+                          )}
+                          {it.status === 'delivery_unknown' && (
+                            <p className="text-xs font-medium text-brand-rose mt-1">Delivery unconfirmed — check Sent Items before retrying</p>
+                          )}
                           {(it.summary || it.body) && (
                             <p className="text-sm text-brand-ink-2 mt-1 line-clamp-2">
                               {it.summary || it.body}

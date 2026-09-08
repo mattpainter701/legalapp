@@ -21,6 +21,10 @@ class ESignProvider(ABC):
         """
         raise NotImplementedError
 
+    def validate_request(self, request) -> None:
+        """Provider-specific preflight hook for persisted request contracts."""
+        return None
+
 
 def get_provider(name: str) -> ESignProvider:
     """Resolve a provider by name. Defaults to the internal provider."""

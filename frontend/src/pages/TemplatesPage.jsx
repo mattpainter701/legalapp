@@ -4,6 +4,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import PrepareFormWorkspace from '../components/templates/PrepareFormWorkspace'
 import TemplateStudioHome from '../components/templates/TemplateStudioHome'
 import TemplateStudioWorkspace from '../components/templates/TemplateStudioWorkspace'
+import WordImportWorkspace from '../components/templates/WordImportWorkspace'
+import TemplateTestSummary from '../components/templates/TemplateTestSummary'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
 import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
@@ -418,6 +420,13 @@ export const downloadRenderedText = (rendered, title) => {
   triggerBlobDownload(new Blob([String(rendered || '')], { type: 'text/markdown;charset=utf-8' }), filename)
 }
 
+function replaceSourceText(body, sourceText, token) {
+  // Existing placeholders are template instructions, not sample wording.
+  // A selected literal placeholder may be replaced as a whole, never in part.
+  return body.split(/(\{\{[\s\S]*?\}\})/g).map(part => part === sourceText ? token
+    : part.startsWith('{{') ? part : part.split(sourceText).join(token)).join('')
+}
+
 function UploadTemplateForm({ onCreated, onCancel }) {
   const [file, setFile] = useState(null)
   const [title, setTitle] = useState('')
@@ -436,9 +445,15 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const [sourceReviewReady, setSourceReviewReady] = useState(false)
   const [aiConsent, setAiConsent] = useState(false)
   const [aiAnalyzing, setAiAnalyzing] = useState(false)
+  const [aiRequirements, setAiRequirements] = useState('')
   const analysisRequestRef = useRef(0)
 
+  const aiDraftRevision = JSON.stringify([title, category, aiRequirements, draftBody, mappedFields, analysis?.analysis_token])
+  const aiDraftRevisionRef = useRef(aiDraftRevision)
+  aiDraftRevisionRef.current = aiDraftRevision
+
   const fileKey = file ? `${file.name}:${file.size}:${file.lastModified}` : ''
+  const isWordUpload = /\.docx$/i.test(file?.name || '')
 
   useEffect(() => () => {
     if (sourcePreviewUrl) URL.revokeObjectURL(sourcePreviewUrl)
@@ -451,7 +466,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     fields: reviewedFields(),
   })
 
-  const buildFormData = ({ includeCategory = false, includeReview = false, sourceFile = file } = {}) => {
+  const buildFormData = ({ includeCategory = false, includeReview = false, includeAnalysisToken = false, sourceFile = file } = {}) => {
     const form = new FormData()
     form.append('file', sourceFile)
     // A newly selected File is analyzed before React commits its reset state.
@@ -461,8 +476,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     if (includeReview) {
       if (draftBody.trim()) form.append('reviewed_body', draftBody)
       form.append('variable_schema', JSON.stringify(reviewedVariableSchema()))
-      if (analysis?.analysis_token) form.append('analysis_token', analysis.analysis_token)
     }
+    if ((includeReview || includeAnalysisToken) && analysis?.analysis_token) form.append('analysis_token', analysis.analysis_token)
     return form
   }
 
@@ -519,17 +534,42 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       return
     }
     const requestId = analysisRequestRef.current
+    const requestedRevision = aiDraftRevisionRef.current
     setAiAnalyzing(true)
     setError(null)
     try {
-      const form = buildFormData()
+      const form = buildFormData({ includeAnalysisToken: true })
       form.append('consent_to_external_ai', 'true')
+      form.append('template_context', JSON.stringify({
+        action: 'suggest_fields', title, category, requirements: aiRequirements,
+        draft_body: draftBody,
+        fields: mappedFields.map(field => ({
+          name: field.name || '', label: field.label || '',
+          source_text: field.source_text || field.example || '', field_type: field.field_type || 'text',
+          binding: field.binding || '', included: field.included !== false,
+          required: Boolean(field.required), page: field.page || null,
+          paragraph_ordinal: field.docx_anchor?.paragraph_ordinal ?? null,
+        })),
+      }))
       const result = await proposeTemplateFieldsWithAi(form)
       if (analysisRequestRef.current !== requestId) return
-      const proposals = result?.suggested_variable_schema?.fields || []
-      setAnalysis(result)
-      setDraftBody(result.body || result.extracted_text || '')
-      setMappedFields(proposals.map((field) => ({ ...field, _bodyName: field.name })))
+      if (aiDraftRevisionRef.current !== requestedRevision) {
+        setError('Your template changed while AI was working. Your edits are kept; run suggestions again for the current draft.')
+        return
+      }
+      const proposals = (result?.suggested_variable_schema?.fields || []).filter(field =>
+        field.ai_suggested && field.ai_update_kind !== 'updated'
+        && !mappedFields.some(current => current.name === field.name
+          || (current.source_text && field.source_text && (current.source_text.includes(field.source_text) || field.source_text.includes(current.source_text)))))
+      // The proposal token proves this is the same uploaded source. Preserve
+      // its local paragraph geometry even when an AI response omits it.
+      setAnalysis({ ...result, source_paragraphs: analysis.source_paragraphs })
+      let nextBody = draftBody
+      for (const field of proposals) {
+        if (field.source_text) nextBody = replaceSourceText(nextBody, field.source_text, `{{${field.name}}}`)
+      }
+      setDraftBody(nextBody)
+      setMappedFields([...mappedFields, ...proposals.map(field => ({ ...field, review_required: true, _bodyName: field.name }))])
       setReviewConfirmed(false)
       setSourceReviewReady(false)
       if (!proposals.some((field) => field?.ai_suggested)) {
@@ -545,6 +585,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const selectFile = (selectedFile) => {
     analysisRequestRef.current += 1
     setFile(selectedFile)
+    setAiRequirements('')
     setTitle('')
     setAnalysis(null)
     setAnalysisFileKey('')
@@ -730,6 +771,27 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     ])
   }
 
+  const addWordSelection = (sourceText, options = {}) => {
+    if (!(analysis?.extracted_text || analysis?.body || '').includes(sourceText)) {
+      setError('Select the exact source text again before adding a field.')
+      return 'Select the exact source text again before adding a field.'
+    }
+    if (fields.some(field => field.included !== false && field.source_text === sourceText)) {
+      setError('That text is already mapped. Select its existing field in the list to edit it.')
+      return 'That text is already mapped. Click its existing field box to edit it.'
+    }
+    if (options.name && fields.some(field => field.name === options.name)) return 'That automation key is already used. Choose another.'
+    const normalized = normalizeVariableName(options.label || sourceText).slice(0, 48) || 'new_field'
+    const base = /^[a-z]/i.test(normalized) ? normalized : `field_${normalized}`
+    let name = options.name || base
+    for (let suffix = 2; fields.some(field => field.name === name); suffix += 1) name = `${base}_${suffix}`
+    const field = { name, label: options.label || sourceText.slice(0, 60), field_type: options.field_type || 'text', source_text: sourceText, example: sourceText, included: true, confidence: 1, review_required: true, _bodyName: name }
+    setMappedFields(current => [...current, field])
+    setDraftBody(current => replaceSourceText(current, sourceText, `{{${name}}}`))
+    setReviewConfirmed(false)
+    setError(null)
+  }
+
   const updateSourceText = (index, sourceText) => {
     setReviewConfirmed(false)
     setMappedFields((current) => current.map((field, fieldIndex) => (
@@ -746,7 +808,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       return
     }
     setReviewConfirmed(false)
-    setDraftBody((current) => current.split(sourceText).join(`{{${field.name}}}`))
+    setDraftBody((current) => replaceSourceText(current, sourceText, `{{${field.name}}}`))
     setError(null)
   }
 
@@ -858,20 +920,23 @@ function UploadTemplateForm({ onCreated, onCancel }) {
         />
       </div>
 
-      <div className="sticky bottom-0 z-10 -mx-2 flex flex-col gap-3 border-t border-brand-line bg-brand-surface-2/95 px-2 py-3 backdrop-blur sm:flex-row">
         {analysis && (
-          <div className="order-first rounded border border-brand-accent/30 bg-brand-accent/5 p-3 text-left sm:order-none sm:flex-1">
+          <div className="rounded border border-brand-accent/30 bg-brand-accent/5 p-3 text-left">
             <p className="text-sm font-semibold text-brand-ink">Optional premium AI field proposal</p>
-            <p className="mt-1 text-xs text-brand-muted">Only extracted text and field metadata are sent after local redaction; the original file and page images stay here. AI suggestions are review-only and never save or activate a template.</p>
+            <p className="mt-1 text-xs text-brand-muted">Your document text, current draft, title, category, requirements and field choices are sent after local redaction, along with supported data-field definitions. The original file and page images stay here. AI suggestions are review-only and never save or activate a template.</p>
+            <label htmlFor="template-ai-requirements" className="mt-2 block text-xs font-medium text-brand-ink">What should this template do? (optional)</label>
+            <textarea id="template-ai-requirements" value={aiRequirements} maxLength={2000} onChange={event => setAiRequirements(event.target.value)} rows={2} placeholder="Example: Reusable fee agreement. Include client name and address; keep the fee terms unchanged." className="mt-1 w-full rounded border border-brand-line bg-brand-bg p-2 text-sm text-brand-ink" />
+            <p className="mt-1 text-xs text-brand-muted">Suggestions use the current setup and preserve your edits and excluded fields. Missing requirements are reported for review; AI does not certify completeness.</p>
             <label className="mt-2 flex items-start gap-2 text-xs text-brand-muted">
               <input type="checkbox" checked={aiConsent} onChange={(event) => { setAiConsent(event.target.checked); setError(null) }} className="mt-0.5" />
-              I consent to sending extracted text to the configured premium AI provider for this proposal.
+              I consent to sending extracted text and the template context described above to the configured premium AI provider for this proposal.
             </label>
             <button type="button" onClick={handleAiProposal} disabled={aiAnalyzing || !aiConsent} className="mt-2 rounded border border-brand-accent/40 px-3 py-1.5 text-xs text-brand-ink hover:bg-brand-bg disabled:opacity-50">
               {aiAnalyzing ? 'Proposing fields…' : 'Suggest fields with premium AI'}
             </button>
           </div>
         )}
+      <div className="sticky bottom-0 z-10 -mx-2 flex flex-col gap-3 border-t border-brand-line bg-brand-surface-2/95 px-2 py-3 backdrop-blur sm:flex-row">
         <button
           type="button"
           onClick={() => handleAnalyze()}
@@ -906,6 +971,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
           Cancel
         </button>
       </div>
+
+      {isWordUpload && <WordImportWorkspace key={fileKey} file={file} analysis={analysisReady ? analysis : null} fields={fields} reviewConfirmed={reviewConfirmed} onFieldsChange={handleWorkspaceFieldsChange} onAddField={addWordSelection} />}
 
       {analysis && (
         <div className="space-y-4 pt-2">
@@ -987,7 +1054,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
           )}
           {isPdfAnalysis ? (
             <PrepareFormWorkspace file={file} analysis={analysis} fields={fields} previewUrl={sourcePreviewUrl} reviewConfirmed={reviewConfirmed} onReviewConfirmed={setReviewConfirmed} onSourceReviewReadyChange={setSourceReviewReady} onFieldsChange={handleWorkspaceFieldsChange} />
-          ) : (
+          ) : isWordUpload ? null : (
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4">
           <div className="border border-brand-line rounded bg-brand-bg p-4">
             <div className="flex items-center justify-between gap-3 mb-3">
@@ -1500,7 +1567,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       <div className="space-y-4">
         {error && (
           <div className="text-sm text-brand-rose bg-brand-rose/10 border border-brand-rose/30 px-3 py-2">
-            {error}
+            {canSaveToMatter ? error : 'The test needs attention. See the results below for the exact issue.'}
           </div>
         )}
 
@@ -1749,6 +1816,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             )}
           </button>
         </div>
+
+        {!canSaveToMatter && <TemplateTestSummary template={template} error={error} rendering={rendering} outputReady={Boolean(filePreview || rendered)} missing={requiredUnresolvedNames} diagnostic={isPdfTemplate && previewPurpose !== 'activation'} />}
 
         {rendered && (
           <div>
@@ -2076,6 +2145,15 @@ export default function TemplatesPage() {
     if (restored) setWorkspaceTemplate(restored)
     await load()
   }, [load])
+
+  const handleDerivedWordDraft = useCallback(async (draft) => {
+    await load()
+    if (draft?.id) {
+      navigate(`/templates/${encodeURIComponent(draft.id)}/studio`, {
+        state: { studioStatus: 'Derived draft created. Review its placeholders before testing or publishing.' },
+      })
+    }
+  }, [load, navigate])
 
   const handlePublishWorkspace = useCallback(async () => {
     try {
@@ -2541,6 +2619,7 @@ export default function TemplatesPage() {
           sourceError={workspaceSourceError}
           onSaveFields={handleSaveWorkspaceFields}
           onRestored={handleRestoredVersion}
+          onDerived={handleDerivedWordDraft}
         />
         {editTemplate && (
           <Modal title="Edit Template" onClose={() => setEditTemplate(null)}>
