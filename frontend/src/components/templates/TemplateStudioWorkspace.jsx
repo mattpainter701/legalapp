@@ -51,23 +51,22 @@ export default function TemplateStudioWorkspace({
   }, [statusMessage])
 
   return (
-    <div className="h-full overflow-y-auto bg-brand-bg p-4 md:p-6">
-      <main className="mx-auto max-w-6xl" aria-labelledby="template-studio-title">
+    <div className="h-full overflow-y-auto bg-brand-bg p-3 md:p-4">
+      <main className="mx-auto max-w-screen-2xl" aria-labelledby="template-studio-title">
         <Link to="/templates" className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand-muted hover:text-brand-ink">
           <ArrowLeft size={16} aria-hidden="true" /> Template Studio
         </Link>
-        <header className="mt-3 rounded-2xl bg-brand-ink p-4 text-white shadow-lg">
-          <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+        <header className="mt-2 rounded-xl border border-brand-line bg-brand-surface-2 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/60">Template workspace</p>
-              <h1 id="template-studio-title" className="mt-2 truncate text-white text-2xl font-semibold md:text-3xl">{template.title}</h1>
-              <p className="mt-2 text-sm text-white/70">{template.description || `Review this ${template.format || 'document'} template, its fields, and generation readiness.`}</p>
+              <h1 id="template-studio-title" className="break-words text-lg font-semibold text-brand-ink">{template.title}</h1>
+              <p className="mt-1 text-xs text-brand-muted">{lifecycleLabel}</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={onEdit} className="inline-flex items-center gap-2 rounded-lg border border-white/20 text-white px-4 py-2 text-sm font-semibold hover:bg-white/10">
+              <button type="button" onClick={onEdit} className="inline-flex items-center gap-2 rounded-lg border border-brand-line text-brand-ink px-3 py-2 text-sm font-semibold hover:bg-brand-bg">
                 <Pencil size={16} aria-hidden="true" /> Edit template
               </button>
-              <button type="button" onClick={onGenerate} disabled={sourceMissing} className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-brand-ink disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="button" onClick={onGenerate} disabled={sourceMissing} className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
                 {template.is_active ? <Sparkles size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                 {template.is_active ? 'Generate' : 'Preview draft'}
               </button>
@@ -82,6 +81,7 @@ export default function TemplateStudioWorkspace({
 
         <details aria-label="Template setup checklist" className="mt-3 rounded-lg border border-brand-line bg-brand-surface-2 px-4 py-2 text-sm">
           <summary className="cursor-pointer font-semibold">Help with setup</summary>
+          <p className="mt-2 break-words text-xs text-brand-muted">{template.source_filename || template.format || 'Document'}{template.description ? ` · ${template.description}` : ''}</p>
           <ol className="mt-2 list-decimal space-y-1 pl-5 text-brand-muted">
             <li>Review highlighted details. Select text or place a box to add a field; labels and data sources can be changed below.</li>
             <li>Choose what each field fills from, and use “When to use this template” for a scenario such as divorce with children.</li>
@@ -90,7 +90,7 @@ export default function TemplateStudioWorkspace({
           </ol>
         </details>
 
-        <nav aria-label="Template Studio workspace sections" className="mt-4 flex gap-1 overflow-x-auto rounded-xl border border-brand-line bg-brand-surface-2 p-1">
+        <nav aria-label="Template Studio workspace sections" className="mt-2 flex gap-1 overflow-x-auto rounded-xl border border-brand-line bg-brand-surface-2 p-1">
           {tabs.map(({ key, label, suffix, icon: Icon }) => (
             <Link key={key} to={`${base}${suffix}`} aria-current={section === key ? 'page' : undefined} className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-semibold ${section === key ? 'bg-brand-ink text-white' : 'text-brand-muted hover:bg-brand-bg hover:text-brand-ink'}`}>
               <Icon size={15} aria-hidden="true" /> {label}
@@ -101,13 +101,7 @@ export default function TemplateStudioWorkspace({
         {statusMessage && <div ref={statusRef} role="status" aria-label="Workspace status" tabIndex={-1} className="mt-4 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">{statusMessage}</div>}
 
         {section === 'workspace' ? (
-          <section className="mt-4 space-y-3" aria-label="Template workspace summary">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-brand-line bg-brand-surface-2 px-4 py-2 text-xs text-brand-muted">
-              <h2 className="sr-only">Current template</h2>
-              <span className="font-semibold text-brand-ink">{lifecycleLabel}</span>
-              <span className="break-all">{template.source_filename || template.format || 'Document'}</span>
-              <span>{template.variable_schema?.fields?.filter((field) => field.included !== false).length || 0} fields</span>
-            </div>
+          <section className="mt-2 space-y-2" aria-label="Template workspace summary">
             {sourceMissing && (
               <div role="alert" className="flex gap-3 rounded-xl border border-brand-amber/40 bg-brand-amber/10 p-4 md:col-span-3">
                 <AlertTriangle className="mt-0.5 shrink-0 text-brand-amber" size={18} aria-hidden="true" />

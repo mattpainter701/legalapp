@@ -464,22 +464,6 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
   return (
     <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-surface-2">
-      <div className="border-b border-brand-line p-3 text-sm">
-        <p className="font-semibold">{fields.filter(field => field.included !== false).length} included fields · {fields.filter(field => field.included !== false && (field.review_required || field.ai_suggested || Number(field.confidence ?? 1) < 0.75)).length} need review</p>
-        <p className="mt-1 text-xs text-brand-muted">Select a named box or a field in the list to edit it. {isDocx ? 'Drag across the words that should change to create a field directly on the page.' : 'Choose a field type in the toolbar to add a box, then move and resize it on the page.'}</p>
-      </div>
-      {isDocx && template.variable_schema?.source_review_version === 1 && (
-        <div className="border-b border-brand-line p-3">
-          <WordDeriveDraftAction
-            templateId={template.id}
-            fields={deriveSchema.fields}
-            sourceReview={deriveSchema.source_review || {}}
-            reviewedSchema={deriveSchema}
-            suggestedMode={sourceModeSuggestion?.suggested_mode || 'prose'}
-            onCreated={onDerived}
-          />
-        </div>
-      )}
       <div className="flex flex-wrap items-center gap-2 border-b border-brand-line px-3 py-2">
         {/* Placement tools need page geometry, so they are PDF-only. Everything
             else about a field — its name, what it fills from, when it applies —
@@ -517,7 +501,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           </>
         ) : (
           <>
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted">Fields</span>
+            <span className="text-xs font-semibold text-brand-muted"><span>{fields.filter(field => field.included !== false).length} fields</span> · {fields.filter(field => field.included !== false && (field.review_required || field.ai_suggested || Number(field.confidence ?? 1) < 0.75)).length} need review</span>
             <ToolbarButton icon={Undo2} label="Undo" onClick={undo} disabled={!undoStack.current.length} />
             <ToolbarButton icon={Redo2} label="Redo" onClick={redo} disabled={!redoStack.current.length} />
           </>
@@ -546,16 +530,6 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
         </div>
       </div>
 
-      <details className="border-b border-brand-line p-3 text-sm">
-        <summary className="cursor-pointer font-semibold">When to use this template{applicability?.label ? `: ${applicability.label}` : ''}</summary>
-        <p className="mt-2 text-xs text-brand-muted">Name the scenario, such as Divorce with children. Generation checks a saved matter or client detail; missing values block selection. This does not create a list of children.</p>
-        <label className="mt-2 flex gap-2"><input type="checkbox" checked={Boolean(applicability)} onChange={event => { setApplicability(event.target.checked ? { label: '', field: '', value: '' } : null); setDirty(true) }} />Use only for a matching scenario</label>
-        {applicability && <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <label>Scenario label<input aria-label="Scenario label" value={applicability.label} onChange={event => { setApplicability({ ...applicability, label: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink" /></label>
-          <label>Saved detail<select aria-label="Scenario detail" value={applicability.field} onChange={event => { setApplicability({ ...applicability, field: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink"><option value="">Choose a linked detail</option>{fields.filter(field => field.binding?.startsWith('custom.')).map(field => <option key={field.name} value={field.name}>{field.label || field.name}</option>)}</select></label>
-          <label>Required answer{scenarioOptions.length ? <select aria-label="Scenario required answer" value={applicability.value} onChange={event => { setApplicability({ ...applicability, value: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink"><option value="">Choose an answer</option>{scenarioOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input aria-label="Scenario required answer" type={['number', 'date'].includes(scenarioDefinition?.field_type) ? scenarioDefinition.field_type : 'text'} placeholder="Answer required for this scenario" value={applicability.value} onChange={event => { setApplicability({ ...applicability, value: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink" />}</label>
-        </div>}
-      </details>
       {(saveError || duplicateNames.size > 0 || invalidNames.length > 0) && (
         <div role="alert" className="border-b border-brand-line bg-brand-amber/10 px-4 py-2 text-sm text-brand-ink">
           {saveError
@@ -884,6 +858,29 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           <span className="sr-only" aria-live="polite">History step {historyVersion}</span>
         </aside>
       </div>
+      {isDocx && template.variable_schema?.source_review_version === 1 && (
+        <details className="border-b border-brand-line p-3">
+          <summary className="cursor-pointer text-sm font-semibold">Create a reusable Word copy</summary>
+          <WordDeriveDraftAction
+            templateId={template.id}
+            fields={deriveSchema.fields}
+            sourceReview={deriveSchema.source_review || {}}
+            reviewedSchema={deriveSchema}
+            suggestedMode={sourceModeSuggestion?.suggested_mode || 'prose'}
+            onCreated={onDerived}
+          />
+        </details>
+      )}
+      <details className="border-b border-brand-line p-3 text-sm">
+        <summary className="cursor-pointer font-semibold">When to use this template{applicability?.label ? `: ${applicability.label}` : ''}</summary>
+        <p className="mt-2 text-xs text-brand-muted">Name the scenario, such as Divorce with children. Generation checks a saved matter or client detail; missing values block selection. This does not create a list of children.</p>
+        <label className="mt-2 flex gap-2"><input type="checkbox" checked={Boolean(applicability)} onChange={event => { setApplicability(event.target.checked ? { label: '', field: '', value: '' } : null); setDirty(true) }} />Use only for a matching scenario</label>
+        {applicability && <div className="mt-2 grid gap-2 sm:grid-cols-3">
+          <label>Scenario label<input aria-label="Scenario label" value={applicability.label} onChange={event => { setApplicability({ ...applicability, label: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink" /></label>
+          <label>Saved detail<select aria-label="Scenario detail" value={applicability.field} onChange={event => { setApplicability({ ...applicability, field: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink"><option value="">Choose a linked detail</option>{fields.filter(field => field.binding?.startsWith('custom.')).map(field => <option key={field.name} value={field.name}>{field.label || field.name}</option>)}</select></label>
+          <label>Required answer{scenarioOptions.length ? <select aria-label="Scenario required answer" value={applicability.value} onChange={event => { setApplicability({ ...applicability, value: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink"><option value="">Choose an answer</option>{scenarioOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input aria-label="Scenario required answer" type={['number', 'date'].includes(scenarioDefinition?.field_type) ? scenarioDefinition.field_type : 'text'} placeholder="Answer required for this scenario" value={applicability.value} onChange={event => { setApplicability({ ...applicability, value: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink" />}</label>
+        </div>}
+      </details>
       {isDocx && <WordCleanupAction templateId={template.id} selection={cleanupSelection} onCreated={onDerived} />}
     </div>
   )

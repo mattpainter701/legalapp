@@ -11,6 +11,13 @@
 
 # Changelog
 
+## 2026.09.08.1 - Restore Word previews and focus Studio editing
+
+- Strip the narrowly validated local XYZ opening destination emitted by LibreOffice before PDF normalization; continue rejecting action dictionaries, additional actions, and malformed destinations.
+- Move optional Word-copy and applicability controls below the editor, consolidate field counts, and reduce the workspace header.
+- Route Add field to usable text mapping when page rendering is pending or unavailable.
+- Verified with the installed production converter using synthetic content only; no deployed code or source templates changed during diagnosis.
+
 ## 2026.09.07.23 - Background route provider pricing
 
 - Add native DeepSeek V4 peak rates and explicit zero rates for provider-verified OpenCode Zen free endpoints, fixing activation of DeepSeek V4 Flash with a Mimo V2.5 Free fallback.
