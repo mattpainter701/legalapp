@@ -1,13 +1,13 @@
 """Approval-gated unattended service identities and immutable occurrence evidence.
 
-Revision ID: 169_automation_service_identities
+Revision ID: 169_automation_services
 Revises: 168_workflow_runtime
 """
 
 from alembic import op
 
 
-revision = "169_automation_service_identities"
+revision = "169_automation_services"
 down_revision = "168_workflow_runtime"
 branch_labels = None
 depends_on = None
@@ -214,3 +214,4 @@ def downgrade():
     op.execute("ALTER TABLE workflow_runs ADD CONSTRAINT ck_workflow_runs_channel CHECK (origin_channel IN ('matter_chat','workspace_mcp'))")
     op.execute("ALTER TABLE users DROP CONSTRAINT ck_users_principal_type")
     op.execute("ALTER TABLE users DROP COLUMN principal_type")
+
