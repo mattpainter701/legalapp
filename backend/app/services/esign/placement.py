@@ -41,6 +41,20 @@ class PositionedField:
         return self.rect[3] - self.rect[1]
 
 
+def is_signing_template_field(field: dict | None) -> bool:
+    """Signing dates are supplied by the signer, unlike ordinary document dates."""
+    return bool(
+        isinstance(field, dict)
+        and (
+            field.get("field_type") in {"signature", "initials"}
+            or (
+                field.get("field_type") == "date"
+                and str(field.get("signer_role") or "").strip()
+            )
+        )
+    )
+
+
 def signing_template_fields(variable_schema: dict | None) -> list[dict]:
     schema = variable_schema if isinstance(variable_schema, dict) else {}
     return [
@@ -48,10 +62,7 @@ def signing_template_fields(variable_schema: dict | None) -> list[dict]:
         for field in schema.get("fields", [])
         if isinstance(field, dict)
         and field.get("included") is not False
-        and (
-            field.get("field_type") in {"signature", "initials"}
-            or (field.get("field_type") == "date" and field.get("signer_role"))
-        )
+        and is_signing_template_field(field)
     ]
 
 

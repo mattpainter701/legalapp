@@ -5,6 +5,13 @@ In Template Studio, choose a signature field and assign a signer role, such as
 role to a date only when it should record the signing date; ordinary template
 dates remain filled values. Role edits use the editor's normal save and undo.
 
+Signatures, initials, and dates assigned to a signer are completed during signing.
+They are excluded from Smart Fill and pre-signing completion requirements; ordinary
+required dates still need values. The fill panel labels signer-linked dates as
+completed during e-signing. Word generation keeps signing placeholders blank and
+rejects supplied signing values. PDF generation excludes signing fields from its
+value contract and clears existing signing-date AcroForm values.
+
 Test and publish the map, then preview and save the document to its matter.
 Supported PDF templates retain their authored positions. Missing roles or
 unsupported signing page geometry leave the generated document usable and

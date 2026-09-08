@@ -1,6 +1,7 @@
 // A populated value is separate from a reviewed value. Confidence describes
 // the suggestion that actually supplied this value, never a manual override.
 export const fillValue = value => value == null ? '' : String(value)
+export const isSigningField = field => ['signature', 'initials'].includes(field?.field_type) || (field?.field_type === 'date' && Boolean(String(field.signer_role || '').trim()))
 
 export function suggestionConfidenceLabel(review) {
   if (review.source?.source_type === 'firm_profile') return 'Saved firm profile value'
@@ -24,7 +25,7 @@ export function discoverySuggestions(response) {
 }
 
 export function fillReview(names, fields, values, sources, reviewed) {
-  const rows = names.filter(name => fields[name]?.field_type !== 'signature' && !fields[name]?.value_from).map(name => {
+  const rows = names.filter(name => !isSigningField(fields[name]) && !fields[name]?.value_from).map(name => {
     const field = fields[name] || {}
     const value = fillValue(values[name])
     const present = field.field_type === 'checkbox'
@@ -46,6 +47,7 @@ export function applyFillSuggestions(names, fields, values, sources, suggestions
   const nextValues = { ...values }
   const nextSources = { ...sources }
   for (const name of names) {
+    if (isSigningField(fields[name])) continue
     const suggestion = suggestions[name]
     if (suggestion?.suggested_value == null) continue
     // Unchecked checkboxes are real choices, not empty strings to overwrite.

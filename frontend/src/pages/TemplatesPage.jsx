@@ -9,7 +9,7 @@ import TemplateTestSummary from '../components/templates/TemplateTestSummary'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
 import TemplateFillProgress from '../components/templates/TemplateFillProgress'
 import TemplateFillSource from '../components/templates/TemplateFillSource'
-import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues, suggestionConfidenceLabel } from '../components/templates/templateFillReview'
+import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues, isSigningField, suggestionConfidenceLabel } from '../components/templates/templateFillReview'
 import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
@@ -1285,7 +1285,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const isPdfOutput = isPdfTemplate || (isDocxTemplate && convertDocxToPdf)
   const canSaveToMatter = Boolean(template?.is_active)
   const fillableNames = useMemo(
-    () => names.filter((name) => fieldDefinitions[name]?.field_type !== 'signature' && !fieldDefinitions[name]?.value_from),
+    () => names.filter((name) => !isSigningField(fieldDefinitions[name]) && !fieldDefinitions[name]?.value_from),
     [names, fieldDefinitions],
   )
   const progress = fillReview(names, fieldDefinitions, variables, fieldSources, reviewedValues)
@@ -1669,6 +1669,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                 const review = progress.rows.find(row => row.name === name)
                 const changedSuggestion = latestSuggestions[name]?.suggested_value != null && fillValue(latestSuggestions[name].suggested_value) !== fillValue(variables[name]) ? latestSuggestions[name] : null
                 const fieldType = field.field_type || 'text'
+                const signingField = isSigningField(field)
                 const label = field.label || friendlyVariableLabel(name)
                 const inputId = `template-variable-${name}`
                 const options = (field.options || []).map((option) => (
@@ -1677,8 +1678,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                     : { value: option, label: option }
                 ))
                 return (
-                <div key={name} className={fieldType === 'signature' ? 'border border-brand-line rounded bg-brand-bg px-3 py-2' : ''}>
-                  {fieldType === 'signature' ? (
+                <div key={name} className={signingField ? 'border border-brand-line rounded bg-brand-bg px-3 py-2' : ''}>
+                  {signingField ? (
                     <p className="block text-xs font-medium text-brand-muted mb-0.5">
                       {label}
                     </p>
@@ -1698,9 +1699,9 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                     <p>{changedSuggestion.source_type === 'firm_profile' ? 'Firm profile now suggests' : 'Matter now suggests'}: {fillValue(changedSuggestion.suggested_value)}</p>
                     <button type="button" disabled={saving} className="mt-1 rounded border border-brand-line px-2 py-1" onClick={() => { setVariable(name, fillValue(changedSuggestion.suggested_value)); setFieldSources(prev => ({ ...prev, [name]: changedSuggestion })); setReviewedValues(prev => ({ ...prev, [name]: undefined })) }}>Use updated {label}</button>
                   </div>}
-                  {field.value_from ? <p id={inputId} className="text-sm text-brand-muted">Uses {fieldDefinitions[field.value_from]?.label || field.value_from}</p> : fieldType === 'signature' ? (
+                  {field.value_from ? <p id={inputId} className="text-sm text-brand-muted">Uses {fieldDefinitions[field.value_from]?.label || field.value_from}</p> : signingField ? (
                     <p className="text-sm text-brand-muted">
-                      Signature area is left blank for signing; it is not populated during document generation.
+                      {fieldType === 'date' ? `Signing date is completed by ${field.signer_role} during e-signing.` : 'Signature area is left blank for signing; it is not populated during document generation.'}
                       {field.pdf_field_name ? ` PDF field: ${field.pdf_field_name}.` : ''}
                     </p>
                   ) : fieldType === 'checkbox' ? (
@@ -1747,7 +1748,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                       placeholder={`Enter ${label}`}
                     />
                   )}
-                  {field.pdf_field_name && fieldType !== 'signature' && (
+                  {field.pdf_field_name && !signingField && (
                     <p className="mt-1 text-[11px] text-brand-muted">PDF field: {field.pdf_field_name}{field.page ? ` · Page ${field.page}` : ''}</p>
                   )}
                 </div>

@@ -77,6 +77,21 @@ const renderStudioRoute = (route) => rtlRender(
 )
 
 describe('document template workflow', () => {
+  it('keeps a signing date out of required fill inputs and the render payload', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{ id: 'signing', title: 'Signing draft', format: 'pdf', source_filename: 'form.pdf', source_sha256: 'a'.repeat(64), is_active: false, variable_schema: { fields: [
+      { name: 'signed_on', label: 'Signing date', field_type: 'date', signer_role: 'client', required: true },
+      { name: 'event_date', label: 'Event date', field_type: 'date', required: true },
+    ] } }] })
+    renderTemplateFile.mockResolvedValue({ blob: new Blob(['pdf']), filename: 'preview.pdf', previewId: 'preview', previewPurpose: 'activation' })
+    render(<TemplatesPage />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Preview draft' }))
+    expect(screen.getByText('Signing date is completed by client during e-signing.')).toBeVisible()
+    expect(screen.queryByLabelText(/^Signing date/)).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Event date *'), { target: { value: '2026-10-12' } })
+    expect(screen.getByRole('progressbar', { name: 'Fields completed' })).toHaveAttribute('value', '1')
+    await userEvent.click(screen.getByRole('button', { name: 'Test this draft' }))
+    await waitFor(() => expect(renderTemplateFile).toHaveBeenCalledWith('signing', expect.objectContaining({ variables: { event_date: '2026-10-12' } })))
+  })
   beforeEach(() => vi.clearAllMocks())
   afterEach(() => {
     cleanup()
