@@ -111,6 +111,13 @@ class CapabilityContext:
     client_id: str | None = None
     # Only the durable runtime supplies this server-owned checkpoint callback.
     runtime_checkpoint: Any | None = None
+    # Named unattended service runs preserve the service principal as the
+    # creator while routing ordinary task review to the human who approved the
+    # immutable rule.
+    review_owner_user_id: uuid.UUID | None = None
+    review_owner_is_admin: bool = False
+    service_rule_id: uuid.UUID | None = None
+    service_rule_sha256: str | None = None
 
     @property
     def tenant_id(self) -> uuid.UUID:

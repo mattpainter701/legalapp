@@ -65,6 +65,12 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "schedule": "Every minute",
     },
     {
+        "name": "automation-service-scheduler",
+        "display_name": "Approved Automation Services",
+        "description": "Starts bounded, approval-gated matter preparation rules.",
+        "schedule": "Every minute",
+    },
+    {
         "name": "renewal-watcher",
         "display_name": "Renewal Watcher",
         "description": "Scans contract renewals within 90 days and emails per-tenant alerts.",
@@ -808,6 +814,17 @@ class LegalScheduler:
             next_run_time=datetime.now(timezone.utc),
         )
         agent_count += 1
+        self.scheduler.add_job(
+            self._guarded("automation-service-scheduler", self.run_automation_service_scheduler),
+            "interval",
+            minutes=1,
+            id="automation-service-scheduler",
+            name="Approved Automation Service Scheduler",
+            replace_existing=True,
+            max_instances=1,
+            next_run_time=datetime.now(timezone.utc),
+        )
+        agent_count += 1
         self.scheduler.start()
         logger.info("LegalScheduler started with %d agents", agent_count)
 
@@ -829,6 +846,15 @@ class LegalScheduler:
         async with async_session_maker() as session:
             await _apply_scheduler_tenant_context(session)
             await enqueue_due_events_for_tenant(session, _scheduler_tenant_id.get())
+            await session.commit()
+
+    @tenant_scoped_job
+    async def run_automation_service_scheduler(self) -> None:
+        from app.services.automation_service_scheduler import schedule_due_rules
+
+        async with async_session_maker() as session:
+            await _apply_scheduler_tenant_context(session)
+            await schedule_due_rules(session, _scheduler_tenant_id.get())
             await session.commit()
 
     @tenant_scoped_job
@@ -2063,6 +2089,7 @@ class LegalScheduler:
         """
         agent_map = {
             "scheduler-heartbeat": self.run_scheduler_heartbeat,
+            "automation-service-scheduler": self.run_automation_service_scheduler,
             "renewal-watcher": self.run_renewal_watcher,
             "reg-monitor": self.run_reg_monitor,
             "docket-watcher": self.run_docket_watcher,

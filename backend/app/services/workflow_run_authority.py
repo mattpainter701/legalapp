@@ -24,7 +24,42 @@ async def current_context(db, run, spec=None):
     active = await db.scalar(select(Tenant.is_active).where(Tenant.id == run.tenant_id))
     if not active:
         raise CapabilityError("inactive_tenant", "The firm is inactive")
-    if run.origin_channel == "workspace_mcp":
+    review_owner_id = None
+    service_capabilities = None
+    if run.origin_channel == "automation_service":
+        from app.models.automation_service import AutomationServiceIdentity, AutomationServiceRule
+
+        rule = await db.scalar(select(AutomationServiceRule).where(
+            AutomationServiceRule.tenant_id == run.tenant_id,
+            AutomationServiceRule.id == run.service_rule_id,
+            AutomationServiceRule.status == "active",
+        ))
+        if not rule or rule.matter_id != run.matter_id or rule.definition_sha256 != run.plan_json.get("service_rule_sha256"):
+            raise CapabilityError("service_rule_unavailable", "The approved service rule changed or was paused")
+        identity = await db.scalar(select(AutomationServiceIdentity).where(
+            AutomationServiceIdentity.tenant_id == run.tenant_id,
+            AutomationServiceIdentity.id == rule.identity_id,
+            AutomationServiceIdentity.user_id == run.actor_user_id,
+            AutomationServiceIdentity.status == "active",
+        ))
+        user = await db.scalar(select(User).options(selectinload(User.tenant)).where(
+            User.tenant_id == run.tenant_id, User.id == run.actor_user_id,
+            User.principal_type == "automation_service", User.is_active.is_(False),
+            User.license_active.is_(False), User.workspace_mcp_enabled.is_(False),
+        ))
+        approver = await db.scalar(select(User).where(
+            User.tenant_id == run.tenant_id, User.id == rule.approved_by_user_id,
+            User.is_active.is_(True), User.license_active.is_(True),
+        ))
+        if not identity or not user or not approver:
+            raise CapabilityError("service_identity_unavailable", "The named service or its approving attorney is unavailable")
+        capabilities = await get_user_capabilities(db, approver.id)
+        if not {"approve_legal_work", "manage_matters"}.issubset(capabilities) or not await can_access_matter(
+            db, tenant_id=run.tenant_id, user_id=approver.id, is_admin=approver.role == "admin", matter_id=run.matter_id
+        ):
+            raise CapabilityError("service_approval_unavailable", "The approving attorney no longer has matter authority")
+        service_capabilities, review_owner_id = set(identity.capabilities), approver.id
+    elif run.origin_channel == "workspace_mcp":
         identity = WorkspaceMCPIdentity(
             user_id=run.actor_user_id,
             tenant_id=run.tenant_id,
@@ -54,7 +89,7 @@ async def current_context(db, run, spec=None):
                 "actor_unavailable", "The originating user is unavailable"
             )
         capabilities = await get_user_capabilities(db, user.id)
-    if not await can_access_matter(
+    if run.origin_channel != "automation_service" and not await can_access_matter(
         db,
         tenant_id=run.tenant_id,
         user_id=user.id,
@@ -64,7 +99,7 @@ async def current_context(db, run, spec=None):
         raise CapabilityError(
             "matter_access_changed", "The originating user cannot access this matter"
         )
-    if "manage_matters" not in capabilities:
+    if run.origin_channel != "automation_service" and "manage_matters" not in capabilities:
         raise CapabilityError(
             "actor_permission_changed", "Matter management permission is required"
         )
@@ -77,10 +112,15 @@ async def current_context(db, run, spec=None):
         else None,
         grant_id=run.grant_id,
         client_id=run.client_id,
+        review_owner_user_id=review_owner_id,
+        review_owner_is_admin=bool(review_owner_id and approver.role == "admin") if run.origin_channel == "automation_service" else False,
     )
     if spec:
         required = _APP_CAPABILITIES_BY_TOOL.get(spec.name)
-        if required is None or not required.issubset(capabilities):
+        if run.origin_channel == "automation_service":
+            if spec.name not in service_capabilities:
+                raise CapabilityError("service_scope_denied", "The named service does not have this capability")
+        elif required is None or not required.issubset(capabilities):
             raise CapabilityError(
                 "actor_permission_changed",
                 "Current permissions do not allow this capability",
