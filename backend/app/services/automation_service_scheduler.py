@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 
 from app.models.automation_service import AutomationServiceIdentity, AutomationServiceOccurrence, AutomationServiceRule
 from app.models.user import User
+from app.models.workflow_automation import MatterWorkflowAutomationEvent
 from app.services.automation_capabilities import CapabilityContext, CapabilityError
 from app.services.automation_service_contract import ServiceSchedule, due_occurrence
 from app.services.workflow_run_contract import WorkflowRunInput
@@ -27,7 +28,21 @@ async def schedule_due_rules(db, tenant_id, *, now=None):
     outcomes = []
     for rule in rules:
         schedule = ServiceSchedule.model_validate(rule.schedule)
+        source_event = None
         key = due_occurrence(schedule, now, rule.approved_at)
+        if schedule.kind == "workflow_event":
+            source_event = await db.scalar(select(MatterWorkflowAutomationEvent).where(
+                MatterWorkflowAutomationEvent.tenant_id == tenant_id,
+                MatterWorkflowAutomationEvent.rule_id == rule.event_rule_id,
+                MatterWorkflowAutomationEvent.matter_id == rule.matter_id,
+                MatterWorkflowAutomationEvent.outcome == "planned",
+                MatterWorkflowAutomationEvent.rule_sha256 == rule.event_rule_sha256,
+                ~MatterWorkflowAutomationEvent.id.in_(select(AutomationServiceOccurrence.source_event_id).where(
+                    AutomationServiceOccurrence.tenant_id == tenant_id,
+                    AutomationServiceOccurrence.source_event_id.is_not(None),
+                )),
+            ).order_by(MatterWorkflowAutomationEvent.created_at).with_for_update(skip_locked=True))
+            key = f"event:{source_event.id}" if source_event else None
         if not key:
             continue
         identity = await db.scalar(select(AutomationServiceIdentity).where(
@@ -51,7 +66,8 @@ async def schedule_due_rules(db, tenant_id, *, now=None):
         ))
         if identity_count and identity_count >= MAX_IDENTITY_DAILY_RUNS:
             row = AutomationServiceOccurrence(tenant_id=tenant_id, rule_id=rule.id, identity_id=identity.id,
-                occurrence_key=key, rule_sha256=rule.definition_sha256, outcome="blocked", failure_code="identity_daily_budget")
+                occurrence_key=key, source_event_id=source_event.id if source_event else None,
+                rule_sha256=rule.definition_sha256, outcome="blocked", failure_code="identity_daily_budget")
             db.add(row)
             outcomes.append(row)
             continue
@@ -62,7 +78,8 @@ async def schedule_due_rules(db, tenant_id, *, now=None):
         ))
         if tenant_count and tenant_count >= MAX_TENANT_DAILY_RUNS:
             row = AutomationServiceOccurrence(tenant_id=tenant_id, rule_id=rule.id, identity_id=identity.id,
-                occurrence_key=key, rule_sha256=rule.definition_sha256, outcome="blocked", failure_code="tenant_daily_budget")
+                occurrence_key=key, source_event_id=source_event.id if source_event else None,
+                rule_sha256=rule.definition_sha256, outcome="blocked", failure_code="tenant_daily_budget")
             db.add(row)
             outcomes.append(row)
             continue
@@ -77,10 +94,12 @@ async def schedule_due_rules(db, tenant_id, *, now=None):
             run = await submit_run(context, plan)
         except CapabilityError as error:
             row = AutomationServiceOccurrence(tenant_id=tenant_id, rule_id=rule.id, identity_id=identity.id,
-                occurrence_key=key, rule_sha256=rule.definition_sha256, outcome="blocked", failure_code=error.code)
+                occurrence_key=key, source_event_id=source_event.id if source_event else None,
+                rule_sha256=rule.definition_sha256, outcome="blocked", failure_code=error.code)
         else:
             row = AutomationServiceOccurrence(tenant_id=tenant_id, rule_id=rule.id, identity_id=identity.id,
-                occurrence_key=key, rule_sha256=rule.definition_sha256, run_id=uuid.UUID(run["run_id"]), outcome="started")
+                occurrence_key=key, source_event_id=source_event.id if source_event else None,
+                rule_sha256=rule.definition_sha256, run_id=uuid.UUID(run["run_id"]), outcome="started")
         db.add(row)
         outcomes.append(row)
     await db.flush()
