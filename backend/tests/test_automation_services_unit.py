@@ -88,8 +88,20 @@ async def test_approve_rule_requires_live_legal_authority_and_advances_version()
     [
         (set(), rule(), 1, True, "approval_permission_denied"),
         ({"approve_legal_work"}, None, 1, True, "service_rule_not_found"),
-        ({"approve_legal_work"}, rule(version=2), 1, True, "service_rule_version_conflict"),
-        ({"approve_legal_work"}, rule(status="active"), 1, True, "service_rule_not_draft"),
+        (
+            {"approve_legal_work"},
+            rule(version=2),
+            1,
+            True,
+            "service_rule_version_conflict",
+        ),
+        (
+            {"approve_legal_work"},
+            rule(status="active"),
+            1,
+            True,
+            "service_rule_not_draft",
+        ),
         ({"approve_legal_work"}, rule(), 1, False, "approval_actor_unavailable"),
     ],
 )
@@ -98,10 +110,13 @@ async def test_approve_rule_rejects_invalid_state(
 ):
     actor = SimpleNamespace(id=uuid4(), is_active=actor_active, license_active=True)
     db = Database([row])
-    with patch(
-        "app.services.automation_services.get_user_capabilities",
-        AsyncMock(return_value=capabilities),
-    ), pytest.raises(CapabilityError) as error:
+    with (
+        patch(
+            "app.services.automation_services.get_user_capabilities",
+            AsyncMock(return_value=capabilities),
+        ),
+        pytest.raises(CapabilityError) as error,
+    ):
         await approve_rule(
             db,
             tenant_id=uuid4(),
@@ -187,11 +202,15 @@ async def test_router_returns_reviewable_fields_and_commits_mutations():
         created_at=datetime.now(timezone.utc),
     )
     db = SimpleNamespace(commit=AsyncMock())
-    with patch.object(router_module, "set_tenant_context", AsyncMock()), patch.object(
-        router_module, "create_identity", AsyncMock(return_value=identity)
-    ), patch.object(router_module, "create_rule", AsyncMock(return_value=row)), patch.object(
-        router_module, "approve_rule", AsyncMock(return_value=row)
-    ), patch.object(router_module, "set_rule_status", AsyncMock(return_value=row)):
+    with (
+        patch.object(router_module, "set_tenant_context", AsyncMock()),
+        patch.object(
+            router_module, "create_identity", AsyncMock(return_value=identity)
+        ),
+        patch.object(router_module, "create_rule", AsyncMock(return_value=row)),
+        patch.object(router_module, "approve_rule", AsyncMock(return_value=row)),
+        patch.object(router_module, "set_rule_status", AsyncMock(return_value=row)),
+    ):
         created = await router_module.add_identity(
             ServiceIdentityInput(name="Night prep", capabilities=["propose_task"]),
             db,
