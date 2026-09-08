@@ -123,7 +123,7 @@ def upgrade():
         op.execute(f"""CREATE POLICY tenant_isolation ON {table}
           USING (tenant_id=nullif(current_setting('app.current_tenant_id',true),'')::uuid)
           WITH CHECK (tenant_id=nullif(current_setting('app.current_tenant_id',true),'')::uuid)""")
-    op.execute("""
+    guard_sql = """
       CREATE FUNCTION guard_automation_service_identity() RETURNS trigger
       LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
       BEGIN
@@ -189,7 +189,14 @@ def upgrade():
       CREATE TRIGGER automation_service_occurrences_guard BEFORE INSERT OR UPDATE OR DELETE ON automation_service_occurrences FOR EACH ROW EXECUTE FUNCTION guard_automation_service_occurrence();
       CREATE TRIGGER users_automation_service_guard BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION guard_automation_service_user();
       CREATE TRIGGER user_roles_automation_service_guard BEFORE INSERT OR UPDATE ON user_roles FOR EACH ROW EXECUTE FUNCTION guard_automation_service_role();
-    """)
+    """
+    functions, triggers = guard_sql.rsplit("CREATE TRIGGER", 1)
+    for statement in functions.split("END $$;"):
+        if statement.strip():
+            op.execute(statement.strip() + "END $$;")
+    for statement in ("CREATE TRIGGER" + triggers).split(";\n"):
+        if statement.strip():
+            op.execute(statement.strip())
 
 
 def downgrade():
