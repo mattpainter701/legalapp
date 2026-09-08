@@ -380,6 +380,16 @@ async def upload_tabs3_bundle(
         import_run.warnings = warnings
         connection.last_import_run_id = import_run.id
         connection.last_import_at = datetime.now(timezone.utc)
+        from app.services.workflow_synthesis import enqueue_synthesis
+
+        await db.flush()
+        await enqueue_synthesis(
+            db,
+            tenant_id=admin.tenant_id,
+            actor_user_id=admin.id,
+            request_id=import_run.id,
+            import_run_id=import_run.id,
+        )
         await db.commit()
     except HTTPException as exc:
         import_run.status = "failed"
@@ -387,6 +397,7 @@ async def upload_tabs3_bundle(
         await db.commit()
         raise
 
+    await set_tenant_context(db, str(admin.tenant_id))
     await db.refresh(import_run)
     return ExternalImportRunResponse.model_validate(import_run)
 

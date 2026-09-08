@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.08.8",
+      "version": "2026.09.08.8",
+      "title": "Prepare workflow drafts from your firm's history",
+      "published_at": "2026-09-08",
+      "summary": "Turn repeated work and imported Clio or Tabs3 history into evidence-backed workflow drafts for your firm to review.",
+      "highlights": [
+        {
+          "title": "Start with observed practice",
+          "description": "Analyze recurring tasks, timing, assignments, document-template use, and correspondence. Inspect the evidence and approve each workflow through the existing review controls."
+        },
+        {
+          "title": "Use migration history during setup",
+          "description": "Tabs3 bundles prepare suggestions automatically. Map Clio or Tabs3 CSVs without joining spreadsheets. Declined patterns stay suppressed; changes appear as draft amendments."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.7",
       "version": "2026.09.08.7",
       "title": "Prepare workflows from everyday firm events",

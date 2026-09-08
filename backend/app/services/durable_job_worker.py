@@ -619,7 +619,11 @@ async def _run_teams_voice_reconcile(row: DurableJob) -> dict:
         }
 
 
-WORKFLOW_PLANNING_JOB_KINDS = {"matter_workflow_plan", "workflow_lifecycle_plan"}
+WORKFLOW_PLANNING_JOB_KINDS = {
+    "matter_workflow_plan",
+    "workflow_lifecycle_plan",
+    "workflow_configuration_synthesis",
+}
 
 
 async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
@@ -694,6 +698,10 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                 from app.services.workflow_lifecycle import run_lifecycle_job
 
                 result = await run_lifecycle_job(db, row)
+            elif row.kind == "workflow_configuration_synthesis":
+                from app.services.workflow_synthesis import run_synthesis_job
+
+                result = await run_synthesis_job(db, row)
             elif row.kind == "document_ingest":
                 result = await _run_document_ingest(row)
             elif row.kind == "cloud_sync":

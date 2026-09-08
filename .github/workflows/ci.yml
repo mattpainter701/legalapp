@@ -316,6 +316,21 @@ jobs:
         run: python scripts/rehearse_artifact_reviews.py
       - name: Rehearse lifecycle capture and planning recovery
         run: python scripts/rehearse_workflow_lifecycle.py
+      - name: Install rehearsal coverage tooling
+        run: pip install pytest-cov==7.1.0
+      - name: Rehearse native and imported configuration synthesis
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+          COVERAGE_FILE: .coverage.rehearsal
+        run: coverage run --source=app ../scripts/rehearse_workflow_synthesis.py
+      - name: Upload migrated database rehearsal coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)
+        with:
+          name: backend-coverage-rehearsal
+          path: backend/.coverage.rehearsal
+          include-hidden-files: true
+          if-no-files-found: error
 
   # ─── Backend: Unit tests (no database) ──────────────────────────
   # Fast feedback, not a gate. A strict subset of the sharded suite below,
@@ -711,7 +726,7 @@ jobs:
   test-backend:
     name: Backend — Tests (pytest)
     if: always()
-    needs: test-backend-shard
+    needs: [test-backend-shard, configurable-workflow-rehearsal]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -719,9 +734,10 @@ jobs:
       - name: Require every shard to have passed
         env:
           SHARD_RESULT: ${{ needs.test-backend-shard.result }}
+          REHEARSAL_RESULT: ${{ needs.configurable-workflow-rehearsal.result }}
         run: |
           echo "Shard result: $SHARD_RESULT"
-          if [ "$SHARD_RESULT" != "success" ]; then
+          if [ "$SHARD_RESULT" != "success" ] || [ "$REHEARSAL_RESULT" != "success" ]; then
             echo "One or more backend test shards did not pass." >&2
             exit 1
           fi
@@ -748,6 +764,12 @@ jobs:
           path: backend/shard-coverage
           merge-multiple: true
 
+      - name: Download migrated database rehearsal coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: backend-coverage-rehearsal
+          path: backend
+
       - name: Combine shard coverage into one report
         working-directory: backend
         run: |
@@ -757,7 +779,8 @@ jobs:
             echo "expected 4 shard coverage files, found $count" >&2
             exit 1
           fi
-          coverage combine .coverage.shard*
+          test -f .coverage.rehearsal
+          coverage combine .coverage.shard* .coverage.rehearsal
           coverage xml -o coverage.xml
 
       - name: Require changed backend lines to remain tested

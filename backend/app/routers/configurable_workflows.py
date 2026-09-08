@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
@@ -762,7 +762,22 @@ async def approve_workflow_template_version(
     version.status = "approved"
     version.approved_by_user_id = user.id
     version.approved_at = datetime.now(timezone.utc)
-    await db.commit()
+    try:
+        await db.commit()
+    except DBAPIError as error:
+        await db.rollback()
+        if any(
+            reason in str(error.orig)
+            for reason in (
+                "Declined proposal cannot be approved",
+                "Approved workflow changed after this amendment was proposed",
+            )
+        ):
+            raise HTTPException(
+                409,
+                "This suggestion was declined or its approved baseline changed; review a fresh draft",
+            ) from error
+        raise
     await set_tenant_context(db, str(user.tenant_id))
     return await _template_version_response(db, user.tenant_id, version.id)
 

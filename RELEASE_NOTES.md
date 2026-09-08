@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.8 — Prepare workflow drafts from your firm's history
+
+Released September 8, 2026.
+
+Turn repeated work and imported Clio or Tabs3 history into evidence-backed workflow drafts for your firm to review.
+
+- **Start with observed practice.** Analyze recurring tasks, timing, assignments, document-template use, and correspondence. Inspect the evidence and approve each workflow through the existing review controls.
+- **Use migration history during setup.** Tabs3 bundles prepare suggestions automatically. Map Clio or Tabs3 CSVs without joining spreadsheets. Declined patterns stay suppressed; changes appear as draft amendments.
+
 ## 2026.09.08.7 — Prepare workflows from everyday firm events
 
 Released September 8, 2026.

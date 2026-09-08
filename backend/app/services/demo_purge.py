@@ -54,6 +54,7 @@ _STUDIO_TABLES = frozenset(_STUDIO_PURGE_ORDER)
 # if any row remains.
 _CASCADE_PURGED_TABLES = frozenset({"document_template_versions"})
 _CONFIG_WORKFLOW_PURGE_ORDER = (
+    "workflow_configuration_proposals",
     "work_artifact_delivery",
     "work_artifact_approval",
     "work_artifact_review_requirement",
