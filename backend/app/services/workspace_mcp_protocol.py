@@ -58,6 +58,7 @@ from app.services.workspace_mcp_grants import (
     require_active_workspace_grant,
 )
 from app.services.workspace_mcp_access import tenant_workspace_mcp_enabled
+from app.services.workspace_mcp_read_volume import enforce_read_volume
 from app.services.workspace_mcp_budgets import (
     bounded_workspace_read_result,
     enforce_workspace_grant_call_budget,
@@ -301,6 +302,11 @@ def _workspace_idempotency_key(
 def _success_audit_metadata(spec: CapabilitySpec, result: dict[str, Any]) -> dict:
     """Keep tool audit useful without retaining private search text or snippets."""
     metadata: dict[str, Any] = {"effect": spec.effect.value}
+    for key in ("task_id", "artifact_id", "artifact_revision_id"):
+        try:
+            metadata[key] = str(uuid.UUID(str(result[key])))
+        except (KeyError, ValueError, TypeError, AttributeError):
+            pass
     if spec.name in {"propose_workflow_run", "get_workflow_run", "resume_workflow_run"}:
         metadata["run_id"] = str(uuid.UUID(result["run_id"]))
         metadata["plan_sha256"] = str(result["plan_sha256"])[:64]
@@ -445,6 +451,9 @@ async def execute_workspace_capability(
             audit_metadata = _success_audit_metadata(spec, result)
             if not spec.mutating:
                 audit_metadata["result_bytes"] = bounded_workspace_read_result(result)
+                await enforce_read_volume(
+                    request, identity, audit_metadata["result_bytes"]
+                )
             if spec.mutating:
                 # Proposal state and its audit evidence commit atomically.
                 await append_workspace_mcp_audit(

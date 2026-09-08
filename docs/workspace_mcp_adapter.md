@@ -4,6 +4,12 @@ Status: OAuth connection implemented and production-published as a native
 tenant capability administered per user; broader client interoperability
 remains under validation.
 
+The [firm setup and activity guide](mcp/harness-firm-setup.md) covers client
+onboarding and the firm-visible consent/read/proposal/review ledger. Aggregate
+read admission shares grant and tenant byte counters across direct calls and
+durable run reads; the [channel contract](byo-harness-channel-contract.md) owns
+the budget settings and separate inference/metering policy.
+
 ## Product boundary
 
 LawHand has two separate MCP products:

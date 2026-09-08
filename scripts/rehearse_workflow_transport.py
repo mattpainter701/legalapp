@@ -32,7 +32,11 @@ async def replay_through_mcp(sessions, *, tenant_id, user_id, grant_id, plan):
             "token_use":"access","client_id":"runtime-rehearsal","grant_id":str(grant_id),
             "jti":"runtime-rehearsal","scope":scopes,"iat":now,"exp":now+300},
             signing_key,algorithm=protocol.settings.ALGORITHM)
-        with patch.object(protocol.workspace_protocol_session_manager,"security_settings",protocol._transport_security()):
+        # Each rehearsal owns its transport lifetime; MCP managers are single-use.
+        manager = protocol.StreamableHTTPSessionManager(
+            app=protocol.workspace_protocol_server, event_store=None,
+            json_response=True, stateless=True, security_settings=protocol._transport_security())
+        with patch.object(protocol,"workspace_protocol_session_manager",manager):
             async with protocol.workspace_protocol_session_manager.run():
                 async with AsyncClient(transport=ASGITransport(app=app),base_url=issuer,
                     headers={"Authorization":f"Bearer {token}"}) as http_client:
