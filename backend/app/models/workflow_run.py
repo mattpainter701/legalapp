@@ -59,7 +59,7 @@ class WorkflowRun(RunIdentity, Base):
         tenant_fk("actor_user_id", "users"),
         tenant_fk("matter_id", "matters"),
         CheckConstraint(
-            "origin_channel IN ('matter_chat','workspace_mcp')",
+            "origin_channel IN ('matter_chat','workspace_mcp','automation_service')",
             name="ck_workflow_runs_channel",
         ),
         CheckConstraint(
@@ -78,6 +78,10 @@ class WorkflowRun(RunIdentity, Base):
             "(origin_channel='workspace_mcp')=(grant_id IS NOT NULL AND client_id IS NOT NULL)",
             name="ck_workflow_runs_grant",
         ),
+        CheckConstraint(
+            "(origin_channel='automation_service')=(service_rule_id IS NOT NULL)",
+            name="ck_workflow_runs_service_rule",
+        ),
         Index(
             "ix_workflow_runs_tenant_matter_created",
             "tenant_id",
@@ -92,6 +96,7 @@ class WorkflowRun(RunIdentity, Base):
     origin_channel: Mapped[str] = mapped_column(String(30), nullable=False)
     grant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     client_id: Mapped[str | None] = mapped_column(String(200))
+    service_rule_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     scope_snapshot: Mapped[list] = mapped_column(JSONB, nullable=False)
     objective: Mapped[str] = mapped_column(String(80), nullable=False)
     plan_json: Mapped[dict] = mapped_column(JSONB, nullable=False)

@@ -190,6 +190,7 @@ async def describe_run(db, run):
         "status": run.status,
         "version": run.version,
         "origin_channel": run.origin_channel,
+        "service_rule_id": str(run.service_rule_id) if run.service_rule_id else None,
         "plan_sha256": run.plan_sha256,
         "next_step": run.next_step,
         "failure_code": run.failure_code,

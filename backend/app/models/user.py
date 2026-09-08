@@ -46,6 +46,11 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(50), default="user", server_default="user")
+    # Service principals are created only for an approved unattended rule. They
+    # never authenticate, consume a seat, receive an OAuth token, or hold roles.
+    principal_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="human", server_default="human"
+    )
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     oauth_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     oauth_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)

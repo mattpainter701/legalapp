@@ -227,12 +227,20 @@ from app.models.workflow_automation import (
 
 from app.models.workflow_configuration_proposal import WorkflowConfigurationProposal
 from app.models.workflow_run import WorkflowRun, WorkflowRunStep, WorkflowRunEvent
+from app.models.automation_service import (
+    AutomationServiceIdentity,
+    AutomationServiceOccurrence,
+    AutomationServiceRule,
+)
 
 __all__ = [
     "WorkflowConfigurationProposal",
     "WorkflowRun",
     "WorkflowRunStep",
     "WorkflowRunEvent",
+    "AutomationServiceIdentity",
+    "AutomationServiceRule",
+    "AutomationServiceOccurrence",
     "WorkArtifactReviewRequirement",
     "WorkArtifactApproval",
     "WorkArtifactDelivery",
