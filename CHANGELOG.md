@@ -1,3 +1,9 @@
+## 2026.09.08.12 - Approved automation service rules
+
+- Add named noninteractive service identities with immutable narrow grants; services cannot sign in, hold roles, consume a seat, consent to MCP, or approve legal work.
+- Freeze completed durable workflow inputs and verified sources into hash-bound rules that require an active licensed legal-work approver before activation.
+- Schedule daily, weekly, or pinned lifecycle-event work with one immutable occurrence receipt, tenant RLS, durable run checkpoints, reviewer assignment, and bounded daily admission.
+
 ## 2026.09.08.10 - Durable capability workflows
 
 - Add bounded Chat/MCP workflow plans, encrypted step payloads, missing-input/review continuation, current authority checks and firm/matter evidence views.

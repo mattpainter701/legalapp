@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.12 — Prepare recurring matter work with named service identities
+
+Released September 8, 2026.
+
+Create a narrowly scoped firm service identity from a completed workflow and require legal approval before it can prepare recurring work for review.
+
+- **Approve the exact recurring plan.** Rules freeze a completed workflow's bounded inputs and verified sources. A named noninteractive identity cannot sign in, receive roles, or approve its own work.
+- **Keep recurring work reviewable.** Daily, weekly, and approved lifecycle-event schedules create durable proposals with the approving attorney as reviewer. Existing review controls still decide every final action.
+
 ## 2026.09.08.11 — See connected assistant activity across your firm
 
 Released September 8, 2026.
