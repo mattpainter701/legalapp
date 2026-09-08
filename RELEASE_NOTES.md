@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.9 — Keep signing fields ready for e-signing
+
+Released September 8, 2026.
+
+Prepare template documents without entering signatures or signing dates before the signer receives them.
+
+- **Complete only the information needed now.** Signatures and dates assigned to a signer stay out of Smart Fill and completion requirements. Ordinary dates still work as normal template values.
+- **Leave signing areas ready for the signer.** Generate Word and PDF documents with blank signing fields. Clear old PDF signing-date form values and retain signer roles for final PDF placement review.
+
 ## 2026.09.08.8 — Prepare workflow drafts from your firm's history
 
 Released September 8, 2026.

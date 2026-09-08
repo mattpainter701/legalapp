@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { applyFillSuggestions, discoverySuggestions, fillReview, initialFillValues } from './templateFillReview'
 
 describe('matter template completion', () => {
+  it('leaves signing dates to the signer while ordinary dates remain fillable', () => {
+    const fields = { signed_on: { field_type: 'date', signer_role: 'client', required: true }, event_date: { field_type: 'date', required: true } }
+    const names = Object.keys(fields)
+    expect(fillReview(names, fields, {}, {}, {})).toMatchObject({ total: 1, percent: 0, remaining: [{ name: 'event_date' }] })
+    const applied = applyFillSuggestions(names, fields, {}, {}, { signed_on: { suggested_value: '2026-01-01' }, event_date: { suggested_value: '2026-10-12' } })
+    expect(applied.values).toEqual({ event_date: '2026-10-12' })
+    expect(fillReview(names, fields, applied.values, applied.sources, {})).toMatchObject({ total: 1, percent: 100 })
+  })
   it('counts answers independently of suggestion review, excluding signatures and linked fields', () => {
     const fields = { client: {}, fee: {}, signature: { field_type: 'signature' }, duplicate: { value_from: 'client' }, consent: { field_type: 'checkbox', required: true }, optional: { field_type: 'checkbox' } }
     const values = { client: 'Ada', fee: '', consent: 'false', optional: 'false' }

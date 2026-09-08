@@ -20,6 +20,7 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
 from app.services.template_bindings import is_item_binding, item_key
+from app.services.esign.placement import is_signing_template_field
 
 
 class TemplateDocxError(ValueError):
@@ -714,6 +715,13 @@ def fill_docx_template(
     from app.services.docx_source_review import word_values
 
     variables = word_values(fields, variables)
+    for name, field in by_name.items():
+        if field.get("included") is not False and is_signing_template_field(field):
+            if str(variables.get(name) or "").strip():
+                raise TemplateDocxError(
+                    f"Signing field {name!r} must remain blank for signing."
+                )
+            variables[name] = ""
 
     unknown = set(variables) - set(by_name)
     if unknown:
@@ -726,6 +734,7 @@ def fill_docx_template(
             for name, field in by_name.items()
             if field.get("included") is not False
             and field.get("required")
+            and not is_signing_template_field(field)
             and not str(variables.get(name) or "").strip()
         )
         if missing:
@@ -742,7 +751,7 @@ def fill_docx_template(
         if field.get("included") is False:
             continue
         binding = field.get("binding")
-        if is_item_binding(str(binding or "")):
+        if is_item_binding(str(binding or "")) and not is_signing_template_field(field):
             item_fields.append(
                 (
                     str(field.get("source_text") or field.get("example") or ""),

@@ -13,6 +13,7 @@ from typing import Any
 
 from pypdf import PdfReader, PdfWriter
 from pypdf.errors import PdfReadError
+from app.services.esign.placement import is_signing_template_field
 
 
 class TemplatePdfError(ValueError):
@@ -826,7 +827,7 @@ def pdf_review_evidence(
         if (
             not isinstance(field, dict)
             or field.get("included", True) is False
-            or field.get("field_type") == "signature"
+            or is_signing_template_field(field)
         ):
             continue
         name = str(field.get("name") or "").strip()
@@ -857,7 +858,7 @@ def validate_representative_pdf_variables(
         if (
             not isinstance(field, dict)
             or field.get("included", True) is False
-            or field.get("field_type") == "signature"
+            or is_signing_template_field(field)
         ):
             continue
         name = str(field.get("name") or "").strip()
@@ -1636,7 +1637,7 @@ def fill_pdf_template(
             field
             for field in overlay_fields
             if field.get("included", True) is not False
-            and field.get("field_type") != "signature"
+            and not is_signing_template_field(field)
         ]
         names = [str(field.get("name") or "").strip() for field in active_input_fields]
         source_keys = [
@@ -1744,9 +1745,8 @@ def fill_pdf_template(
                 "The stored PDF overlay field mapping contains duplicates or is incomplete."
             )
         overlay_names.add(variable)
-        if (
-            field.get("included", True) is not False
-            and field.get("field_type") != "signature"
+        if field.get("included", True) is not False and not is_signing_template_field(
+            field
         ):
             active_overlay_names.add(variable)
         overlay_keys.add(source_key)
@@ -1787,11 +1787,12 @@ def fill_pdf_template(
         # validation, but omit them from the public input contract.
         if (
             field.get("included", True) is not False
-            and actual_field.get("field_type") != "signature"
+            and not is_signing_template_field(actual_field)
+            and not is_signing_template_field(field)
         ):
             known_variables.add(variable)
             variable_fields[variable] = actual_field
-            if actual_field.get("field_type") != "signature" and (
+            if not is_signing_template_field(actual_field) and (
                 actual_field.get("required") or field.get("required")
             ):
                 required_variables[variable] = str(
@@ -1837,15 +1838,14 @@ def fill_pdf_template(
         missing_reviewed = sorted(
             variable
             for variable, actual_field in variable_fields.items()
-            if actual_field.get("field_type") != "signature"
-            and variable not in variables
+            if not is_signing_template_field(actual_field) and variable not in variables
         )
         missing_reviewed.extend(
             sorted(
                 str(field.get("name") or "").strip()
                 for field in overlay_schema_fields
                 if field.get("included", True) is not False
-                and field.get("field_type") != "signature"
+                and not is_signing_template_field(field)
                 and str(field.get("name") or "").strip() not in variables
             )
         )
@@ -1863,7 +1863,7 @@ def fill_pdf_template(
             str(field.get("name") or "").strip()
             for field in overlay_schema_fields
             if field.get("included", True) is not False
-            and field.get("field_type") != "signature"
+            and not is_signing_template_field(field)
             and field.get("required")
             and (
                 not str(
@@ -1896,6 +1896,7 @@ def fill_pdf_template(
             and (
                 field.get("included", True) is False
                 or actual_fields[pdf_name].get("field_type") == "signature"
+                or is_signing_template_field(field)
             )
         ):
             values[pdf_name] = ""

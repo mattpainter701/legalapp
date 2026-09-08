@@ -1,3 +1,9 @@
+## 2026.09.08.9 - Signing-aware template completion
+
+- Exclude signatures and signer-linked dates from Smart Fill and pre-signing completion while preserving ordinary required dates.
+- Keep signing fields blank in Word output, reject supplied signing values, and clear old signing-date AcroForm values in generated PDFs.
+- Cover Word, PDF overlays, AcroForms, mixed PDFs, and fill UI without sending live signature requests.
+
 ## 2026.09.08.8 - Firm configuration synthesis
 
 - Prepare bounded ordinary template/rule drafts from tenant metadata and migrated Clio/Tabs3 history, using existing definition hashes and human approval endpoints.
