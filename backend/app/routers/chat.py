@@ -87,6 +87,10 @@ from app.services.upload_guard import reject_oversized_request
 
 logger = logging.getLogger(__name__)
 
+_RETRIEVAL_METADATA_SCORE_KEY = "__retrieval_metadata__"
+_ATTACHMENT_CONTEXT_CHAR_LIMIT = 4_000
+_ATTACHMENT_CONTEXT_CHUNK_LIMIT = 100
+
 settings = get_settings()
 
 
@@ -717,11 +721,13 @@ async def _is_public_general_route(db: AsyncSession, route, tenant_id) -> bool:
 def _assert_public_general_sources_allowed(
     conv: Conversation,
     body: MessageCreate,
+    *,
+    resolved_attachment_ids: list[str] | None = None,
 ) -> None:
     """Block sources that cannot safely cross the Standard provider boundary."""
     if conv.matter_id or getattr(body, "matter_id", None):
         raise HTTPException(status_code=409, detail=_PUBLIC_GENERAL_MATTER_DETAIL)
-    if getattr(body, "attachment_ids", None):
+    if getattr(body, "attachment_ids", None) or resolved_attachment_ids:
         raise HTTPException(status_code=409, detail=_PUBLIC_GENERAL_ATTACHMENT_DETAIL)
 
 
@@ -834,6 +840,88 @@ def _cloud_hit_context_id(hit_dict: dict) -> str:
     return cloud_context_source_id(hit_dict)
 
 
+def _attachment_context_coverage(
+    text: str, chunk_count: int | None
+) -> tuple[str, str, str]:
+    """Describe exactly which portion of an attachment reached the model."""
+    excerpt = text[:_ATTACHMENT_CONTEXT_CHAR_LIMIT]
+    coverage_limits = []
+    if (chunk_count or 0) > _ATTACHMENT_CONTEXT_CHUNK_LIMIT:
+        coverage_limits.append(
+            f"only the first {_ATTACHMENT_CONTEXT_CHUNK_LIMIT} indexed chunks"
+        )
+    if len(text) > _ATTACHMENT_CONTEXT_CHAR_LIMIT:
+        coverage_limits.append(
+            f"only the opening {_ATTACHMENT_CONTEXT_CHAR_LIMIT:,} characters"
+        )
+    if not coverage_limits:
+        return excerpt, "", "Full attached document"
+
+    coverage = " and ".join(coverage_limits)
+    instruction = (
+        f"Coverage limit: the model received {coverage}. Do not make findings "
+        "about material outside that supplied excerpt."
+    )
+    return excerpt, instruction, coverage.capitalize()
+
+
+async def _resolve_conversation_attachment_ids(
+    db: AsyncSession,
+    user,
+    conversation: Conversation,
+    requested_attachment_ids: list[str] | None,
+) -> list[str]:
+    """Return usable attachments for this conversation and its current matter.
+
+    A follow-up without IDs carries forward the conversation's live uploads.
+    Supplying IDs remains a strict subset request.  The query deliberately
+    excludes non-ready records (including archived and superseded rows) and
+    rows past their retention deadline. It also prevents a document from a
+    different conversation or matter from becoming prompt context.
+    """
+    requested_ids: list[uuid.UUID] = []
+    if requested_attachment_ids:
+        for attachment_id in requested_attachment_ids:
+            try:
+                parsed_id = uuid.UUID(str(attachment_id))
+            except (TypeError, ValueError):
+                continue
+            if parsed_id not in requested_ids:
+                requested_ids.append(parsed_id)
+
+    now = datetime.now(timezone.utc)
+    conditions = [
+        Document.tenant_id == user.tenant_id,
+        Document.conversation_id == conversation.id,
+        Document.status == "ready",
+        (Document.expires_at.is_(None) | (Document.expires_at > now)),
+    ]
+    if conversation.matter_id is None:
+        conditions.append(Document.matter_id.is_(None))
+    else:
+        conditions.append(Document.matter_id == conversation.matter_id)
+    if requested_attachment_ids:
+        if not requested_ids:
+            return []
+        conditions.append(Document.id.in_(requested_ids))
+
+    result = await db.execute(
+        select(Document.id)
+        .where(*conditions)
+        .order_by(Document.created_at, Document.id)
+    )
+    available_ids = [row[0] for row in result.all()]
+    if not requested_attachment_ids:
+        return [str(attachment_id) for attachment_id in available_ids]
+
+    available_set = set(available_ids)
+    return [
+        str(attachment_id)
+        for attachment_id in requested_ids
+        if attachment_id in available_set
+    ]
+
+
 async def _build_attachment_context(
     db: AsyncSession,
     user,
@@ -890,21 +978,24 @@ async def _build_attachment_context(
             if text:
                 source_id = f"document:{doc.id}"
                 source_url = f"/api/documents/{doc.id}/download"
-                attachment_parts.append(
-                    "\n".join(
-                        [
-                            f"[Attachment: {doc.filename or 'Untitled'}]",
-                            f"Source ID: {source_id}",
-                            f"URL: {source_url}",
-                            (
-                                "Citation instruction: cite every factual finding from "
-                                f"this file with [source: {source_id}] and state the "
-                                "section, page, paragraph, or schedule row in the finding."
-                            ),
-                            text[:4000],
-                        ]
-                    )
+                excerpt, coverage_instruction, locator = _attachment_context_coverage(
+                    text,
+                    doc.chunk_count,
                 )
+                attachment_prompt_parts = [
+                    f"[Attachment: {doc.filename or 'Untitled'}]",
+                    f"Source ID: {source_id}",
+                    f"URL: {source_url}",
+                    (
+                        "Citation instruction: cite every factual finding from "
+                        f"this file with [source: {source_id}] and state the "
+                        "section, page, paragraph, or schedule row in the finding."
+                    ),
+                ]
+                if coverage_instruction:
+                    attachment_prompt_parts.append(coverage_instruction)
+                attachment_prompt_parts.append(excerpt)
+                attachment_parts.append("\n".join(attachment_prompt_parts))
                 attachment_sources.append(
                     {
                         "source_id": source_id,
@@ -915,7 +1006,7 @@ async def _build_attachment_context(
                         "url": source_url,
                         "source_type": "tenant_document",
                         "source_label": "Attached document",
-                        "locator": "Full attached document",
+                        "locator": locator,
                     }
                 )
 
@@ -1097,12 +1188,18 @@ def _message_to_response(
                     cited=bool(s.get("cited")),
                 )
             )
+    retrieval_metadata = {}
+    if isinstance(msg.context_relevance_scores, dict):
+        candidate = msg.context_relevance_scores.get(_RETRIEVAL_METADATA_SCORE_KEY)
+        if isinstance(candidate, dict):
+            retrieval_metadata = candidate
     return MessageResponse(
         id=str(msg.id),
         conversation_id=str(msg.conversation_id),
         role=msg.role,
         content=msg.content,
         sources=sources,
+        retrieval_metadata=retrieval_metadata,
         citation_annotations=build_citation_annotations(
             msg.content,
             [source.model_dump() for source in sources],
@@ -2233,8 +2330,18 @@ async def _send_message_under_generation_lock(
     )
     public_general = not matter_sources_allowed
     privacy_mode = _privacy_mode_for_route(user, public_general=public_general)
+    resolved_attachment_ids = await _resolve_conversation_attachment_ids(
+        db,
+        user,
+        conv,
+        body.attachment_ids if hasattr(body, "attachment_ids") else None,
+    )
     if not matter_sources_allowed:
-        _assert_public_general_sources_allowed(conv, body)
+        _assert_public_general_sources_allowed(
+            conv,
+            body,
+            resolved_attachment_ids=resolved_attachment_ids,
+        )
 
     effective_matter = (
         None
@@ -2249,9 +2356,17 @@ async def _send_message_under_generation_lock(
     context_matter_cloud_folder = (
         effective_matter.cloud_folder if matter_context_enabled else None
     )
-    default_public_jurisdiction = select_public_jurisdiction_default(
-        effective_matter.jurisdiction if matter_context_enabled else None,
-        getattr(user, "primary_jurisdictions", None),
+    # A public/general route must not use profile data to steer retrieval.
+    # Its provider prompt is deliberately limited to the current message and
+    # retrieved public authority, so applying a saved jurisdiction preference
+    # here would still make that profile influence the external MCP request.
+    default_public_jurisdiction = (
+        None
+        if public_general
+        else select_public_jurisdiction_default(
+            effective_matter.jurisdiction if matter_context_enabled else None,
+            getattr(user, "primary_jurisdictions", None),
+        )
     )
     rag_scope_key = _rag_scope_key(
         context_matter_id,
@@ -2344,7 +2459,7 @@ async def _send_message_under_generation_lock(
             db,
             user,
             conv,
-            body.attachment_ids if hasattr(body, "attachment_ids") else None,
+            resolved_attachment_ids,
         )
 
     async def _load_memory_context_nonstream():
@@ -2419,6 +2534,7 @@ async def _send_message_under_generation_lock(
                 include_private=not public_general,
                 cloud_search_service=_get_cloud_search_service(),
                 retrieval_planner=_get_retrieval_planner(),
+                planning_route=route,
                 tenant_name=prepare_provider_text(
                     user.tenant.name if user.tenant else "Legal", privacy_mode
                 ),
@@ -2674,6 +2790,12 @@ async def _send_message_under_generation_lock(
             conv.id,
         )
     source_dicts = _mark_cited_sources(cleaned_response, source_dicts)
+
+    public_retrieval = getattr(chunks, "public_retrieval", None)
+    if isinstance(public_retrieval, dict) and public_retrieval:
+        context_scores[_RETRIEVAL_METADATA_SCORE_KEY] = {
+            "public_retrieval": public_retrieval
+        }
 
     # Track matter context usage if provided
     if context_matter_id:
@@ -2970,8 +3092,18 @@ async def _stream_message_under_generation_lock(
         )
         public_general = not matter_sources_allowed
         privacy_mode = _privacy_mode_for_route(user, public_general=public_general)
+        resolved_attachment_ids = await _resolve_conversation_attachment_ids(
+            db,
+            user,
+            conv,
+            body.attachment_ids if hasattr(body, "attachment_ids") else None,
+        )
         if not matter_sources_allowed:
-            _assert_public_general_sources_allowed(conv, body)
+            _assert_public_general_sources_allowed(
+                conv,
+                body,
+                resolved_attachment_ids=resolved_attachment_ids,
+            )
         effective_matter = (
             None
             if public_general
@@ -2990,9 +3122,15 @@ async def _stream_message_under_generation_lock(
     context_matter_cloud_folder = (
         effective_matter.cloud_folder if matter_context_enabled else None
     )
-    default_public_jurisdiction = select_public_jurisdiction_default(
-        effective_matter.jurisdiction if matter_context_enabled else None,
-        getattr(user, "primary_jurisdictions", None),
+    # Keep public/general streaming retrieval on the same profile-free
+    # boundary as the non-streaming route above.
+    default_public_jurisdiction = (
+        None
+        if public_general
+        else select_public_jurisdiction_default(
+            effective_matter.jurisdiction if matter_context_enabled else None,
+            getattr(user, "primary_jurisdictions", None),
+        )
     )
     rag_scope_key = _rag_scope_key(
         context_matter_id,
@@ -3089,7 +3227,7 @@ async def _stream_message_under_generation_lock(
             db,
             user,
             conv,
-            body.attachment_ids if hasattr(body, "attachment_ids") else None,
+            resolved_attachment_ids,
         )
 
     async def _load_memory_context_for_stream():
@@ -3136,7 +3274,7 @@ async def _stream_message_under_generation_lock(
             rag_cache_revision,
         )
 
-    attachment_count = len(body.attachment_ids or [])
+    attachment_count = len(resolved_attachment_ids)
 
     # Create the streaming generator
     stream_user_first_name = (
@@ -3254,6 +3392,7 @@ async def _stream_message_under_generation_lock(
                         include_private=not public_general,
                         cloud_search_service=_get_cloud_search_service(),
                         retrieval_planner=_get_retrieval_planner(),
+                        planning_route=route,
                         tenant_name=prepare_provider_text(
                             user.tenant.name if user.tenant else "Legal",
                             privacy_mode,
@@ -3593,6 +3732,11 @@ async def _stream_message_under_generation_lock(
                     conv.id,
                 )
             source_dicts = _mark_cited_sources(cleaned_response, source_dicts)
+            public_retrieval = getattr(chunks, "public_retrieval", None)
+            if isinstance(public_retrieval, dict) and public_retrieval:
+                context_scores[_RETRIEVAL_METADATA_SCORE_KEY] = {
+                    "public_retrieval": public_retrieval
+                }
             latency_breakdown.update(
                 _source_utilization_metrics(context_str, source_dicts)
             )

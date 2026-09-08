@@ -11,6 +11,14 @@
 
 # Changelog
 
+## 2026.09.07.19 - Assistant retrieval continuity and source honesty
+
+- Restore only ready, unexpired same-tenant, same-conversation, same-matter attachments for follow-up turns; preserve explicit subsets and enforce the private-route gate for implicit attachments.
+- Extract supported cloud PDF/DOCX and native Google exports instead of decoding raw binary bytes. Bound downloads to 10 MiB, preserve provider redirects, and parse off the async event loop.
+- Admit connected-source planning against the exact selected chat route, including Premium; reject malformed/empty keyword plans and blank manual queries. Remove profile jurisdiction defaults from public/general requests.
+- Persist public retrieval outage metadata, reconcile source counts/origins, and expose the 4,000-character/100-chunk attachment excerpt limits. No migration or automatic promotion of conversation documents to matter knowledge.
+- Record live synthetic TXT/PDF/DOCX and long-file validation, known public-search timeouts, and remaining indexing, relevance, artifact-citation and layout concerns. Add focused backend/frontend regressions and updated user/admin guidance.
+
 ## 2026.09.07.17 - Dedicated premium template AI profile
 
 - Add an independently activated, platform-global document-template profile using the stored OpenRouter vault key and `anthropic/claude-opus-5`.

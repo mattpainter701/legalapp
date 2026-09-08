@@ -6,6 +6,7 @@ snippets + metadata.
 """
 
 import base64
+import asyncio
 import logging
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from app.services.matter_cloud_scope import (
     load_matter_document_cloud_scope,
 )
 from app.services.token_vault import get_fresh_token, get_fresh_user_token
+from app.utils.text_processing import extract_text
 
 # Map index (provider, object_type) → CloudHit.source used by fetch_content.
 _INDEX_SOURCE_MAP = {
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 GOOGLE_DRIVE_BASE = "https://www.googleapis.com/drive/v3"
 GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1"
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+MAX_CLOUD_SEARCH_DOWNLOAD_BYTES = 10 * 1024 * 1024
 
 
 # ── Data model ────────────────────────────────────────────────────────────
@@ -876,15 +879,20 @@ class CloudSearchService:
                 params = {"alt": "media", "supportsAllDrives": True}
 
             try:
-                resp = await client.get(
+                content = await self._download_content(
+                    client,
                     url,
                     headers={"Authorization": f"Bearer {token}"},
                     params=params,
-                    follow_redirects=True,
                 )
-                if resp.status_code == 200:
-                    content = resp.text
-                    return content[:max_chars]
+                if content is not None:
+                    return await asyncio.to_thread(
+                        self._extract_downloaded_file,
+                        content,
+                        hit,
+                        max_chars,
+                        export_mime,
+                    )
             except httpx.RequestError:
                 pass
 
@@ -939,18 +947,82 @@ class CloudSearchService:
                     drive_id, item_id = _split_sharepoint_object_id(object_id)
                     if drive_id and item_id:
                         url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
-                resp = await client.get(
+                content = await self._download_content(
+                    client,
                     url,
                     headers={"Authorization": f"Bearer {token}"},
-                    follow_redirects=True,
                 )
-                if resp.status_code == 200:
-                    content = resp.text
-                    return content[:max_chars]
+                if content is not None:
+                    return await asyncio.to_thread(
+                        self._extract_downloaded_file, content, hit, max_chars
+                    )
             except httpx.RequestError:
                 pass
 
         return hit.snippet or None
+
+    @staticmethod
+    async def _download_content(client, url: str, **kwargs) -> bytes | None:
+        """Read a cloud object with a hard upper bound before parsing it."""
+        kwargs.setdefault("follow_redirects", True)
+        async with client.stream("GET", url, **kwargs) as response:
+            if response.status_code != 200:
+                return None
+            announced = response.headers.get("content-length")
+            if announced:
+                try:
+                    if int(announced) > MAX_CLOUD_SEARCH_DOWNLOAD_BYTES:
+                        return None
+                except (TypeError, ValueError):
+                    pass
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_CLOUD_SEARCH_DOWNLOAD_BYTES:
+                    return None
+                chunks.append(chunk)
+            return b"".join(chunks)
+
+    @staticmethod
+    def _extract_downloaded_file(
+        content: bytes,
+        hit: CloudHit,
+        max_chars: int,
+        content_type_override: str | None = None,
+    ) -> str | None:
+        """Decode downloaded file bytes using the bounded shared extractors.
+
+        Graph and Drive return the original bytes for non-native files.  Reading
+        ``response.text`` turns DOCX ZIP members and PDF compressed streams into
+        apparent document text, so route by the hit metadata instead.
+        """
+        effective_mime = content_type_override or hit.mime_type
+        mime_type = (effective_mime or "").split(";", 1)[0].lower()
+        filename = (hit.title or "").lower()
+        supported_binary = (
+            mime_type == "application/pdf"
+            or filename.endswith((".pdf", ".docx"))
+            or mime_type
+            == (
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+        )
+        supported_text = mime_type.startswith("text/") or filename.endswith(
+            (".txt", ".csv", ".json", ".html", ".htm", ".xml")
+        )
+        if not supported_binary and not supported_text:
+            return hit.snippet or None
+        try:
+            extracted = extract_text(
+                content,
+                effective_mime,
+                hit.title,
+                max_pdf_chars=max_chars,
+            )
+        except Exception:
+            return hit.snippet or None
+        return extracted[:max_chars] or hit.snippet or None
 
     async def _fetch_outlook_content(
         self,

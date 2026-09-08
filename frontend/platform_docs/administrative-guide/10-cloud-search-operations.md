@@ -19,6 +19,10 @@ Complete provider authorization and the intended storage binding under [Integrat
 
 Use a distinctive, non-sensitive query with a known document. Check that the result comes from the expected source and that accounts with different permissions see only what they should.
 
+For PDF and Word files, ask about a fact inside the file, not just its title. Supported cloud downloads use format-aware text extraction with a 10 MiB download limit and bounded output. Unsupported, oversized, or textless files may provide only metadata snippets; a listed search hit alone does not prove that its contents were read.
+
+Connected-source planning uses the selected chat route and checks its confidential-context policy before sending the question or matter context to a model. Premium chat therefore also uses Premium for this planning step. A standalone planner must resolve an approved route; it does not silently fall back to an unapproved model. Blank manual queries and planner output without meaningful keywords are rejected rather than expanded into a mailbox-wide search.
+
 Test both positive and negative cases:
 
 - an authorized user finds an expected document;
