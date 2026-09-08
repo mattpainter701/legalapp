@@ -2178,20 +2178,35 @@ async def _ensure_cloud_root(db: AsyncSession, tenant_id: str) -> None:
     _logger = _log.getLogger(__name__)
     try:
         from app.models.tenant import Tenant
-        from app.services.cloud_init import initialize_cloud_root_folder
+        from app.services.cloud_init import (
+            cloud_root_binding_repair_needed,
+            initialize_cloud_root_folder,
+        )
 
         result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
         tenant = result.scalar_one_or_none()
         if not tenant:
             return
 
-        existing = tenant.cloud_root_folder or {}
-        fresh = await initialize_cloud_root_folder(db, tenant_id)
+        existing = tenant.cloud_root_folder
+        repair_needed = cloud_root_binding_repair_needed(existing)
+        if repair_needed:
+            _logger.warning(
+                "Cloud root binding requires administrator repair for tenant %s: %s",
+                tenant_id,
+                ", ".join(repair_needed),
+            )
+            return
+        existing = existing or {}
+        fresh = await initialize_cloud_root_folder(
+            db, tenant_id, existing_root=existing
+        )
         if fresh:
             tenant.cloud_root_folder = {**existing, **fresh}
             await db.commit()
             _logger.info(
-                "Auto-repaired cloud root folder for tenant %s on re-auth", tenant_id
+                "Initialized missing cloud root providers for tenant %s on re-auth",
+                tenant_id,
             )
     except Exception as exc:
         _logger.warning("_ensure_cloud_root failed for tenant %s: %s", tenant_id, exc)
@@ -2211,6 +2226,7 @@ async def cloud_init_retry(
     from app.models.plugin import Matter
     from app.models.tenant import Tenant
     from app.services.cloud_init import (
+        cloud_root_binding_repair_needed,
         get_matter_provisioning_tokens,
         initialize_cloud_root_folder,
         initialize_matter_folders,
@@ -2232,11 +2248,30 @@ async def cloud_init_retry(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    cloud_root = tenant.cloud_root_folder or {}
+    existing_root = tenant.cloud_root_folder
+    repair_needed = cloud_root_binding_repair_needed(existing_root)
+    if repair_needed:
+        logger.warning(
+            "cloud_init_retry: root binding requires administrator repair for tenant %s: %s",
+            tenant_id,
+            ", ".join(repair_needed),
+        )
+        return {
+            "root": existing_root if isinstance(existing_root, dict) else None,
+            "matters_checked": 0,
+            "matters_initialized": 0,
+            "matters_failed": 0,
+            "root_repair_needed": repair_needed,
+            "status": "repair_needed",
+        }
+
+    cloud_root = existing_root or {}
     try:
-        fresh = await initialize_cloud_root_folder(db, str(tenant_id))
+        fresh = await initialize_cloud_root_folder(
+            db, str(tenant_id), existing_root=cloud_root
+        )
         if fresh:
-            cloud_root = {**fresh, **cloud_root}
+            cloud_root = {**cloud_root, **fresh}
             tenant.cloud_root_folder = cloud_root
             await db.commit()
     except Exception as exc:

@@ -11,6 +11,11 @@
 
 # Changelog
 
+## 2026.09.07.20 - Preserve legacy cloud root bindings
+
+- Preserve valid saved OneDrive, SharePoint, and Google root IDs on retry, OAuth reconnect, and matter-folder provisioning; initialize only absent provider roots.
+- Flag malformed saved root bindings for administrator repair without rebinding tenant or matter folders. Add regression coverage for legacy and secondary-provider paths. No migration.
+
 ## 2026.09.07.19 - Assistant retrieval continuity and source honesty
 
 - Restore only ready, unexpired same-tenant, same-conversation, same-matter attachments for follow-up turns; preserve explicit subsets and enforce the private-route gate for implicit attachments.
