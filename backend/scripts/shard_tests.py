@@ -36,7 +36,7 @@ _DATABASE_FIXTURES = re.compile(
 # ``--database-free`` must exclude it too.
 _DATABASE_ACCESS = re.compile(
     r"\b(test_engine|create_async_engine|TEST_DATABASE_URL"
-    r"|RLS_TEST_DATABASE_URL|DATABASE_URL|asyncpg)\b"
+    r"|RLS_TEST_DATABASE_URL|DATABASE_URL|asyncpg|test_redis)\b"
 )
 
 # Measured on CI: a database-backed test costs about a second, a pure unit
