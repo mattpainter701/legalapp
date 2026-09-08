@@ -1,5 +1,5 @@
 """
-Tasks router — deadline and task management.
+Tasks router â€” deadline and task management.
 
   GET  /api/tasks              list with filters
   POST /api/tasks              create
@@ -1449,7 +1449,7 @@ async def transition_task_status(
     is_sms_task = await _task_contains_sms(db, task)
 
     if (
-        task.review_policy == "staff_then_attorney"
+        task.review_policy in {"staff_then_attorney", "attorney_only"}
         and payload.to_status == "in_progress"
         and not staged_review_is_approved(task)
     ):
@@ -1459,7 +1459,7 @@ async def transition_task_status(
         )
 
     if (
-        task.review_policy == "staff_then_attorney"
+        task.review_policy in {"staff_then_attorney", "attorney_only"}
         and payload.reviewer_user_id is not None
         and payload.reviewer_user_id != task.reviewer_user_id
     ):
@@ -1646,7 +1646,7 @@ async def mark_task_viewed(
 ):
     """Read receipt: record that the assignee has seen this task (idempotent).
 
-    Only a view by the assigned user counts — a receptionist or admin looking
+    Only a view by the assigned user counts â€” a receptionist or admin looking
     at the task list must not mark someone else's task as read.
     """
     tenant_id = str(current_user.tenant_id)
@@ -2220,7 +2220,7 @@ async def update_task(
     await _require_sms_task_access(db, task, current_user)
     is_sms_task = await _task_contains_sms(db, task)
     if (
-        task.review_policy == "staff_then_attorney"
+        task.review_policy in {"staff_then_attorney", "attorney_only"}
         and payload.status == "in_progress"
         and not staged_review_is_approved(task)
     ):
@@ -2325,7 +2325,7 @@ async def update_task(
     waiting_follow_up_date = updates.pop("waiting_follow_up_date", None)
     reviewer_user_id = updates.pop("reviewer_user_id", None)
     if (
-        task.review_policy == "staff_then_attorney"
+        task.review_policy in {"staff_then_attorney", "attorney_only"}
         and "reviewer_user_id" in payload.model_fields_set
         and reviewer_user_id != task.reviewer_user_id
     ):
@@ -2596,7 +2596,7 @@ async def send_task_reminder(
 
     if not task.assigned_to_user_id:
         raise HTTPException(
-            status_code=422, detail="Task has no assigned user — cannot send reminder"
+            status_code=422, detail="Task has no assigned user â€” cannot send reminder"
         )
 
     user_result = await db.execute(

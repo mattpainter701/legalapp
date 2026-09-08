@@ -10,6 +10,7 @@ import {
   archiveWorkflowTemplate,
 } from "../api";
 import WorkflowAutomationRules from "../components/workflows/WorkflowAutomationRules";
+import ArtifactReviewPolicy from "../components/workflows/ArtifactReviewPolicy";
 
 const TYPES = [
   "text",
@@ -790,6 +791,7 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
             ))}
           </section>
           <WorkflowAutomationRules user={user} templates={templates} />
+          {!embedded && <ArtifactReviewPolicy />}
         </>
       )}
     </Container>

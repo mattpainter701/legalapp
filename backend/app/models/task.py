@@ -49,8 +49,17 @@ class Task(Base):
             "review_stage",
         ),
         CheckConstraint(
-            "review_policy IN ('single', 'staff_then_attorney')",
+            "review_policy IN ('single', 'staff_then_attorney', 'attorney_only')",
             name="ck_tasks_review_policy",
+        ),
+        CheckConstraint(
+            "review_policy != 'attorney_only' OR "
+            "(attorney_reviewer_user_id IS NOT NULL AND reviewer_user_id IS NOT NULL "
+            "AND reviewer_user_id = attorney_reviewer_user_id "
+            "AND review_stage IN ('attorney_pending', 'approved') "
+            "AND (review_stage != 'approved' OR "
+            "(attorney_approved_at IS NOT NULL AND attorney_approved_by_user_id IS NOT NULL)))",
+            name="ck_tasks_attorney_only_review",
         ),
         CheckConstraint(
             "review_stage IN ('attorney', 'staff', 'attorney_pending', 'approved')",

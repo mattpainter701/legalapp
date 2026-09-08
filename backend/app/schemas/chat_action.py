@@ -158,6 +158,10 @@ class ProposeClientEmailArgs(ChatActionModel):
     """
 
     matter_id: UUID
+    artifact_id: UUID | None = Field(
+        default=None,
+        description="Attach the current attorney-approved document artifact on this matter. LawHand resolves the exact approved revision and bytes.",
+    )
     recipient_party_ids: list[UUID] = Field(min_length=1, max_length=10)
     title: str = Field(min_length=1, max_length=500)
     subject: str = Field(min_length=1, max_length=300)
@@ -299,6 +303,15 @@ class SmsConsentEvidenceBinding(ChatActionModel):
         return self
 
 
+class ApprovedArtifactAttachment(ChatActionModel):
+    artifact_id: UUID
+    revision_id: UUID
+    approval_id: UUID
+    document_id: UUID
+    document_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    filename: str = Field(min_length=1, max_length=255)
+
+
 class EmailClientAction(ChatActionModel):
     type: Literal["email_client"]
     # Server-resolved. Present so the board can show the attorney exactly who
@@ -310,6 +323,7 @@ class EmailClientAction(ChatActionModel):
     subject: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1, max_length=20_000)
     matter_id: UUID
+    artifact_attachment: ApprovedArtifactAttachment | None = None
     source_ids: list[str] = Field(default_factory=list, max_length=10)
     # Server-resolved local evidence rows. Public authorities remain URLs only.
     source_document_ids: list[UUID] = Field(default_factory=list, max_length=10)

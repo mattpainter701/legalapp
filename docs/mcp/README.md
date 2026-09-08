@@ -2,6 +2,8 @@
 
 ## Purpose
 
+- [Artifact review and approved document delivery](artifact-review-and-delivery.md): exact-revision human review, firm policy, and separately approved email attachments.
+
 This directory is the stable entry point for LawHand MCP documentation. The current Markdown corpus is the source material for a later wiki and user guide; it is not temporary implementation commentary.
 
 Keep the detailed source documents in the repository so behavior, security boundaries, operational evidence, and release gates remain reviewable beside the code. The future wiki may reorganize and simplify this material for each audience, but it must link back to the canonical repository sources.

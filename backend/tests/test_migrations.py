@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["164_word_derived_source_evidence"]
+    assert heads == ["165_artifact_review_spine"]
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():
@@ -434,7 +434,7 @@ def test_online_migrations_seed_non_customer_rls_context():
 
 
 def test_revision_ids_fit_alembic_version_column():
-    """alembic_version.version_num is VARCHAR(32) — a longer revision id
+    """alembic_version.version_num is VARCHAR(32) â€” a longer revision id
     fails at apply time (StringDataRightTruncationError), not at import time,
     so this only ever surfaces during a real deploy unless checked here."""
     backend_dir = Path(__file__).resolve().parents[1]

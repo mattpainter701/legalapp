@@ -40,6 +40,13 @@ async def _is_attorney_capable(db: AsyncSession, user) -> bool:
 def staged_review_is_approved(task: Task) -> bool:
     """Return whether a staged task has durable attorney approval evidence."""
 
+    if task.review_policy == "attorney_only":
+        return bool(
+            task.review_stage == "approved"
+            and task.attorney_approved_at
+            and task.attorney_reviewer_user_id is not None
+            and task.attorney_approved_by_user_id == task.attorney_reviewer_user_id
+        )
     if not (
         task.review_policy == "staff_then_attorney"
         and task.review_stage == "approved"
@@ -72,12 +79,14 @@ async def require_review_actor(
 ) -> None:
     """Authorize one exact staged-review decision and fail closed."""
 
-    if task.review_policy != "staff_then_attorney":
+    if task.review_policy not in {"staff_then_attorney", "attorney_only"}:
         raise TaskWorkflowError("This task does not use staged review", status_code=409)
     if task.status != "review":
         raise TaskWorkflowError("This task is not awaiting review", status_code=409)
 
     if stage == "staff":
+        if task.review_policy == "attorney_only":
+            raise TaskWorkflowError("This artifact requires attorney-only review", 409)
         if task.review_stage != "staff":
             raise TaskWorkflowError(
                 "Staff review is not currently required", status_code=409
@@ -90,6 +99,10 @@ async def require_review_actor(
         return
 
     if stage == "attorney":
+        if override and task.review_policy == "attorney_only":
+            raise TaskWorkflowError(
+                "Attorney-only review has no staff stage to override", 409
+            )
         if not await _is_attorney_capable(db, actor):
             raise TaskWorkflowError(
                 "Attorney approval capability is required for this review",
@@ -141,6 +154,17 @@ async def record_review_decision(
     now = datetime.now(timezone.utc)
     clean_reason = (reason or "").strip() or None
     prior_stage = task.review_stage
+    from app.services.work_artifact_reviews import record_artifact_decision
+
+    await record_artifact_decision(
+        db,
+        task,
+        actor=actor,
+        stage=stage,
+        decision=decision,
+        reason=reason,
+        override=override,
+    )
 
     if stage == "staff":
         if decision == "approve":
@@ -163,8 +187,14 @@ async def record_review_decision(
                 "attorney_override_approved" if override else "attorney_approved"
             )
         else:
-            task.review_stage = "staff"
-            task.reviewer_user_id = task.staff_reviewer_user_id
+            task.review_stage = (
+                "attorney_pending" if task.review_policy == "attorney_only" else "staff"
+            )
+            task.reviewer_user_id = (
+                task.attorney_reviewer_user_id
+                if task.review_policy == "attorney_only"
+                else task.staff_reviewer_user_id
+            )
             task.staff_reviewed_at = None
             task.staff_reviewed_by_user_id = None
             task.attorney_approved_at = None
@@ -197,10 +227,16 @@ async def record_review_decision(
 def reset_staged_review_after_edit(task: Task) -> bool:
     """Invalidate every staged-review decision after artifact content changes."""
 
-    if task.review_policy != "staff_then_attorney":
+    if task.review_policy not in {"staff_then_attorney", "attorney_only"}:
         return False
-    task.review_stage = "staff"
-    task.reviewer_user_id = task.staff_reviewer_user_id
+    task.review_stage = (
+        "attorney_pending" if task.review_policy == "attorney_only" else "staff"
+    )
+    task.reviewer_user_id = (
+        task.attorney_reviewer_user_id
+        if task.review_policy == "attorney_only"
+        else task.staff_reviewer_user_id
+    )
     task.staff_reviewed_at = None
     task.staff_reviewed_by_user_id = None
     task.attorney_approved_at = None

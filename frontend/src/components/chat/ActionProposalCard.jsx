@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, CheckCircle2, ClipboardCheck, FileText, LoaderCircle, Mail, Pencil, Send, Sparkles, X } from 'lucide-react'
 import { API_BASE_URL, syncTaskCloudDocument, updateTaskPendingAction } from '../../api'
 import DocumentDraftWorkspace from './DocumentDraftWorkspace'
+import ArtifactReviewPanel from '../tasks/ArtifactReviewPanel'
 
 // The backend emits document links as origin-relative `/api/...`; re-base them
 // so a deployment serving the API from another host still resolves them.
@@ -45,6 +46,7 @@ function EmailDraft({ pendingAction, draft, onDraftChange, editing, immutable = 
           <dd className="break-words">{pendingAction.subject}</dd>
         </div>
       </dl>
+      {pendingAction.artifact_attachment && <p className="mt-2 text-xs font-semibold">Attachment: {pendingAction.artifact_attachment.filename} · attorney-approved revision. Sending uses the exact reviewed file.</p>}
       {editing ? (
         <label className="mt-2 block">
           <span className="sr-only">Email body</span>
@@ -616,6 +618,7 @@ export default function ActionProposalCard({
               <span className="ml-auto text-[11px] text-brand-muted">Approval verifies this cloud revision; client delivery stays separate.</span>
             </div>
             {verification === 'loading' && <p role="status" className="mt-3 flex items-center gap-2 text-xs font-semibold text-brand-muted"><LoaderCircle size={14} className="animate-spin" />Checking the live Review task…</p>}
+            {verification === 'verified' && (liveTask?.pending_action?.artifact_id || liveTask?.delivery?.action_snapshot?.artifact_id) && <ArtifactReviewPanel task={liveTask} onUpdated={setLiveTask} disabled={bodyChanged || titleChanged || documentSaving || cloudSyncing} />}
             {verification === 'failed' && <div role="alert" className="mt-3 text-xs font-semibold text-brand-rose"><p>{loadError}</p><button type="button" onClick={() => setReloadCounter((value) => value + 1)} className="mt-2 rounded-lg border border-brand-line px-3 py-2 text-brand-ink">Retry task status</button></div>}
           </div>
         </section>

@@ -126,6 +126,14 @@ def test_document_metadata_never_exposes_provider_storage_fields():
     assert "storage_path" not in summary
     assert "provider_object_id" not in summary
     assert "storage_backend" not in summary
+    assert summary["artifact_id"] is None
+    document.generated_artifact_id = uuid4()
+    document.generated_artifact_revision_id = uuid4()
+    document.document_status = "approved"
+    summary = _document_summary(document)
+    assert summary["artifact_id"] == str(document.generated_artifact_id)
+    assert summary["artifact_revision_id"] == str(document.generated_artifact_revision_id)
+    assert summary["document_status"] == "approved"
 
 
 def test_document_list_contract_has_a_hard_limit():
