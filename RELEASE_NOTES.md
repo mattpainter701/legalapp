@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.07.20 — Reliable background model pricing
+## 2026.09.07.23 — Reliable background model pricing
 
 Released September 7, 2026.
 
@@ -13,6 +13,15 @@ Background profiles can activate with native DeepSeek V4 and verified free OpenC
 
 - **Save supported background profiles.** Native DeepSeek V4 models and verified free OpenCode Zen endpoints now have explicit provider prices, including Mimo V2.5 Free.
 - **Meter free responses accurately.** Confirmed free-model responses settle at zero cost while request limits and unknown-cost safeguards remain enforced.
+
+## 2026.09.07.20 — Preserved cloud folder connections
+
+Released September 7, 2026.
+
+Cloud reconnect and retry now preserve existing folder IDs while adding newly connected storage providers.
+
+- **Keep established folders linked.** Existing OneDrive, SharePoint, and Google roots stay linked even when they have a legacy name, keeping matter folders aligned.
+- **Flag incomplete root records.** Setup now reports incomplete saved root records for administrator repair instead of silently switching to a new folder.
 
 ## 2026.09.07.19 — More reliable assistant document context
 

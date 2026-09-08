@@ -11,12 +11,17 @@
 
 # Changelog
 
-## 2026.09.07.20 - Background route provider pricing
+## 2026.09.07.23 - Background route provider pricing
 
 - Add native DeepSeek V4 peak rates and explicit zero rates for provider-verified OpenCode Zen free endpoints, fixing activation of DeepSeek V4 Flash with a Mimo V2.5 Free fallback.
 - Accept explicitly attested, provider-qualified zero-price overrides. Unknown prices, partial zero rates, and negative/nonfinite rates remain rejected.
 - Keep positive bookkeeping reservations and request-count limits for free work; release the hold to zero on confirmed free responses. Unknown outcomes retain the conservative reservation.
 - No migration, live route activation, chat profile change, or background data-policy change.
+
+## 2026.09.07.20 - Preserve legacy cloud root bindings
+
+- Preserve valid saved OneDrive, SharePoint, and Google root IDs on retry, OAuth reconnect, and matter-folder provisioning; initialize only absent provider roots.
+- Flag malformed saved root bindings for administrator repair without rebinding tenant or matter folders. Add regression coverage for legacy and secondary-provider paths. No migration.
 
 ## 2026.09.07.19 - Assistant retrieval continuity and source honesty
 

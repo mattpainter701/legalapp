@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.09.07.20",
-      "version": "2026.09.07.20",
+      "id": "2026.09.07.23",
+      "version": "2026.09.07.23",
       "title": "Reliable background model pricing",
       "published_at": "2026-09-07",
       "summary": "Background profiles can activate with native DeepSeek V4 and verified free OpenCode Zen models.",
@@ -15,6 +15,23 @@
         {
           "title": "Meter free responses accurately",
           "description": "Confirmed free-model responses settle at zero cost while request limits and unknown-cost safeguards remain enforced."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.07.20",
+      "version": "2026.09.07.20",
+      "title": "Preserved cloud folder connections",
+      "published_at": "2026-09-07",
+      "summary": "Cloud reconnect and retry now preserve existing folder IDs while adding newly connected storage providers.",
+      "highlights": [
+        {
+          "title": "Keep established folders linked",
+          "description": "Existing OneDrive, SharePoint, and Google roots stay linked even when they have a legacy name, keeping matter folders aligned."
+        },
+        {
+          "title": "Flag incomplete root records",
+          "description": "Setup now reports incomplete saved root records for administrator repair instead of silently switching to a new folder."
         }
       ]
     },

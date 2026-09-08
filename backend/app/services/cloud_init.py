@@ -58,72 +58,131 @@ def matter_relative_path(
     return f"{ROOT_FOLDER_NAME}/{name}"
 
 
+CLOUD_ROOT_PROVIDERS = ("onedrive", "sharepoint", "google_drive")
+
+
+def _has_valid_root_binding(binding: object) -> bool:
+    """Return whether a persisted provider root has a usable immutable ID."""
+    return (
+        isinstance(binding, dict)
+        and isinstance(binding.get("id"), str)
+        and bool(binding["id"].strip())
+    )
+
+
+def cloud_root_binding_repair_needed(cloud_root: object) -> list[str]:
+    """List saved roots that cannot safely be replaced automatically.
+
+    Folder IDs are the authority for existing tenant and matter bindings. A
+    missing provider can be initialized, but a present provider without an ID
+    needs an explicit administrator repair instead of a silent rebind.
+    """
+    if cloud_root is None:
+        return []
+    if not isinstance(cloud_root, dict):
+        return ["cloud_root_folder"]
+    return [
+        provider
+        for provider in CLOUD_ROOT_PROVIDERS
+        if provider in cloud_root and not _has_valid_root_binding(cloud_root[provider])
+    ]
+
+
+def _provider_root_is_absent(cloud_root: dict, provider: str) -> bool:
+    """Return true only for providers without any saved binding."""
+    return provider not in cloud_root
+
+
 async def initialize_cloud_root_folder(
     db: AsyncSession,
     tenant_id: str,
+    *,
+    existing_root: object | None = None,
 ) -> dict:
-    """Create or discover the root folder in all connected cloud drives.
+    """Create roots only for connected providers with no saved root binding.
 
-    Returns {provider: {id: str, url: str}} for each provider where creation succeeded.
+    Existing provider IDs remain authoritative even when they use a legacy
+    folder name. Malformed saved provider bindings are left untouched so an
+    administrator can repair them without silently changing matter mappings.
+    Returns bindings only for newly initialized providers.
     """
     result = {}
+    if existing_root is not None and not isinstance(existing_root, dict):
+        logger.warning(
+            "Cloud root binding requires administrator repair for tenant %s: %s",
+            tenant_id,
+            ", ".join(cloud_root_binding_repair_needed(existing_root)),
+        )
+        return result
 
-    # Microsoft OneDrive
+    saved_root = existing_root or {}
+    repair_needed = cloud_root_binding_repair_needed(saved_root)
+    if repair_needed:
+        logger.warning(
+            "Cloud root bindings require repair for tenant %s: %s; preserving them",
+            tenant_id,
+            ", ".join(repair_needed),
+        )
+
+    # Microsoft OneDrive and SharePoint share a token, but each provider's
+    # persisted root is independently authoritative.
     ms_token = await get_fresh_token(db, tenant_id, "microsoft")
     if ms_token:
-        try:
-            folder_id = await _ensure_onedrive_folder(
-                ms_token, ROOT_FOLDER_NAME, "root"
-            )
-            folder_meta = await _get_onedrive_folder_metadata(ms_token, folder_id)
-            result["onedrive"] = {
-                "id": folder_id,
-                "folder_name": folder_meta.get("name") or ROOT_FOLDER_NAME,
-                "url": folder_meta.get("webUrl") or "",
-            }
-            logger.info(
-                "Ensured %s in OneDrive for tenant %s", ROOT_FOLDER_NAME, tenant_id
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to create OneDrive root folder for tenant %s: %s",
-                tenant_id,
-                exc,
-            )
-        try:
-            binding = await _get_sharepoint_binding(db, tenant_id)
-            if binding and binding.get("drive_id"):
-                folder_id = await _ensure_sharepoint_folder(
-                    ms_token,
-                    binding["drive_id"],
-                    ROOT_FOLDER_NAME,
-                    binding.get("root_item_id") or "root",
+        if _provider_root_is_absent(saved_root, "onedrive"):
+            try:
+                folder_id = await _ensure_onedrive_folder(
+                    ms_token, ROOT_FOLDER_NAME, "root"
                 )
-                folder_meta = await _get_sharepoint_folder_metadata(
-                    ms_token, binding["drive_id"], folder_id
-                )
-                result["sharepoint"] = {
+                folder_meta = await _get_onedrive_folder_metadata(ms_token, folder_id)
+                result["onedrive"] = {
                     "id": folder_id,
-                    "drive_id": binding["drive_id"],
-                    "site_id": binding.get("site_id"),
                     "folder_name": folder_meta.get("name") or ROOT_FOLDER_NAME,
                     "url": folder_meta.get("webUrl") or "",
                 }
                 logger.info(
-                    "Ensured %s in SharePoint for tenant %s",
-                    ROOT_FOLDER_NAME,
-                    tenant_id,
+                    "Ensured %s in OneDrive for tenant %s", ROOT_FOLDER_NAME, tenant_id
                 )
-        except Exception as exc:
-            logger.warning(
-                "Failed to create SharePoint root folder for tenant %s: %s",
-                tenant_id,
-                exc,
-            )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to create OneDrive root folder for tenant %s: %s",
+                    tenant_id,
+                    exc,
+                )
+        if _provider_root_is_absent(saved_root, "sharepoint"):
+            try:
+                binding = await _get_sharepoint_binding(db, tenant_id)
+                if binding and binding.get("drive_id"):
+                    folder_id = await _ensure_sharepoint_folder(
+                        ms_token,
+                        binding["drive_id"],
+                        ROOT_FOLDER_NAME,
+                        binding.get("root_item_id") or "root",
+                    )
+                    folder_meta = await _get_sharepoint_folder_metadata(
+                        ms_token, binding["drive_id"], folder_id
+                    )
+                    result["sharepoint"] = {
+                        "id": folder_id,
+                        "drive_id": binding["drive_id"],
+                        "site_id": binding.get("site_id"),
+                        "folder_name": folder_meta.get("name") or ROOT_FOLDER_NAME,
+                        "url": folder_meta.get("webUrl") or "",
+                    }
+                    logger.info(
+                        "Ensured %s in SharePoint for tenant %s",
+                        ROOT_FOLDER_NAME,
+                        tenant_id,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to create SharePoint root folder for tenant %s: %s",
+                    tenant_id,
+                    exc,
+                )
 
     # Google Drive
     g_token = await get_fresh_token(db, tenant_id, "google")
-    if g_token:
+    if g_token and _provider_root_is_absent(saved_root, "google_drive"):
         try:
             folder_id = await _ensure_gdrive_folder(g_token, ROOT_FOLDER_NAME, "root")
             folder_meta = await _get_gdrive_folder_metadata(g_token, folder_id)
@@ -144,8 +203,10 @@ async def initialize_cloud_root_folder(
             )
 
     if result:
-        result["path"] = ROOT_FOLDER_NAME
-        result["subfolders"] = list(MATTER_SUBFOLDERS)
+        if "path" not in saved_root:
+            result["path"] = ROOT_FOLDER_NAME
+        if "subfolders" not in saved_root:
+            result["subfolders"] = list(MATTER_SUBFOLDERS)
 
     return result
 
