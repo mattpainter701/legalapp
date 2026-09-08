@@ -1,5 +1,7 @@
 # Matter Workflow Automations
 
+Firms can [prepare draft templates and rules from existing or imported history](workflow-configuration-synthesis.md).
+
 COMP-09 gave firms approved workflow templates, but someone still had to
 remember to run one. This adds the trigger half: a firm-defined rule that
 watches one bounded matter lifecycle event and, when it matches, plans the same

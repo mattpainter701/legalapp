@@ -225,7 +225,10 @@ from app.models.workflow_automation import (
     MatterWorkflowAutomationRule,
 )
 
+from app.models.workflow_configuration_proposal import WorkflowConfigurationProposal
+
 __all__ = [
+    "WorkflowConfigurationProposal",
     "WorkArtifactReviewRequirement",
     "WorkArtifactApproval",
     "WorkArtifactDelivery",

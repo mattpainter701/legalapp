@@ -11,6 +11,7 @@ import {
 } from "../api";
 import WorkflowAutomationRules from "../components/workflows/WorkflowAutomationRules";
 import ArtifactReviewPolicy from "../components/workflows/ArtifactReviewPolicy";
+import WorkflowSynthesisPanel from "../components/workflows/WorkflowSynthesisPanel";
 
 const TYPES = [
   "text",
@@ -687,11 +688,13 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
           </section>
             </>
           )}
+          {!embedded && <WorkflowSynthesisPanel user={user} onChanged={load} />}
           <section>
             <h2 className="font-semibold">Templates and versions</h2>
             {templates.map((template) => (
               <article
                 key={template.version_id || template.id}
+                id={`workflow-version-${template.version_id}`}
                 className="border-t py-2"
               >
                 <strong>{template.template_name || template.name}</strong>

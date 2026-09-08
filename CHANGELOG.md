@@ -1,3 +1,10 @@
+## 2026.09.08.8 - Firm configuration synthesis
+
+- Prepare bounded ordinary template/rule drafts from tenant metadata and migrated Clio/Tabs3 history, using existing definition hashes and human approval endpoints.
+- Preserve immutable proposal evidence, source fingerprints, rejection suppression, and non-destructive amendments to active templates in migration 167.
+- Add mapped task/matter CSV ingestion, automatic Tabs3 staging analysis, and onboarding/Workflow settings evidence controls.
+- Rehearse native/imported drafts, approval, drift, rollback/retry, and tenant isolation on migrated PostgreSQL; include rehearsal evidence in backend coverage.
+
 ## 2026.09.08.7 - Lifecycle workflow preparation
 
 - Add eight lifecycle events to approved workflow rules and the firm rule editor.

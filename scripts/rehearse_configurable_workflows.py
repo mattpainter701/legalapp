@@ -41,7 +41,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "166_workflow_lifecycle_events"
+EXPECTED_HEAD = "167_workflow_synthesis"
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 REQUIRED_REVISION = "148_configurable_workflows"

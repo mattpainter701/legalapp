@@ -10,6 +10,7 @@ import {
   API_BASE_URL,
 } from '../api'
 import { AgreementAcceptancePanel } from '../components/CompliancePanel'
+import WorkflowSynthesisPanel from '../components/workflows/WorkflowSynthesisPanel'
 
 const STEPS = [
   { id: 0, label: 'Welcome' },
@@ -361,6 +362,7 @@ export default function OnboardingWizard() {
           {step === 3 && (
             <div className="bg-brand-surface border border-brand-line rounded-2xl p-8 shadow-sm">
               <h2 className="text-brand-ink font-sans text-lg font-bold mb-1">Review Imported Users</h2>
+              <WorkflowSynthesisPanel user={user} onboarding />
               <p className="text-brand-ink-2 font-sans text-sm mb-6">
                 {totalSynced > 0
                   ? `${totalSynced} users were imported from your directory.`
