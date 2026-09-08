@@ -11,6 +11,13 @@
 
 # Changelog
 
+## 2026.09.07.23 - Background route provider pricing
+
+- Add native DeepSeek V4 peak rates and explicit zero rates for provider-verified OpenCode Zen free endpoints, fixing activation of DeepSeek V4 Flash with a Mimo V2.5 Free fallback.
+- Accept explicitly attested, provider-qualified zero-price overrides. Unknown prices, partial zero rates, and negative/nonfinite rates remain rejected.
+- Keep positive bookkeeping reservations and request-count limits for free work; release the hold to zero on confirmed free responses. Unknown outcomes retain the conservative reservation.
+- No migration, live route activation, chat profile change, or background data-policy change.
+
 ## 2026.09.07.22 - Public support path and requirements matrix
 
 - Publish `/support`, rendering the existing versioned support policy (coverage hours, S1-S4 definitions, acknowledgement objectives, escalation) live from `GET /api/public/support-policy` so published response times cannot drift from the security-review packet. Contact is `mailto:support@getlawhand.com`; the email path and the objectives-not-an-SLA boundary render without a successful fetch.
@@ -18,6 +25,7 @@
 - Add `frontend/src/marketing/integration-scopes.json` as the canonical published scope list, asserted against the router and Teams scope constants by `backend/tests/test_public_integration_scopes.py` so narrowing a scope fails a test rather than leaving a stale public claim.
 - Activate the built-but-unused tenant support workflow as an admin-only Administration → Support tab: severity picker backed by the published policy, acknowledgement clock and policy version returned on filing, request history, and the backend's unsafe-content rejection surfaced verbatim. Accountant roles do not see the tab.
 - Wire both routes through routing, SEO metadata, sitemap, no-JavaScript prerender shells, nginx rewrites and analytics CSP maps, and the marketing footer. The `/support` shell deliberately carries no hours or acknowledgement figures so it cannot become a second stale copy of the policy.
+
 
 ## 2026.09.07.21 - Microsoft Calendar read-time normalization
 

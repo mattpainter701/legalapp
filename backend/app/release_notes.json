@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.23",
+      "version": "2026.09.07.23",
+      "title": "Reliable background model pricing",
+      "published_at": "2026-09-07",
+      "summary": "Background profiles can activate with native DeepSeek V4 and verified free OpenCode Zen models.",
+      "highlights": [
+        {
+          "title": "Save supported background profiles",
+          "description": "Native DeepSeek V4 models and verified free OpenCode Zen endpoints now have explicit provider prices, including Mimo V2.5 Free."
+        },
+        {
+          "title": "Meter free responses accurately",
+          "description": "Confirmed free-model responses settle at zero cost while request limits and unknown-cost safeguards remain enforced."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.21",
       "version": "2026.09.07.21",
       "title": "Show connected calendar times accurately",

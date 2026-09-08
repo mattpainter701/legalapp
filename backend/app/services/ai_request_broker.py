@@ -416,6 +416,7 @@ class AIRequestBroker:
                             model=model,
                             input_tokens=result.tokens_in,
                             max_output_tokens=result.tokens_out,
+                            minimum_micros=0,
                         )
                         for model in matching_models
                     )
