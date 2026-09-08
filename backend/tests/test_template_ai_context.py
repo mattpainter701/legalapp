@@ -62,10 +62,9 @@ def test_current_edits_and_exclusions_are_locked(changes, allowed):
 async def test_context_reaches_model_without_entering_signed_source_schema(monkeypatch):
     from app.services import template_ai_service as service
     monkeypatch.setattr(service, "check_token_budget", AsyncMock())
-    monkeypatch.setattr(service, "resolve_llm_route", AsyncMock(return_value=SimpleNamespace(
-        model="configured-template-model", provider="litellm", customer_api_key=None,
-        customer_provider=None, customer_endpoint=None, requested_route="premium",
-        resolved_route="customer", gateway_provider="customer", gateway_alias="configured-template-model")))
+    from app.services.template_ai_profile import TemplateAiRoute
+    monkeypatch.setattr(service, "resolve_template_ai_route", AsyncMock(return_value=TemplateAiRoute(
+        requested_route="template-premium", resolved_route="template-premium", gateway_alias="configured-template-model")))
     llm = SimpleNamespace(complete=AsyncMock(return_value=(json.dumps({"fields": [
         {"existing_name": "custom", "name": "renamed", "label": "Renamed", "source_text": "Ada Lovelace"},
         {"name": "duplicate", "label": "Duplicate", "source_text": "Ada Lovelace"},

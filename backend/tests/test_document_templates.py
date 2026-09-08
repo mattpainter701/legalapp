@@ -4195,22 +4195,12 @@ async def test_premium_ai_proposal_is_audited_and_reconciled_locally(monkeypatch
     async def allow_budget(_db, _user):
         return None
 
-    async def premium_route(_db, _tenant_id, *, use_premium):
-        assert use_premium is True
-        return SimpleNamespace(
-            model="premium-test",
-            provider="litellm",
-            customer_api_key="tenant-key",
-            customer_provider="openai",
-            customer_endpoint=None,
-            requested_route="premium",
-            resolved_route="customer",
-            gateway_provider="customer",
-            gateway_alias="premium-test",
-        )
+    from app.services.template_ai_profile import TemplateAiRoute
+    async def premium_route(_db):
+        return TemplateAiRoute(requested_route="template-premium", resolved_route="template-premium", gateway_alias="premium-test")
 
     monkeypatch.setattr(template_ai_service, "check_token_budget", allow_budget)
-    monkeypatch.setattr(template_ai_service, "resolve_llm_route", premium_route)
+    monkeypatch.setattr(template_ai_service, "resolve_template_ai_route", premium_route)
     database = FakeDatabase()
     user = SimpleNamespace(
         id=uuid.uuid4(),

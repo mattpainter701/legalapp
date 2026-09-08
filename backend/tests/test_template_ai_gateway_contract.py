@@ -8,23 +8,26 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 
-from app.services import llm_routing, template_ai_service
+from app.services import template_ai_service
+from app.services.template_ai_profile import TemplateAiProfile
 from app.services.llm import LLMService
 from app.services.template_ai_context import TemplateAiContext
 from app.services.template_intake import analyze_template_upload
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("served_model", ["anthropic/claude-opus-5", "openai/gpt-5.4", "clarity-premium-contract-opus5"])
+@pytest.mark.parametrize("served_model", ["anthropic/claude-opus-5", "alias"])
 async def test_editor_context_crosses_real_client_and_records_served_model(monkeypatch, served_model):
-    alias = "clarity-premium-contract-opus5"
+    profile = TemplateAiProfile(enabled=True, key_id=uuid4())
+    alias = profile.alias
+    if served_model == "alias":
+        served_model = alias
     user = SimpleNamespace(id=uuid4(), tenant_id=uuid4(), tenant=SimpleNamespace(name="Synthetic firm", billing_tier="payg"))
     rows = []
-    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: None)),
+    db = SimpleNamespace(scalar=AsyncMock(return_value=SimpleNamespace(value={
+        "settings": profile.model_dump(mode="json"), "activation": {"status": "active", "alias": alias}})),
         add=rows.append, commit=AsyncMock())
     monkeypatch.setattr(template_ai_service, "check_token_budget", AsyncMock())
-    monkeypatch.setattr(llm_routing, "get_platform_llm_config", AsyncMock(return_value={"premium_model": alias}))
-    monkeypatch.setattr(llm_routing, "get_tenant_routing_profile", AsyncMock(return_value=None))
     received = []
     async def gateway(request):
         assert request.url.path == "/v1/chat/completions"
@@ -60,7 +63,6 @@ async def test_editor_context_crosses_real_client_and_records_served_model(monke
         result = await template_ai_service.assist_template_mapping(db=db, user=user, analysis=analysis, file_bytes=b"synthetic", consent_to_external_ai=True, template_context=context, llm=service)
     finally:
         await service.client.close()
-        llm_routing.invalidate_llm_route_cache(user.tenant_id)
     assert len(received) == 1
     assert rows[0].gateway_alias == alias
     expected_model = None if served_model == alias else served_model
@@ -71,3 +73,8 @@ async def test_editor_context_crosses_real_client_and_records_served_model(monke
     assert result.variable_schema["ai_proposal"]["model_alias"] == alias
     assert result.variable_schema["ai_proposal"]["resolved_model"] == expected_model
     assert result.variable_schema["fields"][0]["name"] == "reference"
+
+    assert rows[0].requested_route == "template-premium"
+    assert rows[0].resolved_route == "template-premium"
+    assert float(rows[0].cost_usd) == 0.025
+    assert rows[0].operation_type == "template_ai_map"

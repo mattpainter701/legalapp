@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.17 — Dedicated premium template AI
+
+Released September 7, 2026.
+
+Premium template field suggestions now have a dedicated Opus 5 profile and separate usage accounting.
+
+- **Choose template AI separately.** Activate Opus 5 through a stored OpenRouter key specifically for Template Studio. Chat and background automation profiles keep their current settings.
+- **Track premium template usage.** Template suggestions record their token usage and configured costs separately. The feature explains when its dedicated profile has not been activated.
+
 ## 2026.09.07.16 — Template-aware AI field suggestions
 
 Released September 7, 2026.

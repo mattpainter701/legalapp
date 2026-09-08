@@ -54,6 +54,11 @@ from app.services.background_ai_quota import (
 from app.services.operator_audit import record_operator_audit
 from app.services.platform_auth import require_platform_token
 from app.services.token_vault import decrypt_token, encrypt_token
+from app.services.template_ai_profile import (
+    TEMPLATE_AI_PROFILE_KEY,
+    TEMPLATE_AI_ROUTE,
+    TemplateAiProfile,
+)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -514,7 +519,7 @@ def _confidential_data_unsafe_targets(
     # context. Operators may deliberately use OpenCode Zen's free evaluation
     # models there for bounded background automations; do not let that
     # exception weaken the customer-route policy.
-    for route_name in ("standard", "premium"):
+    for route_name in ("standard", "premium", TEMPLATE_AI_ROUTE):
         route = config.get(route_name, {})
         if not isinstance(route, dict):
             continue
@@ -1819,7 +1824,10 @@ def _canary_reasoning_drain(payload: Any, content: str) -> bool:
 
 
 async def _call_litellm_config_update(
-    new_model_list: list[dict], fallbacks: list[dict]
+    new_model_list: list[dict],
+    fallbacks: list[dict],
+    *,
+    update_router_settings: bool = True,
 ) -> tuple[bool, str | None]:
     """Hot-reload LiteLLM aliases with current model-management endpoints."""
     if not settings.LITELLM_BASE_URL or not settings.LITELLM_API_KEY:
@@ -1905,6 +1913,10 @@ async def _call_litellm_config_update(
                         f"LiteLLM model upsert for {name} returned {resp.status_code}: {detail}",
                     )
 
+            if not update_router_settings:
+                # Function-specific profiles own only their model deployment.
+                # Never clear chat/background fallbacks or change their strategy.
+                return True, None
             router_settings: dict[str, Any] = {
                 # App-level quota reservation owns long-window fairness;
                 # LiteLLM should only shuffle admitted homogeneous targets.
@@ -1998,7 +2010,7 @@ def _build_litellm_reload_payload(
     # Background is a third platform-global pool. Primaries and alternates
     # intentionally share its one versioned alias so LiteLLM balances keys
     # within the pool; its explicit fallback chain never points at Premium.
-    for route_name in ("standard", "premium", "background"):
+    for route_name in ("standard", "premium", "background", TEMPLATE_AI_ROUTE):
         if route_name not in aliases:
             continue
         route = config.get(route_name, {}) or {}
@@ -2035,6 +2047,7 @@ async def _reload_litellm_routes(
     *,
     aliases: dict[str, str] | None = None,
     validate: bool = True,
+    update_router_settings: bool = True,
 ) -> dict[str, Any]:
     aliases = aliases or _managed_route_aliases(config)
     new_models, fallback_settings, build_errors = _build_litellm_reload_payload(
@@ -2047,9 +2060,14 @@ async def _reload_litellm_routes(
     if build_errors:
         litellm_error = "; ".join(build_errors)
     elif new_models:
-        litellm_updated, litellm_error = await _call_litellm_config_update(
-            new_models, fallback_settings
-        )
+        if update_router_settings:
+            litellm_updated, litellm_error = await _call_litellm_config_update(
+                new_models, fallback_settings
+            )
+        else:
+            litellm_updated, litellm_error = await _call_litellm_config_update(
+                new_models, fallback_settings, update_router_settings=False
+            )
         if litellm_updated and validate:
             valid, validation, validation_error = await _probe_litellm_aliases(aliases)
             if not valid:
@@ -2449,6 +2467,17 @@ async def delete_provider_key(
         for route_name in ("standard", "premium", "background")
         if _uses_key(route_config.get(route_name, {}) or {})
     ]
+    template_row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == TEMPLATE_AI_PROFILE_KEY)
+    )
+    template_value = (
+        template_row.value
+        if template_row and isinstance(template_row.value, dict)
+        else {}
+    )
+    template_settings = template_value.get("settings") or {}
+    if template_settings.get("enabled") and _uses_key(template_settings):
+        in_use_by.append(TEMPLATE_AI_ROUTE)
     if in_use_by:
         raise HTTPException(
             status_code=409,
@@ -2796,6 +2825,80 @@ async def recommend_routes(
     )
     await db.commit()
     return recommendation
+
+
+@router.get("/template-profile")
+async def get_template_profile(request: Request, db: AsyncSession = Depends(get_db)):
+    _require_platform_key(request)
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == TEMPLATE_AI_PROFILE_KEY)
+    )
+    return (
+        row.value
+        if row
+        else {
+            "settings": TemplateAiProfile().model_dump(mode="json"),
+            "activation": {"status": "not_configured"},
+        }
+    )
+
+
+@router.put("/template-profile")
+async def save_template_profile(
+    body: TemplateAiProfile, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Activate only the document-template function, using an existing vault key."""
+    _require_platform_key(request)
+    activation = {"status": "disabled"}
+    if body.enabled:
+        key = await db.get(LLMProviderKey, body.key_id) if body.key_id else None
+        if not key or key.provider_id != body.provider_id:
+            raise HTTPException(422, "Select a stored OpenRouter key for template AI.")
+        route = {
+            "provider_id": body.provider_id,
+            "model": body.model,
+            "key_id": str(body.key_id),
+            "allow_matter_context": True,
+        }
+        config = {TEMPLATE_AI_ROUTE: route}
+        await _enforce_customer_route_data_policy(request, db, config)
+        result = await _reload_litellm_routes(
+            config,
+            {str(body.key_id): key},
+            aliases={TEMPLATE_AI_ROUTE: body.alias},
+            validate=True,
+            update_router_settings=False,
+        )
+        if not result["litellm_updated"]:
+            # Keep the prior active profile on failed registration or canary.
+            # Provider errors can contain credentials; expose no raw diagnostics.
+            raise HTTPException(
+                409,
+                "Template AI activation failed. Check the gateway and selected key; the previous profile is unchanged.",
+            )
+        activation = {
+            "status": "active",
+            "alias": body.alias,
+            "activated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    value = {"settings": body.model_dump(mode="json"), "activation": activation}
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == TEMPLATE_AI_PROFILE_KEY)
+    )
+    if row:
+        row.value = value
+    else:
+        db.add(PlatformSetting(key=TEMPLATE_AI_PROFILE_KEY, value=value))
+    await record_operator_audit(
+        db,
+        request,
+        action="llm.template_profile_updated",
+        resource_type="platform_setting",
+        resource_id=TEMPLATE_AI_PROFILE_KEY,
+        metadata=value,
+    )
+    await db.commit()
+    return value
 
 
 @router.get("/profiles")
