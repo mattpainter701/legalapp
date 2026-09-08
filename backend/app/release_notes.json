@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.07.21",
+      "version": "2026.09.07.21",
+      "title": "Show connected calendar times accurately",
+      "published_at": "2026-09-07",
+      "summary": "Microsoft Calendar events now show at their actual local time and all-day events stay on the selected date.",
+      "highlights": [
+        {
+          "title": "See the right appointment time",
+          "description": "Connected Microsoft Calendar events include their timezone when LawHand displays them, so a UTC event is shown at the correct local time."
+        },
+        {
+          "title": "Keep all-day events on their date",
+          "description": "All-day Microsoft Calendar events remain on the calendar date chosen in Outlook instead of shifting when you view them in LawHand."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.19",
       "version": "2026.09.07.19",
       "title": "More reliable assistant document context",

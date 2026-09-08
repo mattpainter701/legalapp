@@ -6,6 +6,117 @@ import pytest
 from app.models.user_oauth_token import UserOAuthToken
 
 
+@pytest.mark.asyncio
+async def test_microsoft_calendar_read_returns_explicit_utc_and_keeps_all_day_dates(
+    monkeypatch,
+):
+    from app.services import calendar_sync as calendar_sync_module
+
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "value": [
+                    {
+                        "id": "timed-utc",
+                        "subject": "Timed UTC event",
+                        "start": {
+                            "dateTime": "2026-09-08T15:30:00.0000000",
+                            "timeZone": "UTC",
+                        },
+                        "end": {
+                            "dateTime": "2026-09-08T16:00:00.0000000",
+                            "timeZone": "UTC",
+                        },
+                    },
+                    {
+                        "id": "timed-offset",
+                        "subject": "Timed offset event",
+                        "start": {
+                            "dateTime": "2026-09-08T10:30:00-05:00",
+                            "timeZone": "UTC",
+                        },
+                        "end": {
+                            "dateTime": "2026-09-08T11:00:00-05:00",
+                            "timeZone": "UTC",
+                        },
+                    },
+                    {
+                        "id": "all-day",
+                        "subject": "All-day event",
+                        "isAllDay": True,
+                        "start": {
+                            "dateTime": "2026-09-08T00:00:00.0000000",
+                            "timeZone": "UTC",
+                        },
+                        "end": {
+                            "dateTime": "2026-09-09T00:00:00.0000000",
+                            "timeZone": "UTC",
+                        },
+                    },
+                    {
+                        "id": "malformed",
+                        "subject": "Malformed event",
+                        "start": {
+                            "dateTime": "not-a-provider-datetime",
+                            "timeZone": "UTC",
+                        },
+                        "end": {
+                            "dateTime": "not-a-provider-datetime",
+                            "timeZone": "UTC",
+                        },
+                    },
+                    {
+                        "id": "missing-timezone",
+                        "subject": "Naive time with malformed timezone metadata",
+                        "start": {"dateTime": "2026-09-08T15:30:00", "timeZone": None},
+                        "end": {"dateTime": "2026-09-08T16:00:00", "timeZone": None},
+                    },
+                    {
+                        "id": "non-object-time",
+                        "subject": "Non-object provider timestamps",
+                        "start": "2026-09-08T15:30:00",
+                        "end": ["2026-09-08T16:00:00"],
+                    },
+                ]
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            captured.update(kwargs)
+            return FakeResponse()
+
+    async def fake_token(*args, **kwargs):
+        return "token"
+
+    monkeypatch.setattr(calendar_sync_module, "get_fresh_user_token", fake_token)
+    monkeypatch.setattr(calendar_sync_module.httpx, "AsyncClient", FakeClient)
+
+    events = await calendar_sync_module.CalendarSyncService().ms_get_events(
+        None, "tenant-id", "user-id"
+    )
+
+    assert captured["headers"]["Prefer"] == 'outlook.timezone="UTC"'
+    assert "isAllDay" in captured["params"]["$select"]
+    assert events[0]["start"] == "2026-09-08T15:30:00Z"
+    assert events[1]["start"] == "2026-09-08T15:30:00Z"
+    assert events[2]["start"] == "2026-09-08"
+    assert events[2]["end"] == "2026-09-09"
+    assert events[3]["start"] is None
+    assert events[4]["start"] is None
+    assert events[5]["start"] is None
+    assert events[5]["end"] is None
+
+
 def test_scheduled_event_rejects_unknown_iana_timezone():
     from app.schemas.calendar import ScheduledEventCreate
 
