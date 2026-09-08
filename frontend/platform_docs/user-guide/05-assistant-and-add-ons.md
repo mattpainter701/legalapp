@@ -17,6 +17,16 @@ Open the [Assistant](/chat) and state the matter, jurisdiction, task, desired fo
 
 Separate facts from assumptions. Ask for uncertainty and missing information to be called out. For research or legal propositions, inspect the cited source and confirm that it supports the specific statement.
 
+## Understand the supplied sources
+
+Private attachments require a route approved by your firm for confidential context. If Standard blocks an attachment, select an approved Premium route or ask your administrator to review the route policy.
+
+Eligible attachments remain available for follow-up questions in the same conversation. They do not automatically become searchable in other conversations or part of a matter's indexed knowledge. Saving a file in matter Documents, attaching it to a conversation, and indexing it for search are separate operations.
+
+The assistant receives bounded text excerpts. A long attachment may supply only its first 4,000 characters; check its coverage label before asking about later sections. Open the original file to verify facts, and provide the relevant section when it lies outside the supplied excerpt. Scanned pages may require text extraction or OCR before they can support an answer.
+
+When an answer reports public authority unavailable, public research did not complete successfully. The message may still contain a draft or general reasoning; it does not establish that authorities were retrieved or checked. Review both the cited sources and the retrieval status, including after reopening the conversation.
+
 ## Review every result
 
 Before using output outside LawHand:

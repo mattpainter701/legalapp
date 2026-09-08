@@ -8,7 +8,11 @@ import logging
 from typing import TypedDict
 
 from app.services.llm import LLMService
-from app.services.llm_routing import resolve_llm_route
+from app.services.llm_routing import (
+    LLMRoute,
+    resolve_llm_route,
+    route_matter_context_allowed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +86,7 @@ class RetrievalPlanner:
         matter_context: str | None = None,
         active_providers: list[str] | None = None,
         smb_enabled: bool = False,
+        planning_route: LLMRoute | None = None,
     ) -> RetrievalPlanDict | None:
         """Generate a search plan from a user question.
 
@@ -93,6 +98,8 @@ class RetrievalPlanner:
                 ``["microsoft"]``, ``["google", "microsoft"]``, or ``None``
                 for all.
             smb_enabled: Whether SMB file share search is available.
+            planning_route: Already authorized route selected for this request;
+                premium callers reuse this route for planner work.
 
         Returns:
             A ``RetrievalPlanDict`` with search parameters, or ``None`` if
@@ -120,17 +127,45 @@ class RetrievalPlanner:
             user_question=user_question,
         )
 
-        route = None
-        if db is not None and tenant_id is not None:
-            route = await resolve_llm_route(db, tenant_id, use_premium=False)
+        route = planning_route
+        if route is None:
+            if db is None or tenant_id is None:
+                logger.info("Dropping planner request without an admitted route")
+                return None
+            try:
+                route = await resolve_llm_route(db, tenant_id, use_premium=False)
+            except Exception:
+                logger.exception("Planner route resolution failed")
+                return None
+
+        use_premium = route.resolved_route == "profile-premium" or (
+            route.requested_route == "premium"
+        )
+        if db is None or tenant_id is None:
+            logger.info("Dropping planner request without route admission context")
+            return None
+        try:
+            if not await route_matter_context_allowed(
+                db,
+                tenant_id,
+                use_premium=use_premium,
+                route=route,
+            ):
+                logger.info("Planner route is not admitted for matter context")
+                return None
+        except Exception:
+            logger.exception("Planner route admission failed")
+            return None
 
         response_text, _, _ = await self.llm.complete(
             messages=[{"role": "user", "content": user_question}],
             tenant_name=tenant_name,
             context=system_prompt,
-            provider=route.provider if route else "litellm",
-            model=route.model if route else None,
+            provider=route.provider,
+            model=route.model,
+            use_premium=use_premium,
             response_format={"type": "json_object"},
+            max_output_tokens=512,
         )
 
         plan = self._parse_response(response_text)
@@ -141,6 +176,31 @@ class RetrievalPlanner:
         raw_sources = plan.get("sources", [])
         plan["sources"] = [s for s in raw_sources if s in allowed_sources]
         plan.setdefault("max_hits", 10)
+
+        # Graph treats an empty query as a mailbox-wide wildcard. Require a
+        # real keyword list from the model so malformed output cannot broaden
+        # a search, and normalize harmless whitespace/duplicates at the edge.
+        raw_keywords = plan.get("keywords")
+        if not isinstance(raw_keywords, list):
+            logger.info("Dropping planner output without a keyword list")
+            return None
+        keywords: list[str] = []
+        seen: set[str] = set()
+        for keyword in raw_keywords:
+            if not isinstance(keyword, str):
+                logger.info("Dropping planner output with non-string keyword")
+                return None
+            normalized = keyword.strip()
+            if not any(character.isalnum() for character in normalized):
+                continue
+            identity = normalized.casefold()
+            if identity not in seen:
+                seen.add(identity)
+                keywords.append(normalized)
+        if not keywords:
+            logger.info("Dropping planner output without meaningful keywords")
+            return None
+        plan["keywords"] = keywords
 
         if not plan["sources"]:
             logger.info(

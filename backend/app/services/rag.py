@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.database import async_session_maker, set_tenant_context
 from app.services.embeddings import EmbeddingService
 from app.services.mcp_product import record_internal_chat_mcp_usage
+from app.services.llm_routing import LLMRoute
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -1821,6 +1822,7 @@ async def _connected_source_query(
     redis=None,
     conversation_id: str | None = None,
     db: AsyncSession | None = None,
+    planning_route: LLMRoute | None = None,
 ) -> tuple[str, list[dict], str]:
     """Search connected cloud/SMB sources using one supplied or helper session.
 
@@ -1863,6 +1865,7 @@ async def _connected_source_query(
                     matter_context=matter_context_str,
                     active_providers=connected if connected else None,
                     smb_enabled=smb_enabled,
+                    planning_route=planning_route,
                 ),
                 timeout=settings.CLOUD_RETRIEVAL_PLANNER_TIMEOUT_SECONDS,
             )
@@ -2005,6 +2008,7 @@ async def hybrid_rag_query(
     default_public_jurisdiction: str | None = None,
     redis=None,
     conversation_id: str | None = None,
+    planning_route: LLMRoute | None = None,
 ) -> tuple[str, list[dict], list[dict]]:
     """
     Hybrid RAG pipeline: optional tenant pgvector/cloud/SMB search plus public
@@ -2050,6 +2054,7 @@ async def hybrid_rag_query(
                 redis=redis,
                 conversation_id=conversation_id,
                 db=db,
+                planning_route=planning_route,
             )
         except asyncio.CancelledError:
             raise
