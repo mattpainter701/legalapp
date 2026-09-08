@@ -226,6 +226,9 @@ def main():
                 first_step=await db.scalar(select(WorkflowRunStep).where(WorkflowRunStep.run_id==run_id,WorkflowRunStep.position==0))
                 assert run.status=="completed",await describe_run(db,run)
                 assert first_step.approval_id==approval_id
+            from rehearse_harness_activity import prove_harness_activity
+            await prove_harness_activity(sessions, fixture, grant, run_id,
+                lambda job_id: worker_once(tenant, job_id, directory))
             await engine.dispose()
         asyncio.run(reconcile_and_review())
         assert (Path(directory)/"uploads.txt").read_text()=="1"

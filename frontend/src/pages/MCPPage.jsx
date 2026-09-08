@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Copy, KeyRound, Pencil, Plus, RotateCcw, Trash2, X } from 'lucide-react'
+import WorkspaceMcpActivityPanel from '../components/WorkspaceMcpActivityPanel'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import {
   createMcpProductKey,
@@ -189,6 +190,11 @@ function WorkspaceSection({ embedded, overview, onNavigateUsers, onToggle, savin
         </details>
       </div>
       <div className="rounded-xl border border-brand-line bg-brand-surface p-5">
+        <p className="font-semibold text-brand-ink">Bring your firm's approved assistant</p>
+        <p className="mt-2 text-sm leading-6 text-brand-muted">Use your assistant account for reasoning over authorized workspace information. LawHand provides firm policy, review, and the audit record. Premium PDF templating and LawHand Standard/Premium AI research retain their own metering when used.</p>
+        <p className="mt-2 text-sm leading-6 text-brand-muted">Choose the account and vendor your firm permits for confidential work. A personal assistant subscription alone is not a confidentiality assurance. Enable users, then have each user connect and consent; they can inspect and revoke connections in Profile.</p>
+      </div>
+      <div className="rounded-xl border border-brand-line bg-brand-surface p-5">
         <p className="font-semibold text-brand-ink">Connection and setup</p>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           <CodeBlock label="Official MCP URL" value={officialUrl} />
@@ -204,6 +210,11 @@ function WorkspaceSection({ embedded, overview, onNavigateUsers, onToggle, savin
           <div className="mt-3"><CodeBlock label="Claude Code" value={claudeSetup(officialUrl)} /><p className="mt-2 text-xs leading-5 text-brand-muted">Then run <code>/mcp</code> and authenticate <code>lawhand</code>. In Claude Desktop, add the official URL under Settings → Connectors → Add custom connector.</p></div>
         </details>
       </div>
+      <details className="rounded-xl border border-brand-line bg-brand-surface p-5">
+        <summary className="cursor-pointer text-sm font-semibold">OpenCode setup</summary>
+        <p className="mt-2 text-sm">Run <code>opencode mcp add</code>, choose a remote server named <code>lawhand</code>, and enter the official Workspace URL. Then run <code>opencode mcp auth lawhand</code> and <code>opencode mcp list</code>. Complete the browser consent using your own LawHand account.</p>
+      </details>
+      <WorkspaceMcpActivityPanel />
       <div className="rounded-xl border border-brand-line bg-brand-surface p-5">
         <div className="flex items-baseline justify-between gap-3"><p className="font-semibold text-brand-ink">Available tool calls</p><p className="text-xs text-brand-muted">{tools.length} published</p></div>
         <p className="mt-1 text-xs leading-5 text-brand-muted">Read tools return bounded workspace information. Proposal tools create reviewable work only. There are no MCP tools for approval, filing, sending, delivery, or execution.</p>

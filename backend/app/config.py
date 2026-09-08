@@ -387,6 +387,12 @@ class Settings(BaseSettings):
     WORKSPACE_MCP_READ_RESULT_MAX_BYTES: int = Field(
         default=1048576, ge=1024, le=8388608
     )
+    WORKSPACE_MCP_GRANT_READ_BYTES_PER_MINUTE: int = Field(
+        default=8388608, ge=1024, le=268435456
+    )
+    WORKSPACE_MCP_TENANT_READ_BYTES_PER_MINUTE: int = Field(
+        default=67108864, ge=1024, le=1073741824
+    )
     WORKSPACE_MCP_TENANT_REQUESTS_PER_MINUTE: int = 1200
     WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED: bool = False
 

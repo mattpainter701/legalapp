@@ -22,6 +22,8 @@ vi.mock('../api', () => ({
   updateMcpProductKey: mocks.updateMcpProductKey,
 }))
 
+vi.mock('../components/WorkspaceMcpActivityPanel', () => ({ default: () => <div>Firm assistant activity</div> }))
+
 vi.mock('../App', () => ({
   useAuth: () => ({ user: { id: 'admin-1', role: 'admin' } }),
 }))

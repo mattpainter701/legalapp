@@ -146,7 +146,9 @@ async def test_protocol_returns_retry_guidance(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["allowed", "rate_limited", "oversized"])
+@pytest.mark.parametrize(
+    "outcome", ["allowed", "rate_limited", "oversized", "volume_limited"]
+)
 async def test_dispatch_enforces_budget_before_handler_and_audits_reads(
     monkeypatch, outcome
 ):
@@ -185,6 +187,12 @@ async def test_dispatch_enforces_budget_before_handler_and_audits_reads(
         side_effect=HTTPException(429, "budget") if outcome == "rate_limited" else None
     )
     monkeypatch.setattr(protocol, "enforce_workspace_grant_call_budget", limit)
+    volume = AsyncMock(
+        side_effect=HTTPException(429, "read volume")
+        if outcome == "volume_limited"
+        else None
+    )
+    monkeypatch.setattr(protocol, "enforce_read_volume", volume)
     payload = {"text": "private" * (1000 if outcome == "oversized" else 1)}
     handler = AsyncMock(return_value=payload)
     monkeypatch.setattr(handlers, "find_matter", handler)
@@ -206,7 +214,9 @@ async def test_dispatch_enforces_budget_before_handler_and_audits_reads(
         assert audit.call_args.kwargs["event_type"] == "tool_called"
     else:
         with pytest.raises(
-            HTTPException if outcome == "rate_limited" else CapabilityError
+            HTTPException
+            if outcome in {"rate_limited", "volume_limited"}
+            else CapabilityError
         ):
             await execute()
         assert audit.call_args.kwargs["event_type"] == "tool_call_refused"
@@ -214,9 +224,12 @@ async def test_dispatch_enforces_budget_before_handler_and_audits_reads(
 
         metadata = _bounded_audit_metadata(audit.call_args.kwargs["metadata"])
         assert metadata["failure_reason"] == (
-            "429" if outcome == "rate_limited" else "result_size_exceeded"
+            "429"
+            if outcome in {"rate_limited", "volume_limited"}
+            else "result_size_exceeded"
         )
     assert handler.await_count == (0 if outcome == "rate_limited" else 1)
+    assert volume.await_count == (1 if outcome in {"allowed", "volume_limited"} else 0)
     sessions[0].commit.assert_not_awaited()
     sessions[0].rollback.assert_awaited()
     sessions[1].commit.assert_awaited_once()

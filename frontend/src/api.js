@@ -774,6 +774,10 @@ export const getWorkspaceMcpAuthorizationRequest = (requestId) =>
   api.get(`/workspace-mcp/oauth/requests/${encodeURIComponent(requestId)}`).then((r) => r.data)
 export const decideWorkspaceMcpAuthorizationRequest = (requestId, approved) =>
   api.post(`/workspace-mcp/oauth/requests/${encodeURIComponent(requestId)}/decision`, { approved }).then((r) => r.data)
+export const getWorkspaceMcpActivity = (params = {}) =>
+  api.get('/workspace-mcp/activity', { params }).then(r => r.data)
+export const getWorkspaceMcpActiveGrants = (params = {}) =>
+  api.get('/workspace-mcp/activity/grants', { params }).then(r => r.data)
 export const getWorkspaceMcpGrants = () =>
   api.get('/workspace-mcp/grants').then((r) => r.data)
 export const revokeWorkspaceMcpGrant = (grantId) =>

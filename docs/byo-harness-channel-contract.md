@@ -37,13 +37,14 @@ or grant arbitrary execution. Approval and privileged administration remain
 authenticated human controls; irreversible effects use deterministic workers.
 
 The current [Workspace catalog](workspace_mcp_adapter.md) is authoritative for
-implemented tools. Portal administration proposals, wider lifecycle triggers,
-PDF preview-bound proposals, synthesized firm configuration, first-class staged
-review records and durable multi-step runs remain gated work. Do not label these
-available until implementation and acceptance evidence land. Research coverage
+implemented tools. Lifecycle triggers, synthesized firm configuration, staged
+artifact review and durable multi-step runs are implemented in W1–W4. The
+synthesis controls currently use the authenticated portal/API. Broader portal
+administration and PDF preview-bound MCP proposals remain outside the catalog.
+Research coverage
 is maintained separately in the [MCP documentation index](mcp/README.md).
 
-## Read-load admission — initial implementation
+## Read-load admission
 
 Workspace admission has an additional Redis-atomic, minute-window budget of
 60 actual tool calls per consent grant, shared across refreshed tokens and API
@@ -52,6 +53,8 @@ share the configured tenant request ceiling. Settings:
 
 - `WORKSPACE_MCP_GRANT_CALLS_PER_MINUTE` (default 60, range 1–600).
 - `WORKSPACE_MCP_READ_RESULT_MAX_BYTES` (default 1 MiB, range 1 KiB–8 MiB).
+- `WORKSPACE_MCP_GRANT_READ_BYTES_PER_MINUTE` (default 8 MiB, range 1 KiB–256 MiB).
+- `WORKSPACE_MCP_TENANT_READ_BYTES_PER_MINUTE` (default 64 MiB, range 1 KiB–1 GiB).
 
 The result ceiling counts UTF-8 JSON for both MCP result representations and
 their text escaping. It excludes the outer JSON-RPC framing. Oversized reads
@@ -64,9 +67,15 @@ share the tenant ceiling. These are infrastructure limits, not AI balance checks
 Read audit events include result byte counts; refusals include a bounded error
 code. Neither records query text or returned document bodies. Proposal results
 are not rejected after materializing a cloud artifact; their existing bounded
-input/output contracts and the grant call budget apply. Per-period byte quotas,
-per-tenant configurable grant budgets, and a firm-visible activity dashboard
-remain residual W5a work. This initial change alone does not clear promotion.
+input/output contracts and the grant call budget apply. Aggregate byte admission
+atomically checks both grant and tenant before reserving either counter. Refused
+reads consume no byte reservation. Durable MCP run reads use the same budgets;
+exhaustion blocks at the read checkpoint until the user continues the run.
+These deployment settings are shared defaults, not per-firm editable pricing.
+
+The [firm setup and activity guide](mcp/harness-firm-setup.md) covers connections,
+bounded audit history, exact review evidence and supported client setup. Full
+production TLS interoperability remains a release gate.
 
 ## Governance
 
@@ -76,6 +85,7 @@ subscription is not a LawHand assurance about firm confidentiality. The firm
 decides which external accounts and vendors it permits. This decision neither
 mandates a particular subscription tier nor enables unattended runs.
 
-W2's revision-bound review spine and W4's durable runtime still gate unattended
+W2's revision-bound review spine and W4's durable runtime are implemented.
+Named service identities and approved scheduled rules still gate unattended
 operation. The [scaling plan](capability-first-automation-scaling-plan-2026-09-08.md)
 tracks the remaining workstreams and acceptance conditions.

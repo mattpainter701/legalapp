@@ -5,6 +5,13 @@
 - Replace durable-job dispatch branches with an explicit handler registry, preserve legacy transaction modes, and account for runtime MCP steps in existing grant budgets.
 - Add migration 168 with forced RLS and immutable evidence guards; rehearse actual process termination, one cloud upload, retained artifact identity and one normal attorney approval.
 
+## [2026.09.08.11] - 2026-09-08
+
+- Add bounded firm Workspace MCP activity and active-grant views with named actors, exact revision review evidence, tenant-scoped joins and historical audit links.
+- Apply atomic grant/tenant read-byte budgets to direct MCP reads and durable runtime reads without AI debits. Preserve blocked checkpoints until continuation.
+- Promote firm-approved assistant setup with separate Workspace/Research URLs, account governance and metered-feature boundaries; add OpenCode setup.
+- Rehearse tenant-isolated activity and read-budget pause/resume on the existing killed-worker and human artifact-review fixture.
+
 ## 2026.09.08.9 - Signing-aware template completion
 
 - Exclude signatures and signer-linked dates from Smart Fill and pre-signing completion while preserving ordinary required dates.

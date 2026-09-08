@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.11 — See connected assistant activity across your firm
+
+Released September 8, 2026.
+
+Connect a firm-approved assistant and inspect its access, proposed work, and recorded reviews from MCP settings.
+
+- **Follow work through review.** See active connections, recorded reads and proposals, and links to workflow and review tasks. Inspect the exact artifact revision and recorded review evidence.
+- **Keep assistant access bounded.** Shared connection and firm read budgets cover direct calls and durable workflows. Assistant inference remains separate from metered LawHand premium features.
+
 ## 2026.09.08.10 — Continue bounded workflows across review and interruptions
 
 Released September 8, 2026.

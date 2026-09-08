@@ -414,7 +414,13 @@ async def run_workflow_job(job):
                     try:
                         result = canonical_payload(await handler(context, parsed))
                         if run.origin_channel == "workspace_mcp":
-                            bounded_workspace_read_result(result)
+                            from app.services.workspace_mcp_read_volume import (
+                                enforce_runtime_read_volume,
+                            )
+
+                            await enforce_runtime_read_volume(
+                                run, bounded_workspace_read_result(result)
+                            )
                     finally:
                         await savepoint.rollback()
                 else:
