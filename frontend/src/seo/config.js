@@ -33,7 +33,7 @@ export const PLATFORM_PRICE_USD = '89'
 export const MCP_TOOL_CALL_PRICE_USD = '0.45'
 
 // Bumped whenever public marketing copy changes; feeds sitemap <lastmod>.
-export const PUBLIC_CONTENT_LASTMOD = '2026-08-29'
+export const PUBLIC_CONTENT_LASTMOD = '2026-09-07'
 
 export const PRICING_FAQ = Object.freeze([
   Object.freeze([
@@ -173,6 +173,24 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     indexable: true,
     priority: '0.9',
     breadcrumb: 'Pricing',
+  },
+  '/support': {
+    title: 'Support | LawHand Response Objectives',
+    description:
+      'Contact LawHand support by email and review published coverage hours, S1-S4 severity definitions, and acknowledgement objectives. Objectives, not an SLA.',
+    canonicalPath: '/support',
+    indexable: true,
+    priority: '0.6',
+    breadcrumb: 'Support',
+  },
+  '/requirements': {
+    title: 'Platform Requirements and Integrations | LawHand',
+    description:
+      'Review LawHand platform requirements, the Microsoft 365 and Google Workspace integration matrix, the administrator consent and scopes each provider requests, and the onboarding sequence.',
+    canonicalPath: '/requirements',
+    indexable: true,
+    priority: '0.7',
+    breadcrumb: 'Requirements',
   },
   '/privacy': {
     title: 'Privacy Policy | LawHand',

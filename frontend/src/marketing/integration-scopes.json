@@ -1,0 +1,52 @@
+{
+  "$comment": "Canonical OAuth scope lists published on the public /requirements page. Lives inside the frontend so the frontend Docker build context is self-contained; backend/tests/test_public_integration_scopes.py reads it from here and asserts it matches the constants in backend/app/routers/integrations.py and backend/app/services/teams.py, so narrowing a scope fails a test instead of leaving a stale public claim.",
+  "reviewedAt": "2026-09-07",
+  "providers": {
+    "microsoft": {
+      "admin": [
+        "offline_access",
+        "User.Read.All",
+        "Mail.Read",
+        "Mail.Send",
+        "Files.ReadWrite.All",
+        "Sites.Read.All",
+        "Calendars.ReadWrite"
+      ],
+      "user": [
+        "offline_access",
+        "User.Read",
+        "Mail.Read",
+        "Mail.Send",
+        "Files.ReadWrite.All",
+        "Calendars.ReadWrite"
+      ],
+      "teamsOptIn": [
+        "Channel.ReadBasic.All",
+        "ChannelMessage.Send",
+        "Chat.ReadWrite",
+        "Team.ReadBasic.All",
+        "TeamsActivity.Send",
+        "Channel.Create"
+      ]
+    },
+    "google": {
+      "admin": [
+        "openid",
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/admin.directory.user.readonly",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/drive"
+      ],
+      "user": [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/drive"
+      ],
+      "teamsOptIn": []
+    }
+  }
+}

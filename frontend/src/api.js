@@ -2706,8 +2706,17 @@ export const getPublicServiceStatus = () =>
 export const getPublicSecurityReviewPacket = () =>
   api.get('/public/security-review-packet').then(r => r.data)
 
+// Published support coverage, S1-S4 definitions, and acknowledgement
+// objectives. Unauthenticated, so the public support page and the in-app
+// admin tab render the same policy the security-review packet exports.
+export const getPublicSupportPolicy = () =>
+  api.get('/public/support-policy').then(r => r.data)
+
 export const createOperatingSupportRequest = (body) =>
   api.post('/compliance/operating/support', body).then(r => r.data)
+
+export const listOperatingSupportRequests = () =>
+  api.get('/compliance/operating/support').then(r => r.data)
 
 export const createCustomerLifecycleReceipt = (body) =>
   api.post('/compliance/operating/receipts', body).then(r => r.data)

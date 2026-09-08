@@ -117,6 +117,12 @@ export default function PricingPage() {
             </article>
           ))}
         </div>
+        <p className="mt-8 text-center text-[14px] leading-relaxed text-brand-ink-2">
+          Before you commit, review the{' '}
+          <Link to="/requirements" className="font-semibold text-brand-accent-2 hover:underline">platform requirements and integration matrix</Link>
+          {' '}and the{' '}
+          <Link to="/support" className="font-semibold text-brand-accent-2 hover:underline">published support objectives</Link>.
+        </p>
       </section>
     </MarketingPageLayout>
   )

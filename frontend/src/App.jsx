@@ -22,6 +22,8 @@ const TrustCenterPage = lazy(() => import('./pages/TrustCenterPage'))
 const ProductChatPage = lazy(() => import('./pages/ProductChatPage'))
 const McpProductPage = lazy(() => import('./pages/McpProductPage'))
 const PricingPage = lazy(() => import('./pages/PricingPage'))
+const SupportPage = lazy(() => import('./pages/SupportPage'))
+const RequirementsPage = lazy(() => import('./pages/RequirementsPage'))
 const DemoRequestPage = lazy(() => import('./pages/DemoRequestPage'))
 const ProductPage = lazy(() => import('./pages/ProductPage'))
 const WorkspaceMcpAuthorizePage = lazy(() => import('./pages/WorkspaceMcpAuthorizePage'))
@@ -273,6 +275,8 @@ export default function App() {
         <Route path="/product/chat" element={<ProductChatPage />} />
         <Route path="/product/mcp" element={<McpProductPage />} />
           <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/support" element={<SupportPage />} />
+          <Route path="/requirements" element={<RequirementsPage />} />
           <Route path="/request-demo" element={<DemoRequestPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/portal/accept" element={<PortalAcceptPage />} />
