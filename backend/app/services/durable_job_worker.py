@@ -619,6 +619,9 @@ async def _run_teams_voice_reconcile(row: DurableJob) -> dict:
         }
 
 
+WORKFLOW_PLANNING_JOB_KINDS = {"matter_workflow_plan", "workflow_lifecycle_plan"}
+
+
 async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
     async with async_session_maker() as db:
         await set_tenant_context(db, str(tenant_id))
@@ -627,7 +630,7 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
             .where(
                 DurableJob.id == job_id,
                 DurableJob.tenant_id == tenant_id,
-                DurableJob.kind == "matter_workflow_plan",
+                DurableJob.kind.in_(WORKFLOW_PLANNING_JOB_KINDS),
                 DurableJob.status == "running",
                 DurableJob.attempts >= DurableJob.max_attempts,
                 DurableJob.leased_at
@@ -646,12 +649,12 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
         row = await claim_job(db, job_id)
         if not row:
             return False
-        workflow_planning_job = row.kind == "matter_workflow_plan"
+        workflow_planning_job = row.kind in WORKFLOW_PLANNING_JOB_KINDS
         claim_token = (row.attempts, row.leased_at)
         try:
             # claim_job commits; restore transaction-local tenant context.
             await set_tenant_context(db, str(tenant_id))
-            if row.kind == "matter_workflow_plan":
+            if workflow_planning_job:
                 # Hold through completion so lease recovery cannot overlap a
                 # still-running planner, and completion commits the plan too.
                 row = await db.scalar(
@@ -680,13 +683,17 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
             }:
                 result = (
                     {"outcome": "blocked", "failure_code": "inactive_tenant"}
-                    if row.kind == "matter_workflow_plan"
+                    if workflow_planning_job
                     else {"ignored": "inactive_tenant"}
                 )
             elif row.kind == "matter_workflow_plan":
                 from app.services.durable_workflow_automations import run_planning_job
 
                 result = await run_planning_job(db, row)
+            elif row.kind == "workflow_lifecycle_plan":
+                from app.services.workflow_lifecycle import run_lifecycle_job
+
+                result = await run_lifecycle_job(db, row)
             elif row.kind == "document_ingest":
                 result = await _run_document_ingest(row)
             elif row.kind == "cloud_sync":

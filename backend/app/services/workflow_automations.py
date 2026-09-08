@@ -34,6 +34,7 @@ from app.models.plugin import Matter
 from app.models.workflow_automation import (
     MatterWorkflowAutomationEvent,
     MatterWorkflowAutomationRule,
+    TRIGGER_EVENTS,
 )
 from app.services.configurable_workflows import (
     acquire_workflow_config_lock,
@@ -43,8 +44,6 @@ from app.services.configurable_workflows import (
 )
 
 logger = logging.getLogger(__name__)
-
-TRIGGER_EVENTS = ("matter_created", "matter_stage_changed")
 
 
 def _normalized(value: str | None) -> str | None:
@@ -266,8 +265,11 @@ async def _plan_for_rule(
     trigger_event: str,
     actor_user_id: uuid.UUID,
     as_of: date,
+    dispatch_key: str | None = None,
+    trigger_evidence: dict[str, Any] | None = None,
 ) -> MatterWorkflowAutomationEvent | None:
-    key = dedupe_key(rule, matter, trigger_event=trigger_event)
+    key = dispatch_key or dedupe_key(rule, matter, trigger_event=trigger_event)
+    evidence = {"trigger_evidence": trigger_evidence} if trigger_evidence else {}
     existing = await _existing_dispatch(db, rule, key)
     if existing is not None:
         return None
@@ -285,6 +287,7 @@ async def _plan_for_rule(
             actor_user_id=actor_user_id,
             detail={
                 "failure_code": "template_not_approved",
+                **evidence,
                 "message": (
                     "The rule's template has no active, approved version to plan."
                 ),
@@ -313,6 +316,7 @@ async def _plan_for_rule(
             actor_user_id=actor_user_id,
             detail={
                 "failure_code": "preview_rejected",
+                **evidence,
                 "status_code": exc.status_code,
                 "message": "The approved template cannot be previewed. Review its current configuration.",
             },
@@ -323,6 +327,7 @@ async def _plan_for_rule(
         "matter_id": str(matter.id),
         "template_version_id": str(version_id),
         "trigger_event": trigger_event,
+        **evidence,
     }
     run = MatterWorkflowRun(
         tenant_id=rule.tenant_id,
@@ -351,6 +356,7 @@ async def _plan_for_rule(
             "missing_assignee_count": len(preview["missing_assignees"]),
             "automation_rule_id": str(rule.id),
             "automation_trigger_event": trigger_event,
+            **evidence,
         },
     )
     return _record_dispatch(
@@ -364,6 +370,7 @@ async def _plan_for_rule(
         actor_user_id=actor_user_id,
         detail={
             "template_version_id": str(version_id),
+            **evidence,
             "preview_sha256": preview_sha256,
             "can_apply": preview["can_apply"],
             "missing_required_field_count": len(preview["missing_required_fields"]),

@@ -28,6 +28,7 @@ BLOCK_REASONS = {
     "rule_changed": "The rule changed or was archived after this trigger.",
     "matter_archived": "The matter was archived after this trigger.",
     "matter_changed": "Workflow facts changed after this trigger.",
+    "source_changed": "The triggering record or workflow facts changed after this trigger.",
     "template_changed": "The approved template changed or is no longer available.",
     "inactive_tenant": "The firm's account is inactive.",
 }
@@ -39,7 +40,7 @@ def blocked_message(code):
 
 async def enqueue_matter_event(db, *, matter, trigger_event, actor_user_id):
     """Flush/enqueue in the caller's transaction; failure must roll back the save."""
-    if trigger_event not in planning.TRIGGER_EVENTS:
+    if trigger_event not in ("matter_created", "matter_stage_changed"):
         raise ValueError("Unsupported workflow trigger")
     await db.flush()
     await planning.acquire_workflow_config_lock(db, matter.tenant_id, shared=True)
@@ -178,7 +179,8 @@ async def run_planning_job(db: AsyncSession, job: DurableJob) -> dict:
 async def pending_activity(db, tenant_id, *, matter_id=None, rule_id=None, limit=50):
     """Reuse activity endpoints; completed plans have immutable event receipts."""
     query = select(DurableJob).where(
-        DurableJob.tenant_id == tenant_id, DurableJob.kind == JOB_KIND
+        DurableJob.tenant_id == tenant_id,
+        DurableJob.kind.in_((JOB_KIND, "workflow_lifecycle_plan")),
     )
     if matter_id:
         query = query.where(

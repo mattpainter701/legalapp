@@ -8,7 +8,18 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-TriggerEvent = Literal["matter_created", "matter_stage_changed"]
+TriggerEvent = Literal[
+    "matter_created",
+    "matter_stage_changed",
+    "task_completed",
+    "document_received",
+    "intake_submitted",
+    "esign_completed",
+    "deadline_approaching",
+    "invoice_overdue",
+    "inbound_email_matched_to_matter",
+    "payment_received",
+]
 
 
 def _clean_optional(value: str | None) -> str | None:
@@ -45,7 +56,7 @@ class WorkflowAutomationRuleInput(BaseModel):
     def _stage_matches_trigger(self) -> "WorkflowAutomationRuleInput":
         if self.trigger_event == "matter_stage_changed" and not self.trigger_stage:
             raise ValueError("trigger_stage is required for a stage-change trigger")
-        if self.trigger_event == "matter_created" and self.trigger_stage:
+        if self.trigger_event != "matter_stage_changed" and self.trigger_stage:
             raise ValueError("trigger_stage applies only to a stage-change trigger")
         return self
 

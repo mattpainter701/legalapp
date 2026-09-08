@@ -12,16 +12,16 @@ creating tasks and moving the matter stage — remains the existing
 `approve_legal_work` + `manage_matters` step described in
 [`configurable-matter-workflows.md`](configurable-matter-workflows.md).
 
-This is still not a no-code builder. There are two triggers, three optional
+This is still not a no-code builder. There are ten triggers, three optional
 equality conditions, and one action. Rules cannot run expressions, call
-services, send email or SMS, generate documents, schedule anything, or reach a
+services, send email or SMS, generate documents, create arbitrary schedules, or reach a
 matter a person has not already opened.
 
 ## What a rule contains
 
 | Part | Values |
 | --- | --- |
-| Trigger | `matter_created`, or `matter_stage_changed` with one named stage |
+| Trigger | Matter creation/stage change, task completion, document receipt, intake submission, signature completion, an approaching deadline, an overdue invoice, accepted inbound matter email, or payment receipt |
 | Conditions | optional matter type and/or practice area, compared case- and whitespace-insensitively |
 | Action | plan the approved version captured when the trigger was queued |
 
@@ -77,6 +77,31 @@ must be retried rather than silently losing its trigger. The worker plans later:
 - `POST /api/matters` queues `matter_created`;
 - `PATCH /api/matters/{id}` queues `matter_stage_changed` only when stage changes.
 
+Migration 166 adds transactional database capture into `workflow_lifecycle_plan`
+for source writes from API requests, imports, and background workers:
+Capture is deferred to transaction completion, so later writes in the same
+transaction (such as completed-signature evidence) are included in the frozen
+fingerprint.
+
+| Event | Source condition |
+| --- | --- |
+| `task_completed` | A task enters completed status. Reopening and completing it again uses its completion timestamp/version. |
+| `document_received` | A non-generated document first becomes verified, or a legacy upload first acquires a storage path. Repeated edits do not count as new receipts. |
+| `intake_submitted` | A portal questionnaire first becomes complete, or an accepted public intake is linked to a matter through its lead. |
+| `esign_completed` | A signature request enters completed status. |
+| `inbound_email_matched_to_matter` | A received email is accepted into its matched matter. Pending and rejected mail do not trigger a workflow. |
+| `payment_received` | A positive invoice payment is inserted or a nonpositive payment becomes positive. |
+| `deadline_approaching` | An incomplete deadline task is due today through three days ahead, inclusive. |
+| `invoice_overdue` | A sent/overdue/partially paid invoice is past due and recorded payments remain below its total. |
+
+The scheduler scans the two due conditions every 15 minutes and on startup,
+under each active firm's tenant context. Their occurrence keys include the due
+date. A changed due date can create a new occurrence; a repeated scan cannot.
+All other new events select the currently active matching subscriptions in the
+source transaction. Activating a rule later does not replay historical writes.
+The rule approver is the frozen planning actor, whose live license and
+`manage_matters` capability are checked again by the worker.
+
 The job stores the original actor, trigger date, rule fingerprint, approved
 version identifier, and matter/custom-field evidence fingerprint. It stores no
 document text, custom-field values, credentials, or raw exception detail. The
@@ -93,11 +118,18 @@ crashed workers, and duplicate deliveries reuse the original receipt. Final
 failure remains visible with a manual preview recovery path. There is no
 user-triggered replay endpoint that can silently re-authorize stale events.
 
-**One plan per rule, matter, and triggering condition — ever.** The dedupe key
+**Matter creation/stage change: one plan per rule, matter, and condition.** The dedupe key
 is a hash of the matter, the trigger, and the rule's stage, and it is unique
 per rule in the database. A retried request, a concurrent duplicate, or a
 matter that leaves and re-enters an automated stage all produce the same single
 run. A person who wants a second run creates a preview by hand.
+
+The eight additional events instead deduplicate per rule and source occurrence.
+Two distinct received documents can prepare two runs. The source identifier,
+kind, and source/matter/custom-field fingerprint are preserved in immutable
+dispatch evidence and the run request fingerprint. Changed or deleted source
+facts block preparation; raw questionnaire answers and email content never
+enter the durable job payload.
 
 Silence is a bug, so a rule that cannot plan records why instead. If the
 template lost its approval or was archived, or the preview is rejected, the
@@ -144,14 +176,14 @@ planned run a person did not create still names the rule that created it.
 
 Outside this slice, and not to be inferred from it:
 
-- any trigger other than matter creation and matter stage change — no task,
-  document, invoice, payment, signature, or inbound-message triggers;
+- triggers outside the ten listed above;
 - any action other than planning a workflow run — no outbound email or SMS,
   document generation, field writes, or status changes;
 - conditions beyond matter type and practice area equality — no expressions,
   ranges, custom-field predicates, or boolean composition;
-- new business schedules or webhooks; events produced outside the two matter
-  endpoints (imports, scripts, direct writes) do not queue these rules;
+- arbitrary business schedules or webhook definitions; matter creation/stage
+  events still come from the two canonical matter endpoints, while the eight
+  additional events use transactional source capture;
 - automatic application of a planned run, under any configuration; and
 - re-planning after a stage is re-entered, or automatic cleanup of planned runs
   a firm chose not to apply.
@@ -172,6 +204,14 @@ Backend behavior is covered by `backend/tests/test_workflow_automation_rules.py`
 dedupe and blocked outcomes). `test_durable_workflow_automations.py` covers
 transaction rollback, retry/crash recovery, duplicate delivery, actor revocation,
 changed/archived sources and tenant isolation with PostgreSQL.
+
+`scripts/rehearse_workflow_lifecycle.py` runs against the actual migrated schema
+and a NOSUPERUSER/NOBYPASSRLS role. It exercises all eight events and both intake
+sources, rollback, duplicate capture, source changes, tenant isolation, real
+worker planning, a crash before commit, recovery, and replay without added tasks.
+The unit tests cover revoked actors, changed approvals/templates, frozen
+evidence, and tenant-scoped scheduling. The rule editor tests author each event
+as a draft and reject stale stage conditions.
 
 ## Operator and customer review path
 

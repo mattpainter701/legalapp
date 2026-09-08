@@ -28,7 +28,21 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 
-TRIGGER_EVENTS = ("matter_created", "matter_stage_changed")
+TRIGGER_EVENTS = (
+    "matter_created",
+    "matter_stage_changed",
+    "task_completed",
+    "document_received",
+    "intake_submitted",
+    "esign_completed",
+    "deadline_approaching",
+    "invoice_overdue",
+    "inbound_email_matched_to_matter",
+    "payment_received",
+)
+TRIGGER_EVENT_CHECK = (
+    "trigger_event IN (" + ",".join(repr(event) for event in TRIGGER_EVENTS) + ")"
+)
 RULE_STATUSES = ("draft", "active", "archived")
 DISPATCH_OUTCOMES = ("planned", "blocked")
 
@@ -42,7 +56,7 @@ class MatterWorkflowAutomationRule(Base):
             "tenant_id", "id", name="uq_matter_workflow_automation_rules_tenant_id"
         ),
         CheckConstraint(
-            "trigger_event IN ('matter_created', 'matter_stage_changed')",
+            TRIGGER_EVENT_CHECK,
             name="ck_matter_workflow_automation_rules_event",
         ),
         CheckConstraint(
@@ -178,7 +192,7 @@ class MatterWorkflowAutomationEvent(Base):
             name="ck_matter_workflow_automation_events_run",
         ),
         CheckConstraint(
-            "trigger_event IN ('matter_created', 'matter_stage_changed')",
+            TRIGGER_EVENT_CHECK,
             name="ck_matter_workflow_automation_events_event",
         ),
         CheckConstraint(

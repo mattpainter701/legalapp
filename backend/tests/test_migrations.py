@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["165_artifact_review_spine"]
+    assert heads == ["166_workflow_lifecycle_events"]
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():
