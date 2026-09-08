@@ -184,7 +184,7 @@ though the mobile drawer works.
 
 ## Outstanding validation and remaining risks
 
-Local remediation checks passed: 34 cloud/planner/SMB tests, three release
+Local remediation checks passed: 37 cloud/planner/SMB tests, three release
 catalog tests, 18 chat UI tests, six guide tests, and the frontend production
 build. Scoped attachment continuity passed against disposable PostgreSQL and
 Redis; related route/scope endpoint checks and three pure chat checks also
@@ -193,15 +193,22 @@ three-second wait expired over the remote database tunnel and left its stream
 transaction open, blocking teardown. The test now always cancels/awaits the
 consumer and uses a ten-second bounded wait. Final full-suite evidence must
 come from CI; the cleanup-version local rerun did not yield a captured result.
+All four backend CI shards and the merge gate subsequently passed for
+`f1d7871c`. The final MIME additions require their own fresh-head CI evidence.
 The disposable database/Redis containers and tunnels were stopped afterward.
 
 The first remediation patch addresses attachment continuity and excerpt labels,
-cloud PDF/DOCX extraction with bounded downloads, empty planner queries, planner
+cloud PDF/DOCX and EML/Outlook MIME extraction with bounded downloads, empty planner queries, planner
 route admission, profile-free public/general jurisdiction defaults, persistent
 public-retrieval failure status, and citation-count/source-origin consistency.
 It does not establish a live pass until the exact patch has been deployed and
 the failed scenarios repeated. Premium planning now follows the selected
 Premium chat route, so that preparatory call also uses the Premium model.
+
+The separately verified Microsoft self-send, matter capture, original-byte
+OneDrive EML retention, and idempotent rescan are documented in
+`2026-09-07-email-retention-validation.md`. That retention result does not
+substitute for post-deployment email retrieval validation.
 
 Follow-up remediation priorities:
 
