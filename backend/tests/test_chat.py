@@ -2953,10 +2953,15 @@ async def test_cancelled_stream_rolls_back_flushed_action_and_source_promotion(
                     generation_state=state,
                 )
                 consumer = asyncio.create_task(drain(response.body_iterator))
-                await asyncio.wait_for(action_flushed.wait(), timeout=3)
-                consumer.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await consumer
+                try:
+                    await asyncio.wait_for(action_flushed.wait(), timeout=10)
+                finally:
+                    # A timeout must still stop the response generator. Leaving
+                    # it alive holds its transaction open and wedges the next
+                    # fixture reset before pytest can report the real failure.
+                    consumer.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await consumer
 
     db_session.expire_all()
     assert (

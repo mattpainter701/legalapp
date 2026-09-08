@@ -162,6 +162,8 @@ async def test_planner_uses_selected_premium_route(monkeypatch):
     assert result["keywords"] == ["notice"]
     assert llm.calls[0]["provider"] == premium.provider
     assert llm.calls[0]["model"] == premium.model
+    assert llm.calls[0]["use_premium"] is True
+    assert llm.calls[0]["max_output_tokens"] == 512
 
 
 @pytest.mark.asyncio

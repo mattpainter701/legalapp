@@ -163,7 +163,9 @@ class RetrievalPlanner:
             context=system_prompt,
             provider=route.provider,
             model=route.model,
+            use_premium=use_premium,
             response_format={"type": "json_object"},
+            max_output_tokens=512,
         )
 
         plan = self._parse_response(response_text)

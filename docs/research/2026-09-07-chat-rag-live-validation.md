@@ -114,6 +114,13 @@ the existing isolated dev1 renderer and its page was inspected locally.
     addendum at character 9,289. The answer appropriately declined to invent
     values, while the source locator still said “Full attached document”.
     Expose truncation and separately implement/test long-document retrieval.
+15. **Planner usage lacks request-level accounting.** The existing planner calls
+    `LLMService.complete` directly and discards its returned token counts. The
+    route-admission fix reuses the selected Premium route and bounds plan output
+    to 512 tokens, but does not add planner usage to the chat request ledger.
+    Follow up with broker reservation/settlement and actual-provider usage
+    attribution for preparatory calls; do not infer complete metering from the
+    final answer's usage record.
 
 ## Long-document control
 
@@ -176,6 +183,17 @@ horizontal scrollbar. This reproduces the user's wider-layout concern even
 though the mobile drawer works.
 
 ## Outstanding validation and remaining risks
+
+Local remediation checks passed: 34 cloud/planner/SMB tests, three release
+catalog tests, 18 chat UI tests, six guide tests, and the frontend production
+build. Scoped attachment continuity passed against disposable PostgreSQL and
+Redis; related route/scope endpoint checks and three pure chat checks also
+passed. The full local chat suite was incomplete: a cancellation test's
+three-second wait expired over the remote database tunnel and left its stream
+transaction open, blocking teardown. The test now always cancels/awaits the
+consumer and uses a ten-second bounded wait. Final full-suite evidence must
+come from CI; the cleanup-version local rerun did not yield a captured result.
+The disposable database/Redis containers and tunnels were stopped afterward.
 
 The first remediation patch addresses attachment continuity and excerpt labels,
 cloud PDF/DOCX extraction with bounded downloads, empty planner queries, planner
