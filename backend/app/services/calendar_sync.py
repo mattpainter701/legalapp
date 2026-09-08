@@ -37,6 +37,29 @@ def _provider_local_datetime(value: datetime, timezone_name: str) -> str:
     )
 
 
+def _graph_event_datetime(value: object | None, *, is_all_day: bool) -> str | None:
+    """Normalize Graph timed values to explicit UTC, preserving all-day dates."""
+    if not isinstance(value, dict):
+        return None
+
+    raw = value.get("dateTime")
+    if not isinstance(raw, str) or not raw:
+        return None
+    if is_all_day:
+        return raw.split("T", 1)[0]
+
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        timezone_name = value.get("timeZone")
+        if not isinstance(timezone_name, str) or timezone_name.upper() != "UTC":
+            return None
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 class CalendarSyncService:
     async def ms_get_events(
         self,
@@ -67,7 +90,7 @@ class CalendarSyncService:
         params = {
             "startDateTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "endDateTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "$select": "id,subject,start,end,location,bodyPreview,organizer,attendees",
+            "$select": "id,subject,start,end,isAllDay,location,bodyPreview,organizer,attendees",
             "$top": 100,
             "$orderby": "start/dateTime",
         }
@@ -75,7 +98,10 @@ class CalendarSyncService:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 cal_url,
-                headers={"Authorization": f"Bearer {token}"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Prefer": 'outlook.timezone="UTC"',
+                },
                 params=params,
             )
             if resp.status_code != 200:
@@ -85,13 +111,18 @@ class CalendarSyncService:
 
             events = []
             for evt in resp.json().get("value", []):
+                is_all_day = bool(evt.get("isAllDay"))
                 events.append(
                     {
                         "id": evt.get("id"),
                         "provider": "microsoft",
                         "subject": evt.get("subject", ""),
-                        "start": evt.get("start", {}).get("dateTime"),
-                        "end": evt.get("end", {}).get("dateTime"),
+                        "start": _graph_event_datetime(
+                            evt.get("start"), is_all_day=is_all_day
+                        ),
+                        "end": _graph_event_datetime(
+                            evt.get("end"), is_all_day=is_all_day
+                        ),
                         "location": (evt.get("location", {}) or {}).get(
                             "displayName", ""
                         ),
