@@ -5,6 +5,14 @@
 - Scan approaching deadlines and overdue unpaid invoices under tenant context every 15 minutes; preserve changed-source blocks, crash recovery, and immutable evidence without applying workflows.
 - Add migration 166 and a migrated PostgreSQL rehearsal covering all eight events, both intake paths, RLS, rollback, worker recovery, and replay.
 
+## 2026.09.08.6 - Document-first Template Studio
+
+- Focus Studio on the document, simplify field properties, and keep unsaved edits from being discarded by Studio navigation.
+- Place PDF fields at the pointer with correct viewport geometry; stabilize canvas error callbacks to prevent a redraw loop and scale loss.
+- Edit Word paragraph wording into a revised draft, guard source/version, rebase unaffected anchors, reject included-field overlap, and preserve source evidence.
+- Show a source reference beside fill values, distinguish draft references from published output, and move output choices below completion.
+
+
 ## 2026.09.08.4 - Exact artifact review and approved attachments
 
 - Add migration165: tenant-scoped review requirements, immutable decisions and delivery receipts, exact content/file hashes, stage ordering, override evidence and revision supersession.

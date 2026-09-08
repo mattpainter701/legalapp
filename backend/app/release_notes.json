@@ -19,6 +19,23 @@
       ]
     },
     {
+      "id": "2026.09.08.6",
+      "version": "2026.09.08.6",
+      "title": "Work directly on documents in Template Studio",
+      "published_at": "2026-09-08",
+      "summary": "See more of the document, place PDF fields where you click, and revise Word wording while keeping mapped fields.",
+      "highlights": [
+        {
+          "title": "Put the document first",
+          "description": "A focused canvas, compact tools and simpler field settings reduce navigation. Place PDF fields on the page and complete values beside a source reference."
+        },
+        {
+          "title": "Revise Word wording in context",
+          "description": "Edit a paragraph and save a separate revised draft. Nearby field mappings shift with the text; edits through included fields are blocked to protect their replacements."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.5",
       "version": "2026.09.08.5",
       "title": "Reuse shared firm details in templates",

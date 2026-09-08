@@ -27,7 +27,7 @@ import DocxDocumentView from './DocxDocumentView'
 import WordDocumentPreview from './WordDocumentPreview'
 import { resolveWordPageSelection } from './wordPlaceholderMatches'
 import WordDeriveDraftAction from './WordDeriveDraftAction'
-import WordCleanupAction from './WordCleanupAction'
+import WordWordingEditor from './WordWordingEditor'
 import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocumentCanvas'
 import {
   MIN_FIELD_SIZE,
@@ -52,7 +52,7 @@ const FIELD_TOOLS = [
   { kind: 'signature', label: 'Signature', icon: PenLine },
 ]
 
-const FIELD_TYPES = ['text', 'date', 'checkbox', 'signature', 'number', 'currency']
+const FIELD_TYPES = ['text', 'multiline', 'date', 'checkbox', 'signature', 'number', 'currency']
 
 // Operators that need no literal to compare against. The server accepts
 // equals/in/not_in too; those need a value input this panel does not have yet.
@@ -153,13 +153,15 @@ function useBindingCatalogue() {
 }
 
 
-export default function TemplateStudioEditor({ template, source, sourceError, onSave, onDerived }) {
+export default function TemplateStudioEditor({ template, source, sourceError, onSave, onDerived, onDirtyChange }) {
   const [fields, setFields] = useState(() => schemaFields(template))
   const [applicability, setApplicability] = useState(template.variable_schema?.applicability || null)
   const [regions, setRegions] = useState(() => schemaRegions(template))
   const [coverRegions, setCoverRegions] = useState(() => schemaCoverRegions(template))
   const [sourceReview, setSourceReview] = useState(template.variable_schema?.source_review || {})
-  const [cleanupSelection, setCleanupSelection] = useState(null)
+  const [wordingSelection, setWordingSelection] = useState(null)
+  const [editingWording, setEditingWording] = useState(false)
+  const [placingTool, setPlacingTool] = useState(null)
   const [wordParagraphs, setWordParagraphs] = useState([])
   const [sourceModeSuggestion, setSourceModeSuggestion] = useState(
     template.variable_schema?.source_mode_suggestion || null,
@@ -180,6 +182,9 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const redoStack = useRef([])
   const [historyVersion, setHistoryVersion] = useState(0)
   const scrollerRef = useRef(null)
+  const onPageRenderError = useCallback(error => setRenderError(`Page ${pageNumber} could not be rendered. (${error?.message || 'Preview unavailable'})`), [pageNumber])
+  useEffect(() => { onDirtyChange?.(dirty || Boolean(wordingSelection)) }, [dirty, wordingSelection, onDirtyChange])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   const { groups: bindingGroups, collections } = useBindingCatalogue()
 
@@ -206,6 +211,9 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     setPageNumber(1)
     setZoom(0.9)
     setDirty(false)
+    setWordingSelection(null)
+    setEditingWording(false)
+    setPlacingTool(null)
     setSaveError('')
     setSavedAt(null)
     undoStack.current = []
@@ -286,10 +294,18 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     )))
   }
 
-  const addField = (kind) => {
-    const field = createManualField(kind, { page, pageNumber, fields })
+  const addField = (kind, position) => {
+    let field = createManualField(kind, { page, pageNumber, fields })
+    if (position) {
+      const initial = overlayToCanvasRect(field.pdf_overlay, page, viewport, viewport ? 1 : zoom)
+      const overlays = geometryToOverlays(field, 0, { ...initial, ...position }, {
+        page, pageNumber, viewport, scale: viewport ? 1 : zoom, canvasWidth, canvasHeight,
+      })
+      field = { ...field, rect: overlays[0].rect, pdf_overlay: overlays[0], pdf_overlays: overlays }
+    }
     commitFields([...fields, field])
     setSelectedIdentity(field.pdf_source_key)
+    setPlacingTool(null)
   }
 
   const setCoverSource = (entry, enabled) => updateField(entry.identity, {
@@ -306,7 +322,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   }
 
   const updateCoverRegion = (index, geometry) => {
-    const rect = canvasToOverlayRect(geometry, page, pdfSource ? viewport : null, pdfSource ? 1 : zoom)
+    const rect = canvasToOverlayRect(geometry, page, pdfSource ? viewport : null, zoom)
     commitCoverRegions(coverRegions.map((item, itemIndex) => itemIndex === index ? { ...item, page: pageNumber, rect } : item))
   }
 
@@ -396,7 +412,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
       page,
       pageNumber,
       viewport: pdfSource ? viewport : null,
-      scale: pdfSource ? 1 : zoom,
+      scale: zoom,
       canvasWidth,
       canvasHeight,
     })
@@ -439,14 +455,14 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
   // Guard an accidental tab close while placements are unsaved.
   useEffect(() => {
-    if (!dirty) return undefined
+    if (!dirty && !wordingSelection) return undefined
     const warn = (event) => {
       event.preventDefault()
       event.returnValue = ''
     }
     globalThis.addEventListener?.('beforeunload', warn)
     return () => globalThis.removeEventListener?.('beforeunload', warn)
-  }, [dirty])
+  }, [dirty, wordingSelection])
 
   const visiblePlacements = indexedFields.flatMap((entry) => (
     placementsFor(entry.field)
@@ -463,8 +479,8 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-surface-2">
-      <div className="flex flex-wrap items-center gap-2 border-b border-brand-line px-3 py-2">
+    <div className="studio-editor overflow-hidden bg-brand-surface-2">
+      <fieldset disabled={saving || Boolean(wordingSelection)} className="min-w-0 studio-editor-toolbar flex flex-wrap items-center gap-2 border-b border-brand-line px-3 py-2">
         {/* Placement tools need page geometry, so they are PDF-only. Everything
             else about a field — its name, what it fills from, when it applies —
             is editable for every format. */}
@@ -476,7 +492,8 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 key={tool.kind}
                 icon={tool.icon}
                 label={tool.label}
-                onClick={() => addField(tool.kind)}
+                active={placingTool === tool.kind}
+                onClick={() => setPlacingTool(current => current === tool.kind ? null : tool.kind)}
               />
             ))}
             <ToolbarButton icon={Eraser} label="Cover" onClick={addCoverRegion} />
@@ -528,7 +545,8 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
             Save fields
           </button>
         </div>
-      </div>
+      </fieldset>
+      {placingTool && <div className="flex flex-wrap items-center gap-3 border-b border-brand-line bg-brand-accent/10 px-3 py-2 text-sm"><span>Click on the document to place a {placingTool} field.</span><button type="button" onClick={() => addField(placingTool)} className="text-xs underline">Place at page center</button><button type="button" onClick={() => setPlacingTool(null)} className="text-xs underline">Cancel placement</button></div>}
 
       {(saveError || duplicateNames.size > 0 || invalidNames.length > 0) && (
         <div role="alert" className="border-b border-brand-line bg-brand-amber/10 px-4 py-2 text-sm text-brand-ink">
@@ -539,9 +557,12 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
         </div>
       )}
 
-      <div className={`grid gap-0 ${pdfSource ? 'lg:grid-cols-[168px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
+      <div className={`studio-editor-grid grid gap-0 ${pdfSource ? 'lg:grid-cols-[92px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
         {!pdfSource && isDocx && (
           <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256} fields={fields} paragraphs={wordParagraphs} selectedIdentity={selectedIdentity} onSelectField={setSelectedIdentity}
+            wordingDisabled={dirty || saving}
+            wordingActive={Boolean(wordingSelection)}
+            onWordingModeChange={onDerived ? (enabled) => { setEditingWording(enabled); setWordingSelection(null) } : undefined}
             onCreateField={({ text, ...options }) => {
               const selection = resolveWordPageSelection(text, wordParagraphs)
               if (!selection) return 'This text occurs more than once or cannot be matched to the Word source. Use Fields to select its exact paragraph.'
@@ -561,7 +582,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
             fields={fields}
             regions={regions}
             sourceReview={sourceReview}
-            onSelectText={(selection) => setCleanupSelection({ paragraph_ordinal: selection.ordinal, start: selection.start, end: selection.end, original_text: selection.text })}
+            editingWording={editingWording && !wordingSelection}
+            onEditWording={setWordingSelection}
+            wordingSelection={wordingSelection}
+            wordingEditor={wordingSelection && <WordWordingEditor key={`${wordingSelection.ordinal}:${wordingSelection.start}`} template={template} selection={wordingSelection} onCancel={() => setWordingSelection(null)} onCreated={onDerived} />}
             onModeSuggestion={setSourceModeSuggestion}
             onParagraphs={setWordParagraphs}
             onReviewChange={template.variable_schema?.source_review_version === 1 ? (next) => {
@@ -624,14 +648,20 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           ))}
         </nav>
 
-        <div ref={scrollerRef} className="max-h-[70vh] overflow-auto bg-brand-bg p-4">
+        <div ref={scrollerRef} className="studio-document-scroll overflow-auto bg-brand-bg p-4">
           {previewProblem && (
             <p role="alert" className="mb-3 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-3 py-2 text-sm text-brand-ink">
               {previewProblem}
             </p>
           )}
           <div
-            className="relative mx-auto"
+            aria-label="Editable PDF page"
+            className={`relative mx-auto ${placingTool ? 'cursor-crosshair' : ''}`}
+            onClick={event => {
+              if (!placingTool || event.target.closest('.react-draggable')) return
+              const bounds = event.currentTarget.getBoundingClientRect()
+              addField(placingTool, { x: event.clientX - bounds.left, y: event.clientY - bounds.top })
+            }}
             style={{ width: canvasWidth || 612, height: canvasHeight || 792 }}
           >
             <PdfPageCanvas
@@ -639,12 +669,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
               pageNumber={pageNumber}
               zoom={zoom}
               onViewport={setViewport}
-              onError={(error) => setRenderError(
-                `Page ${pageNumber} could not be rendered. (${error?.message || 'Preview unavailable'})`,
-              )}
+              onError={onPageRenderError}
             />
             {coverRegions.map((region, index) => Number(region.page) === pageNumber ? (() => {
-              const geometry = overlayToCanvasRect(region, page, pdfSource ? viewport : null, pdfSource ? 1 : zoom)
+              const geometry = overlayToCanvasRect(region, page, pdfSource ? viewport : null, zoom)
               return <Rnd key={`cover:${index}`} bounds="parent" size={{ width: geometry.width, height: geometry.height }} position={{ x: geometry.x, y: geometry.y }} minWidth={MIN_FIELD_SIZE} minHeight={MIN_FIELD_SIZE} onDragStop={(_, data) => updateCoverRegion(index, { ...geometry, x: data.x, y: data.y })} onResizeStop={(_, __, ref, ___, position) => updateCoverRegion(index, { x: position.x, y: position.y, width: ref.offsetWidth, height: ref.offsetHeight })} className="rounded-sm border-2 border-slate-700 bg-white/90 cursor-move"><span className="pointer-events-none text-[10px] font-semibold text-slate-700">Cover</span><button type="button" aria-label="Remove cover region" onClick={(event) => { event.stopPropagation(); removeCoverRegion(index) }} className="absolute right-0 top-0 bg-slate-700 px-1 text-[10px] text-white">×</button></Rnd>
             })() : null)}
             {visiblePlacements.map(({ entry, overlay, index }) => {
@@ -652,7 +680,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 overlay,
                 page,
                 pdfSource ? viewport : null,
-                pdfSource ? 1 : zoom,
+                zoom,
               )
               const active = entry.identity === selectedIdentity
               const locked = Boolean(entry.field.pdf_field_name)
@@ -688,12 +716,13 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
         </>
         )}
 
-        <aside aria-label="Field properties" className="max-h-[70vh] overflow-y-auto border-t border-brand-line p-3 lg:border-l lg:border-t-0">
+        <aside aria-label="Field properties" tabIndex={-1} className="studio-field-inspector overflow-y-auto border-t border-brand-line p-3 lg:border-l lg:border-t-0">
+          <fieldset disabled={saving || Boolean(wordingSelection)}>
           <h2 className="text-sm font-semibold text-brand-ink">
             Fields <span className="font-normal text-brand-muted">({fields.filter((field) => field.included !== false).length})</span>
           </h2>
           <input type="search" aria-label="Find a field" placeholder="Find a field…" value={fieldSearch} onChange={event => setFieldSearch(event.target.value)} className="mt-2 w-full rounded border border-brand-line bg-brand-bg p-2 text-sm" />
-          <ul className="mt-2 max-h-52 space-y-1 overflow-y-auto">
+          <ul aria-label="Template fields" className="mt-2 max-h-36 space-y-1 overflow-y-auto">
             {indexedFields.filter(entry => `${entry.field.label || ''} ${entry.field.name || ''} ${entry.field.source_text || ''}`.toLowerCase().includes(fieldSearch.toLowerCase())).map((entry) => (
               <li key={entry.identity}>
                 <button
@@ -721,16 +750,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           </ul>
 
           {selected ? (
-            <div className="mt-4 space-y-3 border-t border-brand-line pt-3">
-              <details><summary className="cursor-pointer text-xs text-brand-muted">Advanced: internal field name</summary>
-              <PropertyRow label="Variable name">
-                <input
-                  value={selected.name || ''}
-                  onChange={(event) => updateField(selectedEntry.identity, { name: event.target.value })}
-                  className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
-                />
-              </PropertyRow>
-              </details>
+            <div className="mt-3 space-y-3 border-t border-brand-line pt-3"><p className="text-xs font-semibold text-brand-muted">Selected field</p>
               <PropertyRow label="Label">
                 <input
                   value={selected.label || ''}
@@ -739,12 +759,6 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 />
               </PropertyRow>
               {selected.context && <p className="text-xs text-brand-muted">Source context: {selected.context}</p>}
-              {isDocx && !selected.docx_choice && (!selected.binding?.startsWith('item.') || selected.value_from) && <PropertyRow label="Use the same value as">
-                <select value={selected.value_from || ''} onChange={event => updateField(selectedEntry.identity, { value_from: event.target.value })} className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm">
-                  <option value="">Separate value</option>
-                  {fields.filter(field => field.name !== selected.name && field.included !== false && !field.value_from && !field.docx_choice && !field.binding?.startsWith('item.') && (field.field_type || 'text') === (selected.field_type || 'text')).map(field => <option key={field.name} value={field.name}>{field.label || field.name}</option>)}
-                </select>
-              </PropertyRow>}
               <PropertyRow label="Type">
                 <select
                   disabled={Boolean(selected.docx_choice)}
@@ -787,11 +801,35 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
               </PropertyRow>
               <p className="text-[11px] leading-4 text-brand-muted">
                 {selected.binding && selected.binding !== 'manual'
-                  ? 'This field fills from the matter every time, whatever it is named.'
+                  ? (selected.binding.startsWith('firm.') ? 'Uses the shared firm profile in every matter.' : 'Uses the selected data source, whatever this field is named.')
                   : selected.binding === 'manual'
                     ? 'Never filled automatically.'
                     : 'Filled only when the field name happens to match a known record.'}
               </p>
+              <label className="flex items-center gap-2 text-sm text-brand-ink">
+                <input
+                  type="checkbox"
+                  checked={Boolean(selected.required)}
+                  onChange={(event) => updateField(selectedEntry.identity, { required: event.target.checked })}
+                />
+                Required
+              </label>
+              <details className="rounded-lg border border-brand-line p-2"><summary className="cursor-pointer text-xs font-semibold">Advanced field settings</summary><div className="mt-3 space-y-3">
+              <details><summary className="cursor-pointer text-xs text-brand-muted">Advanced: internal field name</summary>
+              <PropertyRow label="Variable name">
+                <input
+                  value={selected.name || ''}
+                  onChange={(event) => updateField(selectedEntry.identity, { name: event.target.value })}
+                  className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
+                />
+              </PropertyRow>
+              </details>
+              {isDocx && !selected.docx_choice && (!selected.binding?.startsWith('item.') || selected.value_from) && <PropertyRow label="Use the same value as">
+                <select value={selected.value_from || ''} onChange={event => updateField(selectedEntry.identity, { value_from: event.target.value })} className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm">
+                  <option value="">Separate value</option>
+                  {fields.filter(field => field.name !== selected.name && field.included !== false && !field.value_from && !field.docx_choice && !field.binding?.startsWith('item.') && (field.field_type || 'text') === (selected.field_type || 'text')).map(field => <option key={field.name} value={field.name}>{field.label || field.name}</option>)}
+                </select>
+              </PropertyRow>}
               <PropertyRow label="Only include when">
                 <div className="mt-1 flex gap-1.5">
                   <select
@@ -828,14 +866,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                   )}
                 </div>
               </PropertyRow>
-              <label className="flex items-center gap-2 text-sm text-brand-ink">
-                <input
-                  type="checkbox"
-                  checked={Boolean(selected.required)}
-                  onChange={(event) => updateField(selectedEntry.identity, { required: event.target.checked })}
-                />
-                Required
-              </label>
+              </div></details>
               {placementsFor(selected).length > 0 && <label className="flex items-start gap-2 text-sm text-brand-ink"><input type="checkbox" aria-label="Cover what is underneath" checked={Boolean(selected.erase_source ?? placementsFor(selected)[0]?.overlay?.erase_source)} onChange={(event) => setCoverSource(selectedEntry, event.target.checked)} className="mt-0.5" /><span>Cover what is underneath<p className="text-[11px] text-brand-muted">Paints white over the source when generated.</p></span></label>}
               <p className="text-[11px] text-brand-muted">
                 Page {Number(placementsFor(selected)[0]?.overlay?.page || selected.page || 1)}
@@ -856,8 +887,10 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
             </p>
           )}
           <span className="sr-only" aria-live="polite">History step {historyVersion}</span>
+          </fieldset>
         </aside>
       </div>
+      <fieldset disabled={saving || Boolean(wordingSelection)} className="min-w-0">
       {isDocx && template.variable_schema?.source_review_version === 1 && (
         <details className="border-b border-brand-line p-3">
           <summary className="cursor-pointer text-sm font-semibold">Create a reusable Word copy</summary>
@@ -881,7 +914,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
           <label>Required answer{scenarioOptions.length ? <select aria-label="Scenario required answer" value={applicability.value} onChange={event => { setApplicability({ ...applicability, value: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink"><option value="">Choose an answer</option>{scenarioOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input aria-label="Scenario required answer" type={['number', 'date'].includes(scenarioDefinition?.field_type) ? scenarioDefinition.field_type : 'text'} placeholder="Answer required for this scenario" value={applicability.value} onChange={event => { setApplicability({ ...applicability, value: event.target.value }); setDirty(true) }} className="block w-full border rounded p-2 bg-brand-bg text-brand-ink" />}</label>
         </div>}
       </details>
-      {isDocx && <WordCleanupAction templateId={template.id} selection={cleanupSelection} onCreated={onDerived} />}
+      </fieldset>
     </div>
   )
 }

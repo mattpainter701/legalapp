@@ -14,6 +14,15 @@ Approved automation rules can prepare reviewable workflows when tasks, documents
 - **Choose more workflow triggers.** Use task completion, document receipt, intake submission, completed signatures, accepted inbound email, or payment receipt to prepare an approved workflow for review.
 - **Prepare for deadlines and overdue invoices.** Watch deadlines within three days and unpaid overdue invoices. Duplicate events prepare one run; changed facts block preparation. Applying a workflow still requires approval.
 
+## 2026.09.08.6 — Work directly on documents in Template Studio
+
+Released September 8, 2026.
+
+See more of the document, place PDF fields where you click, and revise Word wording while keeping mapped fields.
+
+- **Put the document first.** A focused canvas, compact tools and simpler field settings reduce navigation. Place PDF fields on the page and complete values beside a source reference.
+- **Revise Word wording in context.** Edit a paragraph and save a separate revised draft. Nearby field mappings shift with the text; edits through included fields are blocked to protect their replacements.
+
 ## 2026.09.08.5 — Reuse shared firm details in templates
 
 Released September 8, 2026.

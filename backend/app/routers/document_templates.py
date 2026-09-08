@@ -106,6 +106,7 @@ from app.services.template_source_preview import source_preview_cache
 from app.services.docx_outline import docx_outline, validate_visual_field_map
 from app.services.docx_placeholder_authoring import (
     cleanup_docx_source,
+    schema_after_word_edit,
     derive_reviewed_docx_source,
     resolve_source_mode,
     suggest_source_mode,
@@ -3461,10 +3462,24 @@ async def cleanup_word_draft(
     )
     if not template or str(template.format or "").lower() != "docx":
         raise HTTPException(status_code=404, detail="Word template not found")
+    if (
+        payload.expected_source_sha256 is not None
+        and payload.expected_source_sha256 != template.source_sha256
+    ) or (
+        payload.expected_version_no is not None
+        and payload.expected_version_no != int(template.current_version_no or 0)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The template changed. Reload before saving wording.",
+        )
     source = await _verified_template_source(template)
+    edit = payload.model_dump(exclude={"expected_source_sha256", "expected_version_no"})
     try:
-        derived = await asyncio.to_thread(
-            cleanup_docx_source, source, **payload.model_dump()
+        derived = await asyncio.to_thread(cleanup_docx_source, source, **edit)
+        schema = schema_after_word_edit(
+            template.variable_schema,
+            **{key: value for key, value in edit.items() if key != "original_text"},
         )
     except TemplateDocxError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -3472,13 +3487,6 @@ async def cleanup_word_draft(
     filename = _safe_upload_filename(template.source_filename or "template.docx")
     evidence, evidence_filename = await _verified_word_original(template)
     provenance = getattr(template, "source_provenance", None) or {}
-    if any(
-        isinstance(field, dict) and field.get("docx_anchor")
-        for field in (template.variable_schema or {}).get("fields", [])
-    ):
-        raise HTTPException(
-            status_code=422, detail="Review the derived source again before cleanup"
-        )
     created_paths: list[str] = []
     try:
         active_path = await _persist_template_source(
@@ -3497,12 +3505,10 @@ async def cleanup_word_draft(
         raise HTTPException(
             status_code=500, detail="The cleaned Word source could not be saved"
         ) from exc
-    schema = json.loads(json.dumps(template.variable_schema or {}))
-    schema["source_review"] = {}
     draft = DocumentTemplate(
         id=new_id,
         tenant_id=tenant_id,
-        title=f"{template.title} (cleaned draft)"[:300],
+        title=f"{template.title} (revised draft)"[:300],
         body=template.body or "",
         category=template.category,
         description=f"Cleaned Word draft from: {template.title}",

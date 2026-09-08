@@ -60,6 +60,43 @@ rescan, and this slice does not label it as one.
 
 ## Remaining implementation and acceptance gates
 
+### Document-first remediation (2026.09.08.6)
+
+Studio now opens in a focused document workspace; app navigation can be restored.
+PDF tools select a field type, then place it at the clicked document location.
+Keyboard users can place a field at the page center. Cancel, undo, resize, drag
+and Save fields remain available. The basic inspector contains label, type,
+data source and required status; internal names and conditions are secondary.
+
+For Word, **Edit wording** opens paragraph-level editing within the source text
+view. **Save revised draft** creates and opens a separate catalog draft using
+the existing verified-source cleanup endpoint. The UI sends the source digest
+and version to reject stale edits. The smallest changed character span is sent;
+unaffected later field anchors are shifted by the exact Unicode length delta.
+An edit through an included mapped field is rejected. Excluded mappings inside
+the changed span are retired; source review must be repeated. Surrounding runs,
+tables and original evidence remain preserved by the existing DOCX workflow.
+This is bounded wording editing, not an embedded office formatting engine.
+
+Save field changes before editing wording. Studio section navigation, settings,
+copy and preview are guarded while edits are unfinished. Browser close/reload
+uses the native unsaved-change prompt. The original and published templates are
+not overwritten by a wording revision.
+
+Fill review now shows values beside a clickable source reference on wide
+screens and stacks them on narrow screens. It is explicitly a **reference**,
+not live generated output. Choose Preview to verify the current values. If a
+published template has newer draft edits, its draft source is not displayed as
+the published document. Source-preview failure does not prevent manual filling.
+
+Validation used synthetic documents in the actual React UI, including PDF
+pointer placement, Word wording beside mapped fields, navigation protection,
+revised-draft reopening, side-by-side filling and a 390px viewport. Backend
+tests generate a real revised DOCX and fill a shifted field while checking its
+formatting. The broader acceptance gates below remain open.
+
+### Broader authoring requirements
+
 1. **Embedded document editor.** Select and prove an editor engine with Word
    text, formatting, tables, headers/footers, page breaks, undo and saved versions;
    prove actual PDF text/form editing independently. Word field anchors must

@@ -1,0 +1,19 @@
+.studio-shell { overflow: auto; padding: 0; }
+.studio-shell-main { --studio-canvas-height: max(420px, calc(100dvh - 210px)); }
+.studio-editor-grid { min-width: 0; }
+.studio-document-scroll, .studio-field-inspector { height: var(--studio-canvas-height, 70vh); }
+.studio-field-inspector { background: var(--color-brand-surface-2); }
+.studio-shell [aria-label="Template setup checklist"] { margin: 8px 12px; }
+.studio-shell [aria-label="Word document and fields"] { min-width: 0; }
+.studio-shell .studio-word-scroll { height: calc(var(--studio-canvas-height) - 84px); max-height: none; }
+.studio-shell .studio-word-text-scroll { height: calc(var(--studio-canvas-height) - 70px); max-height: none; }
+.studio-shell .studio-editor-toolbar { position: sticky; top: 0; z-index: 15; background: inherit; }
+@media (min-width: 1200px) {
+  .studio-shell .studio-word-pages-toolbar { position: absolute; top: 5px; right: 0; border: 0; padding: 5px 10px; }
+}
+@media (max-width: 1023px) {
+  .studio-shell-main { --studio-canvas-height: max(360px, calc(65dvh)); }
+  .studio-field-inspector { height: auto; max-height: none; }
+  .studio-editor-grid { display: flex; flex-direction: column; }
+  .studio-field-inspector { border-top: 1px solid; border-color: inherit; }
+}

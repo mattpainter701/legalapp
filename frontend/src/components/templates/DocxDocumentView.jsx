@@ -148,7 +148,7 @@ function SourceReview({ candidates, truncated, fields, decisions, onChange, onCr
   }))
   const pending = remaining.filter(candidate => !decisions[candidate.id])
   const visible = showReviewed ? remaining : pending
-  return <details className="border-b border-brand-line p-4" open={pending.length > 0 || undefined}>
+  return <details className="border-b border-brand-line p-3">
     <summary className="cursor-pointer text-sm font-semibold">Source review: {pending.length} details to review</summary>
     <p className="my-2 text-xs text-brand-muted">Review suggested blanks and sample values, then inspect the document for other wording specific to the original matter. Save your decisions before testing and publishing.</p>
     {truncated && <p role="alert" className="text-sm">This source exceeds the review limit. Split it into smaller templates before publishing.</p>}
@@ -176,12 +176,15 @@ function ParagraphRow({
   onSelectText,
   onPickParagraph,
   onRemoveRegion,
+  editingWording,
+  onEditWording,
 }) {
   const ref = useRef(null)
 
   // A selection is only meaningful once it is expressed in the paragraph's own
   // character offsets, which is exactly what an anchor stores.
   const handleMouseUp = () => {
+    if (editingWording) return
     const selection = globalThis.getSelection?.()
     if (!selection || selection.isCollapsed || !ref.current) return
     const range = selection.getRangeAt(0)
@@ -271,6 +274,7 @@ function ParagraphRow({
         ))
           : <span className="text-brand-muted">&nbsp;</span>}
       </span>
+      {editingWording && paragraph.text && <button type="button" aria-label={`Edit wording in paragraph ${paragraph.ordinal + 1}`} onClick={() => onEditWording({ ordinal: paragraph.ordinal, start: 0, end: Array.from(paragraph.text).length, text: paragraph.text })} className="ml-2 rounded border border-brand-line bg-brand-bg px-2 py-1 text-xs font-sans text-brand-ink">Edit wording</button>}
       {paragraph.dynamic_field && <small className="ml-2 text-brand-muted">Page fields update in the rendered document</small>}
       </p>
     </div>
@@ -293,6 +297,10 @@ export default function DocxDocumentView({
   onRemoveRegion,
   sourceReview = {},
   onReviewChange,
+  editingWording = false,
+  onEditWording,
+  wordingSelection,
+  wordingEditor,
 }) {
   const [state, setState] = useState({ status: 'loading', paragraphs: [], truncated: false })
   const [pending, setPending] = useState(null)
@@ -351,6 +359,7 @@ export default function DocxDocumentView({
   }, [allRegions])
 
   const [range, setRange] = useState(null)
+  useEffect(() => { setPending(null); setRange(null) }, [editingWording])
 
   const extendRange = useCallback((ordinal, additive) => {
     setPending(null)
@@ -389,13 +398,12 @@ export default function DocxDocumentView({
   return (
     <div className="relative">
       <div className="border-b border-brand-line bg-brand-bg px-4 py-2 text-xs text-brand-muted">
-        Select text to make it a field. Use the margin handles to choose paragraphs —
-        shift-click for a range — then make them conditional or repeating.
+        {wordingSelection ? 'Finish or cancel your wording edit to continue working with fields.' : editingWording ? 'Choose Edit wording beside a paragraph. Save a revised draft when ready.' : 'Select words to make a field. Margin handles offer conditional and repeating paragraphs.'}
       </div>
-      {onReviewChange && <SourceReview candidates={state.reviewCandidates || []} truncated={state.reviewTruncated} fields={fields} decisions={sourceReview} onChange={onReviewChange} onCreateField={onCreateField} />}
-      <div className="max-h-[70vh] overflow-y-auto bg-white px-6 py-5 md:px-10">
-        <article aria-label="Word template contents" className="mx-auto max-w-[7in]">
-          <SourceBlocks blocks={state.blocks} paragraphs={state.paragraphs} renderParagraph={(paragraph) => (
+      {onReviewChange && !wordingSelection && <SourceReview candidates={state.reviewCandidates || []} truncated={state.reviewTruncated} fields={fields} decisions={sourceReview} onChange={onReviewChange} onCreateField={onCreateField} />}
+      <div className="studio-word-text-scroll max-h-[70vh] overflow-y-auto bg-brand-bg p-4">
+        <article aria-label="Word template contents" className="mx-auto min-h-[9in] max-w-[7in] bg-white px-6 py-8 shadow-sm md:px-10">
+          <SourceBlocks blocks={state.blocks} paragraphs={state.paragraphs} renderParagraph={(paragraph) => wordingSelection?.ordinal === paragraph.ordinal ? <div key={paragraph.ordinal}>{wordingEditor}</div> : (
             <ParagraphRow
               key={paragraph.ordinal}
               paragraph={paragraph}
@@ -409,6 +417,8 @@ export default function DocxDocumentView({
               onSelectText={(selection) => { setRange(null); setPending(selection); onSelectText?.(selection) }}
               onPickParagraph={extendRange}
               onRemoveRegion={onRemoveRegion}
+              editingWording={editingWording}
+              onEditWording={onEditWording}
             />
           )} />
         </article>

@@ -14,6 +14,7 @@ function DocumentPages({ source, onUnavailable, active, fields, selectedIdentity
   const { document, pages, error } = useTemplatePdfDocument(source)
   const [pageNumber, setPageNumber] = useState(1)
   const [zoom, setZoom] = useState(0.9)
+  const [showPages, setShowPages] = useState(false)
   const [viewport, setViewport] = useState(null)
   const scroller = useRef(null)
   const page = pages[pageNumber - 1]
@@ -21,23 +22,28 @@ function DocumentPages({ source, onUnavailable, active, fields, selectedIdentity
   const height = (page?.rotation % 180 ? page?.width : page?.height) || 792
 
   useEffect(() => { if (error) onUnavailable() }, [error, onUnavailable])
+  useEffect(() => {
+    const available = scroller.current?.clientWidth
+    if (available) setZoom(Math.max(0.35, Math.min(1.25, (available - 32) / width)))
+  }, [width, document])
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-2 border-b border-brand-line p-3 text-sm">
-        <PreviewButton disabled={pageNumber <= 1} onClick={() => setPageNumber(value => value - 1)}>Previous page</PreviewButton>
+      <div className="studio-word-pages-toolbar flex flex-wrap items-center gap-2 border-b border-brand-line px-3 py-2 text-sm">
+        <PreviewButton aria-pressed={showPages} onClick={() => setShowPages(value => !value)}>Pages</PreviewButton>
+        <PreviewButton aria-label="Previous page" disabled={pageNumber <= 1} onClick={() => setPageNumber(value => value - 1)}>‹</PreviewButton>
         <span role="status">Page {pageNumber} of {pages.length || '…'}</span>
-        <PreviewButton disabled={pageNumber >= pages.length} onClick={() => setPageNumber(value => value + 1)}>Next page</PreviewButton>
+        <PreviewButton aria-label="Next page" disabled={pageNumber >= pages.length} onClick={() => setPageNumber(value => value + 1)}>›</PreviewButton>
         <PreviewButton aria-label="Zoom out document" disabled={zoom <= 0.35} onClick={() => setZoom(value => Math.max(0.35, value - 0.15))}>−</PreviewButton>
         <span>{Math.round(zoom * 100)}%</span>
         <PreviewButton aria-label="Zoom in document" disabled={zoom >= 2.5} onClick={() => setZoom(value => Math.min(2.5, value + 0.15))}>+</PreviewButton>
-        <PreviewButton onClick={() => setZoom(Math.max(0.35, Math.min(2.5, ((scroller.current?.clientWidth || 644) - 32) / width)))}>Fit document width</PreviewButton>
+        <PreviewButton aria-label="Fit document width" onClick={() => setZoom(Math.max(0.35, Math.min(2.5, ((scroller.current?.clientWidth || 644) - 32) / width)))}>Fit width</PreviewButton>
       </div>
-      <div className="grid min-w-0 lg:grid-cols-[144px_minmax(0,1fr)]">
-        <nav aria-label="Document pages" className="hidden max-h-[65vh] space-y-2 overflow-y-auto border-r border-brand-line p-2 lg:block">
+      <div className={`grid min-w-0 ${showPages ? 'lg:grid-cols-[88px_minmax(0,1fr)]' : ''}`}>
+        <nav hidden={!showPages} aria-label="Document pages" className="max-h-[65vh] space-y-2 overflow-y-auto border-r border-brand-line p-2">
           {pages.map(item => <PdfThumbnail key={item.page} document={document} pageNumber={item.page} active={item.page === pageNumber} onSelect={() => setPageNumber(item.page)} />)}
         </nav>
-        <div ref={scroller} className="max-h-[65vh] min-w-0 overflow-auto bg-brand-bg p-4">
+        <div ref={scroller} className="studio-word-scroll max-h-[65vh] min-w-0 overflow-auto bg-brand-bg p-4">
           {!document && <p role="status">Loading document pages…</p>}
           <div className="relative mx-auto" style={{ width: viewport?.width || width * zoom, height: viewport?.height || height * zoom }}>
             <PdfPageCanvas document={document} pageNumber={pageNumber} zoom={zoom} onViewport={setViewport} onError={onUnavailable} />
@@ -50,7 +56,7 @@ function DocumentPages({ source, onUnavailable, active, fields, selectedIdentity
 }
 
 /** Print-accurate authoring; Word replacements remain attached to source text. */
-export default function WordDocumentPreview({ templateId, sourceDigest, fields, selectedIdentity, onSelectField, children, file, loadUploadPreview, addFieldRequest = 0, paragraphs, onCreateField, onUpdateField, selectionNote }) {
+export default function WordDocumentPreview({ templateId, sourceDigest, fields, selectedIdentity, onSelectField, children, file, loadUploadPreview, addFieldRequest = 0, paragraphs, onCreateField, onUpdateField, selectionNote, onWordingModeChange, wordingDisabled = false, wordingActive = false }) {
   const [view, setView] = useState('document')
   const [result, setResult] = useState(null)
   const [failed, setFailed] = useState('')
@@ -85,19 +91,20 @@ export default function WordDocumentPreview({ templateId, sourceDigest, fields, 
   const showDocument = view === 'document' && source && !failed
   const canSelectOnPage = Boolean(onCreateField && source && !failed)
   return (
-    <section className="min-w-0" aria-label="Word document and fields">
+    <section className="relative min-w-0" aria-label="Word document and fields">
       <div className="flex gap-2 border-b border-brand-line p-3" role="group" aria-label="Word view">
-        <PreviewButton aria-pressed={view === 'document'} onClick={() => setView('document')}>Document</PreviewButton>
-        <PreviewButton aria-pressed={view === 'fields'} onClick={() => setView('fields')}>Fields</PreviewButton>
-        <PreviewButton onClick={() => { setView(canSelectOnPage ? 'document' : 'fields'); setAdding(true) }}>{onCreateField ? 'Add field' : 'Add field from text'}</PreviewButton>
+        <PreviewButton disabled={wordingActive} aria-pressed={view === 'document'} onClick={() => { setView('document'); onWordingModeChange?.(false) }}>Document</PreviewButton>
+        <PreviewButton disabled={wordingActive} aria-label="Fields" aria-pressed={view === 'fields'} onClick={() => { setView('fields'); onWordingModeChange?.(false) }}>Text & fields</PreviewButton>
+        {onWordingModeChange && <PreviewButton disabled={wordingDisabled || wordingActive} title={wordingDisabled ? 'Save field changes before editing wording' : 'Edit document wording'} onClick={() => { setView('fields'); onWordingModeChange(true) }}>Edit wording</PreviewButton>}
+        <PreviewButton disabled={wordingActive} onClick={() => { setView(canSelectOnPage ? 'document' : 'fields'); setAdding(true); onWordingModeChange?.(false) }}>{onCreateField ? 'Add field' : 'Add field from text'}</PreviewButton>
       </div>
       {adding && view === 'document' && <p role="status" className="m-3 rounded border border-brand-accent bg-brand-accent/10 p-3 text-sm">Drag across the words to replace on the page. A field name box will open beside your selection.</p>}
       {adding && view === 'fields' && <p role="status" className="m-3 rounded border border-brand-accent bg-brand-accent/10 p-3 text-sm">Select the words to replace in the text below, then choose Add field beside your selection. You can edit the field’s label and data source in Field properties.</p>}
-      <p className="px-3 pt-3 text-xs text-brand-muted">Select words directly on the page to add a field. Named boxes show what will go there; click a box to edit it. Fields also lists replacements that could not be located on this page. Filled values can change pagination; review the generated PDF before sending.</p>
       {failed ? <div role="status" className="p-3 text-sm">{failed} <PreviewButton onClick={() => { setView('document'); setAttempt(value => value + 1) }}>Retry document preview</PreviewButton></div>
         : !source && <p role="status" className="p-3 text-sm">Preparing document pages… Use Fields to start mapping while the preview loads.</p>}
       {source && !failed && <div hidden={!showDocument}><DocumentPages key={identity} source={source} onUnavailable={unavailable} active={showDocument} fields={fields} paragraphs={paragraphs} selectedIdentity={selectedIdentity} onSelectField={onSelectField} onCreateField={onCreateField} onUpdateField={onUpdateField} selectionNote={selectionNote} /></div>}
       <div hidden={view === 'document' && !failed} onFocusCapture={() => setView('fields')} onPointerDownCapture={() => setView('fields')}>{children}</div>
+      <details className="px-3 py-1 text-xs text-brand-muted"><summary className="cursor-pointer">Document help</summary><p>Select words to add a field. Click a highlighted field to edit it. Fields lists replacements that could not be located on this page. Filled values can change pagination; review the generated PDF before sending.</p></details>
     </section>
   )
 }
