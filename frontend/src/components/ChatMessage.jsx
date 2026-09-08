@@ -444,6 +444,8 @@ function countSourcesByType(sources) {
       counts.courtlistener += 1
     } else if (type === 'matter_context') {
       counts.matter += 1
+    } else if (type === 'tenant_document' && src?.source_label === 'Attached document') {
+      counts.uploads += 1
     } else {
       counts.firm += 1
     }

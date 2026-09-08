@@ -76,3 +76,6 @@ htmlcov/
 # Python build metadata
 *.egg-info/
 /search-node/build/
+
+# Generated live retrieval fixtures and local validation evidence
+/output/rag-validation/

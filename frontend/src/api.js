@@ -2733,3 +2733,9 @@ export const proposeTemplateFact = (matterId, documentId, fieldId) =>
   api.post(`/templates/fact-review/${matterId}/${documentId}/${fieldId}`).then(r => r.data)
 export const acceptTemplateFact = (matterId, documentId, fieldId, payload) =>
   api.post(`/templates/fact-review/${matterId}/${documentId}/${fieldId}/accept`, payload).then(r => r.data)
+
+export const getTemplateAIProfile = (key) =>
+  platformApi(key).get('/platform/llm/template-profile').then((r) => r.data)
+
+export const saveTemplateAIProfile = (key, data) =>
+  platformApi(key).put('/platform/llm/template-profile', data).then((r) => r.data)

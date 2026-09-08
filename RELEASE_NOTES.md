@@ -5,6 +5,25 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.19 — More reliable assistant document context
+
+Released September 7, 2026.
+
+Follow-up questions retain eligible attachments, cloud PDF and Word files use text extraction, and source limitations stay visible.
+
+- **Continue working with your documents.** Eligible attachments remain available for follow-up questions. Cloud PDF, Word, and retained email use text extraction; long excerpts disclose their coverage limit.
+- **See retrieval limits and source counts.** Public authority outages remain visible after reopening an answer. Citation counts and uploaded-source labels remain consistent across the conversation.
+- **Keep planning on an approved route.** Connected-source planning follows the selected chat route and its confidential-context policy. Blank search plans cannot expand into a mailbox-wide query.
+
+## 2026.09.07.17 — Dedicated premium template AI
+
+Released September 7, 2026.
+
+Premium template field suggestions now have a dedicated Opus 5 profile and separate usage accounting.
+
+- **Choose template AI separately.** Activate Opus 5 through a stored OpenRouter key specifically for Template Studio. Chat and background automation profiles keep their current settings.
+- **Track premium template usage.** Template suggestions record their token usage and configured costs separately. The feature explains when its dedicated profile has not been activated.
+
 ## 2026.09.07.16 — Template-aware AI field suggestions
 
 Released September 7, 2026.

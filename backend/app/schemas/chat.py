@@ -100,6 +100,7 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     sources: List[SourceCitation] = []
+    retrieval_metadata: dict = Field(default_factory=dict)
     citation_annotations: List[CitationAnnotation] = Field(default_factory=list)
     # Reviewable work the assistant proposed on this turn. Empty for every
     # tenant without chat actions enabled, which is the default.

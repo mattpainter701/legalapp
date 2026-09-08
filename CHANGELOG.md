@@ -11,13 +11,29 @@
 
 # Changelog
 
-## 2026.09.07.17 - Public support path and requirements matrix
+## 2026.09.07.20 - Public support path and requirements matrix
 
 - Publish `/support`, rendering the existing versioned support policy (coverage hours, S1-S4 definitions, acknowledgement objectives, escalation) live from `GET /api/public/support-policy` so published response times cannot drift from the security-review packet. Contact is `mailto:support@getlawhand.com`; the email path and the objectives-not-an-SLA boundary render without a successful fetch.
 - Publish `/requirements` with platform prerequisites, the Microsoft 365 and Google Workspace matrix, the administrator role each provider needs, the exact scopes requested for tenant-wide and per-user consent, the onboarding sequence, and current limits including the presently broad consent bundle.
 - Add `frontend/src/marketing/integration-scopes.json` as the canonical published scope list, asserted against the router and Teams scope constants by `backend/tests/test_public_integration_scopes.py` so narrowing a scope fails a test rather than leaving a stale public claim.
 - Activate the built-but-unused tenant support workflow as an admin-only Administration → Support tab: severity picker backed by the published policy, acknowledgement clock and policy version returned on filing, request history, and the backend's unsafe-content rejection surfaced verbatim. Accountant roles do not see the tab.
 - Wire both routes through routing, SEO metadata, sitemap, no-JavaScript prerender shells, nginx rewrites and analytics CSP maps, and the marketing footer. The `/support` shell deliberately carries no hours or acknowledgement figures so it cannot become a second stale copy of the policy.
+
+## 2026.09.07.19 - Assistant retrieval continuity and source honesty
+
+- Restore only ready, unexpired same-tenant, same-conversation, same-matter attachments for follow-up turns; preserve explicit subsets and enforce the private-route gate for implicit attachments.
+- Extract supported cloud PDF/DOCX and native Google exports instead of decoding raw binary bytes. Bound downloads to 10 MiB, preserve provider redirects, and parse off the async event loop.
+- Decode retained EML and Outlook MIME headers and bodies, including HTML-only messages, while excluding attached-file payloads. Record a verified Microsoft self-delivery and OneDrive EML retention roundtrip.
+- Admit connected-source planning against the exact selected chat route, including Premium; reject malformed/empty keyword plans and blank manual queries. Remove profile jurisdiction defaults from public/general requests.
+- Persist public retrieval outage metadata, reconcile source counts/origins, and expose the 4,000-character/100-chunk attachment excerpt limits. No migration or automatic promotion of conversation documents to matter knowledge.
+- Record live synthetic TXT/PDF/DOCX and long-file validation, known public-search timeouts, and remaining indexing, relevance, artifact-citation and layout concerns. Add focused backend/frontend regressions and updated user/admin guidance.
+
+## 2026.09.07.17 - Dedicated premium template AI profile
+
+- Add an independently activated, platform-global document-template profile using the stored OpenRouter vault key and `anthropic/claude-opus-5`.
+- Keep Standard/Premium chat, tenant BYOK, and Background Automations routing unchanged. Unconfigured template AI fails closed, with no shared-route fallback.
+- Meter `template_ai_map` with explicit profile token rates and the existing PAYG markup; preserve gateway request/model correlation, consent, bounded editor context, and daily token limits.
+- Validate a revisioned template alias before publishing settings, enforce the existing confidential-data policy, and prevent deletion of its active key. No migration.
 
 ## 2026.09.07.16 - Context-aware intake AI suggestions
 

@@ -394,6 +394,8 @@ async def cloud_search_test(
     matching hit.
     """
     admin = await _require_admin(request, db)
+    if not body.query.strip():
+        raise HTTPException(status_code=400, detail="query must not be blank")
     tenant_id = str(admin.tenant_id)
     await set_tenant_context(db, tenant_id)
 
