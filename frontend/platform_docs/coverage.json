@@ -38,7 +38,8 @@
     { "tab": "tenant", "chapter": "tenant-settings-and-branding" },
     { "tab": "prompts", "chapter": "prompt-management" },
     { "tab": "integrations", "chapter": "integrations" },
-    { "tab": "settings", "chapter": "tenant-settings-and-branding" }
+    { "tab": "settings", "chapter": "tenant-settings-and-branding" },
+    { "tab": "support", "chapter": "support-and-escalation" }
   ],
   "admin_integration_sections": [
     { "section": "cloud", "chapter": "integrations" },
