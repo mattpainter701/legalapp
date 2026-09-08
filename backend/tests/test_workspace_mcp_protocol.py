@@ -477,6 +477,9 @@ async def test_official_client_discovers_only_scope_and_rbac_allowed_tools(
     names = {tool.name for tool in discovered.tools}
     assert initialized.serverInfo.name == "lawhand-workspace"
     assert names == {
+        "get_workflow_run",
+        "propose_workflow_run",
+        "resume_workflow_run",
         "find_matter",
         "get_matter_context",
         "list_matter_tasks",

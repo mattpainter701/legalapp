@@ -2,6 +2,10 @@
 
 ## Decision
 
+Implementation: [durable capability workflows](durable-capability-workflows.md)
+provide shared Chat/MCP run submission and continuation, current authority checks,
+encrypted checkpoints, human review pauses, and verified cloud-write recovery.
+
 Matter chat is one client of LawHand's tenant-scoped automation layer. It is
 not the automation layer itself.
 

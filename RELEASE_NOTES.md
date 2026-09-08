@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.10 — Continue bounded workflows across review and interruptions
+
+Released September 8, 2026.
+
+Start a matter workflow in LawHand Chat or a connected assistant, supply missing information, and continue from durable review checkpoints.
+
+- **Continue work after review.** Inspect workflow steps from the matter or firm view. Completed work stays recorded, and each proposal uses the existing LawHand review controls.
+- **Recover without duplicate documents.** Interrupted cloud writes retain the original artifact and provider evidence. Verify the existing file before continuing instead of uploading another copy.
+
 ## 2026.09.08.9 — Keep signing fields ready for e-signing
 
 Released September 8, 2026.

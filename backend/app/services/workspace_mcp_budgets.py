@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 from starlette.requests import Request
@@ -56,3 +57,34 @@ def bounded_workspace_read_result(result: dict[str, Any]) -> int:
             "or request fewer results.",
         )
     return size
+
+
+async def enforce_workspace_runtime_budget(run) -> None:
+    """Durable steps consume the same grant bucket as interactive tool calls."""
+    from fastapi import HTTPException
+    from redis.asyncio import Redis
+
+    if run.origin_channel != "workspace_mcp":
+        return
+    async with Redis.from_url(settings.REDIS_URL) as redis:
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/mcp/workspace",
+                "headers": [],
+                "app": SimpleNamespace(state=SimpleNamespace(redis=redis)),
+            }
+        )
+        try:
+            await enforce_workspace_grant_call_budget(request, run)
+        except HTTPException as error:
+            code = (
+                "workflow_rate_limited"
+                if error.status_code == 429
+                else "workflow_budget_unavailable"
+            )
+            raise CapabilityError(
+                code,
+                "The originating grant's tool budget is unavailable; continue later",
+            ) from error

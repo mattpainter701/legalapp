@@ -324,6 +324,14 @@ jobs:
           PYTHONPATH: .
           COVERAGE_FILE: .coverage.rehearsal
         run: coverage run --source=app ../scripts/rehearse_workflow_synthesis.py
+      - name: Rehearse durable capability runs and killed-worker recovery
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+          COVERAGE_FILE: .coverage.rehearsal
+        run: |
+          coverage run --append --source=app ../scripts/rehearse_workflow_runtime.py
+          coverage run --append --source=app ../scripts/rehearse_workflow_cloud_recovery.py
       - name: Upload migrated database rehearsal coverage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)
         with:

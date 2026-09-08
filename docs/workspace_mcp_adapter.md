@@ -464,6 +464,13 @@ across API workers.
 
 ## Remaining automation-hardening gates
 
+Bounded durable runs are implemented through the shared
+[`propose_workflow_run`, `get_workflow_run`, and `resume_workflow_run` contract](durable-capability-workflows.md).
+Runs retain encrypted payloads and immutable checkpoints, pause for input and
+review, and recover uncertain cloud writes without another upload. Runtime steps
+consume existing grant budgets. This does not extend checkpoint commits to every
+standalone legacy proposal path.
+
 The OAuth connection and revocable consent lifecycle are complete. Before
 broad customer rollout or deeper autonomous side effects, LawHand still
 requires:
@@ -475,11 +482,11 @@ requires:
 - reviewed PDF-template automation from an exact visual-preview artifact (DOCX
   and Markdown template proposals are implemented; PDF remains fail-closed in
   MCP until the preview evidence can be bound to the review task);
-- separate, attorney-approved client delivery of the filed artifact as a
-  hash-bound attachment (current email automation is body-only);
+- final production-provider validation of the implemented, separately reviewed
+  hash-bound artifact attachment delivery path;
 - matter visibility/ethical-wall policy beyond tenant isolation;
-- durable pause/resume workflow-run records and complete end-to-end delivery
-  audit coverage;
+- final production cross-channel validation of the implemented durable
+  pause/resume and exact artifact/review/delivery evidence;
 - externally anchored or WORM-retained integrity-chain checkpoints so a
   privileged database operator cannot remove the chain tail undetected;
 - real-provider end-to-end tests for Google Drive, Microsoft

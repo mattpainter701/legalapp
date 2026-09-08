@@ -50,6 +50,11 @@ from app.schemas.workspace_mcp import (
     SearchMattersArgs,
     SearchTasksArgs,
 )
+from app.services.workflow_run_contract import (
+    WorkflowRunInput,
+    GetWorkflowRunInput,
+    ResumeWorkflowRunInput,
+)
 
 
 class CapabilityEffect(StrEnum):
@@ -102,6 +107,10 @@ class CapabilityContext:
     # Relay transport is supplied by authenticated adapters that can initiate
     # outbound-agent work. In-app chat capability calls leave it unset.
     redis: Any | None = None
+    grant_id: uuid.UUID | None = None
+    client_id: str | None = None
+    # Only the durable runtime supplies this server-owned checkpoint callback.
+    runtime_checkpoint: Any | None = None
 
     @property
     def tenant_id(self) -> uuid.UUID:
@@ -177,6 +186,33 @@ class CapabilitySpec:
 
 
 CAPABILITY_SPECS: tuple[CapabilitySpec, ...] = (
+    CapabilitySpec(
+        name="propose_workflow_run",
+        description="Propose a bounded matter workflow using existing read/propose capabilities. Pauses for missing input and human review; never approves or sends. Reuse request_id on retries across Chat and MCP.",
+        args_model=WorkflowRunInput,
+        handler_name="propose_workflow_run",
+        effect=CapabilityEffect.PROPOSE,
+        approval_policy=ApprovalPolicy.LAWHAND_REVIEW,
+        required_scopes=("matters:read", "tasks:propose"),
+    ),
+    CapabilitySpec(
+        name="get_workflow_run",
+        description="Read the current user's workflow checkpoints, review tasks and outcomes without work-product bodies.",
+        args_model=GetWorkflowRunInput,
+        handler_name="get_workflow_run",
+        effect=CapabilityEffect.READ,
+        approval_policy=ApprovalPolicy.NONE,
+        required_scopes=("matters:read",),
+    ),
+    CapabilitySpec(
+        name="resume_workflow_run",
+        description="Continue an existing paused workflow at its expected version; supply only requested missing inputs. Human approval remains in LawHand.",
+        args_model=ResumeWorkflowRunInput,
+        handler_name="resume_workflow_run",
+        effect=CapabilityEffect.PROPOSE,
+        approval_policy=ApprovalPolicy.LAWHAND_REVIEW,
+        required_scopes=("matters:read", "tasks:propose"),
+    ),
     CapabilitySpec(
         name="search_clients",
         description=(

@@ -2732,6 +2732,11 @@ export const requestCustomerOffboarding = (body) =>
 
 export default api
 
+export const listWorkflowRuns = (params = {}) => api.get('/workflow-runs', { params }).then(r => r.data)
+export const resumeWorkflowRun = (id, body) => api.post(`/workflow-runs/${id}/resume`, body).then(r => r.data)
+export const cancelWorkflowRun = (id, expectedVersion) => api.post(`/workflow-runs/${id}/cancel`, { expected_version: expectedVersion }).then(r => r.data)
+export const reconcileWorkflowRunCloud = (id, body) => api.post(`/workflow-runs/${id}/reconcile-cloud`, body).then(r => r.data)
+
 export const proposeTemplateFact = (matterId, documentId, fieldId) =>
   api.post(`/templates/fact-review/${matterId}/${documentId}/${fieldId}`).then(r => r.data)
 export const acceptTemplateFact = (matterId, documentId, fieldId, payload) =>
