@@ -14,6 +14,15 @@ Background profiles can activate with native DeepSeek V4 and verified free OpenC
 - **Save supported background profiles.** Native DeepSeek V4 models and verified free OpenCode Zen endpoints now have explicit provider prices, including Mimo V2.5 Free.
 - **Meter free responses accurately.** Confirmed free-model responses settle at zero cost while request limits and unknown-cost safeguards remain enforced.
 
+## 2026.09.07.21 — Show connected calendar times accurately
+
+Released September 7, 2026.
+
+Microsoft Calendar events now show at their actual local time and all-day events stay on the selected date.
+
+- **See the right appointment time.** Connected Microsoft Calendar events include their timezone when LawHand displays them, so a UTC event is shown at the correct local time.
+- **Keep all-day events on their date.** All-day Microsoft Calendar events remain on the calendar date chosen in Outlook instead of shifting when you view them in LawHand.
+
 ## 2026.09.07.20 — Preserved cloud folder connections
 
 Released September 7, 2026.
