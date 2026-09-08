@@ -1094,6 +1094,55 @@ describe('document template workflow', () => {
     expect(screen.getByText(/Smart-fill results were not applied because the matter or fields changed/)).toBeInTheDocument()
   })
 
+  it('shows completion, review confidence and changed suggestions without replacing user values', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{ id: 'template-fill', title: 'Reusable letter', body: '{{client_name}} {{fee}}', is_active: true, variable_schema: { fields: [
+      { name: 'client_name', label: 'Client name', required: true }, { name: 'fee', label: 'Fee', required: true },
+    ] } } ] })
+    discoverTemplateVariables.mockResolvedValueOnce({ variables: [{ variable: 'client_name', suggested_value: 'Ada', confidence: 0.85 }] })
+      .mockResolvedValueOnce({ variables: [{ variable: 'client_name', suggested_value: 'Grace', confidence: 0.95 }] })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
+    await user.click(screen.getByRole('button', { name: 'Smart Fill' }))
+    expect(await screen.findByText('85% match confidence')).toBeInTheDocument()
+    expect(screen.getByText(/50% complete/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Missing (1)' }))
+    expect(screen.queryByPlaceholderText('Enter Client name')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next field needing attention' }))
+    expect(screen.getByPlaceholderText('Enter Fee')).toHaveFocus()
+    await user.type(screen.getByPlaceholderText('Enter Fee'), '0')
+    expect(screen.getByText(/100% complete/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Confirm Client name' }))
+    expect(screen.getByRole('button', { name: 'Review suggestions (0)' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Refresh matter values' }))
+    expect(await screen.findByText('Matter now suggests: Grace')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Enter Client name')).toHaveValue('Ada')
+    await user.click(screen.getByRole('button', { name: 'Use updated Client name' }))
+    expect(screen.getByPlaceholderText('Enter Client name')).toHaveValue('Grace')
+    expect(screen.getByText('95% match confidence')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Confirm Client name' })).toBeInTheDocument()
+    await user.clear(screen.getByPlaceholderText('Enter Client name'))
+    await user.type(screen.getByPlaceholderText('Enter Client name'), 'Manual')
+    expect(screen.queryByText('95% match confidence')).not.toBeInTheDocument()
+  })
+
+  it('clears matter-specific values and suggestions when changing the destination', async () => {
+    discoverTemplateVariables.mockResolvedValueOnce({ variables: { client_name: { suggested_value: 'Ada', confidence: 1 } } })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
+    await user.click(screen.getByRole('button', { name: 'Smart Fill' }))
+    expect(await screen.findByText('100% match confidence')).toBeInTheDocument()
+    await user.click(screen.getByText('Find a matter by ID'))
+    fireEvent.change(screen.getByLabelText('Matter UUID fallback'), { target: { value: 'matter-2' } })
+    expect(screen.getByPlaceholderText('Enter Client Name')).toHaveValue('')
+    expect(screen.queryByText('100% match confidence')).not.toBeInTheDocument()
+    expect(screen.getByText(/0% complete/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Smart Fill' })).toBeEnabled()
+  })
+
   it('surfaces an actionable PDF render error', async () => {
     getTemplates.mockResolvedValueOnce({ items: [{ id: 'pdf-template', title: 'Flat Scan', body: '', category: 'other', format: 'pdf', source_filename: 'scan.pdf', source_sha256: 'abc', is_active: true, variable_schema: { fields: [] } }] })
     const error = new Error('This PDF has no fillable AcroForm fields.')
@@ -1161,7 +1210,6 @@ describe('document template workflow', () => {
     const signatureHeading = screen.getByText((_, element) => (
       element.tagName === 'P'
       && element.textContent.includes('Client signature')
-      && element.textContent.includes('{{signature_1}}')
     ))
     expect(signatureHeading).not.toHaveAttribute('for')
     expect(signatureHeading.closest('label')).toBeNull()

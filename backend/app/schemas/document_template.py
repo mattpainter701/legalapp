@@ -48,6 +48,17 @@ class DocumentTemplateUpdate(BaseModel):
     change_summary: Optional[str] = Field(None, max_length=500)
 
 
+class DocumentTemplateCopyRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+
+    @field_validator("title")
+    @classmethod
+    def nonblank_title(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Enter a name for the new template")
+        return value.strip()
+
+
 class DocumentTemplateVersionSummary(BaseModel):
     version_no: int
     title: str

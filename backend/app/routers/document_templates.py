@@ -57,6 +57,7 @@ from app.schemas.document_template import (
     DocumentTemplateCollectionOption,
     CATEGORIES,
     DocumentTemplateCreate,
+    DocumentTemplateCopyRequest,
     DocumentTemplateListResponse,
     DocumentTemplateQueueResponse,
     DocumentTemplateRenderRequest,
@@ -3203,6 +3204,111 @@ async def _rollback_word_draft(db, paths: list[str]) -> None:
         logger.exception("Unable to roll back failed Word draft save")
     finally:
         _remove_created_template_files(paths)
+
+
+@router.post("/{template_id}/copy", response_model=DocumentTemplateResponse)
+async def copy_template(
+    template_id: uuid.UUID,
+    payload: DocumentTemplateCopyRequest,
+    current_user=Depends(require_capability("manage_documents")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Branch a saved template into an independently owned, unpublished draft."""
+    tenant_id = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_id))
+    template = await db.scalar(
+        select(DocumentTemplate).where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == tenant_id,
+        )
+    )
+    if template is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    new_id = uuid.uuid4()
+    source = None
+    if template.format in {"pdf", "docx"} or template.source_storage_path:
+        source = await _verified_template_source(template)
+    evidence = None
+    if source is not None:
+        evidence, evidence_filename = await _verified_word_original(template)
+    copied = {
+        key: json.loads(json.dumps(getattr(template, key)))
+        for key in (
+            "body",
+            "category",
+            "description",
+            "visibility",
+            "layer",
+            "format",
+            "module",
+            "stage",
+            "jurisdiction",
+            "kind",
+            "variable_schema",
+            "signer_roles",
+            "branding_profile",
+        )
+    }
+    paths: list[str] = []
+    try:
+        if source is not None:
+            filename = _safe_upload_filename(
+                template.source_filename or f"template.{template.format}"
+            )
+            active_path = await _persist_template_source(
+                tenant_id=tenant_id,
+                template_id=new_id,
+                filename=filename,
+                content=source,
+            )
+            paths.append(active_path)
+            evidence_path = await _persist_template_source(
+                tenant_id=tenant_id,
+                template_id=new_id,
+                filename=f"original-{new_id.hex}-{filename}",
+                content=evidence,
+            )
+            paths.append(evidence_path)
+            copied.update(
+                source_storage_path=active_path,
+                source_filename=filename,
+                source_content_type=template.source_content_type,
+                source_sha256=hashlib.sha256(source).hexdigest(),
+                source_file_size=len(source),
+                source_evidence_storage_path=evidence_path,
+                source_evidence_filename=evidence_filename,
+                source_evidence_sha256=hashlib.sha256(evidence).hexdigest(),
+                source_provenance={
+                    **(template.source_provenance or {}),
+                    "kind": "template_copy",
+                    "parent_template_id": str(template.id),
+                    "parent_source_sha256": template.source_sha256,
+                    "original_template_id": (template.source_provenance or {}).get(
+                        "original_template_id"
+                    )
+                    or str(template.id),
+                    "original_sha256": hashlib.sha256(evidence).hexdigest(),
+                },
+            )
+        draft = DocumentTemplate(
+            **copied,
+            id=new_id,
+            tenant_id=tenant_id,
+            title=payload.title,
+            status="draft",
+            is_active=False,
+            current_version_no=0,
+            tested_version_no=None,
+            published_version_no=None,
+        )
+        db.add(draft)
+        await db.commit()
+    except Exception as exc:
+        await _rollback_word_draft(db, paths)
+        raise HTTPException(
+            status_code=500, detail="The template copy could not be saved"
+        ) from exc
+    return _template_response(draft)
 
 
 @router.post(

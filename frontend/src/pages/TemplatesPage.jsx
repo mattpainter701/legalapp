@@ -7,6 +7,8 @@ import TemplateStudioWorkspace from '../components/templates/TemplateStudioWorks
 import WordImportWorkspace from '../components/templates/WordImportWorkspace'
 import TemplateTestSummary from '../components/templates/TemplateTestSummary'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
+import TemplateFillProgress from '../components/templates/TemplateFillProgress'
+import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues } from '../components/templates/templateFillReview'
 import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
@@ -1164,6 +1166,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
 
 function MatterPicker({ matters, selectedMatterId, onSelect, loading, disabled = false }) {
   const [query, setQuery] = useState('')
+  const [choosing, setChoosing] = useState(false)
   const selected = matters.find((matter) => matter.id === selectedMatterId)
   const filtered = matters.filter((matter) => {
     const q = query.trim().toLowerCase()
@@ -1175,6 +1178,11 @@ function MatterPicker({ matters, selectedMatterId, onSelect, loading, disabled =
       matter.id?.toLowerCase().includes(q)
     )
   }).slice(0, 8)
+
+  if (selected && !choosing) return <div className="flex items-center justify-between gap-3 rounded border border-brand-line bg-brand-bg px-3 py-2 text-sm">
+    <span className="min-w-0 truncate"><span className="mr-2 text-brand-muted">Matter</span>{formatMatterLabel(selected)}</span>
+    <button type="button" disabled={disabled} onClick={() => setChoosing(true)} className="shrink-0 rounded border border-brand-line px-2 py-1 text-xs">Change matter</button>
+  </div>
 
   return (
     <div className="border border-brand-line rounded bg-brand-bg p-3">
@@ -1210,7 +1218,7 @@ function MatterPicker({ matters, selectedMatterId, onSelect, loading, disabled =
           <button
             key={matter.id}
             type="button"
-            onClick={() => onSelect(matter.id)}
+            onClick={() => { onSelect(matter.id); setChoosing(false) }}
             disabled={disabled}
             className={`w-full text-left px-3 py-2 rounded border text-sm transition-colors ${
               selectedMatterId === matter.id
@@ -1256,7 +1264,10 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const [smartFillState, setSmartFillState] = useState('idle')
   const [smartFillMessage, setSmartFillMessage] = useState('')
   const [fieldSources, setFieldSources] = useState({})
-  useEffect(() => { setFieldSources({}) }, [matterId])
+  const [latestSuggestions, setLatestSuggestions] = useState({})
+  const [reviewedValues, setReviewedValues] = useState({})
+  const [fieldFilter, setFieldFilter] = useState('all')
+  const pendingFocus = useRef(null)
   const previewRequestGenerationRef = useRef(0)
   const smartFillRequestGenerationRef = useRef(0)
   const formRevisionRef = useRef(0)
@@ -1276,6 +1287,20 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     () => names.filter((name) => fieldDefinitions[name]?.field_type !== 'signature' && !fieldDefinitions[name]?.value_from),
     [names, fieldDefinitions],
   )
+  const progress = fillReview(names, fieldDefinitions, variables, fieldSources, reviewedValues)
+  const visibleNames = fieldFilter === 'all' ? names : (fieldFilter === 'remaining' ? progress.remaining : progress.review).map(row => row.name)
+  const nextField = () => {
+    const name = progress.remaining[0]?.name || progress.review[0]?.name
+    if (!name) return
+    if (fieldFilter === 'all') document.getElementById(`template-variable-${name}`)?.focus()
+    else { pendingFocus.current = name; setFieldFilter('all') }
+  }
+  useEffect(() => {
+    if (pendingFocus.current) {
+      document.getElementById(`template-variable-${pendingFocus.current}`)?.focus()
+      pendingFocus.current = null
+    }
+  }, [fieldFilter])
   const requiredUnresolvedNames = fillableNames.filter((name) => {
     const field = fieldDefinitions[name]
     if (!field?.required) return false
@@ -1294,11 +1319,11 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   ))
 
   useEffect(() => {
-    const initialVars = {}
-    fillableNames.forEach((name) => {
-      initialVars[name] = fieldDefinitions[name]?.field_type === 'checkbox' ? 'false' : ''
-    })
-    setVariables(initialVars)
+    setVariables(initialFillValues(fillableNames, fieldDefinitions))
+    setFieldSources({})
+    setLatestSuggestions({})
+    setReviewedValues({})
+    setFieldFilter('all')
     setSaved(false)
     setRendered(null)
     setMatterDocId(null)
@@ -1342,6 +1367,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const setVariable = (name, value) => {
     setSaved(false)
     invalidatePreview()
+    setFieldSources(prev => { const next = { ...prev }; delete next[name]; return next })
     setVariables((prev) => {
       const next = { ...prev, [name]: value }
       const choice = fieldDefinitions[name]?.docx_choice
@@ -1357,25 +1383,19 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     })
   }
 
-  const normalizeDiscovery = (res) => {
-    const values = res?.variables || res?.values || res?.field_values || {}
-    const next = {}
-    if (Array.isArray(values)) {
-      values.forEach((item) => {
-        const key = item?.variable || item?.name || item?.key
-        if (!key) return
-        next[key] = item?.suggested_value ?? item?.value ?? item?.text ?? ''
-      })
-      return next
-    }
-    Object.entries(values).forEach(([key, value]) => {
-      if (value && typeof value === 'object') {
-        next[key] = value.suggested_value ?? value.value ?? value.text ?? ''
-      } else {
-        next[key] = value ?? ''
-      }
-    })
-    return next
+  const selectMatter = (id) => {
+    if (id === matterId) return
+    setMatterId(id)
+    setVariables(initialFillValues(fillableNames, fieldDefinitions))
+    setFieldSources({})
+    setLatestSuggestions({})
+    setReviewedValues({})
+    setSmartFillState('idle')
+    setSmartFillMessage('')
+    setSaved(false)
+    setMatterDocId(null)
+    setSavedDownloadUrl('')
+    invalidatePreview()
   }
 
   const handleSmartFill = async () => {
@@ -1404,18 +1424,20 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         setSmartFillMessage('Smart-fill results were not applied because the matter or fields changed. Run Smart Fill again if needed.')
         return
       }
-      const discovered = normalizeDiscovery(res)
+      const discovered = discoverySuggestions(res)
       if (Object.keys(discovered).length === 0) {
         setSmartFillState('empty')
         setSmartFillMessage('No smart-fill values were returned for this template yet.')
         return
       }
-      setFieldSources(Object.fromEntries((res.variables || []).map(item => [item.variable, item])))
-      setVariables((prev) => Object.fromEntries(Object.keys(prev).map(name => [name, prev[name] || discovered[name] || ''])))
+      const applied = applyFillSuggestions(fillableNames, fieldDefinitions, variables, fieldSources, discovered)
+      setLatestSuggestions(discovered)
+      setFieldSources(applied.sources)
+      setVariables(applied.values)
       invalidatePreview()
       setSaved(false)
       setSmartFillState('ready')
-      setSmartFillMessage('Available values loaded into empty fields. Existing entries kept. Review the source and each value before saving.')
+      setSmartFillMessage('Matter values refreshed. Your entries were kept.')
     } catch (err) {
       if (smartFillRequestGenerationRef.current !== requestGeneration) return
       if ([404, 405, 501].includes(err?.response?.status)) {
@@ -1580,7 +1602,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         <MatterPicker
           matters={matters}
           selectedMatterId={matterId}
-          onSelect={(id) => { setMatterId(id); setSaved(false); invalidatePreview() }}
+          onSelect={selectMatter}
           loading={matterLoading}
           disabled={saving}
         />
@@ -1605,36 +1627,36 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           </fieldset>
         )}
 
-        <div>
+        <details>
+          <summary className="cursor-pointer text-xs text-brand-muted">Find a matter by ID</summary>
           <label htmlFor="templatespage-matter-uuid-fallback" className="block text-xs font-medium text-brand-muted mb-0.5">
             Matter UUID fallback
           </label>
           <input id="templatespage-matter-uuid-fallback"
             type="text"
             value={matterId}
-            onChange={(e) => { setMatterId(e.target.value); setSaved(false); invalidatePreview() }}
+            onChange={(e) => selectMatter(e.target.value)}
             disabled={saving}
             className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent font-mono"
             placeholder="Paste matter UUID if the matter is not listed"
           />
-        </div>
+        </details>
 
         {names.length > 0 && (
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border border-brand-line rounded bg-brand-bg px-3 py-2">
             <div>
               <p className="text-sm font-medium text-brand-ink">Smart fill</p>
               <p className="text-xs text-brand-muted">
-                Pull matter-aware values, including structured plaintiff and defendant parties. Every value remains reviewable before preview or save.
+                Fill from the selected matter. Refresh after its details change; your entries are kept and changed suggestions appear beside them.
               </p>
-              <p className="mt-1 text-[11px] text-brand-muted leading-relaxed">{CAPTION_VARIABLE_HELP}</p>
             </div>
             <button
               onClick={handleSmartFill}
               disabled={saving || smartFillState === 'loading' || !matterId.trim()}
-              className="flex items-center justify-center gap-2 px-3 py-2 text-sm text-brand-ink border border-brand-line rounded hover:bg-brand-surface-2 disabled:opacity-50"
+              className="flex shrink-0 items-center justify-center gap-2 whitespace-nowrap px-3 py-2 text-sm text-brand-ink border border-brand-line rounded hover:bg-brand-surface-2 disabled:opacity-50"
             >
               <Wand2 size={15} />
-              {smartFillState === 'loading' ? 'Filling...' : 'Smart Fill'}
+              {smartFillState === 'loading' ? 'Filling...' : smartFillState === 'ready' ? 'Refresh matter values' : 'Smart Fill'}
             </button>
           </div>
         )}
@@ -1654,12 +1676,15 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
 
         {names.length > 0 && (
           <div>
+            <TemplateFillProgress progress={progress} filter={fieldFilter} onFilter={setFieldFilter} onNext={nextField} />
             <h3 className="text-sm font-medium text-brand-ink mb-2">
-              Fields To Review
+              Fields
             </h3>
             <div className="space-y-2">
-              {names.map((name) => {
+              {visibleNames.map((name) => {
                 const field = fieldDefinitions[name] || {}
+                const review = progress.rows.find(row => row.name === name)
+                const changedSuggestion = latestSuggestions[name]?.suggested_value != null && fillValue(latestSuggestions[name].suggested_value) !== fillValue(variables[name]) ? latestSuggestions[name] : null
                 const fieldType = field.field_type || 'text'
                 const label = field.label || friendlyVariableLabel(name)
                 const inputId = `template-variable-${name}`
@@ -1673,20 +1698,22 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                   {fieldType === 'signature' ? (
                     <p className="block text-xs font-medium text-brand-muted mb-0.5">
                       {label}
-                      <span className="font-mono text-brand-muted ml-2">
-                        {'{{'}{name}{'}}'}
-                      </span>
                     </p>
                   ) : (
                     <label htmlFor={inputId} className="block text-xs font-medium text-brand-muted mb-0.5">
                       {label}{field.required ? ' *' : ''}
-                      <span className="font-mono text-brand-muted ml-2">
-                        {'{{'}{name}{'}}'}
-                      </span>
                     </label>
                   )}
                   {fieldSources[name] && <p className="mb-1 text-xs text-brand-muted">{fieldSources[name].suggested_value == null ? 'Missing: review or enter a value' : `From ${fieldSources[name].provenance?.binding_label || fieldSources[name].source_type || 'record'} · verify current accuracy`}{fieldSources[name].provenance?.updated_at ? ` · Updated ${new Date(fieldSources[name].provenance.updated_at).toLocaleDateString()}` : ''}</p>}
                   {fieldSources[name]?.provenance?.source_document_id && <a className="block mb-1 text-xs underline" href={getMatterDocumentDownloadUrl(matterId, fieldSources[name].provenance.source_document_id)} target="_blank" rel="noreferrer">Open reviewed source document</a>}
+                  {review?.source && <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span>{review.confidence == null ? 'Confidence unavailable' : `${review.confidence}% match confidence`}</span>
+                    {review.needsReview ? <button type="button" disabled={saving} className="rounded border border-brand-line px-2 py-1" onClick={() => setReviewedValues(prev => ({ ...prev, [name]: fillValue(variables[name]) }))}>Confirm {label}</button> : <span className="text-brand-green">Reviewed</span>}
+                  </div>}
+                  {changedSuggestion && <div className="mb-2 rounded border border-brand-amber/40 bg-brand-amber/10 p-2 text-xs">
+                    <p>Matter now suggests: {fillValue(changedSuggestion.suggested_value)}</p>
+                    <button type="button" disabled={saving} className="mt-1 rounded border border-brand-line px-2 py-1" onClick={() => { setVariable(name, fillValue(changedSuggestion.suggested_value)); setFieldSources(prev => ({ ...prev, [name]: changedSuggestion })); setReviewedValues(prev => ({ ...prev, [name]: undefined })) }}>Use updated {label}</button>
+                  </div>}
                   {field.value_from ? <p id={inputId} className="text-sm text-brand-muted">Uses {fieldDefinitions[field.value_from]?.label || field.value_from}</p> : fieldType === 'signature' ? (
                     <p className="text-sm text-brand-muted">
                       Signature area is left blank for signing; it is not populated during document generation.
@@ -1743,6 +1770,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                 )
               })}
             </div>
+            {visibleNames.length === 0 && <p role="status" className="py-3 text-sm text-brand-muted">{fieldFilter === 'remaining' ? 'No missing fields.' : 'No suggestions waiting for review.'}</p>}
             <p className={`mt-2 text-xs ${requiredUnresolvedNames.length ? 'text-brand-amber' : 'text-brand-green'}`} role="status">
               {requiredUnresolvedNames.length
                 ? `${requiredUnresolvedNames.length} required field${requiredUnresolvedNames.length === 1 ? '' : 's'} still need review before saving.`
@@ -2150,7 +2178,7 @@ export default function TemplatesPage() {
     await load()
     if (draft?.id) {
       navigate(`/templates/${encodeURIComponent(draft.id)}/studio`, {
-        state: { studioStatus: 'Derived draft created. Review its placeholders before testing or publishing.' },
+        state: { studioStatus: 'New template draft created. Review its document and fields before testing or publishing.' },
       })
     }
   }, [load, navigate])

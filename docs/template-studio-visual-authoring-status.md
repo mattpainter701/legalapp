@@ -25,6 +25,11 @@ Release entries .7, .8 and .9 record covers, signing and Word authoring respecti
 
 ## Decisions and limits
 
+The user's 2026-09-08 [document workflow direction](template-studio-document-workflow.md)
+supersedes the earlier exclusion of an embedded office suite below. This page
+records the shipped mapper, not completion of full document editing, legacy DOC
+support or matter document rescanning.
+
 - Keep Word as the source for prose. Source type is a suggestion with an author
   override recorded in provenance; it does not silently convert a Word form to
   a frozen PDF. Draft creation is explicit after source review, rather than

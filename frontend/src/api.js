@@ -2244,6 +2244,9 @@ export const listResearchWorkspaceHistory = (matterId, workspaceId) => api.get(`
 export const discoverTemplateVariables = (id, data = {}) =>
   api.post(`/templates/${id}/smart-fill-preview`, data).then(r => r.data)
 
+export const copyTemplate = (id, data) =>
+  api.post(`/templates/${id}/copy`, data).then(r => r.data)
+
 // The closed vocabulary a template field may bind to, plus the collections a
 // repeating section may iterate, including eligible firm custom fields.
 export const getTemplateBindings = () =>
