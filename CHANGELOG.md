@@ -19,6 +19,11 @@
 - Activate the built-but-unused tenant support workflow as an admin-only Administration → Support tab: severity picker backed by the published policy, acknowledgement clock and policy version returned on filing, request history, and the backend's unsafe-content rejection surfaced verbatim. Accountant roles do not see the tab.
 - Wire both routes through routing, SEO metadata, sitemap, no-JavaScript prerender shells, nginx rewrites and analytics CSP maps, and the marketing footer. The `/support` shell deliberately carries no hours or acknowledgement figures so it cannot become a second stale copy of the policy.
 
+## 2026.09.07.20 - Preserve legacy cloud root bindings
+
+- Preserve valid saved OneDrive, SharePoint, and Google root IDs on retry, OAuth reconnect, and matter-folder provisioning; initialize only absent provider roots.
+- Flag malformed saved root bindings for administrator repair without rebinding tenant or matter folders. Add regression coverage for legacy and secondary-provider paths. No migration.
+
 ## 2026.09.07.19 - Assistant retrieval continuity and source honesty
 
 - Restore only ready, unexpired same-tenant, same-conversation, same-matter attachments for follow-up turns; preserve explicit subsets and enforce the private-route gate for implicit attachments.

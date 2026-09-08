@@ -32,7 +32,8 @@ async def test_cloud_init_retry_keeps_later_matters_healthy_after_database_error
     matter_ids = {first.id, second.id}
     attempts = []
 
-    async def fake_root(_db, _tenant_id):
+    async def fake_root(_db, _tenant_id, *, existing_root=None):
+        assert existing_root == {}
         return {"onedrive": {"id": "root-id"}}
 
     async def fake_tokens(_db, _tenant_id, _cloud_root):
@@ -86,7 +87,8 @@ async def test_cloud_init_retry_provisions_unbound_matter_without_outer_join_loc
     db_session.add(matter)
     await db_session.commit()
 
-    async def no_root_change(_db, _tenant_id):
+    async def no_root_change(_db, _tenant_id, *, existing_root=None):
+        assert existing_root == {"onedrive": {"id": "root-id"}}
         return None
 
     async def fresh_tokens(_db, _tenant_id, _cloud_root):
@@ -146,3 +148,73 @@ async def test_matter_provisioning_reuses_tokens_without_refreshing_inside_savep
     )
 
     assert result["onedrive"]["matter_folder_id"] == "folder-id"
+
+
+@pytest.mark.asyncio
+async def test_cloud_init_retry_preserves_legacy_root_and_adds_secondary_provider(
+    client, db_session, test_tenant, monkeypatch
+):
+    """A retry adds an unbound provider without replacing the legacy root ID."""
+    legacy_root = {
+        "onedrive": {
+            "id": "01GIDQVHIWKMVSL5RS3FD34HJJGAQHK5RO",
+            "folder_name": "CyberSafeadvisor",
+        }
+    }
+    test_tenant.cloud_root_folder = legacy_root
+    await db_session.commit()
+    calls = []
+
+    async def add_google(_db, _tenant_id, *, existing_root=None):
+        calls.append(existing_root)
+        return {"google_drive": {"id": "google-root"}}
+
+    monkeypatch.setattr(cloud_init, "initialize_cloud_root_folder", add_google)
+
+    response = await client.post("/api/integrations/cloud-init/retry")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "root": {
+            "onedrive": legacy_root["onedrive"],
+            "google_drive": {"id": "google-root"},
+        },
+        "root_providers": ["google_drive", "onedrive"],
+        "matters_checked": 0,
+        "matters_initialized": 0,
+        "matters_failed": 0,
+        "status": "ready",
+    }
+    assert calls == [legacy_root]
+    await db_session.refresh(test_tenant)
+    assert test_tenant.cloud_root_folder["onedrive"] == legacy_root["onedrive"]
+    assert test_tenant.cloud_root_folder["google_drive"]["id"] == "google-root"
+
+
+@pytest.mark.asyncio
+async def test_cloud_init_retry_reports_malformed_saved_root_without_rebinding(
+    client, db_session, test_tenant, monkeypatch
+):
+    """A saved provider entry without an ID needs administrator repair."""
+    malformed_root = {"onedrive": {"folder_name": "CyberSafeadvisor"}}
+    test_tenant.cloud_root_folder = malformed_root
+    await db_session.commit()
+
+    async def should_not_initialize(*_args, **_kwargs):
+        raise AssertionError("malformed root must not be replaced by retry")
+
+    monkeypatch.setattr(
+        cloud_init, "initialize_cloud_root_folder", should_not_initialize
+    )
+
+    response = await client.post("/api/integrations/cloud-init/retry")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "root": malformed_root,
+        "matters_checked": 0,
+        "matters_initialized": 0,
+        "matters_failed": 0,
+        "root_repair_needed": ["onedrive"],
+        "status": "repair_needed",
+    }

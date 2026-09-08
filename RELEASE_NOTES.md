@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.07.20 — Preserved cloud folder connections
+
+Released September 7, 2026.
+
+Cloud reconnect and retry now preserve existing folder IDs while adding newly connected storage providers.
+
+- **Keep established folders linked.** Existing OneDrive, SharePoint, and Google roots stay linked even when they have a legacy name, keeping matter folders aligned.
+- **Flag incomplete root records.** Setup now reports incomplete saved root records for administrator repair instead of silently switching to a new folder.
+
 ## 2026.09.07.19 — More reliable assistant document context
 
 Released September 7, 2026.
