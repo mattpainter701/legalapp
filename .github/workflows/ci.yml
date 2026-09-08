@@ -312,6 +312,8 @@ jobs:
           SQL
       - name: Rehearse tenant isolation, integrity, immutability, and concurrency
         run: python scripts/rehearse_configurable_workflows.py
+      - name: Rehearse artifact review and delivery evidence
+        run: python scripts/rehearse_artifact_reviews.py
 
   # ─── Backend: Unit tests (no database) ──────────────────────────
   # Fast feedback, not a gate. A strict subset of the sharded suite below,

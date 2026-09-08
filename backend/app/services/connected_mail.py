@@ -27,6 +27,7 @@ from app.models.user import User
 from app.models.user_oauth_token import UserOAuthToken
 from app.schemas.chat_action import normalize_recipient_mailboxes
 from app.services.email import EmailDeliveryResult, EmailService
+from app.services.mail_attachment import MailAttachment
 from app.services.google_client import gmail_request
 from app.services.graph_client import graph_request
 from app.services.provider_http import ProviderAuthError, ProviderError
@@ -77,6 +78,7 @@ async def _send_microsoft(
     to: list[str],
     subject: str,
     html_body: str,
+    attachment: MailAttachment | None = None,
 ) -> ConnectedMailDelivery:
     response = await graph_request(
         "POST",
@@ -88,6 +90,22 @@ async def _send_microsoft(
         max_retries=0,
         json={
             "message": {
+                **(
+                    {
+                        "attachments": [
+                            {
+                                "@odata.type": "#microsoft.graph.fileAttachment",
+                                "name": attachment.filename,
+                                "contentType": attachment.content_type,
+                                "contentBytes": base64.b64encode(
+                                    attachment.content
+                                ).decode("ascii"),
+                            }
+                        ]
+                    }
+                    if attachment
+                    else {}
+                ),
                 "subject": subject,
                 "body": {"contentType": "HTML", "content": html_body},
                 "toRecipients": [
@@ -112,13 +130,26 @@ async def _send_microsoft(
 
 
 def _gmail_message(
-    *, to: list[str], subject: str, html_body: str, text_body: str
+    *,
+    to: list[str],
+    subject: str,
+    html_body: str,
+    text_body: str,
+    attachment: MailAttachment | None = None,
 ) -> str:
     message = EmailMessage()
     message["To"] = ", ".join(to)
     message["Subject"] = subject
     message.set_content(text_body or "This message contains an HTML version.")
     message.add_alternative(html_body, subtype="html")
+    if attachment is not None:
+        maintype, subtype = attachment.content_type.split("/", 1)
+        message.add_attachment(
+            attachment.content,
+            maintype=maintype,
+            subtype=subtype,
+            filename=attachment.filename,
+        )
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
 
@@ -129,6 +160,7 @@ async def _send_google(
     subject: str,
     html_body: str,
     text_body: str,
+    attachment: MailAttachment | None = None,
 ) -> ConnectedMailDelivery:
     response = await gmail_request(
         "POST",
@@ -141,6 +173,7 @@ async def _send_google(
                 subject=subject,
                 html_body=html_body,
                 text_body=text_body,
+                **({"attachment": attachment} if attachment else {}),
             )
         },
     )
@@ -162,15 +195,23 @@ async def _provider_send(
     subject: str,
     html_body: str,
     text_body: str,
+    attachment: MailAttachment | None = None,
 ) -> ConnectedMailDelivery:
     if provider == "microsoft":
-        return await _send_microsoft(token, to=to, subject=subject, html_body=html_body)
+        return await _send_microsoft(
+            token,
+            to=to,
+            subject=subject,
+            html_body=html_body,
+            **({"attachment": attachment} if attachment else {}),
+        )
     return await _send_google(
         token,
         to=to,
         subject=subject,
         html_body=html_body,
         text_body=text_body,
+        **({"attachment": attachment} if attachment else {}),
     )
 
 
@@ -194,6 +235,7 @@ async def _attempt_provider(
     subject: str,
     html_body: str,
     text_body: str,
+    attachment: MailAttachment | None = None,
 ) -> ConnectedMailDelivery:
     try:
         return await _provider_send(
@@ -203,6 +245,7 @@ async def _attempt_provider(
             subject=subject,
             html_body=html_body,
             text_body=text_body,
+            **({"attachment": attachment} if attachment else {}),
         )
     except ProviderAuthError:
         logger.warning(
@@ -250,6 +293,7 @@ async def send_client_email(
     html_body: str,
     text_body: str,
     smtp_service: EmailService,
+    attachment: MailAttachment | None = None,
 ) -> ConnectedMailDelivery:
     """Send from the approver's mailbox, a firm mailbox, or legacy SMTP."""
     try:
@@ -312,6 +356,7 @@ async def send_client_email(
             subject=subject,
             html_body=html_body,
             text_body=text_body,
+            **({"attachment": attachment} if attachment else {}),
         )
 
     tenant_rows = (
@@ -350,6 +395,7 @@ async def send_client_email(
             subject=subject,
             html_body=html_body,
             text_body=text_body,
+            **({"attachment": attachment} if attachment else {}),
         )
 
     if reconnect:
@@ -366,6 +412,7 @@ async def send_client_email(
         subject=subject,
         html_body=html_body,
         text_body=text_body,
+        **({"attachment": attachment} if attachment else {}),
     )
     return ConnectedMailDelivery(
         result,

@@ -368,3 +368,4 @@ describe("WorkflowSettingsPage", () => {
     expect(options).toEqual([""]);
   });
 });
+vi.mock('../components/workflows/ArtifactReviewPolicy', () => ({ default: () => <div>Document review policy</div> }))

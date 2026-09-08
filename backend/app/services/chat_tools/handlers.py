@@ -617,7 +617,8 @@ async def _resolve_document_reviewers(
     matter: Matter,
     requested_staff_user_id: uuid.UUID | None,
     requested_attorney_user_id: uuid.UUID | None,
-) -> tuple[uuid.UUID, uuid.UUID]:
+    review_policy: str = "staff_then_attorney",
+) -> tuple[uuid.UUID | None, uuid.UUID]:
     """Resolve two active matter members and capability-check final approval."""
 
     team = list(
@@ -691,6 +692,8 @@ async def _resolve_document_reviewers(
             "Assign an active matter attorney with approve_legal_work before drafting",
         )
 
+    if review_policy == "attorney_only":
+        return None, attorney.id
     if requested_staff_user_id is not None:
         staff = await _active_reviewer(context, requested_staff_user_id)
         if staff is None or staff.id not in matter_team_ids or staff.id == attorney.id:
@@ -855,6 +858,10 @@ async def _create_proposed_task(
     require_live_matter_access: bool = False,
 ) -> Task:
     staged = review_policy == "staff_then_attorney"
+    if review_policy == "attorney_only" and attorney_reviewer_user_id is None:
+        raise ChatToolError(
+            "reviewer_configuration_required", "An attorney reviewer is required"
+        )
     if staged and (staff_reviewer_user_id is None or attorney_reviewer_user_id is None):
         raise ChatToolError(
             "reviewer_configuration_required",
@@ -871,7 +878,15 @@ async def _create_proposed_task(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
             {"scope": idempotency_prefix},
         )
-    current_reviewer_id = staff_reviewer_user_id if staged else context.actor_user_id
+    current_reviewer_id = (
+        staff_reviewer_user_id
+        if staged
+        else (
+            attorney_reviewer_user_id
+            if review_policy == "attorney_only"
+            else context.actor_user_id
+        )
+    )
     values = {
         "matter_id": matter_id,
         "assigned_to_user_id": current_reviewer_id,
@@ -1034,7 +1049,9 @@ async def _create_proposed_task(
         task_type="follow_up",
         pending_action=pending_action,
         review_policy=review_policy,
-        review_stage="staff" if staged else "attorney",
+        review_stage="staff"
+        if staged
+        else ("attorney_pending" if review_policy == "attorney_only" else "attorney"),
         staff_reviewer_user_id=staff_reviewer_user_id,
         attorney_reviewer_user_id=attorney_reviewer_user_id,
     )
@@ -1163,6 +1180,19 @@ async def propose_client_email(
     context: ChatToolContext, args: ProposeClientEmailArgs
 ) -> dict[str, Any]:
     await _require_matter(context, args.matter_id)
+    attachment = None
+    if args.artifact_id is not None:
+        from app.services.work_artifact_reviews import resolve_approved_attachment
+
+        try:
+            attachment, _ = await resolve_approved_attachment(
+                context.db,
+                tenant_id=context.tenant_id,
+                matter_id=args.matter_id,
+                artifact_id=args.artifact_id,
+            )
+        except TaskWorkflowError as exc:
+            raise ChatToolError("artifact_review_required", exc.detail) from exc
 
     requested = list(dict.fromkeys(args.recipient_party_ids))
     rows = (
@@ -1230,6 +1260,7 @@ async def propose_client_email(
         )
         action = EmailClientAction(
             type="email_client",
+            artifact_attachment=attachment,
             to=to,
             recipient_bindings=bindings,
             subject=args.subject,
@@ -1397,6 +1428,12 @@ async def _propose_matter_document(
 ) -> dict[str, Any]:
     """Create a verified tenant-cloud working copy and place it in Review."""
     matter = await _require_matter(context, args.matter_id)
+    from app.services.work_artifact_reviews import (
+        artifact_review_policy,
+        ensure_review_requirements,
+    )
+
+    review_policy = await artifact_review_policy(context.db, context.tenant_id)
     (
         staff_reviewer_user_id,
         attorney_reviewer_user_id,
@@ -1405,6 +1442,7 @@ async def _propose_matter_document(
         matter=matter,
         requested_staff_user_id=args.staff_reviewer_user_id,
         requested_attorney_user_id=args.attorney_reviewer_user_id,
+        review_policy=review_policy,
     )
     async with context.db.begin_nested():
         chips = await _resolve_source_chips(
@@ -1483,7 +1521,7 @@ async def _propose_matter_document(
                 due_date=args.due_date,
                 source_ids=args.source_ids,
                 pending_action=provisional_action,
-                review_policy="staff_then_attorney",
+                review_policy=review_policy,
                 staff_reviewer_user_id=staff_reviewer_user_id,
                 attorney_reviewer_user_id=attorney_reviewer_user_id,
             )
@@ -1531,7 +1569,7 @@ async def _propose_matter_document(
                     "The existing review task points to a different artifact revision",
                 )
             if (
-                task.review_policy != "staff_then_attorney"
+                task.review_policy != review_policy
                 or task.staff_reviewer_user_id != staff_reviewer_user_id
                 or task.attorney_reviewer_user_id != attorney_reviewer_user_id
             ):
@@ -1576,6 +1614,9 @@ async def _propose_matter_document(
             sources=chips,
         )
         task.pending_action = action.model_dump(mode="json")
+        await ensure_review_requirements(
+            context.db, task, binding=(artifact, revision, document)
+        )
         await context.db.flush()
 
     return {
@@ -1591,7 +1632,9 @@ async def _propose_matter_document(
         "status": task.status,
         "review_policy": task.review_policy,
         "review_stage": task.review_stage,
-        "staff_reviewer_user_id": str(task.staff_reviewer_user_id),
+        "staff_reviewer_user_id": str(task.staff_reviewer_user_id)
+        if task.staff_reviewer_user_id
+        else None,
         "attorney_reviewer_user_id": str(task.attorney_reviewer_user_id),
         "matter_id": str(task.matter_id),
         "task_url": f"{settings.FRONTEND_URL.rstrip('/')}/tasks/{task.id}",

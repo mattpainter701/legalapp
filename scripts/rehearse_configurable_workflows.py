@@ -11,7 +11,7 @@ Alembic path and never targets a persistent environment.
 
 The feature under rehearsal remains migration ``148_configurable_workflows``;
 the head assertion advances as later migrations are appended.
-CI proves the 147→148 upgrade separately, then advances the disposable database
+CI proves the 147â†’148 upgrade separately, then advances the disposable database
 to the repository's current Alembic head before invoking this script. The
 rehearsal requires 148 in every deployed head's ancestry and exercises the
 catalog with a real NOSUPERUSER/NOBYPASSRLS role; it never targets persistence.
@@ -41,7 +41,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "164_word_derived_source_evidence"
+EXPECTED_HEAD = "165_artifact_review_spine"
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 REQUIRED_REVISION = "148_configurable_workflows"

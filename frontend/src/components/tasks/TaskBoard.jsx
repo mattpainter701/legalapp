@@ -41,6 +41,7 @@ import {
   updateTaskPendingAction,
 } from '../../api'
 import DocumentDraftWorkspace from '../chat/DocumentDraftWorkspace'
+import ArtifactReviewPanel from './ArtifactReviewPanel'
 
 export const BOARD_STATUSES = ['pending', 'in_progress', 'waiting', 'review', 'completed']
 
@@ -790,6 +791,7 @@ function PendingEmailDraftPanel({
         )}
       </div>
 
+      {pendingEmail.artifact_attachment && <p className="mt-2 text-sm font-semibold">Approved attachment: {pendingEmail.artifact_attachment.filename} · exact reviewed file</p>}
       <dl className="mt-3 space-y-2 text-sm">
         <div>
           <dt className="text-[11px] font-bold uppercase tracking-wide text-brand-muted">To</dt>
@@ -1246,6 +1248,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
                 />
               )}
               <DeliveryAttemptHistory attempts={task.delivery_history} />
+              {(livePendingDocument || task.delivery?.action_snapshot?.artifact_id) && <ArtifactReviewPanel task={task} onUpdated={applyUpdatedTask} disabled={draftEditing || draftSaving} />}
               {task.description && !pendingEmail && !livePendingDocument && !livePendingSms && <section><h3 className="text-xs font-bold uppercase tracking-wide text-brand-muted">Notes</h3><p className="mt-2 whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-4 text-sm leading-relaxed text-brand-ink">{task.description}</p></section>}
               {task.waiting_reason && <section className="rounded-xl border border-amber-200 bg-amber-50 p-4"><h3 className="text-xs font-bold uppercase tracking-wide text-amber-800">Waiting on</h3><p className="mt-1 text-sm text-amber-950">{task.waiting_reason}</p>{task.waiting_follow_up_date && <p className="mt-2 text-xs text-amber-800">Follow up {localDate(task.waiting_follow_up_date).toLocaleDateString()}</p>}</section>}
               <section>
@@ -1310,7 +1313,12 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
           onTitleChange={(value) => { setDraftSubject(value); setDraftNotice(null) }}
           onBodyChange={(value) => { setDraftBody(value); setDraftNotice(null) }}
           onSave={savePendingDocumentDraft}
-          onApprove={() => { setDocumentWorkspaceOpen(false); onApproveDocument(task) }}
+          onApprove={() => {
+            setDocumentWorkspaceOpen(false)
+            if (['staff_then_attorney', 'attorney_only'].includes(task.review_policy)) {
+              window.setTimeout(() => document.getElementById('artifact-review-panel')?.scrollIntoView({ block: 'center' }), 0)
+            } else onApproveDocument(task)
+          }}
           onClose={() => { resetDraft(); setDocumentWorkspaceOpen(false) }}
         />
       )}

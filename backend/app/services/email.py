@@ -11,12 +11,14 @@ from html import escape
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 from typing import List, Optional
 
 import aiosmtplib
 import httpx
 
 from app.config import get_settings
+from app.services.mail_attachment import MailAttachment
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -437,6 +439,7 @@ class EmailService:
         subject: str,
         html_body: str,
         text_body: str = "",
+        attachment: MailAttachment | None = None,
     ) -> EmailDeliveryResult:
         """
         Send an email to one or more recipients.
@@ -467,6 +470,21 @@ class EmailService:
             if text_body:
                 msg.attach(MIMEText(text_body, "plain", "utf-8"))
             msg.attach(MIMEText(html_body, "html", "utf-8"))
+            if attachment is not None:
+                alternative = msg
+                msg = MIMEMultipart("mixed")
+                for key in ("Subject", "From", "To"):
+                    msg[key] = alternative[key]
+                    del alternative[key]
+                msg.attach(alternative)
+                part = MIMEApplication(
+                    attachment.content,
+                    _subtype=attachment.content_type.split("/", 1)[1],
+                )
+                part.add_header(
+                    "Content-Disposition", "attachment", filename=attachment.filename
+                )
+                msg.attach(part)
 
             await aiosmtplib.send(
                 msg,

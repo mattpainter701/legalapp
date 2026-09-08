@@ -11,6 +11,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Index,
+    CheckConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
@@ -112,6 +113,10 @@ class TenantSettings(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", name="uq_tenant_settings_tenant_id"),
         Index("idx_tenant_settings_tenant_id", "tenant_id"),
+        CheckConstraint(
+            "artifact_review_policy IN ('staff_then_attorney', 'attorney_only')",
+            name="ck_tenant_artifact_review_policy",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -173,6 +178,13 @@ class TenantSettings(Base):
     # inherited silently by every existing tenant on deploy.
     enable_chat_actions: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
+    )
+
+    artifact_review_policy: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="staff_then_attorney",
+        server_default="staff_then_attorney",
     )
 
     # Rate limiting

@@ -2,7 +2,7 @@
 
 This is the half of the chat action layer with no model in it. The assistant may
 draft a client email, but a human approves it on the work board and *this* code
-sends it — so an outbound message never depends on model behavior at send time.
+sends it â€” so an outbound message never depends on model behavior at send time.
 
 One automatic attempt per approval is the database guarantee. A
 ``task_automation_runs`` row claims the work, and the unique constraint on
@@ -75,7 +75,7 @@ logger = logging.getLogger(__name__)
 matter_file_store = MatterFileStore()
 
 # Approval is a specific move, not merely leaving Review. Cancelling a drafted
-# client email must never send it — that inverts the attorney's intent — and
+# client email must never send it â€” that inverts the attorney's intent â€” and
 # parking it in Waiting or closing the task without acting are not approvals
 # either. Only accepting the draft into active work executes it.
 APPROVAL_FROM_STATUS = "review"
@@ -221,14 +221,15 @@ async def enqueue_automation_run(
 
     This is what makes delivery durable. The queued row commits atomically with
     the status change, so a process that dies between approval and send leaves
-    behind a record the worker will pick up — previously that send was simply
+    behind a record the worker will pick up â€” previously that send was simply
     lost, with the attorney told it was approved.
 
     Does not commit: the caller owns the transaction, which is the whole point.
     """
-    if task.review_policy == "staff_then_attorney" and not staged_review_is_approved(
-        task
-    ):
+    if task.review_policy in {
+        "staff_then_attorney",
+        "attorney_only",
+    } and not staged_review_is_approved(task):
         raise ActionApprovalConflict(
             "Attorney approval is required before staged automation"
         )
@@ -256,12 +257,24 @@ async def enqueue_automation_run(
             _delivery_certainty_v2=DELIVERY_NOT_ATTEMPTED,
             triggered_by_user_id=actor_user_id,
         )
-        # An existing row already covers this approval — including one still
+        # An existing row already covers this approval â€” including one still
         # sending or already sent. Never reset it here.
         .on_conflict_do_nothing(constraint="uq_task_automation_runs_task_key")
         .returning(TaskAutomationRun.id)
     )
-    await db.execute(stmt)
+    inserted = await db.execute(stmt)
+    if action_snapshot.get("artifact_attachment"):
+        from app.services.work_artifact_reviews import append_delivery_receipt
+
+        run_id = inserted.scalar_one_or_none()
+        if run_id is not None:
+            run = await db.scalar(
+                select(TaskAutomationRun).where(
+                    TaskAutomationRun.tenant_id == task.tenant_id,
+                    TaskAutomationRun.id == run_id,
+                )
+            )
+            await append_delivery_receipt(db, run, status="queued")
     return None
 
 
@@ -379,6 +392,18 @@ async def _record_terminal_no_send(
         .returning(TaskAutomationRun.id)
     )
     if run_id is not None:
+        if action_snapshot.get("artifact_attachment"):
+            from app.services.work_artifact_reviews import append_delivery_receipt
+
+            run = await db.scalar(
+                select(TaskAutomationRun)
+                .where(
+                    TaskAutomationRun.tenant_id == task.tenant_id,
+                    TaskAutomationRun.id == run_id,
+                )
+                .execution_options(populate_existing=True)
+            )
+            await append_delivery_receipt(db, run, status="failed")
         append_task_event(
             db,
             task,
@@ -395,7 +420,7 @@ async def _record_terminal_no_send(
     )
 
 
-# ── Action handlers ─────────────────────────────────────────────────────────
+# â”€â”€ Action handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,6 +465,43 @@ async def _run_email_client(
             delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
 
+    attachment = None
+    if action.artifact_attachment is not None:
+        from app.services.work_artifact_reviews import resolve_approved_attachment
+        from app.services.task_workflow import TaskWorkflowError
+        from app.services.cloud_artifact_materialization import (
+            cloud_artifact_materializer,
+        )
+        from app.services.mail_attachment import MailAttachment
+
+        try:
+            binding, document = await resolve_approved_attachment(
+                db,
+                tenant_id=task.tenant_id,
+                matter_id=task.matter_id,
+                artifact_id=action.artifact_attachment.artifact_id,
+                expected=action.artifact_attachment,
+            )
+            content = await cloud_artifact_materializer.read_current_cloud_bytes(
+                tenant_id=task.tenant_id,
+                document=document,
+            )
+            if hashlib.sha256(content).hexdigest() != binding.document_sha256:
+                raise ValueError("Attachment cloud bytes changed")
+            attachment = MailAttachment(filename=binding.filename, content=content)
+        except (TaskWorkflowError, ValueError):
+            return ActionExecutionResult(
+                False,
+                "Not sent: the approved attachment changed or exceeds the 2 MiB attachment limit",
+                delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            )
+        except Exception:
+            return ActionExecutionResult(
+                False,
+                "Not sent: the approved attachment could not be verified",
+                delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            )
+
     # OAuth refresh may commit its session. Keep it separate from the worker's
     # task-locking transaction so approval cannot be cancelled between the
     # final status check and the external send.
@@ -455,6 +517,7 @@ async def _run_email_client(
             html_body=_body_to_html(action.body),
             text_body=action.body,
             smtp_service=email_service,
+            **({"attachment": attachment} if attachment else {}),
         )
     return ActionExecutionResult(
         bool(delivery.result),
@@ -625,6 +688,15 @@ async def _run_matter_document_draft(
             )
 
     if artifact is not None:
+        from app.services.work_artifact_reviews import current_artifact_approval
+        from app.services.task_workflow import TaskWorkflowError
+
+        try:
+            await current_artifact_approval(db, task)
+        except TaskWorkflowError as exc:
+            return ActionExecutionResult(
+                False, exc.detail, delivery_certainty=DELIVERY_NOT_ATTEMPTED
+            )
         document = await db.scalar(
             select(MatterDocument)
             .where(
@@ -952,7 +1024,7 @@ ACTION_HANDLERS: dict[
 }
 
 
-# ── Entry point ─────────────────────────────────────────────────────────────
+# â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 async def run_task_automation(
@@ -990,10 +1062,10 @@ async def run_task_automation(
             )
             if task is None:
                 return
-            if (
-                task.review_policy == "staff_then_attorney"
-                and not staged_review_is_approved(task)
-            ):
+            if task.review_policy in {
+                "staff_then_attorney",
+                "attorney_only",
+            } and not staged_review_is_approved(task):
                 logger.warning(
                     "staged_automation_blocked_without_approval task_id=%s",
                     task_id,
@@ -1118,7 +1190,7 @@ async def run_task_automation(
                 or not task.pending_action
                 or not actor_is_authorized
                 or (
-                    task.review_policy == "staff_then_attorney"
+                    task.review_policy in {"staff_then_attorney", "attorney_only"}
                     and not staged_review_is_approved(task)
                 )
                 or (
@@ -1133,6 +1205,12 @@ async def run_task_automation(
                 run.delivery_certainty = DELIVERY_NOT_ATTEMPTED
                 run.completed_at = datetime.now(timezone.utc)
                 if task is not None:
+                    if (run.action_snapshot or {}).get("artifact_attachment"):
+                        from app.services.work_artifact_reviews import (
+                            append_delivery_receipt,
+                        )
+
+                        await append_delivery_receipt(db, run, status="failed")
                     append_task_event(
                         db,
                         task,
@@ -1171,6 +1249,12 @@ async def run_task_automation(
                 run.delivery_detail = detail
                 run.delivery_certainty = DELIVERY_NOT_ATTEMPTED
                 run.completed_at = datetime.now(timezone.utc)
+                if (run.action_snapshot or {}).get("artifact_attachment"):
+                    from app.services.work_artifact_reviews import (
+                        append_delivery_receipt,
+                    )
+
+                    await append_delivery_receipt(db, run, status="failed")
                 append_task_event(
                     db,
                     task,
@@ -1267,6 +1351,16 @@ async def run_task_automation(
             )
             run.completed_at = run.completed_at or datetime.now(timezone.utc)
             audit_snapshot = run.action_snapshot or {}
+            if audit_snapshot.get("artifact_attachment"):
+                from app.services.work_artifact_reviews import append_delivery_receipt
+
+                await append_delivery_receipt(
+                    db,
+                    run,
+                    status="outcome_unknown"
+                    if run.delivery_certainty == DELIVERY_OUTCOME_UNKNOWN
+                    else run.status,
+                )
             append_task_event(
                 db,
                 task,
@@ -1342,12 +1436,13 @@ async def enqueue_durable_automation(
 
     Writes both the queued run (the attorney-visible delivery state) and a
     durable job (the worker's instruction). Both are idempotent and neither
-    commits, so they land atomically with the approval or not at all — there is
+    commits, so they land atomically with the approval or not at all â€” there is
     no window in which a task is approved but the send is unrecorded.
     """
-    if task.review_policy == "staff_then_attorney" and not staged_review_is_approved(
-        task
-    ):
+    if task.review_policy in {
+        "staff_then_attorney",
+        "attorney_only",
+    } and not staged_review_is_approved(task):
         raise ActionApprovalConflict(
             "Attorney approval is required before staged automation"
         )
@@ -1386,6 +1481,20 @@ async def enqueue_durable_automation(
                 "A cited local document is no longer available or no longer "
                 "belongs to this matter. Restore the evidence or create a new draft."
             )
+        if pending_email.artifact_attachment is not None:
+            from app.services.work_artifact_reviews import resolve_approved_attachment
+            from app.services.task_workflow import TaskWorkflowError
+
+            try:
+                await resolve_approved_attachment(
+                    db,
+                    tenant_id=task.tenant_id,
+                    matter_id=task.matter_id,
+                    artifact_id=pending_email.artifact_attachment.artifact_id,
+                    expected=pending_email.artifact_attachment,
+                )
+            except TaskWorkflowError as exc:
+                raise ActionApprovalConflict(exc.detail) from exc
     elif str(task.pending_action.get("type") or "") == "sms_client":
         try:
             pending_sms = SmsClientAction.model_validate(task.pending_action)
@@ -1424,6 +1533,13 @@ async def enqueue_durable_automation(
             raise ActionApprovalConflict(
                 "This draft predates verified cloud review. Regenerate it before approval."
             )
+        from app.services.work_artifact_reviews import current_artifact_approval
+        from app.services.task_workflow import TaskWorkflowError
+
+        try:
+            await current_artifact_approval(db, task)
+        except TaskWorkflowError as exc:
+            raise ActionApprovalConflict(exc.detail) from exc
 
     active_run = await db.scalar(
         select(TaskAutomationRun)
@@ -1554,6 +1670,10 @@ async def _terminalize_interrupted_delivery(
         run.delivery_detail = _INTERRUPTED_DELIVERY_DETAIL
         run.delivery_certainty = DELIVERY_OUTCOME_UNKNOWN
         run.completed_at = datetime.now(timezone.utc)
+        if (run.action_snapshot or {}).get("artifact_attachment"):
+            from app.services.work_artifact_reviews import append_delivery_receipt
+
+            await append_delivery_receipt(db, run, status="outcome_unknown")
         if task is not None:
             append_task_event(
                 db,
