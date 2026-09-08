@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.08.12",
+      "version": "2026.09.08.12",
+      "title": "Prepare recurring matter work with named service identities",
+      "published_at": "2026-09-08",
+      "summary": "Create a narrowly scoped firm service identity from a completed workflow and require legal approval before it can prepare recurring work for review.",
+      "highlights": [
+        {
+          "title": "Approve the exact recurring plan",
+          "description": "Rules freeze a completed workflow's bounded inputs and verified sources. A named noninteractive identity cannot sign in, receive roles, or approve its own work."
+        },
+        {
+          "title": "Keep recurring work reviewable",
+          "description": "Daily, weekly, and approved lifecycle-event schedules create durable proposals with the approving attorney as reviewer. Existing task and document review controls still decide every final action."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.11",
       "version": "2026.09.08.11",
       "title": "See connected assistant activity across your firm",
