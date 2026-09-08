@@ -127,7 +127,10 @@ def upgrade():
       CREATE FUNCTION guard_automation_service_identity() RETURNS trigger
       LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
       BEGIN
-        IF TG_OP='DELETE' THEN RAISE EXCEPTION 'Automation service identities are retained'; END IF;
+        IF TG_OP='DELETE' THEN
+          IF public.config_workflow_demo_purge_authorized(OLD.tenant_id) THEN RETURN OLD; END IF;
+          RAISE EXCEPTION 'Automation service identities are retained';
+        END IF;
         IF NOT EXISTS (SELECT 1 FROM users u WHERE u.tenant_id=NEW.tenant_id AND u.id=NEW.user_id
           AND u.principal_type='automation_service' AND NOT u.is_active AND NOT u.license_active
           AND NOT u.workspace_mcp_enabled AND u.password_hash IS NULL AND u.oauth_subject IS NULL) THEN
@@ -161,7 +164,10 @@ def upgrade():
       CREATE FUNCTION guard_automation_service_rule() RETURNS trigger
       LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
       BEGIN
-        IF TG_OP='DELETE' THEN RAISE EXCEPTION 'Automation service rules are retained'; END IF;
+        IF TG_OP='DELETE' THEN
+          IF public.config_workflow_demo_purge_authorized(OLD.tenant_id) THEN RETURN OLD; END IF;
+          RAISE EXCEPTION 'Automation service rules are retained';
+        END IF;
         IF TG_OP='INSERT' AND NEW.status<>'draft' THEN RAISE EXCEPTION 'Rules begin as drafts'; END IF;
         IF TG_OP='UPDATE' AND (to_jsonb(NEW)-ARRAY['status','version','updated_at','approved_by_user_id','approved_at'])
           IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['status','version','updated_at','approved_by_user_id','approved_at']) THEN
@@ -177,6 +183,7 @@ def upgrade():
       CREATE FUNCTION guard_automation_service_occurrence() RETURNS trigger
       LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
       BEGIN
+        IF TG_OP='DELETE' AND public.config_workflow_demo_purge_authorized(OLD.tenant_id) THEN RETURN OLD; END IF;
         IF TG_OP<>'INSERT' THEN RAISE EXCEPTION 'Automation occurrence evidence is immutable'; END IF;
         IF NEW.outcome='started' AND NOT EXISTS (SELECT 1 FROM workflow_runs r WHERE r.tenant_id=NEW.tenant_id
           AND r.id=NEW.run_id AND r.service_rule_id=NEW.rule_id AND r.actor_user_id=(SELECT user_id FROM automation_service_identities WHERE id=NEW.identity_id)) THEN
