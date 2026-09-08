@@ -60,11 +60,11 @@ export default function FirmBrandingPanel() {
   }
 
   return (
-    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+    <div id="firm-branding" className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden scroll-mt-6">
       <div className="px-8 py-6 border-b border-brand-line bg-brand-bg-soft/50">
         <h3 className="font-serif font-bold text-xl text-brand-ink">Firm Branding</h3>
         <p className="text-sm text-brand-ink-2 font-sans mt-1">
-          Customize how your firm appears on invoices, statements, and other generated documents.
+          Maintain the shared firm details used by invoices, statements, and templates mapped to Firm profile fields. Updates apply to future Smart Fill runs; saved documents remain unchanged.
         </p>
       </div>
       <div className="px-8 py-5 space-y-5">

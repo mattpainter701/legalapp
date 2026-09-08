@@ -2,6 +2,11 @@
 // the suggestion that actually supplied this value, never a manual override.
 export const fillValue = value => value == null ? '' : String(value)
 
+export function suggestionConfidenceLabel(review) {
+  if (review.source?.source_type === 'firm_profile') return 'Saved firm profile value'
+  return review.confidence == null ? 'Confidence unavailable' : `${review.confidence}% match confidence`
+}
+
 export function initialFillValues(names, fields) {
   return Object.fromEntries(names.map(name => [name, fields[name]?.field_type === 'checkbox' ? 'false' : '']))
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getTemplateFieldLibrary, getTemplateFieldUsage } from '../../api'
+import TemplateFirmValue from './TemplateFirmValue'
 
 const PAGE_SIZE = 20
 const errorMessage = (error) => typeof error?.response?.data?.detail === 'string'
@@ -58,7 +59,7 @@ export default function TemplateFieldLibrary({ refreshKey = 0 }) {
     <section aria-labelledby="field-library-heading" className="space-y-5">
       <div>
         <h2 id="field-library-heading" className="text-xl font-semibold text-brand-ink">Field Library</h2>
-        <p className="mt-1 text-sm text-brand-muted">Reuse the same client or matter detail across documents. Choose a field to see its explicit mappings in the current saved templates, including drafts and inactive templates.</p>
+        <p className="mt-1 text-sm text-brand-muted">Reuse firm, client, and matter details across documents. Firm profile values are shared across all matters; client and matter values come from the matter you select. Choose a field to see its explicit mappings in saved templates, including drafts and inactive templates.</p>
       </div>
       <details className="rounded-xl border border-brand-line bg-brand-surface-2 p-4 text-sm">
         <summary className="cursor-pointer font-semibold text-brand-ink">How to mark fields in Word</summary>
@@ -69,7 +70,7 @@ export default function TemplateFieldLibrary({ refreshKey = 0 }) {
           <p>Keep the entire placeholder together in one paragraph with consistent formatting. Review the source, save the mappings, then test the generated document before publishing.</p>
         </div>
       </details>
-      <p className="text-sm text-brand-muted">Firm custom fields are managed in Workflow configuration and appear here when active and supported. Fields marked sensitive are unavailable in Studio. Values remain on their client or matter records.</p>
+      <p className="text-sm text-brand-muted">Custom client and matter fields are managed in Workflow configuration and appear here when active and supported. Fields marked sensitive are unavailable in Studio. Their values remain on individual client or matter records.</p>
       {loading ? <p role="status">Loading shared fields…</p> : error ? (
         <div role="alert"><p>{error}</p><button type="button" className="mt-2 underline" onClick={() => setRetry((value) => value + 1)}>Retry field library</button></div>
       ) : (
@@ -99,6 +100,7 @@ export default function TemplateFieldLibrary({ refreshKey = 0 }) {
             {!selected ? <p className="text-sm text-brand-muted">Select a shared field to see where it is used.</p> : (
               <>
                 <h3 className="text-lg font-semibold">{selected.label}</h3>
+                {selected.group === 'Firm profile' && <TemplateFirmValue field={selected} />}
                 <p className="mt-1 text-sm text-brand-muted">Fills from: {selected.group} / {selected.label}{selected.field_type ? ` · ${selected.field_type.replaceAll('_', ' ')}` : ''}</p>
                 {selected.options?.length > 0 && <p className="mt-2 text-sm">Choices: {selected.options.join(', ')}</p>}
                 {selected.suggested_name && <p className="mt-3 text-sm">Suggested Word placeholder: <code>{`{{${selected.suggested_name}}}`}</code>. Choose this source in Studio’s <strong>Fills from</strong> menu.</p>}

@@ -8,7 +8,7 @@ import WordImportWorkspace from '../components/templates/WordImportWorkspace'
 import TemplateTestSummary from '../components/templates/TemplateTestSummary'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
 import TemplateFillProgress from '../components/templates/TemplateFillProgress'
-import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues } from '../components/templates/templateFillReview'
+import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues, suggestionConfidenceLabel } from '../components/templates/templateFillReview'
 import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
@@ -1705,13 +1705,14 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                     </label>
                   )}
                   {fieldSources[name] && <p className="mb-1 text-xs text-brand-muted">{fieldSources[name].suggested_value == null ? 'Missing: review or enter a value' : `From ${fieldSources[name].provenance?.binding_label || fieldSources[name].source_type || 'record'} · verify current accuracy`}{fieldSources[name].provenance?.updated_at ? ` · Updated ${new Date(fieldSources[name].provenance.updated_at).toLocaleDateString()}` : ''}</p>}
+                  {field.binding?.startsWith('firm.') && <p className="mb-1 text-xs text-brand-muted">Shared firm profile. Missing or outdated details can be updated once by a firm administrator in Firm settings, then refreshed here with Smart Fill.</p>}
                   {fieldSources[name]?.provenance?.source_document_id && <a className="block mb-1 text-xs underline" href={getMatterDocumentDownloadUrl(matterId, fieldSources[name].provenance.source_document_id)} target="_blank" rel="noreferrer">Open reviewed source document</a>}
                   {review?.source && <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-                    <span>{review.confidence == null ? 'Confidence unavailable' : `${review.confidence}% match confidence`}</span>
+                    <span>{suggestionConfidenceLabel(review)}</span>
                     {review.needsReview ? <button type="button" disabled={saving} className="rounded border border-brand-line px-2 py-1" onClick={() => setReviewedValues(prev => ({ ...prev, [name]: fillValue(variables[name]) }))}>Confirm {label}</button> : <span className="text-brand-green">Reviewed</span>}
                   </div>}
                   {changedSuggestion && <div className="mb-2 rounded border border-brand-amber/40 bg-brand-amber/10 p-2 text-xs">
-                    <p>Matter now suggests: {fillValue(changedSuggestion.suggested_value)}</p>
+                    <p>{changedSuggestion.source_type === 'firm_profile' ? 'Firm profile now suggests' : 'Matter now suggests'}: {fillValue(changedSuggestion.suggested_value)}</p>
                     <button type="button" disabled={saving} className="mt-1 rounded border border-brand-line px-2 py-1" onClick={() => { setVariable(name, fillValue(changedSuggestion.suggested_value)); setFieldSources(prev => ({ ...prev, [name]: changedSuggestion })); setReviewedValues(prev => ({ ...prev, [name]: undefined })) }}>Use updated {label}</button>
                   </div>}
                   {field.value_from ? <p id={inputId} className="text-sm text-brand-muted">Uses {fieldDefinitions[field.value_from]?.label || field.value_from}</p> : fieldType === 'signature' ? (
