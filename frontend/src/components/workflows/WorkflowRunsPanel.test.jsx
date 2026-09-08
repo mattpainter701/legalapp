@@ -70,3 +70,10 @@ it('shows a load error and supports refresh', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Refresh runs' }))
   expect(await screen.findByText('No workflow runs yet.')).toBeInTheDocument()
 })
+
+it.each([[], null, { items: null }])('contains an invalid list response within the panel: %j', async response => {
+  api.listWorkflowRuns.mockResolvedValue(response)
+  render(<MemoryRouter><h1>Matter workflow</h1><WorkflowRunsPanel /></MemoryRouter>)
+  expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load workflow runs')
+  expect(screen.getByRole('heading', { name: 'Matter workflow' })).toBeVisible()
+})

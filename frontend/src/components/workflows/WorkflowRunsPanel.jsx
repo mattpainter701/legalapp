@@ -84,7 +84,11 @@ export default function WorkflowRunsPanel({ matterId }) {
   const [error, setError] = useState('')
   const [offset, setOffset] = useState(0)
   const load = useCallback(async () => {
-    try { setData(await listWorkflowRuns({ matter_id: matterId, offset })); setError('') }
+    try {
+      const result = await listWorkflowRuns({ matter_id: matterId, offset })
+      if (!Array.isArray(result?.items)) throw new Error('Invalid workflow response')
+      setData(result); setError('')
+    }
     catch { setError('Unable to load workflow runs.') }
   }, [matterId, offset])
   useEffect(() => { load() }, [load])
