@@ -603,7 +603,11 @@ async def _require_live_matter_access(
     if matter is None:
         raise ChatToolError("matter_not_found", "Matter not found")
     access_user_id = context.review_owner_user_id or context.actor_user_id
-    if context.review_owner_is_admin or context.user.role == "admin" or matter.user_id == access_user_id:
+    if (
+        context.review_owner_is_admin
+        or context.user.role == "admin"
+        or matter.user_id == access_user_id
+    ):
         return matter
     assignment_stmt = select(MatterAssignment.id).where(
         MatterAssignment.tenant_id == context.tenant_id,

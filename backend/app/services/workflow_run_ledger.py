@@ -81,7 +81,9 @@ async def submit_run(context, body):
     metadata = plan_metadata(body)
     if context.channel == "automation_service":
         if not context.service_rule_id or not context.service_rule_sha256:
-            raise CapabilityError("service_rule_unavailable", "A service run requires its approved rule")
+            raise CapabilityError(
+                "service_rule_unavailable", "A service run requires its approved rule"
+            )
         metadata["service_rule_sha256"] = context.service_rule_sha256
     run = WorkflowRun(
         id=uuid.uuid4(),

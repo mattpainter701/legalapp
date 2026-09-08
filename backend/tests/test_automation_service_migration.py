@@ -5,7 +5,10 @@ from pathlib import Path
 
 
 def test_service_migration_has_rls_and_database_guards():
-    path = Path(__file__).resolve().parents[1] / "migrations/versions/169_automation_services.py"
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "migrations/versions/169_automation_services.py"
+    )
     spec = importlib.util.spec_from_file_location("service_migration", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -17,4 +20,3 @@ def test_service_migration_has_rls_and_database_guards():
     assert "permanently noninteractive" in source
     assert "Service occurrence must bind its exact run and identity" in source
     assert "Workflow evidence exists" not in source
-

@@ -15,43 +15,72 @@ def moment(value):
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
 
 
-@pytest.mark.parametrize("capabilities", [
-    ["approve_task"], ["propose_client_email"], ["search_clients"],
-    ["propose_task", "propose_task"],
-])
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        ["approve_task"],
+        ["propose_client_email"],
+        ["search_clients"],
+        ["propose_task", "propose_task"],
+    ],
+)
 def test_service_grants_are_narrow(capabilities):
     with pytest.raises(ValidationError):
         ServiceIdentityInput(name="Night preparation", capabilities=capabilities)
 
 
 def test_named_service_grant_is_trimmed():
-    identity = ServiceIdentityInput(name=" Night preparation ", capabilities=["propose_task"])
+    identity = ServiceIdentityInput(
+        name=" Night preparation ", capabilities=["propose_task"]
+    )
     assert identity.name == "Night preparation"
     with pytest.raises(ValidationError):
         ServiceIdentityInput(name=" ", capabilities=["propose_task"])
 
 
-@pytest.mark.parametrize("values", [
-    {"kind": "daily"}, {"kind": "daily", "local_time": "25:00"},
-    {"kind": "daily", "local_time": "02:00", "timezone": "not/a-zone"},
-    {"kind": "weekly", "local_time": "02:00", "weekdays": []},
-    {"kind": "weekly", "local_time": "02:00", "weekdays": [7]},
-    {"kind": "daily", "local_time": "02:00", "weekdays": [1]},
-    {"kind": "workflow_event"},
-    {"kind": "workflow_event", "event_rule_id": str(uuid4()), "local_time": "02:00"},
-    {"kind": "daily", "local_time": "02:00", "event_rule_id": str(uuid4())},
-])
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"kind": "daily"},
+        {"kind": "daily", "local_time": "25:00"},
+        {"kind": "daily", "local_time": "02:00", "timezone": "not/a-zone"},
+        {"kind": "weekly", "local_time": "02:00", "weekdays": []},
+        {"kind": "weekly", "local_time": "02:00", "weekdays": [7]},
+        {"kind": "daily", "local_time": "02:00", "weekdays": [1]},
+        {"kind": "workflow_event"},
+        {
+            "kind": "workflow_event",
+            "event_rule_id": str(uuid4()),
+            "local_time": "02:00",
+        },
+        {"kind": "daily", "local_time": "02:00", "event_rule_id": str(uuid4())},
+    ],
+)
 def test_only_fixed_schedules_are_accepted(values):
     with pytest.raises(ValidationError):
         ServiceSchedule(**values)
 
 
 def test_due_occurrence_has_no_unbounded_backlog_or_dst_duplicate():
-    schedule = ServiceSchedule(kind="daily", local_time="02:00", timezone="America/Chicago")
+    schedule = ServiceSchedule(
+        kind="daily", local_time="02:00", timezone="America/Chicago"
+    )
     approved = moment("2026-01-01T00:00:00")
     assert due_occurrence(schedule, moment("2026-03-08T07:59:00"), approved) is None
-    assert due_occurrence(schedule, moment("2026-03-08T08:00:00"), approved) == "date:2026-03-08"
+    assert (
+        due_occurrence(schedule, moment("2026-03-08T08:00:00"), approved)
+        == "date:2026-03-08"
+    )
     fall = ServiceSchedule(kind="daily", local_time="01:30", timezone="America/Chicago")
-    assert due_occurrence(fall, moment("2026-11-01T06:30:00"), approved) == due_occurrence(fall, moment("2026-11-01T07:30:00"), approved)
+    assert due_occurrence(
+        fall, moment("2026-11-01T06:30:00"), approved
+    ) == due_occurrence(fall, moment("2026-11-01T07:30:00"), approved)
     after_due = moment("2026-09-08T02:01:00")
-    assert due_occurrence(ServiceSchedule(kind="daily", local_time="02:00"), moment("2026-09-08T03:00:00"), after_due) is None
+    assert (
+        due_occurrence(
+            ServiceSchedule(kind="daily", local_time="02:00"),
+            moment("2026-09-08T03:00:00"),
+            after_due,
+        )
+        is None
+    )

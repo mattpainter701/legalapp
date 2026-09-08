@@ -9,12 +9,20 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Unattended principals may read one rule's matter and prepare review work.
 # Global client/intake search and outgoing communications are not service grants.
-SERVICE_CAPABILITIES = frozenset({
-    "get_matter_context", "list_document_templates", "get_document_template_text",
-    "get_matter_document_text", "list_matter_documents", "list_matter_tasks",
-    "list_matter_recipients", "propose_task", "propose_matter_document",
-    "propose_document_from_template",
-})
+SERVICE_CAPABILITIES = frozenset(
+    {
+        "get_matter_context",
+        "list_document_templates",
+        "get_document_template_text",
+        "get_matter_document_text",
+        "list_matter_documents",
+        "list_matter_tasks",
+        "list_matter_recipients",
+        "propose_task",
+        "propose_matter_document",
+        "propose_document_from_template",
+    }
+)
 
 
 class ServiceIdentityInput(BaseModel):
@@ -36,7 +44,9 @@ class ServiceSchedule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["daily", "weekly", "workflow_event"]
     timezone: str = Field(default="UTC", min_length=1, max_length=100)
-    local_time: str | None = Field(default=None, pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+    local_time: str | None = Field(
+        default=None, pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+    )
     weekdays: list[int] = Field(default_factory=list, max_length=7)
     event_rule_id: uuid.UUID | None = None
 
@@ -48,13 +58,21 @@ class ServiceSchedule(BaseModel):
             raise ValueError("Use a recognized IANA timezone") from error
         if self.kind == "workflow_event":
             if not self.event_rule_id or self.local_time or self.weekdays:
-                raise ValueError("Event schedules require only an approved workflow rule")
+                raise ValueError(
+                    "Event schedules require only an approved workflow rule"
+                )
         else:
             if not self.local_time or self.event_rule_id:
                 raise ValueError("Timed schedules require a local time")
             if self.kind == "weekly":
-                if not self.weekdays or len(set(self.weekdays)) != len(self.weekdays) or any(day < 0 or day > 6 for day in self.weekdays):
-                    raise ValueError("Choose distinct weekdays from Monday (0) to Sunday (6)")
+                if (
+                    not self.weekdays
+                    or len(set(self.weekdays)) != len(self.weekdays)
+                    or any(day < 0 or day > 6 for day in self.weekdays)
+                ):
+                    raise ValueError(
+                        "Choose distinct weekdays from Monday (0) to Sunday (6)"
+                    )
             elif self.weekdays:
                 raise ValueError("Daily schedules do not accept a weekday filter")
         return self
@@ -83,6 +101,9 @@ def due_occurrence(schedule: ServiceSchedule, now: datetime, approved_at: dateti
         return None
     if local_now.date() < local_approval.date():
         return None
-    if local_now.date() == local_approval.date() and local_approval.time().replace(tzinfo=None) >= scheduled:
+    if (
+        local_now.date() == local_approval.date()
+        and local_approval.time().replace(tzinfo=None) >= scheduled
+    ):
         return None
     return f"date:{local_now.date().isoformat()}"

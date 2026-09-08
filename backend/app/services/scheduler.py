@@ -815,7 +815,9 @@ class LegalScheduler:
         )
         agent_count += 1
         self.scheduler.add_job(
-            self._guarded("automation-service-scheduler", self.run_automation_service_scheduler),
+            self._guarded(
+                "automation-service-scheduler", self.run_automation_service_scheduler
+            ),
             "interval",
             minutes=1,
             id="automation-service-scheduler",

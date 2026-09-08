@@ -21,7 +21,7 @@ TABLES = (
 
 
 def upgrade():
-    op.execute("""
+    for statement in """
       ALTER TABLE users ADD COLUMN principal_type varchar(20) NOT NULL DEFAULT 'human';
       ALTER TABLE users ADD CONSTRAINT ck_users_principal_type
         CHECK (principal_type IN ('human','automation_service'));
@@ -114,7 +114,9 @@ def upgrade():
         FOREIGN KEY(tenant_id,service_rule_id) REFERENCES automation_service_rules(tenant_id,id) ON DELETE RESTRICT;
       CREATE INDEX ix_automation_service_rules_due ON automation_service_rules(tenant_id,status,created_at);
       CREATE INDEX ix_automation_service_occurrences_budget ON automation_service_occurrences(tenant_id,identity_id,created_at);
-    """)
+    """.split(";\n      "):
+        if statement.strip():
+            op.execute(statement.strip())
     for table in TABLES:
         op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
@@ -197,7 +199,9 @@ def downgrade():
         RAISE EXCEPTION 'Automation service evidence exists; preserve it and roll forward';
       END IF;
     END $$""")
-    op.execute("ALTER TABLE workflow_runs DROP CONSTRAINT fk_workflow_runs_service_rule")
+    op.execute(
+        "ALTER TABLE workflow_runs DROP CONSTRAINT fk_workflow_runs_service_rule"
+    )
     op.execute("DROP TABLE automation_service_occurrences")
     op.execute("DROP TABLE automation_service_rules")
     op.execute("DROP TABLE automation_service_identities")
@@ -208,10 +212,13 @@ def downgrade():
     op.execute("DROP TRIGGER users_automation_service_guard ON users")
     op.execute("DROP FUNCTION guard_automation_service_role")
     op.execute("DROP FUNCTION guard_automation_service_user")
-    op.execute("ALTER TABLE workflow_runs DROP CONSTRAINT ck_workflow_runs_service_rule")
+    op.execute(
+        "ALTER TABLE workflow_runs DROP CONSTRAINT ck_workflow_runs_service_rule"
+    )
     op.execute("ALTER TABLE workflow_runs DROP COLUMN service_rule_id")
     op.execute("ALTER TABLE workflow_runs DROP CONSTRAINT ck_workflow_runs_channel")
-    op.execute("ALTER TABLE workflow_runs ADD CONSTRAINT ck_workflow_runs_channel CHECK (origin_channel IN ('matter_chat','workspace_mcp'))")
+    op.execute(
+        "ALTER TABLE workflow_runs ADD CONSTRAINT ck_workflow_runs_channel CHECK (origin_channel IN ('matter_chat','workspace_mcp'))"
+    )
     op.execute("ALTER TABLE users DROP CONSTRAINT ck_users_principal_type")
     op.execute("ALTER TABLE users DROP COLUMN principal_type")
-
