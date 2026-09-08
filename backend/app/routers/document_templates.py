@@ -29,6 +29,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from itsdangerous import BadData, SignatureExpired, URLSafeTimedSerializer
+from pydantic import ValidationError
 from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -81,6 +82,7 @@ from app.services.template_intake import (
     analyze_template_upload,
     prepare_template_source,
 )
+from app.services.template_ai_context import TemplateAiContext
 from app.services.template_ai_service import (
     TemplateAiAssistError,
     assist_template_mapping,
@@ -2686,6 +2688,7 @@ async def propose_template_fields_with_ai(
     title: str | None = Form(None),
     analysis_token: str | None = Form(None),
     consent_to_external_ai: bool = Form(False),
+    template_context: str | None = Form(None),
     current_user=Depends(require_capability("use_premium_ai")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2696,6 +2699,17 @@ async def propose_template_fields_with_ai(
             status_code=403,
             detail="Premium AI is not enabled for this user.",
         )
+    context = None
+    if isinstance(template_context, str):
+        try:
+            if len(template_context) > 150_000:
+                raise ValueError("Context too large")
+            context = TemplateAiContext.model_validate_json(template_context)
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Template AI context is invalid or too large. Shorten the requirements or reduce the draft fields.",
+            ) from exc
     await set_tenant_context(db, str(current_user.tenant_id))
     sample = await _read_template_sample(file)
     try:
@@ -2717,6 +2731,7 @@ async def propose_template_fields_with_ai(
             analysis=analysis,
             file_bytes=sample.content,
             consent_to_external_ai=consent_to_external_ai,
+            template_context=context,
         )
     except (
         TemplatePdfError,
