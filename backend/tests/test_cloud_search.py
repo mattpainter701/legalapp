@@ -1,6 +1,7 @@
 """Cloud search provider and content hydration regressions."""
 
 from io import BytesIO
+from email.message import EmailMessage
 
 from docx import Document
 from pypdf import PdfWriter
@@ -264,6 +265,102 @@ async def test_download_follows_graph_content_redirects():
         )
 
     assert content == document_bytes
+
+
+def test_rfc822_extraction_decodes_multipart_text_and_skips_attachments():
+    message = EmailMessage()
+    message["Subject"] = "Synthetic retained email"
+    message["From"] = "sender@example.test"
+    message["To"] = "recipient@example.test"
+    message.set_content("The encoded email fact is in the plain text body.")
+    message.add_attachment(
+        b"secret attachment bytes",
+        maintype="application",
+        subtype="octet-stream",
+        filename="secret.bin",
+    )
+
+    hit = CloudHit(
+        provider="microsoft",
+        source="onedrive",
+        object_id="eml-id",
+        title="retained.eml",
+        snippet="",
+        url="",
+        modified_time="",
+        mime_type="message/rfc822",
+    )
+    content = CloudSearchService._extract_downloaded_file(bytes(message), hit, 2000)
+
+    assert "Subject: Synthetic retained email" in content
+    assert "encoded email fact" in content
+    assert "secret attachment bytes" not in content
+
+
+def test_rfc822_html_only_body_is_plain_text_and_attached_email_is_excluded():
+    nested = EmailMessage()
+    nested["Subject"] = "Attached message must stay hidden"
+    nested.set_content("secret nested message")
+    message = EmailMessage()
+    message["Subject"] = "HTML retained email"
+    message.set_content(
+        "<html><head><style>secret style text</style><script>secret script text</script></head>"
+        "<body><p>The <b>HTML-only</b> email fact.</p></body></html>",
+        subtype="html",
+    )
+    message.add_attachment(
+        bytes(nested), maintype="message", subtype="rfc822", filename="nested.eml"
+    )
+    hit = CloudHit(
+        provider="microsoft",
+        source="onedrive",
+        object_id="eml-id",
+        title="retained.eml",
+        snippet="",
+        url="",
+        modified_time="",
+        mime_type="message/rfc822",
+    )
+
+    content = CloudSearchService._extract_downloaded_file(bytes(message), hit, 2000)
+
+    assert "HTML-only email fact." in content
+    assert "<b>" not in content
+    assert "secret style text" not in content
+    assert "secret script text" not in content
+    assert "secret nested message" not in content
+
+
+@pytest.mark.asyncio
+async def test_outlook_mime_content_uses_rfc822_extractor(monkeypatch):
+    message = EmailMessage()
+    message["Subject"] = "Outlook MIME fact"
+    message.set_content("The Outlook MIME body is readable.")
+    service = CloudSearchService()
+
+    async def fake_token(*_args, **_kwargs):
+        return "access-token"
+
+    monkeypatch.setattr(service, "_get_microsoft_token", fake_token)
+    monkeypatch.setattr(
+        "app.services.cloud_search.httpx.AsyncClient",
+        lambda **_kwargs: _BinaryClient(_BinaryResponse(bytes(message))),
+    )
+    hit = CloudHit(
+        provider="microsoft",
+        source="outlook",
+        object_id="message-id",
+        title="Outlook MIME fact",
+        snippet="",
+        url="",
+        modified_time="",
+        mime_type="",
+    )
+
+    content = await service._fetch_outlook_content(None, hit, "tenant", 2000, None)
+
+    assert "Subject: Outlook MIME fact" in content
+    assert "Outlook MIME body is readable." in content
 
 
 @pytest.mark.asyncio

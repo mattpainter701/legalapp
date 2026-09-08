@@ -10,7 +10,7 @@
       "highlights": [
         {
           "title": "Continue working with your documents",
-          "description": "Eligible attachments stay available within their conversation. Supported cloud PDF and Word downloads are parsed into text, and long attachment excerpts show their coverage limit."
+          "description": "Eligible attachments remain available for follow-up questions. Cloud PDF, Word, and retained email use text extraction; long excerpts disclose their coverage limit."
         },
         {
           "title": "See retrieval limits and source counts",

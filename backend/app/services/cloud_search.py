@@ -7,6 +7,9 @@ snippets + metadata.
 
 import base64
 import asyncio
+from email import policy
+from email.parser import BytesParser
+from html.parser import HTMLParser
 import logging
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -1011,6 +1014,16 @@ class CloudSearchService:
         supported_text = mime_type.startswith("text/") or filename.endswith(
             (".txt", ".csv", ".json", ".html", ".htm", ".xml")
         )
+        supported_email = mime_type == "message/rfc822" or filename.endswith(".eml")
+        if supported_email:
+            try:
+                return (
+                    CloudSearchService._extract_rfc822_text(content, max_chars)
+                    or hit.snippet
+                    or None
+                )
+            except Exception:
+                return hit.snippet or None
         if not supported_binary and not supported_text:
             return hit.snippet or None
         try:
@@ -1023,6 +1036,59 @@ class CloudSearchService:
         except Exception:
             return hit.snippet or None
         return extracted[:max_chars] or hit.snippet or None
+
+    @staticmethod
+    def _extract_rfc822_text(content: bytes, max_chars: int) -> str:
+        """Extract bounded email headers and text bodies, excluding attachments."""
+        message = BytesParser(policy=policy.default).parsebytes(content)
+        header_lines = [
+            f"{name}: {message.get(name)}"
+            for name in ("Subject", "From", "To", "Cc", "Date")
+            if message.get(name)
+        ]
+        body = message.get_body(preferencelist=("plain", "html"))
+        body_parts: list[str] = []
+        if body is not None and body.get_content_disposition() != "attachment":
+            text = body.get_content()
+            if isinstance(text, str):
+                if body.get_content_type() == "text/html":
+                    text = CloudSearchService._html_to_text(text)
+                if text.strip():
+                    body_parts.append(text.strip())
+        sections = ["\n".join(header_lines), "\n\n".join(body_parts)]
+        return "\n\n".join(section for section in sections if section)[:max_chars]
+
+    @staticmethod
+    def _html_to_text(value: str) -> str:
+        """Convert an email HTML body to plain text without retaining markup."""
+
+        class _TextParser(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.parts: list[str] = []
+                self._ignored_depth = 0
+
+            def handle_data(self, data: str) -> None:
+                if not self._ignored_depth:
+                    self.parts.append(data)
+
+            def handle_starttag(self, tag: str, attrs) -> None:
+                if tag in {"head", "script", "style"}:
+                    self._ignored_depth += 1
+                    return
+                if self._ignored_depth:
+                    return
+                if tag in {"br", "div", "p", "li", "tr"}:
+                    self.parts.append("\n")
+
+            def handle_endtag(self, tag: str) -> None:
+                if tag in {"head", "script", "style"} and self._ignored_depth:
+                    self._ignored_depth -= 1
+
+        parser = _TextParser()
+        parser.feed(value)
+        parser.close()
+        return "".join(parser.parts)
 
     async def _fetch_outlook_content(
         self,
@@ -1038,14 +1104,19 @@ class CloudSearchService:
 
         async with httpx.AsyncClient(timeout=15) as client:
             try:
-                resp = await client.get(
+                content = await self._download_content(
+                    client,
                     f"{GRAPH_BASE}/me/messages/{hit.object_id}/$value",
                     headers={"Authorization": f"Bearer {token}"},
-                    follow_redirects=True,
                 )
-                if resp.status_code == 200:
-                    content = resp.text
-                    return content[:max_chars]
+                if content is not None:
+                    return await asyncio.to_thread(
+                        self._extract_downloaded_file,
+                        content,
+                        hit,
+                        max_chars,
+                        "message/rfc822",
+                    )
             except httpx.RequestError:
                 pass
 
