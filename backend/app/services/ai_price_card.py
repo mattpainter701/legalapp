@@ -31,7 +31,7 @@ MICROS_PER_USD = 1_000_000
 
 # Bumped whenever a rate below changes. Every reservation records the version it
 # was priced under so a mid-window price change stays auditable.
-PRICE_CARD_VERSION = "2026-08-27.2"
+PRICE_CARD_VERSION = "2026-09-07.1"
 
 PRICE_CARD_SETTING_KEY = "ai_price_card_v1"
 
@@ -44,6 +44,37 @@ PRICE_CARD_SETTING_KEY = "ai_price_card_v1"
 # request can cost. Cached-write rates are retained where the provider publishes
 # them; reservation uses the most expensive possible input category.
 _DEFAULT_RATES: dict[str, dict[str, float]] = {
+    # Native DeepSeek pricing, verified 2026-09-07. Reserve peak rates.
+    # https://api-docs.deepseek.com/quick_start/pricing/
+    "deepseek/deepseek-v4-flash": {
+        "input": 0.44,
+        "output": 1.32,
+        "cached_read": 0.014,
+    },
+    "deepseek/deepseek-v4-pro": {
+        "input": 1.32,
+        "output": 3.96,
+        "cached_read": 0.044,
+    },
+    "deepseek/deepseek-v4-flash-vision-exp": {
+        "input": 0.44,
+        "output": 1.32,
+        "cached_read": 0.014,
+    },
+    # Explicit provider-published free endpoints, verified 2026-09-07.
+    # Never infer a zero price from a name suffix or a UI catalog label.
+    # https://opencode.ai/docs/zen/#pricing
+    **{
+        f"opencode-zen/{model}": {"input": 0.0, "output": 0.0, "cached_read": 0.0}
+        for model in (
+            "big-pickle",
+            "mimo-v2.5-free",
+            "ling-3.0-flash-fin-free",
+            "nemotron-3-ultra-free",
+            "nemotron-3.5-lightning-free",
+            "muse-spark-1.3-contributor-free",
+        )
+    },
     "opencode-go/grok-4.6": {
         "input": 2.00,
         "output": 6.00,
@@ -259,6 +290,7 @@ class PriceCard:
         model: str,
         input_tokens: int,
         max_output_tokens: int,
+        minimum_micros: int = 1,
     ) -> int:
         """Price the worst case this request can cost.
 
@@ -290,7 +322,12 @@ class PriceCard:
             max(0, int(max_output_tokens))
         ) * Decimal(str(rate["output"]))
         # Always round up: a reservation must never under-reserve.
-        return max(1, int(micros.to_integral_value(rounding=ROUND_CEILING)))
+        # Admission retains a one-micro bookkeeping hold for verified free
+        # work, preserving the ledger's positive-reservation invariant and
+        # request-count backstop. Settlement can release that hold to zero.
+        return max(
+            minimum_micros, int(micros.to_integral_value(rounding=ROUND_CEILING))
+        )
 
     def estimate_max_for_models(
         self,
@@ -379,8 +416,16 @@ def _coerce_rates(raw: Any) -> dict[str, dict[str, float]]:
         if (
             not math.isfinite(input_rate)
             or not math.isfinite(output_rate)
-            or input_rate <= 0
-            or output_rate <= 0
+            or input_rate < 0
+            or output_rate < 0
+            or (
+                (input_rate == 0 or output_rate == 0)
+                and not (
+                    input_rate == output_rate == 0
+                    and value.get("free") is True
+                    and "/" in model
+                )
+            )
         ):
             continue
         parsed: dict[str, float] = {"input": input_rate, "output": output_rate}
