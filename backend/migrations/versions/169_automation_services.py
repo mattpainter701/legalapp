@@ -190,7 +190,7 @@ def upgrade():
       CREATE TRIGGER users_automation_service_guard BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION guard_automation_service_user();
       CREATE TRIGGER user_roles_automation_service_guard BEFORE INSERT OR UPDATE ON user_roles FOR EACH ROW EXECUTE FUNCTION guard_automation_service_role();
     """
-    functions, triggers = guard_sql.rsplit("CREATE TRIGGER", 1)
+    functions, triggers = guard_sql.split("CREATE TRIGGER", 1)
     for statement in functions.split("END $$;"):
         if statement.strip():
             op.execute(statement.strip() + "END $$;")
