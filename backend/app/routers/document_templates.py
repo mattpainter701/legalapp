@@ -3469,13 +3469,14 @@ async def cleanup_word_draft(
         payload.expected_version_no is not None
         and payload.expected_version_no != int(template.current_version_no or 0)
     ):
-        raise HTTPException(status_code=409, detail="The template changed. Reload before saving wording.")
+        raise HTTPException(
+            status_code=409,
+            detail="The template changed. Reload before saving wording.",
+        )
     source = await _verified_template_source(template)
     edit = payload.model_dump(exclude={"expected_source_sha256", "expected_version_no"})
     try:
-        derived = await asyncio.to_thread(
-            cleanup_docx_source, source, **edit
-        )
+        derived = await asyncio.to_thread(cleanup_docx_source, source, **edit)
         schema = schema_after_word_edit(
             template.variable_schema,
             **{key: value for key, value in edit.items() if key != "original_text"},
