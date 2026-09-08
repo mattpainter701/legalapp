@@ -6,7 +6,7 @@ from app.release_notes import RECENT_RELEASE_DAYS, build_release_catalog
 from app.main import app_version
 
 
-LATEST_RELEASE_ID = "2026.09.08.1"
+LATEST_RELEASE_ID = "2026.09.08.2"
 LATEST_RELEASE_DATE = date(2026, 9, 8)
 
 
@@ -18,8 +18,8 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["version"] == LATEST_RELEASE_ID
     assert latest["is_recent"] is True
     assert len(latest["highlights"]) == 2
-    assert latest["highlights"][0]["title"] == "See the original Word layout"
-    assert latest["highlights"][-1]["title"] == "Keep working on fields"
+    assert latest["highlights"][0]["title"] == "Predictable connection limits"
+    assert latest["highlights"][-1]["title"] == "Separate assistant and platform usage"
     history_ids = [release["id"] for release in catalog["release_notes"]]
     assert all(f"2026.09.07.{n}" in history_ids for n in (7, 8, 9))
     assert "2026.09.07.6" in history_ids

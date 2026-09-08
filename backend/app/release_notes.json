@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.08.2",
+      "version": "2026.09.08.2",
+      "title": "Bound connected assistant usage",
+      "published_at": "2026-09-08",
+      "summary": "Workspace connections share a call budget across refreshed tokens and receive clear guidance when a read is too large.",
+      "highlights": [
+        {
+          "title": "Predictable connection limits",
+          "description": "Connected assistants receive retry guidance when their grant reaches its call limit. Large reads return a request to narrow the query without exposing partial evidence."
+        },
+        {
+          "title": "Separate assistant and platform usage",
+          "description": "Workspace infrastructure limits do not debit AI balances. LawHand-run AI features retain their own usage accounting."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.1",
       "version": "2026.09.08.1",
       "title": "Restore Word previews in Template Studio",

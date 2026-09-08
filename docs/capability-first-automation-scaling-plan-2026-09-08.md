@@ -1,8 +1,7 @@
 # Capability-First Automation Scaling Plan
 
 **Date:** 2026-09-08
-**Status:** Proposed — architecture direction and execution plan, not an
-accepted release claim
+**Status:** Accepted direction; implementation in progress, not a release claim
 **Owner:** LawHand product/engineering
 **Execution branch:** `claude/automation-scaling-strategy-g7tcd7`
 
@@ -92,6 +91,16 @@ deliberately no approve, send, file, or delete tool.
 ---
 
 ## Strategic thesis: the customer brings the harness
+
+**Owner decision, 2026-09-08:** BYO-harness is a supported broad platform channel
+alongside separately metered LawHand AI. Workspace/portal/matter/firm management
+uses `mcp.getlawhand.com`; research uses `research.getlawhand.com`. The harness
+pays for its own reasoning, while LawHand-run PDF templating, Standard/Premium
+research and other inference retain their own metering, including when invoked
+from a harness. This is distinct from provider API-key BYOK. The accepted
+[channel contract](byo-harness-channel-contract.md) and explicit BK24 amendment
+supersede the channel/pricing interpretation below; they do not expand the
+implemented tool catalog or authorize unattended operation.
 
 This is the commercial half of the plan and it changes the cost model.
 
@@ -424,10 +433,9 @@ analytics, court e-filing, native Google Docs conversion, and the open
 
 ## Open decisions for the owner
 
-1. **Channel posture.** Is the customer-supplied harness a co-equal channel with
-   the owned-route assistant, or a power-user tier? This determines whether W5a
-   is marketing-led or product-led, and whether BK24's "BYOK out of scope"
-   decision needs an explicit amendment.
+1. **Channel posture — resolved 2026-09-08.** Supported broad platform channel
+   alongside the owned assistant and separately metered AI features; see the
+   [channel contract](byo-harness-channel-contract.md). BK24 amended explicitly.
 2. **Staffing split for Phase 1.** Three independent tracks; W2 is the critical
    path if fewer than three owners are available.
 3. **W3 proposal surface.** Does synthesized configuration appear in firm
