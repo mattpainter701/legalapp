@@ -59,6 +59,7 @@ describe('Word document preview', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
     expect(screen.getByText('Rendered page 2')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pages', exact: true }))
     fireEvent.click(screen.getByRole('button', { name: 'Thumbnail 2' }))
     expect(screen.getByText('Rendered page 2')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in document' }))
@@ -70,6 +71,7 @@ describe('Word document preview', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Document', exact: true }))
     expect(screen.getByTestId('page')).toBeVisible()
     expect(getTemplateSourcePreview).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByText('Document help'))
     expect(screen.getByText(/Filled values can change pagination/)).toBeVisible()
   })
 

@@ -265,7 +265,7 @@ describe('document template workflow', () => {
     const user = userEvent.setup()
     renderStudioRoute(`/templates/${templateId}/studio`)
 
-    await user.click(await screen.findByRole('button', { name: 'Edit template' }))
+    await user.click(await screen.findByRole('button', { name: 'Template settings' }))
     const dialog = screen.getByRole('dialog', { name: 'Edit Template' })
     const title = within(dialog).getByRole('textbox', { name: 'Title' })
     await user.clear(title)
@@ -1322,7 +1322,7 @@ describe('document template workflow', () => {
     render(<TemplatesPage />)
 
     await user.click(await screen.findByRole('button', { name: 'Preview draft' }))
-    expect(screen.getByText(/This template is inactive/)).toBeInTheDocument()
+    expect(screen.getByText(/Draft preview. Test and publish/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
     expect(screen.getByRole('button', { name: 'Render & Save to Matter' })).toBeDisabled()
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Preview draft' }))

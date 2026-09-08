@@ -294,6 +294,38 @@ def derived_source_is_current(
     )
 
 
+def schema_after_word_edit(schema, *, paragraph_ordinal, start, end, replacement_text):
+    """Retain mappings outside an edit and shift later character anchors.
+
+    The source renderer separately verifies the exact original text. A wording
+    edit may not consume mapped text; that must be changed through field tools.
+    """
+    result = copy.deepcopy(schema or {})
+    delta = len(replacement_text) - (end - start)
+    retained = []
+    for field in result.get("fields", []):
+        anchor = field.get("docx_anchor")
+        if not anchor or anchor.get("paragraph_ordinal") != paragraph_ordinal:
+            retained.append(field)
+            continue
+        if anchor["start"] < end and start < anchor["end"]:
+            if field.get("included") is False:
+                continue
+            raise TemplateDocxError(
+                "This edit changes a mapped field. Edit the wording around the field, "
+                "or exclude that field before changing its source text."
+            )
+        if anchor["start"] >= end:
+            anchor["start"] += delta
+            anchor["end"] += delta
+            if field.get("docx_source_key"):
+                field["docx_source_key"] = docx_source_key(field["source_text"], anchor)
+        retained.append(field)
+    result["fields"] = retained
+    result["source_review"] = {}
+    return result
+
+
 def cleanup_docx_source(
     content: bytes,
     *,

@@ -205,6 +205,8 @@ class DocumentTemplateWordDeriveRequest(BaseModel):
 
 
 class DocumentTemplateWordCleanupRequest(BaseModel):
+    expected_source_sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expected_version_no: Optional[int] = Field(default=None, ge=0)
     paragraph_ordinal: int = Field(ge=0, le=2000)
     start: int = Field(ge=0, le=20000)
     end: int = Field(gt=0, le=20000)

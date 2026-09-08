@@ -8,6 +8,7 @@ import WordImportWorkspace from '../components/templates/WordImportWorkspace'
 import TemplateTestSummary from '../components/templates/TemplateTestSummary'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
 import TemplateFillProgress from '../components/templates/TemplateFillProgress'
+import TemplateFillSource from '../components/templates/TemplateFillSource'
 import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues, suggestionConfidenceLabel } from '../components/templates/templateFillReview'
 import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
@@ -1586,8 +1587,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   }
 
   return (
-    <Modal title={`${canSaveToMatter ? (isPdfOutput ? 'Generate PDF' : isDocxTemplate ? 'Generate Word Document' : 'Generate Document') : 'Preview Draft'}: ${template.title}`} onClose={handleClose}>
-      <div className="space-y-4">
+    <Modal title={`${canSaveToMatter ? (isPdfOutput ? 'Generate PDF' : isDocxTemplate ? 'Generate Word Document' : 'Generate Document') : 'Preview Draft'}: ${template.title}`} onClose={handleClose} wide>
+      <div className="grid gap-5 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]"><div className="space-y-4 lg:max-h-[78vh] lg:overflow-y-auto lg:pr-2">
         {error && (
           <div className="text-sm text-brand-rose bg-brand-rose/10 border border-brand-rose/30 px-3 py-2">
             {canSaveToMatter ? error : 'The test needs attention. See the results below for the exact issue.'}
@@ -1596,7 +1597,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
 
         {!canSaveToMatter && (
           <div role="status" className="text-sm text-brand-amber bg-brand-amber/10 border border-brand-amber/30 px-3 py-2">
-            This template is inactive. Preview and verify it here, then activate it before saving any generated document to a matter.
+            Draft preview. Test and publish before saving to a matter.
           </div>
         )}
 
@@ -1608,25 +1609,6 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           disabled={saving}
         />
 
-        {isDocxTemplate && (
-          <fieldset className="rounded border border-brand-line bg-brand-bg px-3 py-3">
-            <legend className="px-1 text-sm font-medium text-brand-ink">Output format</legend>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <label className={`cursor-pointer rounded border px-3 py-2 ${convertDocxToPdf ? 'border-brand-accent bg-brand-accent/5' : 'border-brand-line bg-brand-surface'}`}>
-                <span className="flex items-start gap-2">
-                  <input type="radio" name="template-output-format" checked={convertDocxToPdf} onChange={() => { setConvertDocxToPdf(true); setSaved(false); invalidatePreview() }} disabled={saving} className="mt-1" />
-                  <span><span className="block text-sm font-semibold text-brand-ink">PDF for signature</span><span className="block text-xs text-brand-muted">Preserves the Word layout in a review-bound PDF ready for the e-signing workflow.</span></span>
-                </span>
-              </label>
-              <label className={`cursor-pointer rounded border px-3 py-2 ${!convertDocxToPdf ? 'border-brand-accent bg-brand-accent/5' : 'border-brand-line bg-brand-surface'}`}>
-                <span className="flex items-start gap-2">
-                  <input type="radio" name="template-output-format" checked={!convertDocxToPdf} onChange={() => { setConvertDocxToPdf(false); setSaved(false); invalidatePreview() }} disabled={saving} className="mt-1" />
-                  <span><span className="block text-sm font-semibold text-brand-ink">Editable Word document</span><span className="block text-xs text-brand-muted">Keep DOCX output when another editing pass is still required.</span></span>
-                </span>
-              </label>
-            </div>
-          </fieldset>
-        )}
 
         <details>
           <summary className="cursor-pointer text-xs text-brand-muted">Find a matter by ID</summary>
@@ -1648,7 +1630,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             <div>
               <p className="text-sm font-medium text-brand-ink">Smart fill</p>
               <p className="text-xs text-brand-muted">
-                {hasFirmFields ? 'Fill shared firm details now; select a matter for client and matter values. ' : 'Fill from the selected matter. '}Refresh after details change; your entries are kept and changed suggestions appear beside them.
+                {hasFirmFields ? 'Uses shared firm details and the selected matter.' : 'Uses the selected matter.'} Your entries are kept on refresh.
               </p>
             </div>
             <button
@@ -1792,6 +1774,27 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           </p>
         )}
 
+        {isDocxTemplate && (
+          <fieldset className="rounded border border-brand-line bg-brand-bg px-3 py-2">
+            <legend className="px-1 text-sm font-medium text-brand-ink">Output format</legend>
+            <div className="flex flex-wrap gap-2">
+              <label className={`cursor-pointer rounded border px-3 py-2 ${convertDocxToPdf ? 'border-brand-accent bg-brand-accent/5' : 'border-brand-line bg-brand-surface'}`}>
+                <span className="flex items-start gap-2">
+                  <input type="radio" name="template-output-format" checked={convertDocxToPdf} onChange={() => { setConvertDocxToPdf(true); setSaved(false); invalidatePreview() }} disabled={saving} className="mt-1" />
+                  <span><span className="block text-sm font-semibold text-brand-ink">PDF for signature</span><span className="sr-only">Preserves the Word layout in a review-bound PDF ready for the e-signing workflow.</span></span>
+                </span>
+              </label>
+              <label className={`cursor-pointer rounded border px-3 py-2 ${!convertDocxToPdf ? 'border-brand-accent bg-brand-accent/5' : 'border-brand-line bg-brand-surface'}`}>
+                <span className="flex items-start gap-2">
+                  <input type="radio" name="template-output-format" checked={!convertDocxToPdf} onChange={() => { setConvertDocxToPdf(false); setSaved(false); invalidatePreview() }} disabled={saving} className="mt-1" />
+                  <span><span className="block text-sm font-semibold text-brand-ink">Editable Word document</span><span className="sr-only">Keep DOCX output when another editing pass is still required.</span></span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+        )}
+
+
         <div className="flex flex-col sm:flex-row gap-3">
           {!canSaveToMatter ? (
             <>
@@ -1849,6 +1852,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
 
         {!canSaveToMatter && <TemplateTestSummary template={template} error={error} rendering={rendering} outputReady={Boolean(filePreview || rendered)} missing={requiredUnresolvedNames} diagnostic={isPdfTemplate && previewPurpose !== 'activation'} />}
 
+        </div><section aria-label="Document preview" className="min-w-0 rounded-xl border border-brand-line bg-brand-bg p-4 lg:max-h-[78vh] lg:overflow-auto">
+        {!filePreview && !rendered && <><div className="mb-3"><h3 className="text-sm font-semibold text-brand-ink">Document reference</h3><p className="mt-1 text-xs text-brand-muted">Click a highlighted field to complete it. Choose Preview to check the generated document with your current values.</p></div><TemplateFillSource template={template} fields={Object.values(fieldDefinitions).filter(field => field.included !== false)} values={variables} onSelectField={name => { pendingFocus.current = name; setFieldFilter('all'); requestAnimationFrame(() => document.getElementById(`template-variable-${name}`)?.focus()) }} /></>}
         {rendered && (
           <div>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -1914,7 +1919,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             )}
           </div>
         )}
-      </div>
+      </section></div>
     </Modal>
   )
 }

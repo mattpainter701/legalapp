@@ -273,6 +273,27 @@ describe('TemplateStudioEditor', () => {
     ])
   })
 
+  it('places a field at the clicked PDF point, supports cancellation and keyboard placement', async () => {
+    const onSave = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Text' }))
+    expect(screen.getByRole('button', { name: 'Save fields' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel placement' }))
+    expect(screen.queryByText('New text field')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Text' }))
+    const canvas = screen.getByLabelText('Editable PDF page')
+    canvas.getBoundingClientRect = () => ({ left: 40, top: 60 })
+    fireEvent.click(canvas, { clientX: 130, clientY: 240 })
+    fireEvent.click(screen.getByRole('button', { name: 'Save fields' }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    const rect = onSave.mock.calls[0][0].fields[0].pdf_overlay.rect
+    expect(rect[0]).toBeCloseTo(100)
+    expect(rect[3]).toBeCloseTo(592)
+    fireEvent.click(screen.getByRole('button', { name: 'Date' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Place at page center' }))
+    expect(screen.getByRole('button', { name: 'New date field' })).toBeVisible()
+  })
+
   it('removes the cover on its own page without shifting another page cover', () => {
     const template = templateWith([], {
       cover_regions: [
@@ -358,7 +379,7 @@ describe('TemplateStudioEditor', () => {
     expect(binding).toHaveValue('')
     fireEvent.change(binding, { target: { value: 'client.name' } })
     expect(binding).toHaveValue('client.name')
-    expect(screen.getByText(/fills from the matter every time/i)).toBeInTheDocument()
+    expect(screen.getByText(/Uses the selected data source/i)).toBeInTheDocument()
 
     const condition = screen.getByLabelText(/only include when/i)
     // A field cannot be conditioned on itself.
@@ -383,6 +404,7 @@ describe('TemplateStudioEditor', () => {
     render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={vi.fn()} />)
     expect(screen.getByRole('status')).toHaveTextContent('No changes')
     fireEvent.click(screen.getByRole('button', { name: 'Text' }))
+    fireEvent.click(screen.getByLabelText('Editable PDF page'), { clientX: 120, clientY: 160 })
     expect(screen.getByRole('status')).toHaveTextContent('Unsaved changes')
     expect(screen.getByDisplayValue('field_1')).toBeInTheDocument()
   })
@@ -391,6 +413,7 @@ describe('TemplateStudioEditor', () => {
     const onSave = vi.fn().mockResolvedValue({})
     render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)
     fireEvent.click(screen.getByRole('button', { name: 'Date' }))
+    fireEvent.click(screen.getByLabelText('Editable PDF page'), { clientX: 120, clientY: 160 })
     fireEvent.click(screen.getByRole('button', { name: /Save fields/i }))
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
     const schema = onSave.mock.calls[0][0]
@@ -405,6 +428,7 @@ describe('TemplateStudioEditor', () => {
     const onSave = vi.fn().mockResolvedValue({})
     render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)
     fireEvent.click(screen.getByRole('button', { name: 'Signature' }))
+    fireEvent.click(screen.getByLabelText('Editable PDF page'), { clientX: 120, clientY: 160 })
     fireEvent.change(screen.getByDisplayValue('field_1'), { target: { value: 'client_signature' } })
     fireEvent.change(screen.getByRole('textbox', { name: 'Signer role' }), { target: { value: 'client' } })
     fireEvent.click(screen.getByRole('button', { name: /Save fields/i }))
@@ -418,6 +442,7 @@ describe('TemplateStudioEditor', () => {
     const onSave = vi.fn().mockRejectedValue(new Error('Template is locked'))
     render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)
     fireEvent.click(screen.getByRole('button', { name: 'Text' }))
+    fireEvent.click(screen.getByLabelText('Editable PDF page'), { clientX: 120, clientY: 160 })
     fireEvent.click(screen.getByRole('button', { name: /Save fields/i }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Template is locked')
     expect(screen.getByRole('status')).toHaveTextContent('Unsaved changes')
@@ -468,12 +493,14 @@ describe('TemplateStudioEditor', () => {
     expect(screen.getByRole('button', { name: /Exclude field/i })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Text' }))
+    fireEvent.click(screen.getByLabelText('Editable PDF page'), { clientX: 120, clientY: 160 })
     expect(screen.getByRole('button', { name: /Delete field/i })).toBeInTheDocument()
   })
 
   it('restores the previous placement state through undo', () => {
     render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Text' }))
+    fireEvent.click(screen.getByLabelText('Editable PDF page'), { clientX: 120, clientY: 160 })
     expect(screen.getByDisplayValue('field_1')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     expect(screen.queryByDisplayValue('field_1')).not.toBeInTheDocument()
@@ -484,6 +511,7 @@ describe('TemplateStudioEditor', () => {
     render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Show page 2' }))
     fireEvent.click(screen.getByRole('button', { name: 'Text' }))
+    fireEvent.click(screen.getByLabelText('Editable PDF page'), { clientX: 120, clientY: 160 })
     expect(screen.getByText(/Page 2/)).toBeInTheDocument()
   })
 })
