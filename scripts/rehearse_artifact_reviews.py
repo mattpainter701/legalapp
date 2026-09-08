@@ -62,6 +62,10 @@ def main():
             "UPDATE generated_artifacts SET output_document_id=%s WHERE id=%s",
             (document, artifact),
         )
+        cursor.execute(
+            "UPDATE tasks SET status='review',review_policy='staff_then_attorney',review_stage='staff',reviewer_user_id=%s,staff_reviewer_user_id=%s,attorney_reviewer_user_id=%s WHERE id=%s",
+            (staff, staff, attorney, task),
+        )
         for seq, role, reviewer, requirement in (
             (1, "staff", staff, staff_req),
             (2, "attorney", attorney, attorney_req),

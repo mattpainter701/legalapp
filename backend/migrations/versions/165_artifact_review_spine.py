@@ -41,7 +41,7 @@ def upgrade():
         "CREATE TRIGGER work_artifact_approval_validate BEFORE INSERT ON work_artifact_approval FOR EACH ROW EXECUTE FUNCTION validate_work_artifact_approval()"
     )
     op.execute(
-        "CREATE TRIGGER work_artifact_requirement_guard BEFORE UPDATE OR DELETE ON work_artifact_review_requirement FOR EACH ROW EXECUTE FUNCTION guard_work_artifact_requirement()"
+        "CREATE TRIGGER work_artifact_requirement_guard BEFORE INSERT OR UPDATE OR DELETE ON work_artifact_review_requirement FOR EACH ROW EXECUTE FUNCTION guard_work_artifact_requirement()"
     )
     op.execute(
         "CREATE TRIGGER work_artifact_revision_supersede AFTER UPDATE OF current_revision_no ON generated_artifacts FOR EACH ROW EXECUTE FUNCTION supersede_work_artifact_reviews()"
@@ -140,6 +140,11 @@ BEGIN
     IF q.reviewer_user_id <> NEW.reviewer_user_id THEN
       RAISE EXCEPTION 'artifact reviewer mismatch' USING ERRCODE='23514';
     END IF;
+    IF NEW.decision='approve' AND q.reviewer_role='attorney' AND q.sequence=2 AND NOT EXISTS (
+      SELECT 1 FROM work_artifact_review_requirement staff WHERE staff.tenant_id=NEW.tenant_id
+      AND staff.artifact_id=a.id AND staff.revision_id=r.id AND staff.review_round=q.review_round
+      AND staff.reviewer_role='staff' AND staff.status IN ('approved','skipped')
+    ) THEN RAISE EXCEPTION 'staff decision is required' USING ERRCODE='23514'; END IF;
     IF NEW.decision='approve' AND EXISTS (
       SELECT 1 FROM work_artifact_review_requirement prior WHERE prior.tenant_id=NEW.tenant_id
       AND prior.artifact_id=a.id AND prior.revision_id=r.id AND prior.review_round=q.review_round
@@ -150,7 +155,21 @@ BEGIN
 END $$;
 
 CREATE FUNCTION guard_work_artifact_requirement() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE a generated_artifacts; t tasks; r generated_artifact_revisions;
 BEGIN
+  IF TG_OP='INSERT' THEN
+    SELECT * INTO a FROM generated_artifacts WHERE tenant_id=NEW.tenant_id AND id=NEW.artifact_id FOR UPDATE;
+    SELECT * INTO t FROM tasks WHERE tenant_id=NEW.tenant_id AND id=a.task_id;
+    SELECT * INTO r FROM generated_artifact_revisions WHERE tenant_id=NEW.tenant_id AND artifact_id=NEW.artifact_id AND id=NEW.revision_id;
+    IF a.id IS NULL OR t.id IS NULL OR r.id IS NULL OR a.status<>'review'
+       OR a.current_revision_no<>r.revision_no OR NEW.status<>'pending' OR NOT NEW.required
+       OR t.review_policy NOT IN ('staff_then_attorney','attorney_only')
+       OR (NEW.reviewer_role='staff' AND (t.review_policy<>'staff_then_attorney' OR NEW.sequence<>1 OR NEW.reviewer_user_id IS DISTINCT FROM t.staff_reviewer_user_id))
+       OR (NEW.reviewer_role='attorney' AND (NEW.sequence<>CASE t.review_policy WHEN 'attorney_only' THEN 1 ELSE 2 END OR NEW.reviewer_user_id IS DISTINCT FROM t.attorney_reviewer_user_id)) THEN
+      RAISE EXCEPTION 'artifact requirements must match the assigned review policy' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF TG_OP='DELETE' THEN
     IF public.config_workflow_demo_purge_authorized(OLD.tenant_id) THEN RETURN OLD; END IF;
     RAISE EXCEPTION 'artifact review requirements cannot be deleted';
