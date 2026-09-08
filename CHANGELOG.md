@@ -11,7 +11,7 @@
 
 # Changelog
 
-## 2026.09.07.20 - Public support path and requirements matrix
+## 2026.09.07.22 - Public support path and requirements matrix
 
 - Publish `/support`, rendering the existing versioned support policy (coverage hours, S1-S4 definitions, acknowledgement objectives, escalation) live from `GET /api/public/support-policy` so published response times cannot drift from the security-review packet. Contact is `mailto:support@getlawhand.com`; the email path and the objectives-not-an-SLA boundary render without a successful fetch.
 - Publish `/requirements` with platform prerequisites, the Microsoft 365 and Google Workspace matrix, the administrator role each provider needs, the exact scopes requested for tenant-wide and per-user consent, the onboarding sequence, and current limits including the presently broad consent bundle.
