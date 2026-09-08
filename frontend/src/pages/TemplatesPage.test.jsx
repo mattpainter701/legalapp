@@ -1127,6 +1127,25 @@ describe('document template workflow', () => {
     expect(screen.queryByText('95% match confidence')).not.toBeInTheDocument()
   })
 
+  it('fills and refreshes explicit firm fields without requiring a matter or overwriting entries', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{ id: 'firm-template', title: 'Firm letter', body: '{{letterhead}}', is_active: true, variable_schema: { fields: [{ name: 'letterhead', label: 'Firm name', binding: 'firm.name' }] } }] })
+    const suggestion = name => ({ variables: { letterhead: { suggested_value: name, source_type: 'firm_profile', confidence: 1, provenance: { binding_label: 'Firm name' } } } })
+    discoverTemplateVariables.mockResolvedValueOnce(suggestion('Example Firm')).mockResolvedValueOnce(suggestion('Updated Firm'))
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.click(screen.getByRole('button', { name: 'Smart Fill' }))
+    expect(await screen.findByText('Saved firm profile value')).toBeInTheDocument()
+    expect(discoverTemplateVariables).toHaveBeenCalledWith('firm-template', { matter_id: null, published: true, variables: ['letterhead'] })
+    expect(screen.getByRole('textbox', { name: 'Firm name' })).toHaveValue('Example Firm')
+    expect(screen.queryByText('100% match confidence')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Refresh firm values' }))
+    expect(await screen.findByText('Firm profile now suggests: Updated Firm')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Firm name' })).toHaveValue('Example Firm')
+    await user.click(screen.getByRole('button', { name: 'Use updated Firm name' }))
+    expect(screen.getByRole('textbox', { name: 'Firm name' })).toHaveValue('Updated Firm')
+  })
+
   it('clears matter-specific values and suggestions when changing the destination', async () => {
     discoverTemplateVariables.mockResolvedValueOnce({ variables: { client_name: { suggested_value: 'Ada', confidence: 1 } } })
     const user = userEvent.setup()

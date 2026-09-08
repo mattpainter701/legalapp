@@ -1288,6 +1288,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     [names, fieldDefinitions],
   )
   const progress = fillReview(names, fieldDefinitions, variables, fieldSources, reviewedValues)
+  const hasFirmFields = fillableNames.some(name => fieldDefinitions[name]?.binding?.startsWith('firm.'))
   const visibleNames = fieldFilter === 'all' ? names : (fieldFilter === 'remaining' ? progress.remaining : progress.review).map(row => row.name)
   const nextField = () => {
     const name = progress.remaining[0]?.name || progress.review[0]?.name
@@ -1399,7 +1400,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   }
 
   const handleSmartFill = async () => {
-    if (!matterId.trim()) {
+    if (!matterId.trim() && !hasFirmFields) {
       setSmartFillState('error')
       setSmartFillMessage('Choose a matter before smart fill.')
       return
@@ -1407,7 +1408,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     const requestGeneration = smartFillRequestGenerationRef.current + 1
     smartFillRequestGenerationRef.current = requestGeneration
     const requestRevision = formRevisionRef.current
-    const requestMatterId = matterId.trim()
+    const requestMatterId = matterId.trim() || null
     setSmartFillState('loading')
     setSmartFillMessage('')
     try {
@@ -1437,7 +1438,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       invalidatePreview()
       setSaved(false)
       setSmartFillState('ready')
-      setSmartFillMessage('Matter values refreshed. Your entries were kept.')
+      setSmartFillMessage('Available values refreshed. Your entries were kept.')
     } catch (err) {
       if (smartFillRequestGenerationRef.current !== requestGeneration) return
       if ([404, 405, 501].includes(err?.response?.status)) {
@@ -1647,16 +1648,16 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             <div>
               <p className="text-sm font-medium text-brand-ink">Smart fill</p>
               <p className="text-xs text-brand-muted">
-                Fill from the selected matter. Refresh after its details change; your entries are kept and changed suggestions appear beside them.
+                {hasFirmFields ? 'Fill shared firm details now; select a matter for client and matter values. ' : 'Fill from the selected matter. '}Refresh after details change; your entries are kept and changed suggestions appear beside them.
               </p>
             </div>
             <button
               onClick={handleSmartFill}
-              disabled={saving || smartFillState === 'loading' || !matterId.trim()}
+              disabled={saving || smartFillState === 'loading' || (!matterId.trim() && !hasFirmFields)}
               className="flex shrink-0 items-center justify-center gap-2 whitespace-nowrap px-3 py-2 text-sm text-brand-ink border border-brand-line rounded hover:bg-brand-surface-2 disabled:opacity-50"
             >
               <Wand2 size={15} />
-              {smartFillState === 'loading' ? 'Filling...' : smartFillState === 'ready' ? 'Refresh matter values' : 'Smart Fill'}
+              {smartFillState === 'loading' ? 'Filling...' : smartFillState === 'ready' ? (matterId.trim() ? 'Refresh matter values' : 'Refresh firm values') : 'Smart Fill'}
             </button>
           </div>
         )}
