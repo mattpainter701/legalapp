@@ -6,19 +6,26 @@ from uuid import uuid4
 import pytest
 
 from app.services.automation_capabilities import CapabilityError
-from app.services.automation_service_contract import ServiceIdentityInput
+from app.services.automation_service_contract import (
+    ServiceIdentityInput,
+    ServiceRuleInput,
+    ServiceSchedule,
+)
 from app.services.automation_services import (
     approve_rule,
     create_identity,
+    create_rule,
     set_rule_status,
 )
 from app.routers import automation_services as router_module
+from app.services.workflow_run_contract import RunStepInput, WorkflowRunInput
 
 
 class Database:
     def __init__(self, rows=()):
         self.scalar = AsyncMock(side_effect=list(rows))
         self.flush = AsyncMock()
+        self.add = Mock()
         self.add_all = Mock()
 
 
@@ -240,3 +247,230 @@ def test_router_maps_not_found_and_conflicts():
     conflict = router_module._error(CapabilityError("service_scope_denied", "no"))
     assert missing.status_code == 404
     assert conflict.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_rule_rejects_missing_identity_or_run():
+    body = ServiceRuleInput(
+        name="Rule",
+        identity_id=uuid4(),
+        source_run_id=uuid4(),
+        schedule=ServiceSchedule(kind="daily", local_time="02:00"),
+    )
+    for rows in ([None, SimpleNamespace()], [SimpleNamespace(status="active"), None]):
+        db = Database(rows)
+        with pytest.raises(CapabilityError) as error:
+            await create_rule(db, tenant_id=uuid4(), actor=SimpleNamespace(id=uuid4()), body=body)
+        assert error.value.code == "service_source_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_create_rule_rejects_disabled_identity():
+    body = ServiceRuleInput(
+        name="Rule",
+        identity_id=uuid4(),
+        source_run_id=uuid4(),
+        schedule=ServiceSchedule(kind="daily", local_time="02:00"),
+    )
+    identity = SimpleNamespace(id=body.identity_id, status="disabled", version=1)
+    run = SimpleNamespace(id=body.source_run_id, matter_id=uuid4(), status="completed")
+    db = Database([identity, run])
+    with pytest.raises(CapabilityError) as error:
+        await create_rule(db, tenant_id=uuid4(), actor=SimpleNamespace(id=uuid4()), body=body)
+    assert error.value.code == "service_identity_disabled"
+
+
+@pytest.mark.asyncio
+async def test_create_rule_rejects_unavailable_event_rule():
+    from app.models.workflow_automation import MatterWorkflowAutomationRule
+
+    event_rule_id = uuid4()
+    body = ServiceRuleInput(
+        name="Rule",
+        identity_id=uuid4(),
+        source_run_id=uuid4(),
+        schedule=ServiceSchedule(kind="workflow_event", event_rule_id=event_rule_id),
+    )
+    identity = SimpleNamespace(
+        id=body.identity_id, status="active", version=1, capabilities=["propose_task"]
+    )
+    run = SimpleNamespace(
+        id=body.source_run_id,
+        tenant_id=uuid4(),
+        matter_id=uuid4(),
+        status="completed",
+        objective="prepare_document",
+        plan_json={"source_bindings": []},
+        source_context_ciphertext=None,
+    )
+    plan = WorkflowRunInput(
+        request_id=uuid4(),
+        matter_id=run.matter_id,
+        objective="prepare_document",
+        steps=[
+            RunStepInput(
+                step_key="task",
+                capability="propose_task",
+                arguments={"matter_id": str(run.matter_id), "title": "x"},
+            )
+        ],
+    )
+    for event_rule in (None, SimpleNamespace(template_id=None, definition_sha256="e" * 64)):
+        db = Database([identity, run, event_rule])
+        with (
+            patch(
+                "app.services.automation_services.freeze_service_plan",
+                new_callable=AsyncMock,
+                return_value=(plan, None),
+            ),
+            pytest.raises(CapabilityError) as error,
+        ):
+            await create_rule(db, tenant_id=uuid4(), actor=SimpleNamespace(id=uuid4()), body=body)
+        assert error.value.code == "service_event_rule_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_create_rule_freezes_plan_and_hashes_definition():
+    from app.services import automation_services as services
+
+    body = ServiceRuleInput(
+        name="Rule",
+        identity_id=uuid4(),
+        source_run_id=uuid4(),
+        schedule=ServiceSchedule(kind="daily", local_time="02:00"),
+    )
+    identity = SimpleNamespace(
+        id=body.identity_id,
+        status="active",
+        version=3,
+        capabilities=["propose_task"],
+    )
+    run = SimpleNamespace(id=body.source_run_id, matter_id=uuid4(), status="completed")
+    plan = WorkflowRunInput(
+        request_id=uuid4(),
+        matter_id=run.matter_id,
+        objective="prepare_document",
+        steps=[
+            RunStepInput(
+                step_key="task",
+                capability="propose_task",
+                arguments={"matter_id": str(run.matter_id), "title": "x"},
+            )
+        ],
+    )
+    db = Database([identity, run])
+    with (
+        patch.object(services, "freeze_service_plan", new_callable=AsyncMock, return_value=(plan, None)),
+        patch.object(services, "seal_payload", return_value=("ciphertext", "payloadsha")),
+        patch.object(services, "digest_payload", return_value="a" * 64),
+    ):
+        rule = await services.create_rule(
+            db, tenant_id=uuid4(), actor=SimpleNamespace(id=uuid4()), body=body
+        )
+
+    assert rule.identity_id == identity.id
+    assert rule.status == "draft"
+    assert rule.plan_sha256 == "a" * 64
+    assert rule.definition_sha256 == "a" * 64
+    assert rule.event_rule_id is None
+    db.add.assert_called_once_with(rule)
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_rule_with_event_rule_freezes_event_hash():
+    from app.services import automation_services as services
+
+    event_rule_id = uuid4()
+    body = ServiceRuleInput(
+        name="Event rule",
+        identity_id=uuid4(),
+        source_run_id=uuid4(),
+        schedule=ServiceSchedule(kind="workflow_event", event_rule_id=event_rule_id),
+    )
+    identity = SimpleNamespace(
+        id=body.identity_id,
+        status="active",
+        version=1,
+        capabilities=["propose_task"],
+    )
+    run = SimpleNamespace(id=body.source_run_id, matter_id=uuid4(), status="completed")
+    plan = WorkflowRunInput(
+        request_id=uuid4(),
+        matter_id=run.matter_id,
+        objective="prepare_document",
+        steps=[
+            RunStepInput(
+                step_key="task",
+                capability="propose_task",
+                arguments={"matter_id": str(run.matter_id), "title": "x"},
+            )
+        ],
+    )
+    event_rule = SimpleNamespace(template_id=uuid4(), definition_sha256="e" * 64)
+    db = Database([identity, run, event_rule])
+    with (
+        patch.object(services, "freeze_service_plan", new_callable=AsyncMock, return_value=(plan, None)),
+        patch.object(services, "seal_payload", return_value=("ciphertext", "payloadsha")),
+        patch.object(services, "digest_payload", return_value="a" * 64),
+    ):
+        rule = await services.create_rule(
+            db, tenant_id=uuid4(), actor=SimpleNamespace(id=uuid4()), body=body
+        )
+
+    assert rule.event_rule_id == event_rule_id
+    assert rule.event_rule_sha256 == event_rule.definition_sha256
+
+
+@pytest.mark.asyncio
+async def test_router_list_services_returns_identities_and_rules():
+    tenant_id = uuid4()
+    actor = SimpleNamespace(id=uuid4(), tenant_id=tenant_id)
+    db = SimpleNamespace(
+        scalars=AsyncMock(return_value=SimpleNamespace(all=lambda: [])),
+        commit=AsyncMock(),
+    )
+    with patch.object(router_module, "set_tenant_context", new_callable=AsyncMock):
+        result = await router_module.list_services(db, actor)
+    assert result == {"identities": [], "rules": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint,kwargs",
+    [
+        ("add_identity", {"body": ServiceIdentityInput(name="x", capabilities=["propose_task"])}),
+        ("add_rule", {"body": SimpleNamespace(identity_id=uuid4(), source_run_id=uuid4())}),
+        ("approve", {"rule_id": uuid4(), "body": SimpleNamespace(expected_version=1)}),
+        ("status", {"rule_id": uuid4(), "body": SimpleNamespace(expected_version=1, status="paused")}),
+    ],
+)
+async def test_router_endpoints_map_capability_errors(endpoint, kwargs):
+    tenant_id = uuid4()
+    actor = SimpleNamespace(id=uuid4(), tenant_id=tenant_id)
+    db = SimpleNamespace(commit=AsyncMock())
+    with (
+        patch.object(router_module, "set_tenant_context", new_callable=AsyncMock),
+        (
+            patch.object(
+                router_module,
+                "create_identity" if endpoint == "add_identity" else "create_rule",
+                new_callable=AsyncMock,
+                side_effect=CapabilityError("service_source_unavailable", "no"),
+            )
+            if endpoint in {"add_identity", "add_rule"}
+            else patch.object(
+                router_module,
+                "approve_rule" if endpoint == "approve" else "set_rule_status",
+                new_callable=AsyncMock,
+                side_effect=CapabilityError("service_rule_version_conflict", "no"),
+            )
+        ),
+    ):
+        with pytest.raises(router_module.HTTPException) as error:
+            coro = getattr(router_module, endpoint)
+            if endpoint in {"approve", "status"}:
+                await coro(kwargs["rule_id"], kwargs["body"], db, actor)
+            else:
+                await coro(kwargs["body"], db, actor)
+    assert error.value.status_code == 409
