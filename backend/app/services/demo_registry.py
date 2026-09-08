@@ -154,6 +154,12 @@ _PURGE_ONLY_TABLES = {
     "workflow_runs",
     "workflow_run_steps",
     "workflow_run_events",
+    # Service principals, approved schedules, and their occurrence evidence
+    # are tenant-specific control-plane records. An expired demo may purge
+    # them through the same exact lifecycle authorization as workflow runs.
+    "automation_service_occurrences",
+    "automation_service_rules",
+    "automation_service_identities",
     "matter_workflow_automation_events",
     "matter_workflow_automation_rules",
     "matter_workflow_checklist_definitions",

@@ -602,12 +602,17 @@ async def _require_live_matter_access(
     matter = await context.db.scalar(matter_stmt)
     if matter is None:
         raise ChatToolError("matter_not_found", "Matter not found")
-    if context.user.role == "admin" or matter.user_id == context.actor_user_id:
+    access_user_id = context.review_owner_user_id or context.actor_user_id
+    if (
+        context.review_owner_is_admin
+        or context.user.role == "admin"
+        or matter.user_id == access_user_id
+    ):
         return matter
     assignment_stmt = select(MatterAssignment.id).where(
         MatterAssignment.tenant_id == context.tenant_id,
         MatterAssignment.matter_id == matter_id,
-        MatterAssignment.user_id == context.actor_user_id,
+        MatterAssignment.user_id == access_user_id,
     )
     if lock:
         assignment_stmt = assignment_stmt.with_for_update(read=True)
@@ -903,7 +908,7 @@ async def _create_proposed_task(
         else (
             attorney_reviewer_user_id
             if review_policy == "attorney_only"
-            else context.actor_user_id
+            else (context.review_owner_user_id or context.actor_user_id)
         )
     )
     values = {

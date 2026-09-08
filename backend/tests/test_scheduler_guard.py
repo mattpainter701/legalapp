@@ -7,6 +7,7 @@ mocked, so they exercise only the pure Python control flow of ``_lock_key``,
 
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -156,3 +157,57 @@ async def test_run_guarded_swallows_exceptions():
         result = await _run_guarded("job", coro_fn)
     assert result is None
     coro_fn.assert_awaited_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# automation-service scheduler job registration and execution
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_scheduler_runs_automation_service_for_one_tenant():
+    from contextlib import asynccontextmanager
+
+    from app.services import scheduler as sched_module
+
+    tenant_id = uuid4()
+    token = sched_module._scheduler_tenant_id.set(tenant_id)
+    try:
+        scheduler = sched_module.LegalScheduler()
+        session = AsyncMock()
+
+        @asynccontextmanager
+        async def ctx():
+            yield session
+
+        with (
+            patch.object(sched_module, "AsyncIOScheduler"),
+            patch.object(sched_module, "async_session_maker", return_value=ctx()),
+            patch.object(sched_module, "set_tenant_context", new_callable=AsyncMock),
+            patch(
+                "app.services.automation_service_scheduler.schedule_due_rules",
+                new_callable=AsyncMock,
+            ) as mock_schedule,
+        ):
+            await scheduler.run_automation_service_scheduler()
+
+        mock_schedule.assert_awaited_once_with(session, tenant_id)
+        session.commit.assert_awaited_once()
+    finally:
+        sched_module._scheduler_tenant_id.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_start_registers_automation_service_job():
+    from app.services import scheduler as sched_module
+
+    with patch.object(sched_module, "AsyncIOScheduler") as mock_scheduler_cls:
+        mock_scheduler = mock_scheduler_cls.return_value
+        scheduler = sched_module.LegalScheduler()
+        scheduler.start()
+
+    assert any(
+        call.kwargs.get("id") == "automation-service-scheduler"
+        for call in mock_scheduler.add_job.call_args_list
+    )
+    mock_scheduler.start.assert_called_once()

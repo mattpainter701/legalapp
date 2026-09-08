@@ -477,6 +477,17 @@ review, and recover uncertain cloud writes without another upload. Runtime steps
 consume existing grant budgets. This does not extend checkpoint commits to every
 standalone legacy proposal path.
 
+Approved unattended preparation uses a separate control-plane identity rather
+than an MCP grant or a staff member's personal consent. A firm creates a named,
+noninteractive service identity with a narrow matter capability list, freezes a
+completed durable run into an encrypted hash-bound rule, and activates that
+rule through an active `approve_legal_work` attorney. Daily, weekly, and pinned
+lifecycle-event schedules can only submit that frozen plan. Each occurrence is
+immutable, retains its originating lifecycle event when applicable, and routes
+review work to the human approver. Service identities cannot log in, hold RBAC
+roles, authorize MCP clients, or approve their own output; direct Workspace MCP
+continues to require an individual user grant.
+
 The OAuth connection and revocable consent lifecycle are complete. Before
 broad customer rollout or deeper autonomous side effects, LawHand still
 requires:

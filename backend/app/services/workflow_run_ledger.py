@@ -79,6 +79,12 @@ async def submit_run(context, body):
         await current_context(db, existing)
         return await describe_run(db, existing)
     metadata = plan_metadata(body)
+    if context.channel == "automation_service":
+        if not context.service_rule_id or not context.service_rule_sha256:
+            raise CapabilityError(
+                "service_rule_unavailable", "A service run requires its approved rule"
+            )
+        metadata["service_rule_sha256"] = context.service_rule_sha256
     run = WorkflowRun(
         id=uuid.uuid4(),
         tenant_id=context.tenant_id,
@@ -88,6 +94,7 @@ async def submit_run(context, body):
         origin_channel=context.channel,
         grant_id=context.grant_id,
         client_id=context.client_id,
+        service_rule_id=context.service_rule_id,
         scope_snapshot=sorted(context.granted_scopes or []),
         objective=body.objective,
         plan_json=metadata,
@@ -190,6 +197,7 @@ async def describe_run(db, run):
         "status": run.status,
         "version": run.version,
         "origin_channel": run.origin_channel,
+        "service_rule_id": str(run.service_rule_id) if run.service_rule_id else None,
         "plan_sha256": run.plan_sha256,
         "next_step": run.next_step,
         "failure_code": run.failure_code,

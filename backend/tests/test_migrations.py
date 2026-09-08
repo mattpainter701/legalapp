@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["168_workflow_runtime"]
+    assert heads == ["169_automation_services"]
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():
@@ -748,3 +748,4 @@ def test_workflow_automation_tables_are_purged_but_never_cloned():
     assert order.index("matter_workflow_automation_rules") < order.index(
         "matter_workflow_templates"
     )
+

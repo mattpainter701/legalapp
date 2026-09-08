@@ -80,6 +80,13 @@ _CONFIG_WORKFLOW_PURGE_ORDER = (
 _CONFIG_WORKFLOW_TABLES = frozenset(_CONFIG_WORKFLOW_PURGE_ORDER)
 _CONFIG_WORKFLOW_PURGE_TENANT_GUC = "app.config_workflow_demo_purge_tenant_id"
 _CONFIG_WORKFLOW_PURGE_SESSION_GUC = "app.config_workflow_demo_purge_session_id"
+_AUTOMATION_SERVICE_TABLES = frozenset(
+    {
+        "automation_service_occurrences",
+        "automation_service_rules",
+        "automation_service_identities",
+    }
+)
 _SMS_IMMUTABLE_TABLES = (
     "sms_number_suppression_events",
     "sms_consent_events",
@@ -407,11 +414,43 @@ async def _purge_demo_tenant_locked(
             )
             deleted[name] = int(result.rowcount or 0)
         await _authorize_config_workflow_demo_purge(db, tenant_id, session_id)
+        # Remove workflow children before their parent service runs. The
+        # remaining configuration entries include source runs and execute
+        # after the service branch is gone.
+        for name in _CONFIG_WORKFLOW_PURGE_ORDER[:3]:
+            table = tables[name]
+            result = await db.execute(
+                delete(table).where(table.c.tenant_id == tenant_id)
+            )
+            deleted[name] = int(result.rowcount or 0)
+        # Service runs point at their rule while each rule retains its source
+        # run. Remove the service branch first, then the rule and identity,
+        # before the ordinary workflow history can remove the source run.
+        for name in ("automation_service_occurrences",):
+            table = tables[name]
+            result = await db.execute(
+                delete(table).where(table.c.tenant_id == tenant_id)
+            )
+            deleted[name] = int(result.rowcount or 0)
+        workflow_runs = tables["workflow_runs"]
+        result = await db.execute(
+            delete(workflow_runs).where(
+                workflow_runs.c.tenant_id == tenant_id,
+                workflow_runs.c.service_rule_id.is_not(None),
+            )
+        )
+        deleted["automation_service_runs"] = int(result.rowcount or 0)
+        for name in ("automation_service_rules", "automation_service_identities"):
+            table = tables[name]
+            result = await db.execute(
+                delete(table).where(table.c.tenant_id == tenant_id)
+            )
+            deleted[name] = int(result.rowcount or 0)
         # Workflow history and approved definitions are append-only in ordinary
         # transactions. Migration 148 admits DELETE only while this exact,
         # expired demo claim is live, so remove the dependency chain before the
         # generic purge deletes demo_sessions.
-        for name in _CONFIG_WORKFLOW_PURGE_ORDER:
+        for name in _CONFIG_WORKFLOW_PURGE_ORDER[3:]:
             table = tables[name]
             result = await db.execute(
                 delete(table).where(table.c.tenant_id == tenant_id)
@@ -429,6 +468,7 @@ async def _purge_demo_tenant_locked(
                 name in _RESEARCH_IMMUTABLE_TABLES
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
+                or name in _AUTOMATION_SERVICE_TABLES
                 or name in _SMS_IMMUTABLE_TABLES
                 or name in _SMS_PURGE_TABLES
                 or name in _CASCADE_PURGED_TABLES
@@ -465,6 +505,7 @@ async def _purge_demo_tenant_locked(
                 name in _RESEARCH_IMMUTABLE_TABLES
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
+                or name in _AUTOMATION_SERVICE_TABLES
                 or name in _SMS_IMMUTABLE_TABLES
                 or name in _SMS_PURGE_TABLES
             ):

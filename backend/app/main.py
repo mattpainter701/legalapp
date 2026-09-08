@@ -132,6 +132,7 @@ from app.routers.workflow_automations import router as workflow_automations_rout
 from app.routers.artifact_reviews import router as artifact_reviews_router
 from app.routers.workflow_synthesis import router as workflow_synthesis_router
 from app.routers.workflow_runs import router as workflow_runs_router
+from app.routers.automation_services import router as automation_services_router
 from app.routers.demo import router as demo_router
 from app.services.studio_render_runtime import (
     StudioRenderRuntimeError,
@@ -530,6 +531,7 @@ app.include_router(workflow_automations_router)
 app.include_router(artifact_reviews_router)
 app.include_router(workflow_synthesis_router)
 app.include_router(workflow_runs_router)
+app.include_router(automation_services_router)
 
 
 # ─────────────────────────────────────────────────────
