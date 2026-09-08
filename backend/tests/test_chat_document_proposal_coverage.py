@@ -3,6 +3,7 @@
 from datetime import date
 from types import SimpleNamespace
 from uuid import uuid4
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -104,6 +105,14 @@ def _fixture(*, created=True, task=None):
 
 
 def _patch_common(monkeypatch, *, task, reviewers=(uuid4(), uuid4())):
+    monkeypatch.setattr(
+        "app.services.work_artifact_reviews.artifact_review_policy",
+        AsyncMock(return_value=task.review_policy),
+    )
+    monkeypatch.setattr(
+        "app.services.work_artifact_reviews.ensure_review_requirements",
+        AsyncMock(return_value=[]),
+    )
     matter = SimpleNamespace(id=task.matter_id)
     monkeypatch.setattr(handlers, "_require_matter", lambda *_a, **_k: _async(matter))
     monkeypatch.setattr(

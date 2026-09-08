@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from uuid import uuid4
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -42,6 +43,29 @@ def _fixture():
     matter = SimpleNamespace(id=uuid4(), attorney_of_record_id=attorney.id)
     active = {user.id: user for user in (staff, attorney, outsider)}
     return context, matter, staff, attorney, outsider, active
+
+
+@pytest.mark.asyncio
+async def test_attorney_only_policy_does_not_require_a_second_staff_member(monkeypatch):
+    context, matter, _, attorney, _, active = _fixture()
+    context.db.users = [attorney]
+    monkeypatch.setattr(
+        handlers,
+        "_active_reviewer",
+        AsyncMock(side_effect=lambda _context, user_id: active.get(user_id)),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "get_user_capabilities",
+        AsyncMock(return_value={"approve_legal_work"}),
+    )
+    assert await handlers._resolve_document_reviewers(
+        context,
+        matter=matter,
+        requested_staff_user_id=None,
+        requested_attorney_user_id=attorney.id,
+        review_policy="attorney_only",
+    ) == (None, attorney.id)
 
 
 @pytest.mark.asyncio

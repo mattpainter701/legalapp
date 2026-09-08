@@ -791,7 +791,7 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
             ))}
           </section>
           <WorkflowAutomationRules user={user} templates={templates} />
-          <ArtifactReviewPolicy />
+          {!embedded && <ArtifactReviewPolicy />}
         </>
       )}
     </Container>
