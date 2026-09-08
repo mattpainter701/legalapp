@@ -429,6 +429,10 @@ established before the grant, user, or matter data is queried.
 
 ## Configuration
 
+Workspace tool calls also enforce grant-scoped admission and bounded read
+responses. See the [BYO-harness channel contract](byo-harness-channel-contract.md#read-load-admission--initial-implementation)
+for configuration, retry errors, audit metadata, billing separation, and residuals.
+
 The surface remains hidden unless explicitly enabled:
 
 ```dotenv
