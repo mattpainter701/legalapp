@@ -1189,8 +1189,9 @@ def _message_to_response(
                 )
             )
     retrieval_metadata = {}
-    if isinstance(msg.context_relevance_scores, dict):
-        candidate = msg.context_relevance_scores.get(_RETRIEVAL_METADATA_SCORE_KEY)
+    context_scores = getattr(msg, "context_relevance_scores", None)
+    if isinstance(context_scores, dict):
+        candidate = context_scores.get(_RETRIEVAL_METADATA_SCORE_KEY)
         if isinstance(candidate, dict):
             retrieval_metadata = candidate
     return MessageResponse(
