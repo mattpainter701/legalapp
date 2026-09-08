@@ -493,7 +493,7 @@ async def execute_workspace_capability(
                         ),
                         metadata={
                             "error_type": exc.__class__.__name__,
-                            "error_code": (
+                            "failure_reason": (
                                 exc.code
                                 if isinstance(exc, CapabilityError)
                                 else str(exc.status_code)

@@ -210,7 +210,10 @@ async def test_dispatch_enforces_budget_before_handler_and_audits_reads(
         ):
             await execute()
         assert audit.call_args.kwargs["event_type"] == "tool_call_refused"
-        assert audit.call_args.kwargs["metadata"]["error_code"] == (
+        from app.services.workspace_mcp_oauth import _bounded_audit_metadata
+
+        metadata = _bounded_audit_metadata(audit.call_args.kwargs["metadata"])
+        assert metadata["failure_reason"] == (
             "429" if outcome == "rate_limited" else "result_size_exceeded"
         )
     assert handler.await_count == (0 if outcome == "rate_limited" else 1)
