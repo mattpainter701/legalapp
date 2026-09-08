@@ -96,7 +96,14 @@ def _json_payload(text: str) -> str:
     return value
 
 
-def _usage_record(user, route, tokens_in: int, tokens_out: int) -> UsageRecord:
+def _usage_record(
+    user,
+    route,
+    tokens_in: int,
+    tokens_out: int,
+    final_model: str | None,
+    gateway_request_id: str | None,
+) -> UsageRecord:
     cost = (
         0
         if route.resolved_route == "customer"
@@ -115,7 +122,8 @@ def _usage_record(user, route, tokens_in: int, tokens_out: int) -> UsageRecord:
         resolved_route=route.resolved_route,
         gateway_provider=route.gateway_provider,
         gateway_alias=route.gateway_alias,
-        final_model=route.gateway_alias,
+        final_model=final_model,
+        gateway_request_id=gateway_request_id,
         model_used=route.model,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
@@ -173,6 +181,7 @@ async def assist_template_mapping(
         )
         evidence["existing_fields"] = evidence["template_context"].pop("fields")
     llm_service = llm or LLMService()
+    usage: dict = {}
     try:
         response_text, tokens_in, tokens_out = await llm_service.complete(
             messages=[
@@ -194,6 +203,7 @@ async def assist_template_mapping(
             customer_provider=route.customer_provider,
             customer_endpoint=route.customer_endpoint,
             response_format={"type": "json_object"},
+            usage_sink=usage,
             system_prompt_override=_SYSTEM_PROMPT,
             gateway_metadata=gateway_metadata(
                 tenant_id=user.tenant_id,
@@ -206,7 +216,20 @@ async def assist_template_mapping(
             "Premium AI could not analyze this template. The deterministic results are unchanged."
         ) from exc
 
-    db.add(_usage_record(user, route, tokens_in, tokens_out))
+    reported_model = str(usage.get("model") or "")[:200]
+    # Some gateways replace response.model with the requested alias. Keep the
+    # actual model unknown in that case; correlate the request with spend logs.
+    final_model = (
+        reported_model
+        if reported_model and reported_model != route.gateway_alias
+        else None
+    )
+    gateway_request_id = str(usage.get("provider_request_id") or "")[:200] or None
+    db.add(
+        _usage_record(
+            user, route, tokens_in, tokens_out, final_model, gateway_request_id
+        )
+    )
     try:
         proposal = AiTemplateProposal.model_validate_json(_json_payload(response_text))
     except (ValidationError, ValueError) as exc:
@@ -245,6 +268,7 @@ async def assist_template_mapping(
         "proposal_id": str(uuid.uuid4()),
         "prompt_version": _PROMPT_VERSION,
         "model_alias": route.model,
+        "resolved_model": final_model,
         "input_sha256": hashlib.sha256(file_bytes).hexdigest(),
         "document_type": proposal.document_type,
         "review_required": True,

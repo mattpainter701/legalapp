@@ -306,3 +306,14 @@ Missing requirements may be explained in warnings, but this action does not
 certify completeness, generate clauses, apply data bindings, or promote a
 template. Other AI actions must declare their own bounded action contract rather
 than reuse the field-suggestion operation to perform unrelated edits.
+
+The template usage record's `final_model` and proposal `resolved_model` retain
+the gateway response's model identifier when it differs from the alias, separately from the
+requested `model_alias`. A fallback is therefore not labeled as the requested
+model merely because it shares the same route. This is provider-reported
+identity, not an independent model attestation. If the response only repeats the
+requested alias, actual model identity stays null. The opaque provider response
+ID is retained as `gateway_request_id` for LiteLLM spend-log correlation.
+Alias-based billing policy is
+unchanged. The gateway contract test uses the real route resolver, LLMService
+and OpenAI HTTP client; only the gateway transport and database reads are mocked.

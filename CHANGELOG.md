@@ -13,6 +13,7 @@
 
 ## 2026.09.07.16 - Context-aware intake AI suggestions
 
+- Verify the real LLM HTTP boundary and retain provider-reported model identity separately from the requested alias, including fallback responses.
 - Add a bounded, redacted current-editor context to premium field proposals, including optional requirements and server-owned binding definitions. Retain existing model routing, billing and source reconciliation.
 - Preserve draft text, field edits and exclusions when appending proposals; reject stale responses after same-document edits. Add context contract, privacy, HTTP validation and UI regression coverage. No migration.
 
