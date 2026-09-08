@@ -59,6 +59,8 @@ vi.mock('../components/Messages', () => ({
       {(messages || []).map((message) => (
         <article key={message.id}>
           <span>{message.content}</span>
+          <span>{message.referenceContext?.status || ''}</span>
+          <span>{message.referenceContext?.cited_count ?? ''} cited · {message.referenceContext?.source_count ?? ''} retrieved</span>
           {(message.sources || []).map((source) => (
             <span key={source.source_id}>{source.case_name}</span>
           ))}
@@ -287,6 +289,88 @@ describe('ChatPage guarded stream lifecycle', () => {
 
     expect(await screen.findByText('Sources refreshed')).toBeInTheDocument()
     expect(screen.getByText('Document One.pdf')).toBeInTheDocument()
+  })
+
+  it('retains a public-authority outage after stream completion and transcript refresh', async () => {
+    apiMocks.getConversation
+      .mockResolvedValueOnce(conversation('conversation-a', 'Conversation A'))
+      .mockResolvedValueOnce(conversation('conversation-a', 'Conversation A', [
+        {
+          id: 'server-user',
+          role: 'user',
+          content: 'Compare the governing standards',
+          sources: [],
+          created_at: '2099-01-01T00:00:01Z',
+        },
+        {
+          ...assistantMessage('server-answer', '## Authority coverage gap'),
+          retrieval_metadata: {
+            public_retrieval: { state: 'service_unavailable', result_count: 0 },
+          },
+        },
+      ]))
+    apiMocks.streamMessage.mockImplementation(async function* () {
+      yield {
+        type: 'progress',
+        event: 'citation_metadata',
+        sources: [],
+        citation_annotations: [],
+        public_retrieval: { state: 'service_unavailable', result_count: 0 },
+      }
+      yield '## Authority coverage gap'
+      yield '[STREAM_COMPLETE]'
+    })
+
+    render(<ChatPage />)
+    await waitFor(() => expect(apiMocks.getConversation).toHaveBeenCalledTimes(1))
+
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Message the assistant'), 'Compare the governing standards')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    expect(
+      await screen.findAllByText('Response complete — public authority unavailable')
+    ).toHaveLength(2)
+  })
+
+  it('keeps cited and retrieved counts consistent on both sides of a streamed turn after refresh', async () => {
+    const citedSource = {
+      source_id: 'document:attachment-1',
+      case_name: 'Attachment One.txt',
+      source_type: 'tenant_document',
+      source_label: 'Attached document',
+      cited: true,
+    }
+    apiMocks.getConversation
+      .mockResolvedValueOnce(conversation('conversation-a', 'Conversation A'))
+      .mockResolvedValueOnce(conversation('conversation-a', 'Conversation A', [
+        {
+          id: 'server-user',
+          role: 'user',
+          content: 'What does the attachment say?',
+          sources: [],
+          created_at: '2099-01-01T00:00:01Z',
+        },
+        assistantMessage('server-answer', 'The attachment controls. [source: document:attachment-1]', [citedSource]),
+      ]))
+    apiMocks.streamMessage.mockImplementation(async function* () {
+      yield {
+        type: 'progress',
+        event: 'citation_metadata',
+        sources: [citedSource],
+        citation_annotations: [],
+      }
+      yield 'The attachment controls. [source: document:attachment-1]'
+      yield '[STREAM_COMPLETE]'
+    })
+
+    render(<ChatPage />)
+    await waitFor(() => expect(apiMocks.getConversation).toHaveBeenCalledTimes(1))
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Message the assistant'), 'What does the attachment say?')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    expect(await screen.findAllByText('1 cited · 1 retrieved')).toHaveLength(2)
   })
 
   it('shows whether chat uses only a profile or a profile plus matter context', async () => {

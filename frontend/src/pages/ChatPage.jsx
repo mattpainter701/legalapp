@@ -5,6 +5,7 @@ import { useAppShell } from '../components/AppShell'
 import { useAuth } from '../App'
 import ChatHeader from '../components/ChatHeader'
 import ChatInput from '../components/ChatInput'
+import { citedSourceCount } from '../components/ChatMessage'
 import Messages from '../components/Messages'
 import ChatRail from '../components/chat/ChatRail'
 import {
@@ -193,6 +194,20 @@ function initialStreamProgress(content, attachmentCount) {
   }
 }
 
+function completedStreamStatus(publicRetrieval) {
+  if (publicRetrieval?.state === 'service_unavailable') {
+    return 'Response complete — public authority unavailable'
+  }
+  return 'Response complete'
+}
+
+function persistedPublicRetrievalStatus(retrievalMetadata) {
+  const publicRetrieval = retrievalMetadata?.public_retrieval
+  return publicRetrieval?.state === 'service_unavailable'
+    ? completedStreamStatus(publicRetrieval)
+    : ''
+}
+
 function mergeStreamProgress(current, event, content) {
   if (!event || event.type !== 'progress') return current
   const counts = {
@@ -236,6 +251,8 @@ function countSourcesByType(sources) {
       counts.courtlistener += 1
     } else if (type === 'matter_context') {
       counts.matter += 1
+    } else if (type === 'tenant_document' && src?.source_label === 'Attached document') {
+      counts.uploads += 1
     } else {
       counts.firm += 1
     }
@@ -244,7 +261,7 @@ function countSourcesByType(sources) {
   return counts
 }
 
-function buildReferenceContext({ progress, sources, status } = {}) {
+function buildReferenceContext({ progress, sources, status, citedCount } = {}) {
   const sourceList = Array.isArray(sources) ? sources : []
   const progressCounts = progress?.counts || null
   const derivedCounts = countSourcesByType(sourceList)
@@ -258,12 +275,16 @@ function buildReferenceContext({ progress, sources, status } = {}) {
   const hasContext = counts.total > 0 || sourceList.length > 0 || progress?.status || status
   if (!hasContext) return null
 
-  return {
+  const referenceContext = {
     counts,
     source_count: sourceList.length,
     status: status || progress?.status || (sourceList.length ? 'Materials retrieved for source audit' : ''),
     complete: Boolean(progress?.complete),
   }
+  if (Number.isFinite(citedCount)) {
+    referenceContext.cited_count = citedCount
+  }
+  return referenceContext
 }
 
 function attachTurnReferences(messages) {
@@ -282,9 +303,16 @@ function attachTurnReferences(messages) {
     if (assistantIndex < 0) continue
 
     const assistant = next[assistantIndex]
+    const citedCount = citedSourceCount(
+      assistant.content,
+      assistant.sources,
+      assistant.citation_annotations,
+    )
     const context = buildReferenceContext({
       progress: assistant.progress,
       sources: assistant.sources,
+      status: persistedPublicRetrievalStatus(assistant.retrieval_metadata),
+      citedCount,
     })
     if (!context) continue
 
@@ -858,6 +886,17 @@ export default function ChatPage() {
         if (token?.type === 'progress' && token.event === 'citation_metadata') {
           streamedSources = token.sources || []
           streamedCitationAnnotations = token.citation_annotations || []
+          if (token.public_retrieval && typeof token.public_retrieval === 'object') {
+            streamProgress = {
+              ...streamProgress,
+              public_retrieval: token.public_retrieval,
+            }
+          }
+          const referenceContext = buildReferenceContext({
+            progress: streamProgress,
+            sources: streamedSources,
+            citedCount: streamedSources.length,
+          })
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMsgId
@@ -865,6 +904,8 @@ export default function ChatPage() {
                     ...msg,
                     sources: streamedSources,
                     citation_annotations: streamedCitationAnnotations,
+                    progress: streamProgress,
+                    referenceContext,
                   }
                 : msg
             )
@@ -886,7 +927,11 @@ export default function ChatPage() {
         }
         if (token?.type === 'progress') {
           streamProgress = mergeStreamProgress(streamProgress, token, content)
-          const referenceContext = buildReferenceContext({ progress: streamProgress })
+          const referenceContext = buildReferenceContext({
+            progress: streamProgress,
+            sources: streamedSources,
+            citedCount: streamedSources.length,
+          })
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMsgId
@@ -911,8 +956,16 @@ export default function ChatPage() {
         }
         if (token === '[STREAM_COMPLETE]') {
           sawStreamComplete = true
-          streamProgress = { ...streamProgress, complete: true, status: 'Response complete' }
-          const referenceContext = buildReferenceContext({ progress: streamProgress })
+          streamProgress = {
+            ...streamProgress,
+            complete: true,
+            status: completedStreamStatus(streamProgress.public_retrieval),
+          }
+          const referenceContext = buildReferenceContext({
+            progress: streamProgress,
+            sources: streamedSources,
+            citedCount: streamedSources.length,
+          })
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMsgId
@@ -983,7 +1036,11 @@ export default function ChatPage() {
           sources: streamedSources,
           citation_annotations: streamedCitationAnnotations,
           progress: { ...streamProgress, complete: true },
-          referenceContext: buildReferenceContext({ progress: { ...streamProgress, complete: true } }),
+          referenceContext: buildReferenceContext({
+            progress: { ...streamProgress, complete: true },
+            sources: streamedSources,
+            citedCount: streamedSources.length,
+          }),
         }
         try {
           const refreshed = await getConversation(convId)

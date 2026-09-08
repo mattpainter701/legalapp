@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.09.07.18",
-      "version": "2026.09.07.18",
+      "id": "2026.09.07.20",
+      "version": "2026.09.07.20",
       "title": "Reliable background model pricing",
       "published_at": "2026-09-07",
       "summary": "Background profiles can activate with native DeepSeek V4 and verified free OpenCode Zen models.",
@@ -15,6 +15,27 @@
         {
           "title": "Meter free responses accurately",
           "description": "Confirmed free-model responses settle at zero cost while request limits and unknown-cost safeguards remain enforced."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.07.19",
+      "version": "2026.09.07.19",
+      "title": "More reliable assistant document context",
+      "published_at": "2026-09-07",
+      "summary": "Follow-up questions retain eligible attachments, cloud PDF and Word files use text extraction, and source limitations stay visible.",
+      "highlights": [
+        {
+          "title": "Continue working with your documents",
+          "description": "Eligible attachments remain available for follow-up questions. Cloud PDF, Word, and retained email use text extraction; long excerpts disclose their coverage limit."
+        },
+        {
+          "title": "See retrieval limits and source counts",
+          "description": "Public authority outages remain visible after reopening an answer. Citation counts and uploaded-source labels remain consistent across the conversation."
+        },
+        {
+          "title": "Keep planning on an approved route",
+          "description": "Connected-source planning follows the selected chat route and its confidential-context policy. Blank search plans cannot expand into a mailbox-wide query."
         }
       ]
     },

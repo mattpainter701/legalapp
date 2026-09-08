@@ -3,7 +3,7 @@
 import asyncio
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -27,8 +27,10 @@ from app.routers.chat import (
     _message_to_response,
     _is_public_general_route,
     _assert_public_general_sources_allowed,
+    _attachment_context_coverage,
     _partition_stream_source_previews,
     _privacy_mode_for_route,
+    _resolve_conversation_attachment_ids,
     _propose_followthrough_actions,
     _normalize_source_url,
     _source_dict_from_chunk,
@@ -530,6 +532,19 @@ def test_mediation_question_requires_retrieved_authority():
     assert "returned no usable match" in guarded
 
 
+def test_governing_standards_question_requires_retrieved_authority():
+    guarded, blocked = enforce_legal_citation_integrity(
+        "Compare the governing standards.",
+        "The governing standards differ in several important ways.",
+        [],
+        {"state": "service_unavailable"},
+    )
+
+    assert blocked is True
+    assert guarded.startswith("## Authority coverage gap")
+    assert "configured public-authority service did not return" in guarded
+
+
 def test_each_contract_schedule_row_requires_its_own_document_source():
     answer = """| Contract | Finding |
 |---|---|
@@ -1007,6 +1022,19 @@ def test_chat_attachment_response_serializes_uuid_id_to_string():
     assert response.id == str(doc_id)
 
 
+def test_attachment_context_marks_the_opening_excerpt_when_it_truncates():
+    tail_marker = "TEAL-LYNX-8625"
+    text = "SCARLET-HERON-3148" + ("x" * 4_000) + tail_marker
+
+    excerpt, instruction, locator = _attachment_context_coverage(text, 101)
+
+    assert "SCARLET-HERON-3148" in excerpt
+    assert tail_marker not in excerpt
+    assert "first 100 indexed chunks" in instruction
+    assert "opening 4,000 characters" in instruction
+    assert locator == "Only the first 100 indexed chunks and only the opening 4,000 characters"
+
+
 def test_message_response_preserves_attachment_link_and_locator():
     document_id = uuid.uuid4()
     message = Message(
@@ -1032,6 +1060,11 @@ def test_message_response_preserves_attachment_link_and_locator():
                 "cited": True,
             }
         ],
+        context_relevance_scores={
+            "__retrieval_metadata__": {
+                "public_retrieval": {"state": "service_unavailable"}
+            }
+        },
         created_at=datetime.now(timezone.utc),
     )
 
@@ -1043,6 +1076,9 @@ def test_message_response_preserves_attachment_link_and_locator():
     assert response.sources[0].cited is True
     assert response.citation_annotations[0].support == "cited"
     assert response.citation_annotations[0].source_ids == [f"document:{document_id}"]
+    assert response.retrieval_metadata == {
+        "public_retrieval": {"state": "service_unavailable"}
+    }
 
 
 def test_source_url_only_preserves_expected_internal_document_downloads():
@@ -1908,6 +1944,62 @@ async def test_standard_chat_excludes_verified_global_user_profile(
 
 
 @pytest.mark.asyncio
+async def test_standard_stream_excludes_history_profile_and_profile_jurisdiction(
+    client: AsyncClient, db_session, test_user
+):
+    test_user.professional_role = "Attorney"
+    test_user.primary_jurisdictions = ["North Dakota"]
+    await db_session.commit()
+    conv = (await client.post("/api/conversations", json={})).json()
+    db_session.add(
+        Message(
+            id=uuid.uuid4(),
+            tenant_id=test_user.tenant_id,
+            conversation_id=uuid.UUID(conv["id"]),
+            role="assistant",
+            content="Earlier private conversation content",
+        )
+    )
+    await db_session.commit()
+    stream_call = {}
+
+    async def stream_tokens(*_args, **kwargs):
+        stream_call.update(kwargs)
+        yield "General answer."
+
+    with (
+        patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag,
+        patch("app.services.llm.LLMService.stream_complete", stream_tokens),
+        patch.object(
+            chat_router.memory_service,
+            "get_memory_context_for_injection",
+            new_callable=AsyncMock,
+        ) as memory,
+    ):
+        rag.return_value = ("", [], [])
+        async with client.stream(
+            "POST",
+            f"/api/conversations/{conv['id']}/messages/stream",
+            json={"content": "Give me a general checklist.", "include_public": True},
+        ) as response:
+            body = "".join([part async for part in response.aiter_text()])
+
+    assert response.status_code == 200
+    assert "[STREAM_COMPLETE]" in body
+    assert rag.call_args.kwargs["include_private"] is False
+    assert rag.call_args.kwargs["default_public_jurisdiction"] is None
+    memory.assert_not_awaited()
+    assert stream_call["messages"] == [
+        {"role": "user", "content": "Give me a general checklist."}
+    ]
+    assert stream_call["tenant_name"] == "Legal"
+    assert stream_call["user_name"] == ""
+    assert stream_call["memory_context"] == ""
+    assert stream_call["global_user_context"] == ""
+    assert stream_call["system_prompt_override"] == chat_router.llm_service.public_general_system_prompt("")
+
+
+@pytest.mark.asyncio
 async def test_standard_chat_injects_only_public_rag_into_isolated_prompt(
     client: AsyncClient, db_session, test_user, mock_llm, mock_embeddings
 ):
@@ -2272,6 +2364,206 @@ async def test_send_message_scopes_attachment_context_to_active_conversation(
     assert source["case_name"] == "active-attachment.txt"
     assert source["url"] == f"/api/documents/{active_doc_id}/download"
     assert source["locator"] == "Full attached document"
+
+
+@pytest.mark.asyncio
+async def test_stream_reuses_live_conversation_attachments_and_respects_explicit_subset(
+    client: AsyncClient,
+    db_session,
+    test_tenant,
+    test_user,
+    mock_embeddings,
+):
+    test_user.premium_ai_enabled = True
+    await db_session.commit()
+    conv = (await client.post("/api/conversations", json={})).json()
+    conversation_id = uuid.UUID(conv["id"])
+    first_id, second_id = uuid.uuid4(), uuid.uuid4()
+    db_session.add_all(
+        [
+            Document(
+                id=first_id,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                conversation_id=conversation_id,
+                filename="first.txt",
+                content_type="text/plain",
+                status="ready",
+                chunk_count=1,
+            ),
+            Document(
+                id=second_id,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                conversation_id=conversation_id,
+                filename="second.txt",
+                content_type="text/plain",
+                status="ready",
+                chunk_count=1,
+            ),
+        ]
+    )
+    await db_session.commit()
+    db_session.add_all(
+        [
+            Chunk(
+                id=uuid.uuid4(),
+                tenant_id=test_tenant.id,
+                document_id=first_id,
+                content="FIRST_ATTACHMENT_ONLY_FACT",
+                chunk_index=0,
+            ),
+            Chunk(
+                id=uuid.uuid4(),
+                tenant_id=test_tenant.id,
+                document_id=second_id,
+                content="SECOND_ATTACHMENT_ONLY_FACT",
+                chunk_index=0,
+            ),
+        ]
+    )
+    await db_session.commit()
+    contexts = []
+
+    async def stream_tokens(*_args, **kwargs):
+        contexts.append(kwargs["context"])
+        yield "Attachment answer."
+
+    with (
+        patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag,
+        patch("app.services.llm.LLMService.stream_complete", stream_tokens),
+    ):
+        rag.return_value = ("", [], [])
+        for content, attachment_ids in (
+            ("Use only the first file.", [str(first_id)]),
+            ("Now compare every uploaded file.", None),
+            ("Use only the second file.", [str(second_id)]),
+        ):
+            payload = {
+                "content": content,
+                "include_public": False,
+                "use_premium_llm": True,
+            }
+            if attachment_ids is not None:
+                payload["attachment_ids"] = attachment_ids
+            async with client.stream(
+                "POST",
+                f"/api/conversations/{conv['id']}/messages/stream",
+                json=payload,
+            ) as response:
+                body = "".join([part async for part in response.aiter_text()])
+            assert response.status_code == 200
+            assert "[STREAM_COMPLETE]" in body
+
+    assert "FIRST_ATTACHMENT_ONLY_FACT" in contexts[0]
+    assert "SECOND_ATTACHMENT_ONLY_FACT" not in contexts[0]
+    assert "FIRST_ATTACHMENT_ONLY_FACT" in contexts[1]
+    assert "SECOND_ATTACHMENT_ONLY_FACT" in contexts[1]
+    assert "FIRST_ATTACHMENT_ONLY_FACT" not in contexts[2]
+    assert "SECOND_ATTACHMENT_ONLY_FACT" in contexts[2]
+
+
+@pytest.mark.asyncio
+async def test_attachment_resolution_excludes_other_conversations_matters_and_inactive_rows(
+    db_session, test_tenant, test_user
+):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"attachment-scope-{uuid.uuid4().hex[:8]}",
+        matter_name="Attachment Scope",
+        matter_type="general",
+        status="open",
+    )
+    other_matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"attachment-other-{uuid.uuid4().hex[:8]}",
+        matter_name="Other Attachment Scope",
+        matter_type="general",
+        status="open",
+    )
+    db_session.add_all([matter, other_matter])
+    await db_session.commit()
+    conversation_id, other_conversation_uuid = uuid.uuid4(), uuid.uuid4()
+    db_session.add_all(
+        [
+            Conversation(
+                id=conversation_id,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                matter_id=matter.id,
+            ),
+            Conversation(
+                id=other_conversation_uuid,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                matter_id=matter.id,
+            ),
+        ]
+    )
+    await db_session.commit()
+    active_id, wrong_matter_id, other_conversation_id, expired_id, archived_id, superseded_id = (
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    db_session.add_all(
+        [
+            Document(id=active_id, tenant_id=test_tenant.id, user_id=test_user.id, conversation_id=conversation_id, matter_id=matter.id, filename="active.txt", status="ready"),
+            Document(id=wrong_matter_id, tenant_id=test_tenant.id, user_id=test_user.id, conversation_id=conversation_id, matter_id=other_matter.id, filename="wrong-matter.txt", status="ready"),
+            Document(id=other_conversation_id, tenant_id=test_tenant.id, user_id=test_user.id, conversation_id=other_conversation_uuid, matter_id=matter.id, filename="other-conversation.txt", status="ready"),
+            Document(id=expired_id, tenant_id=test_tenant.id, user_id=test_user.id, conversation_id=conversation_id, matter_id=matter.id, filename="expired.txt", status="ready", expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)),
+            Document(id=archived_id, tenant_id=test_tenant.id, user_id=test_user.id, conversation_id=conversation_id, matter_id=matter.id, filename="archived.txt", status="archived"),
+            Document(id=superseded_id, tenant_id=test_tenant.id, user_id=test_user.id, conversation_id=conversation_id, matter_id=matter.id, filename="superseded.txt", status="superseded"),
+        ]
+    )
+    await db_session.commit()
+    stored_conv = await db_session.get(Conversation, conversation_id)
+
+    assert await _resolve_conversation_attachment_ids(
+        db_session, test_user, stored_conv, []
+    ) == [str(active_id)]
+    assert await _resolve_conversation_attachment_ids(
+        db_session,
+        test_user,
+        stored_conv,
+        [str(wrong_matter_id), str(active_id), str(other_conversation_id)],
+    ) == [str(active_id)]
+
+
+@pytest.mark.asyncio
+async def test_standard_stream_rejects_implicitly_resolved_attachments(
+    client: AsyncClient, db_session, test_tenant, test_user
+):
+    conv = (await client.post("/api/conversations", json={})).json()
+    db_session.add(
+        Document(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            conversation_id=uuid.UUID(conv["id"]),
+            filename="private-upload.txt",
+            status="ready",
+        )
+    )
+    await db_session.commit()
+
+    async with client.stream(
+        "POST",
+        f"/api/conversations/{conv['id']}/messages/stream",
+        json={"content": "Give me a public checklist.", "include_public": True},
+    ) as response:
+        body = "".join([part async for part in response.aiter_text()])
+
+    assert response.status_code == 200
+    assert "cannot process attachments" in body
+    assert "[STREAM_COMPLETE]" not in body
 
 
 @pytest.mark.asyncio
@@ -2661,10 +2953,15 @@ async def test_cancelled_stream_rolls_back_flushed_action_and_source_promotion(
                     generation_state=state,
                 )
                 consumer = asyncio.create_task(drain(response.body_iterator))
-                await asyncio.wait_for(action_flushed.wait(), timeout=3)
-                consumer.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await consumer
+                try:
+                    await asyncio.wait_for(action_flushed.wait(), timeout=10)
+                finally:
+                    # A timeout must still stop the response generator. Leaving
+                    # it alive holds its transaction open and wedges the next
+                    # fixture reset before pytest can report the real failure.
+                    consumer.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await consumer
 
     db_session.expire_all()
     assert (

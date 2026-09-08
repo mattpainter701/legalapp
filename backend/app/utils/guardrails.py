@@ -88,7 +88,7 @@ _SUPPORTED_TAG_RE = re.compile(r"\[(?:cited|settled)\]", re.IGNORECASE)
 _SOURCE_REF_RE = re.compile(r"\[source:\s*([^\]]+)\]", re.IGNORECASE)
 _LEGAL_RESEARCH_RE = re.compile(
     r"\b(?:case\s+law|citation|court|custod(?:y|ial)|divorce|enforceab(?:le|ility)|"
-    r"elements?|governing\s+law|jurisdiction|legal\s+(?:authority|standard|research)|"
+    r"elements?|governing\s+(?:law|standards?)|jurisdiction|legal\s+(?:authority|standards?|research)|"
     r"precedent|statute|statutory|limitations?\s+period|uccjea|"
     r"mediat(?:e|ion|or)|arbitrat(?:e|ion|or)|"
     r"binding|non[-\s]?binding|assignment|change[-\s]of[-\s]control|"
@@ -98,7 +98,7 @@ _LEGAL_RESEARCH_RE = re.compile(
 )
 _PUBLIC_AUTHORITY_QUESTION_RE = re.compile(
     r"\b(?:case\s+law|citation|courts?|custod(?:y|ial)|divorce|enforceab(?:le|ility)|"
-    r"jurisdiction|legal\s+(?:authority|standard|research)|precedent|statute|statutory|"
+    r"jurisdiction|governing\s+standards?|legal\s+(?:authority|standards?|research)|precedent|statute|statutory|"
     r"limitations?\s+period|uccjea|mediat(?:e|ion|or)|arbitrat(?:e|ion|or))\b",
     re.IGNORECASE,
 )

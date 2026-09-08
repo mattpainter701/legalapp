@@ -6,6 +6,10 @@ snippets + metadata.
 """
 
 import base64
+import asyncio
+from email import policy
+from email.parser import BytesParser
+from html.parser import HTMLParser
 import logging
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -23,6 +27,7 @@ from app.services.matter_cloud_scope import (
     load_matter_document_cloud_scope,
 )
 from app.services.token_vault import get_fresh_token, get_fresh_user_token
+from app.utils.text_processing import extract_text
 
 # Map index (provider, object_type) → CloudHit.source used by fetch_content.
 _INDEX_SOURCE_MAP = {
@@ -39,6 +44,7 @@ logger = logging.getLogger(__name__)
 GOOGLE_DRIVE_BASE = "https://www.googleapis.com/drive/v3"
 GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1"
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+MAX_CLOUD_SEARCH_DOWNLOAD_BYTES = 10 * 1024 * 1024
 
 
 # ── Data model ────────────────────────────────────────────────────────────
@@ -876,15 +882,20 @@ class CloudSearchService:
                 params = {"alt": "media", "supportsAllDrives": True}
 
             try:
-                resp = await client.get(
+                content = await self._download_content(
+                    client,
                     url,
                     headers={"Authorization": f"Bearer {token}"},
                     params=params,
-                    follow_redirects=True,
                 )
-                if resp.status_code == 200:
-                    content = resp.text
-                    return content[:max_chars]
+                if content is not None:
+                    return await asyncio.to_thread(
+                        self._extract_downloaded_file,
+                        content,
+                        hit,
+                        max_chars,
+                        export_mime,
+                    )
             except httpx.RequestError:
                 pass
 
@@ -939,18 +950,145 @@ class CloudSearchService:
                     drive_id, item_id = _split_sharepoint_object_id(object_id)
                     if drive_id and item_id:
                         url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
-                resp = await client.get(
+                content = await self._download_content(
+                    client,
                     url,
                     headers={"Authorization": f"Bearer {token}"},
-                    follow_redirects=True,
                 )
-                if resp.status_code == 200:
-                    content = resp.text
-                    return content[:max_chars]
+                if content is not None:
+                    return await asyncio.to_thread(
+                        self._extract_downloaded_file, content, hit, max_chars
+                    )
             except httpx.RequestError:
                 pass
 
         return hit.snippet or None
+
+    @staticmethod
+    async def _download_content(client, url: str, **kwargs) -> bytes | None:
+        """Read a cloud object with a hard upper bound before parsing it."""
+        kwargs.setdefault("follow_redirects", True)
+        async with client.stream("GET", url, **kwargs) as response:
+            if response.status_code != 200:
+                return None
+            announced = response.headers.get("content-length")
+            if announced:
+                try:
+                    if int(announced) > MAX_CLOUD_SEARCH_DOWNLOAD_BYTES:
+                        return None
+                except (TypeError, ValueError):
+                    pass
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_CLOUD_SEARCH_DOWNLOAD_BYTES:
+                    return None
+                chunks.append(chunk)
+            return b"".join(chunks)
+
+    @staticmethod
+    def _extract_downloaded_file(
+        content: bytes,
+        hit: CloudHit,
+        max_chars: int,
+        content_type_override: str | None = None,
+    ) -> str | None:
+        """Decode downloaded file bytes using the bounded shared extractors.
+
+        Graph and Drive return the original bytes for non-native files.  Reading
+        ``response.text`` turns DOCX ZIP members and PDF compressed streams into
+        apparent document text, so route by the hit metadata instead.
+        """
+        effective_mime = content_type_override or hit.mime_type
+        mime_type = (effective_mime or "").split(";", 1)[0].lower()
+        filename = (hit.title or "").lower()
+        supported_binary = (
+            mime_type == "application/pdf"
+            or filename.endswith((".pdf", ".docx"))
+            or mime_type
+            == (
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+        )
+        supported_text = mime_type.startswith("text/") or filename.endswith(
+            (".txt", ".csv", ".json", ".html", ".htm", ".xml")
+        )
+        supported_email = mime_type == "message/rfc822" or filename.endswith(".eml")
+        if supported_email:
+            try:
+                return (
+                    CloudSearchService._extract_rfc822_text(content, max_chars)
+                    or hit.snippet
+                    or None
+                )
+            except Exception:
+                return hit.snippet or None
+        if not supported_binary and not supported_text:
+            return hit.snippet or None
+        try:
+            extracted = extract_text(
+                content,
+                effective_mime,
+                hit.title,
+                max_pdf_chars=max_chars,
+            )
+        except Exception:
+            return hit.snippet or None
+        return extracted[:max_chars] or hit.snippet or None
+
+    @staticmethod
+    def _extract_rfc822_text(content: bytes, max_chars: int) -> str:
+        """Extract bounded email headers and text bodies, excluding attachments."""
+        message = BytesParser(policy=policy.default).parsebytes(content)
+        header_lines = [
+            f"{name}: {message.get(name)}"
+            for name in ("Subject", "From", "To", "Cc", "Date")
+            if message.get(name)
+        ]
+        body = message.get_body(preferencelist=("plain", "html"))
+        body_parts: list[str] = []
+        if body is not None and body.get_content_disposition() != "attachment":
+            text = body.get_content()
+            if isinstance(text, str):
+                if body.get_content_type() == "text/html":
+                    text = CloudSearchService._html_to_text(text)
+                if text.strip():
+                    body_parts.append(text.strip())
+        sections = ["\n".join(header_lines), "\n\n".join(body_parts)]
+        return "\n\n".join(section for section in sections if section)[:max_chars]
+
+    @staticmethod
+    def _html_to_text(value: str) -> str:
+        """Convert an email HTML body to plain text without retaining markup."""
+
+        class _TextParser(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.parts: list[str] = []
+                self._ignored_depth = 0
+
+            def handle_data(self, data: str) -> None:
+                if not self._ignored_depth:
+                    self.parts.append(data)
+
+            def handle_starttag(self, tag: str, attrs) -> None:
+                if tag in {"head", "script", "style"}:
+                    self._ignored_depth += 1
+                    return
+                if self._ignored_depth:
+                    return
+                if tag in {"br", "div", "p", "li", "tr"}:
+                    self.parts.append("\n")
+
+            def handle_endtag(self, tag: str) -> None:
+                if tag in {"head", "script", "style"} and self._ignored_depth:
+                    self._ignored_depth -= 1
+
+        parser = _TextParser()
+        parser.feed(value)
+        parser.close()
+        return "".join(parser.parts)
 
     async def _fetch_outlook_content(
         self,
@@ -966,14 +1104,19 @@ class CloudSearchService:
 
         async with httpx.AsyncClient(timeout=15) as client:
             try:
-                resp = await client.get(
+                content = await self._download_content(
+                    client,
                     f"{GRAPH_BASE}/me/messages/{hit.object_id}/$value",
                     headers={"Authorization": f"Bearer {token}"},
-                    follow_redirects=True,
                 )
-                if resp.status_code == 200:
-                    content = resp.text
-                    return content[:max_chars]
+                if content is not None:
+                    return await asyncio.to_thread(
+                        self._extract_downloaded_file,
+                        content,
+                        hit,
+                        max_chars,
+                        "message/rfc822",
+                    )
             except httpx.RequestError:
                 pass
 

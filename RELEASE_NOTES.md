@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.07.18 — Reliable background model pricing
+## 2026.09.07.20 — Reliable background model pricing
 
 Released September 7, 2026.
 
@@ -13,6 +13,16 @@ Background profiles can activate with native DeepSeek V4 and verified free OpenC
 
 - **Save supported background profiles.** Native DeepSeek V4 models and verified free OpenCode Zen endpoints now have explicit provider prices, including Mimo V2.5 Free.
 - **Meter free responses accurately.** Confirmed free-model responses settle at zero cost while request limits and unknown-cost safeguards remain enforced.
+
+## 2026.09.07.19 — More reliable assistant document context
+
+Released September 7, 2026.
+
+Follow-up questions retain eligible attachments, cloud PDF and Word files use text extraction, and source limitations stay visible.
+
+- **Continue working with your documents.** Eligible attachments remain available for follow-up questions. Cloud PDF, Word, and retained email use text extraction; long excerpts disclose their coverage limit.
+- **See retrieval limits and source counts.** Public authority outages remain visible after reopening an answer. Citation counts and uploaded-source labels remain consistent across the conversation.
+- **Keep planning on an approved route.** Connected-source planning follows the selected chat route and its confidential-context policy. Blank search plans cannot expand into a mailbox-wide query.
 
 ## 2026.09.07.17 — Dedicated premium template AI
 
