@@ -11,10 +11,12 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.conversation import UsageRecord
-from app.services.billing import calculate_cost
 from app.services.gateway_privacy import gateway_metadata
 from app.services.llm import LLMService
-from app.services.llm_routing import resolve_llm_route
+from app.services.template_ai_profile import (
+    resolve_template_ai_route,
+    TemplateAiProfileUnavailable,
+)
 from app.services.template_ai_assist import (
     AiTemplateProposal,
     reconcile_ai_template_fields,
@@ -104,15 +106,10 @@ def _usage_record(
     final_model: str | None,
     gateway_request_id: str | None,
 ) -> UsageRecord:
-    cost = (
-        0
-        if route.resolved_route == "customer"
-        else calculate_cost(
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            model=route.model,
-            billing_tier=user.tenant.billing_tier if user.tenant else "payg",
-        )
+    cost = route.cost(
+        tokens_in,
+        tokens_out,
+        user.tenant.billing_tier if user.tenant else "payg",
     )
     return UsageRecord(
         id=uuid.uuid4(),
@@ -156,7 +153,10 @@ async def assist_template_mapping(
             "Confirm that bounded extracted text may be sent to your configured premium AI provider."
         )
     await check_token_budget(db, user)
-    route = await resolve_llm_route(db, user.tenant_id, use_premium=True)
+    try:
+        route = await resolve_template_ai_route(db)
+    except TemplateAiProfileUnavailable as exc:
+        raise TemplateAiAssistError(str(exc)) from exc
     existing = [
         {
             "name": _redact_evidence(str(field.get("name") or "")),

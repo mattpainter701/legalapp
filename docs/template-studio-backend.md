@@ -317,3 +317,50 @@ ID is retained as `gateway_request_id` for LiteLLM spend-log correlation.
 Alias-based billing policy is
 unchanged. The gateway contract test uses the real route resolver, LLMService
 and OpenAI HTTP client; only the gateway transport and database reads are mocked.
+
+
+## Dedicated premium template AI profile
+
+Template Studio's explicitly requested premium field suggestions resolve only the
+platform-global `template_ai_profile_v1` setting. They do not inherit a tenant's
+Standard/Premium chat profile, tenant BYOK, or Background Automations route.
+Only this function calls the dedicated resolver; deterministic intake remains
+available when premium template AI is disabled or unconfigured.
+
+In **Platform → AI Routing → Document template premium AI**, select an existing
+OpenRouter vault key, confirm the input/output USD-per-million-token rates, enable
+the function, and save. The model is `anthropic/claude-opus-5` (LiteLLM provider
+model `openrouter/anthropic/claude-opus-5`). Initial reference rates are $5 input
+and $25 output per million tokens; administrators must confirm their agreement's
+rates. Stored key values never reach the browser. Refresh the provider model
+catalog first if Opus 5 is absent: the existing confidential-data approval check
+must pass. OpenRouter requests enforce ZDR and denied data collection.
+
+`GET`/`PUT /api/platform/llm/template-profile` require platform authorization.
+Saving an enabled profile registers only a `clarity-template-premium-r…` alias
+and runs a small billable synthetic completion before committing the activation.
+There are no application-configured fallback or balanced targets for this
+profile. Failed validation preserves the previous settings. Disabling the profile
+blocks subsequent application calls without changing any other alias. Its active
+vault key cannot be deleted until the profile is disabled or uses a replacement.
+Use Save again to re-register and validate the saved profile after gateway recovery;
+the general chat-route Reload control does not reload this independent profile.
+
+The profile is **unconfigured on upgrade**. Merge/deployment does not activate it
+or change live platform settings. An administrator must complete the activation
+above. The tenant's existing premium entitlement, explicit external-AI consent,
+daily token limit, and bounded/redacted current-template context still apply.
+
+Usage records retain `operation_type=template_ai_map` and use
+`requested_route=resolved_route=template-premium`, a revisioned alias, input/output
+tokens, the gateway request ID, and the actual response model when reported.
+Application `cost_usd` uses a snapshot of the configured profile rates with the
+existing PAYG multiplier (10×); other billing tiers retain the base calculation.
+The alias revision includes the rate settings and activation changes are audited.
+This is token-based application metering, not a provider invoice: cache discounts,
+provider adjustments, and upstream spend should still be reconciled using LiteLLM
+request IDs. No additional Stripe charge or new billing plan is introduced.
+No prompt or template content is stored in the usage row.
+
+This profile is internal application configuration; it adds no Workspace or
+Research MCP tool, route, entitlement, or client contract.

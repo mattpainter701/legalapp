@@ -11,6 +11,13 @@
 
 # Changelog
 
+## 2026.09.07.17 - Dedicated premium template AI profile
+
+- Add an independently activated, platform-global document-template profile using the stored OpenRouter vault key and `anthropic/claude-opus-5`.
+- Keep Standard/Premium chat, tenant BYOK, and Background Automations routing unchanged. Unconfigured template AI fails closed, with no shared-route fallback.
+- Meter `template_ai_map` with explicit profile token rates and the existing PAYG markup; preserve gateway request/model correlation, consent, bounded editor context, and daily token limits.
+- Validate a revisioned template alias before publishing settings, enforce the existing confidential-data policy, and prevent deletion of its active key. No migration.
+
 ## 2026.09.07.16 - Context-aware intake AI suggestions
 
 - Verify the real LLM HTTP boundary and retain provider-reported model identity separately from the requested alias, including fallback responses.

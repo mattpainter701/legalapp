@@ -21,6 +21,7 @@ import {
 
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal()),
+  getTemplateAIProfile: vi.fn().mockResolvedValue({ settings: { enabled: false, key_id: null, model: 'anthropic/claude-opus-5', input_usd_per_million: '5', output_usd_per_million: '25' }, activation: { status: 'not_configured' } }),
   getLLMGatewayStatus: vi.fn(),
   getLLMModelCatalog: vi.fn(),
   getLLMProviderKeys: vi.fn(),
