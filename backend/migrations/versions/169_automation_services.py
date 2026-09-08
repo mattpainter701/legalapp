@@ -114,7 +114,7 @@ def upgrade():
         FOREIGN KEY(tenant_id,service_rule_id) REFERENCES automation_service_rules(tenant_id,id) ON DELETE RESTRICT;
       CREATE INDEX ix_automation_service_rules_due ON automation_service_rules(tenant_id,status,created_at);
       CREATE INDEX ix_automation_service_occurrences_budget ON automation_service_occurrences(tenant_id,identity_id,created_at);
-    """.split(";\n      "):
+    """.split(";"):
         if statement.strip():
             op.execute(statement.strip())
     for table in TABLES:
