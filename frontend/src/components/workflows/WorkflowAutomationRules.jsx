@@ -12,6 +12,14 @@ import {
 const TRIGGERS = [
   ["matter_created", "A matter is opened"],
   ["matter_stage_changed", "A matter enters a stage"],
+  ["task_completed", "A task is completed"],
+  ["document_received", "A document is received"],
+  ["intake_submitted", "An intake questionnaire is submitted"],
+  ["esign_completed", "A signature request is completed"],
+  ["deadline_approaching", "A deadline is within three days"],
+  ["invoice_overdue", "An unpaid invoice is overdue"],
+  ["inbound_email_matched_to_matter", "An inbound matter email is accepted"],
+  ["payment_received", "An invoice payment is recorded"],
 ];
 const asItems = (value) =>
   Array.isArray(value) ? value : value?.items || value?.rules || [];
@@ -127,7 +135,7 @@ export default function WorkflowAutomationRules({ user, templates = [] }) {
         Automation rules
       </h2>
       <p className="text-sm">
-        An active rule prepares a workflow preview when a matter event matches
+        An active rule prepares a workflow preview when an event matches
         it. It never applies the workflow: a reviewer still approves and applies
         the planned run.
       </p>

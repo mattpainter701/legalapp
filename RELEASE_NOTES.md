@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.7 — Prepare workflows from everyday firm events
+
+Released September 8, 2026.
+
+Approved automation rules can prepare reviewable workflows when tasks, documents, intake, signatures, invoices, payments, and accepted matter email change.
+
+- **Choose more workflow triggers.** Use task completion, document receipt, intake submission, completed signatures, accepted inbound email, or payment receipt to prepare an approved workflow for review.
+- **Prepare for deadlines and overdue invoices.** Watch deadlines within three days and unpaid overdue invoices. Duplicate events prepare one run; changed facts block preparation. Applying a workflow still requires approval.
+
 ## 2026.09.08.5 — Reuse shared firm details in templates
 
 Released September 8, 2026.

@@ -1,3 +1,10 @@
+## 2026.09.08.7 - Lifecycle workflow preparation
+
+- Add eight lifecycle events to approved workflow rules and the firm rule editor.
+- Capture source writes transactionally, including imports and background writes; defer fingerprints until transaction completion and deduplicate source occurrences.
+- Scan approaching deadlines and overdue unpaid invoices under tenant context every 15 minutes; preserve changed-source blocks, crash recovery, and immutable evidence without applying workflows.
+- Add migration 166 and a migrated PostgreSQL rehearsal covering all eight events, both intake paths, RLS, rollback, worker recovery, and replay.
+
 ## 2026.09.08.4 - Exact artifact review and approved attachments
 
 - Add migration165: tenant-scoped review requirements, immutable decisions and delivery receipts, exact content/file hashes, stage ordering, override evidence and revision supersession.

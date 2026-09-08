@@ -797,6 +797,17 @@ class LegalScheduler:
         )
         agent_count += 1
 
+        self.scheduler.add_job(
+            self._guarded("workflow-due-events", self.run_workflow_due_events),
+            "interval",
+            minutes=15,
+            id="workflow-due-events",
+            name="Workflow Deadline and Invoice Events",
+            replace_existing=True,
+            max_instances=1,
+            next_run_time=datetime.now(timezone.utc),
+        )
+        agent_count += 1
         self.scheduler.start()
         logger.info("LegalScheduler started with %d agents", agent_count)
 
@@ -809,6 +820,16 @@ class LegalScheduler:
     def get_job(self, agent_name: str):
         """Return the APScheduler job object for a given agent name."""
         return self.scheduler.get_job(agent_name)
+
+    @tenant_scoped_job
+    async def run_workflow_due_events(self) -> None:
+        """Capture due conditions under the same tenant boundary as source saves."""
+        from app.services.workflow_lifecycle import enqueue_due_events_for_tenant
+
+        async with async_session_maker() as session:
+            await _apply_scheduler_tenant_context(session)
+            await enqueue_due_events_for_tenant(session, _scheduler_tenant_id.get())
+            await session.commit()
 
     @tenant_scoped_job
     async def run_scheduler_heartbeat(self) -> None:

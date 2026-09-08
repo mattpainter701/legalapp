@@ -70,6 +70,23 @@ describe("WorkflowAutomationRules", () => {
   });
   afterEach(cleanup);
 
+  it.each([
+    "task_completed", "document_received", "intake_submitted", "esign_completed",
+    "deadline_approaching", "invoice_overdue", "inbound_email_matched_to_matter", "payment_received",
+  ])("authors a %s subscription as a draft without a stale stage condition", async (event) => {
+    render(<WorkflowAutomationRules user={{ capabilities: ["manage_workflows"] }} templates={TEMPLATES} />);
+    await waitFor(() => expect(api.listWorkflowAutomations).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("When"), { target: { value: "matter_stage_changed" } });
+    fireEvent.change(screen.getByLabelText("Stage"), { target: { value: "Opening" } });
+    fireEvent.change(screen.getByLabelText("When"), { target: { value: event } });
+    expect(screen.queryByLabelText("Stage")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Rule name"), { target: { value: "Lifecycle checklist" } });
+    fireEvent.change(screen.getByLabelText("Plan this approved template"), { target: { value: "t1" } });
+    fireEvent.click(screen.getByText("Create draft rule"));
+    await waitFor(() => expect(api.createWorkflowAutomation).toHaveBeenCalledWith(expect.objectContaining({trigger_event: event, trigger_stage: null})));
+    expect(api.activateWorkflowAutomation).not.toHaveBeenCalled();
+  });
+
   it("offers only approved templates and never repeats one", async () => {
     render(
       <WorkflowAutomationRules

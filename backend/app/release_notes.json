@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.08.7",
+      "version": "2026.09.08.7",
+      "title": "Prepare workflows from everyday firm events",
+      "published_at": "2026-09-08",
+      "summary": "Approved automation rules can prepare reviewable workflows when tasks, documents, intake, signatures, invoices, payments, and accepted matter email change.",
+      "highlights": [
+        {
+          "title": "Choose more workflow triggers",
+          "description": "Use task completion, document receipt, intake submission, completed signatures, accepted inbound email, or payment receipt to prepare an approved workflow for review."
+        },
+        {
+          "title": "Prepare for deadlines and overdue invoices",
+          "description": "Watch deadlines within three days and unpaid overdue invoices. Duplicate events prepare one run; changed facts block preparation. Applying a workflow still requires approval."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.5",
       "version": "2026.09.08.5",
       "title": "Reuse shared firm details in templates",

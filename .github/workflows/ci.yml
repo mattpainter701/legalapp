@@ -314,6 +314,8 @@ jobs:
         run: python scripts/rehearse_configurable_workflows.py
       - name: Rehearse artifact review and delivery evidence
         run: python scripts/rehearse_artifact_reviews.py
+      - name: Rehearse lifecycle capture and planning recovery
+        run: python scripts/rehearse_workflow_lifecycle.py
 
   # ─── Backend: Unit tests (no database) ──────────────────────────
   # Fast feedback, not a gate. A strict subset of the sharded suite below,

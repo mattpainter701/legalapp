@@ -75,7 +75,7 @@ deliberately no approve, send, file, or delete tool.
    currently carried implicitly by Task rows plus the artifact status enum, and
    `Task.pending_action` remains the compatibility envelope the north star
    itself says cannot be canonical.
-2. **Two triggers.** `TRIGGER_EVENTS = ("matter_created", "matter_stage_changed")`
+2. **Two triggers at the plan's audit baseline.** `TRIGGER_EVENTS = ("matter_created", "matter_stage_changed")`
    in `backend/app/models/workflow_automation.py`. Every other lifecycle event
    is an explicit residual in `docs/workflow-automations.md`.
 3. **No per-firm configuration synthesis.** Templates and rules are authored by
