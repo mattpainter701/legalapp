@@ -208,10 +208,16 @@ function providerLabel(provider) {
   return provider === 'google' ? 'Google Calendar' : 'Microsoft Calendar'
 }
 
-function providerEventDate(evt) {
+function localIsoDate(d) {
+  return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-')
+}
+
+export function providerEventDate(evt) {
   const raw = evt.start || evt.end
   if (!raw) return null
-  return String(raw).slice(0, 10)
+  if (!String(raw).includes('T')) return String(raw).slice(0, 10)
+  const parsed = new Date(raw)
+  return Number.isNaN(parsed.getTime()) ? String(raw).slice(0, 10) : localIsoDate(parsed)
 }
 
 function mergeCalendarEvents(internalEvents, providerEvents) {
