@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from types import SimpleNamespace
@@ -71,6 +72,34 @@ async def test_shared_counter_uses_grant_not_token_and_expiring_window(monkeypat
     assert "tenant-1:grant-1:" in args[2]
     assert "token-1" not in args[2]
     assert 1 <= args[-1] <= 60
+
+
+@pytest.mark.asyncio
+async def test_concurrent_grant_admission_uses_atomic_redis_budget(
+    monkeypatch, test_redis
+):
+    monkeypatch.setattr(transport.settings, "DEV_MODE", False)
+    monkeypatch.setattr(budgets.settings, "WORKSPACE_MCP_GRANT_CALLS_PER_MINUTE", 7)
+    monkeypatch.setattr(budgets, "_minute_window", lambda: (123, 60))
+    tenant, grant = str(uuid.uuid4()), str(uuid.uuid4())
+    outcomes = await asyncio.gather(
+        *(
+            budgets.enforce_workspace_grant_call_budget(
+                request(test_redis), identity(grant=grant, tenant=tenant, token=str(n))
+            )
+            for n in range(30)
+        ),
+        return_exceptions=True,
+    )
+    assert sum(item is None for item in outcomes) == 7
+    refused = [item for item in outcomes if item is not None]
+    assert all(
+        isinstance(item, HTTPException) and item.status_code == 429 for item in refused
+    )
+    assert all(1 <= int(item.headers["Retry-After"]) <= 60 for item in refused)
+    key = f"rate:mcp:workspace:grant:{tenant}:{grant}:123"
+    assert int(await test_redis.get(key)) == 30
+    assert 0 < await test_redis.ttl(key) <= 60
 
 
 def test_read_budget_counts_utf8_and_both_mcp_representations(monkeypatch):

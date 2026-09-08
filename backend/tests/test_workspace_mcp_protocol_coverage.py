@@ -124,6 +124,9 @@ async def test_list_tools_and_call_tool_cover_success_denial_and_errors(monkeypa
 
 @pytest.mark.asyncio
 async def test_execute_capability_dispatches_and_commits_only_proposals(monkeypatch):
+    monkeypatch.setattr(
+        protocol, "enforce_workspace_grant_call_budget", lambda *_args: _async_noop()
+    )
     db = FakeDB()
     user = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
     actor = (user, frozenset({"manage_matters"}))

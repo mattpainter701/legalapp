@@ -49,6 +49,9 @@ async def test_tool_failure_survives_refusal_audit_failure(monkeypatch, caplog):
     async def actor(*_args):
         return user, frozenset({"manage_matters"})
 
+    async def allow_budget(*_args):
+        return None
+
     async def failed_handler(*_args, **_kwargs):
         raise RuntimeError("handler failed")
 
@@ -57,6 +60,7 @@ async def test_tool_failure_survives_refusal_audit_failure(monkeypatch, caplog):
 
     monkeypatch.setattr(protocol, "async_session_maker", lambda: _Session(db))
     monkeypatch.setattr(protocol, "_load_workspace_actor", actor)
+    monkeypatch.setattr(protocol, "enforce_workspace_grant_call_budget", allow_budget)
     monkeypatch.setattr(protocol, "set_tenant_context", failed_audit)
     monkeypatch.setattr(protocol, "append_workspace_mcp_audit", failed_audit)
     monkeypatch.setattr(handlers, "find_matter", failed_handler)
