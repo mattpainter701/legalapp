@@ -1,5 +1,11 @@
 # 2026.09.06.4 - Durable workflow preparation
 
+## 2026.09.08.3 - Template variations and matter completion
+
+- Add tenant-scoped template copying with independent source/evidence files and draft-only lifecycle state.
+- Add fill completion, missing/review filters, per-value confidence, explicit changed-suggestion acceptance, and matter-switch isolation.
+- Document the expanded authoring requirement and remaining editor, DOC import, rescan and matter-native generation work.
+
 ## 2026-09-07 - Role navigation profiles
 
 - Added tenant role view allowlists and account-synced personal navigation hiding/order (migration 159).

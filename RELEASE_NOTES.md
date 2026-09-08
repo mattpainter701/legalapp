@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.3 — Reuse templates and finish matter fields faster
+
+Released September 8, 2026.
+
+Create separately named template variations and review matter-filled values with clearer completion and confidence.
+
+- **Create reusable variations.** Copy a saved document and its fields into an independent draft without uploading the sample again.
+- **Find the remaining fields.** See completion and suggestion confidence, jump to missing fields, and review changed matter values while keeping your entries. Switching matters clears the previous values.
+
 ## 2026.09.08.2 — Bound connected assistant usage
 
 Released September 8, 2026.

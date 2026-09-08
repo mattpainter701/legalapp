@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 import TemplateStudioEditor from './TemplateStudioEditor'
 import TemplateVersionHistory from './TemplateVersionHistory'
 import TemplateTestSummary from './TemplateTestSummary'
+import TemplateCopyAction from './TemplateCopyAction'
 
 const tabs = [
   { key: 'workspace', label: 'Workspace', suffix: '', icon: FileText },
@@ -63,6 +64,7 @@ export default function TemplateStudioWorkspace({
               <p className="mt-1 text-xs text-brand-muted">{lifecycleLabel}</p>
             </div>
             <div className="flex flex-wrap gap-2">
+              {onDerived && <TemplateCopyAction key={template.id} template={template} onCreated={onDerived} />}
               <button type="button" onClick={onEdit} className="inline-flex items-center gap-2 rounded-lg border border-brand-line text-brand-ink px-3 py-2 text-sm font-semibold hover:bg-brand-bg">
                 <Pencil size={16} aria-hidden="true" /> Edit template
               </button>
