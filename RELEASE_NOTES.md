@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.2 — Bound connected assistant usage
+
+Released September 8, 2026.
+
+Workspace connections share a call budget across refreshed tokens and receive clear guidance when a read is too large.
+
+- **Predictable connection limits.** Connected assistants receive retry guidance when their grant reaches its call limit. Large reads return a request to narrow the query without exposing partial evidence.
+- **Separate assistant and platform usage.** Workspace infrastructure limits do not debit AI balances. LawHand-run AI features retain their own usage accounting.
+
 ## 2026.09.08.1 — Restore Word previews in Template Studio
 
 Released September 8, 2026.

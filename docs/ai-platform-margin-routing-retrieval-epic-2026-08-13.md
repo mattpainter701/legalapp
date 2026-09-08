@@ -8,8 +8,20 @@ Execution branch: `agent/bk24-ai-platform-sprint0`
 
 Ship a dependable, margin-positive AI assistant product for legal customers and
 prove it in a prospect meeting with realistic corporate-contract and recurring-
-retainer scenarios. The product owns provider credentials and pricing; customer
-BYOK is intentionally out of scope.
+retainer scenarios. LawHand owns provider credentials and pricing for its managed
+AI routes. The original exclusion of customer BYOK described this workstream's
+scope, not a prohibition on customer-supplied reasoning clients.
+
+**Owner amendment — 2026-09-08:** BYO-harness is a supported, broad platform
+channel alongside the owned assistant. It is distinct from supplying provider
+API keys and from metered LawHand AI. An external assistant pays for its own
+reasoning; LawHand-run PDF templating, Standard/Premium research, and other
+inference remain subject to their own entitlement, price, admission, and usage
+records even when invoked by that assistant. Ordinary Workspace MCP read/propose
+access uses infrastructure budgets, not AI-dollar debits. Workspace management
+uses `mcp.getlawhand.com`; research uses `research.getlawhand.com`, with separate
+authorization and metering. The [channel contract](byo-harness-channel-contract.md)
+owns the scope and capability-coverage rules.
 
 The release path is: qualified paid routes, correctly separated private/public
 retrieval, useful matter work, explicit attorney review, and measurable margin.

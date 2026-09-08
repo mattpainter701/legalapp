@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -382,6 +383,10 @@ class Settings(BaseSettings):
     # Per-token and tenant-aggregate protocol limits cover initialize,
     # discovery, notifications, and tool calls. Nginx separately limits IPs.
     WORKSPACE_MCP_TOKEN_REQUESTS_PER_MINUTE: int = 120
+    WORKSPACE_MCP_GRANT_CALLS_PER_MINUTE: int = Field(default=60, ge=1, le=600)
+    WORKSPACE_MCP_READ_RESULT_MAX_BYTES: int = Field(
+        default=1048576, ge=1024, le=8388608
+    )
     WORKSPACE_MCP_TENANT_REQUESTS_PER_MINUTE: int = 1200
     WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED: bool = False
 

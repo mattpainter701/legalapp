@@ -58,6 +58,10 @@ from app.services.workspace_mcp_grants import (
     require_active_workspace_grant,
 )
 from app.services.workspace_mcp_access import tenant_workspace_mcp_enabled
+from app.services.workspace_mcp_budgets import (
+    bounded_workspace_read_result,
+    enforce_workspace_grant_call_budget,
+)
 
 from app.services.workspace_mcp_oauth import (
     WorkspaceOAuthError,
@@ -417,6 +421,7 @@ async def execute_workspace_capability(
                 ),
             )
             spec.authorize(context)
+            await enforce_workspace_grant_call_budget(request, identity)
 
             # The handlers are the application layer currently shared with
             # matter chat. Import lazily to avoid a catalog/handler cycle.
@@ -429,6 +434,8 @@ async def execute_workspace_capability(
                 )
             result = await handler(context, parsed)
             audit_metadata = _success_audit_metadata(spec, result)
+            if not spec.mutating:
+                audit_metadata["result_bytes"] = bounded_workspace_read_result(result)
             if spec.mutating:
                 # Proposal state and its audit evidence commit atomically.
                 await append_workspace_mcp_audit(
@@ -484,7 +491,16 @@ async def execute_workspace_capability(
                             if isinstance(exc, (CapabilityError, HTTPException))
                             else "error"
                         ),
-                        metadata={"error_type": exc.__class__.__name__},
+                        metadata={
+                            "error_type": exc.__class__.__name__,
+                            "failure_reason": (
+                                exc.code
+                                if isinstance(exc, CapabilityError)
+                                else str(exc.status_code)
+                                if isinstance(exc, HTTPException)
+                                else "internal_error"
+                            ),
+                        },
                     )
                     await audit_db.commit()
             except Exception:
@@ -524,6 +540,12 @@ async def call_workspace_tool(
     except CapabilityError as exc:
         return _tool_error(exc.code, exc.message)
     except HTTPException as exc:
+        if exc.status_code == 429:
+            result = _tool_error("rate_limited", str(exc.detail))
+            result.structuredContent["error"]["retry_after_seconds"] = int(
+                (exc.headers or {}).get("Retry-After", "60")
+            )
+            return result
         code = "workspace_access_denied" if exc.status_code < 500 else "unavailable"
         return _tool_error(code, str(exc.detail))
     except Exception:

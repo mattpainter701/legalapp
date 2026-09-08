@@ -11,6 +11,14 @@
 
 # Changelog
 
+## 2026.09.08.2 - Workspace grant admission
+
+- Enforce Redis-atomic tool-call budgets by tenant and OAuth grant, surviving access-token rotation while retaining existing token/tenant request controls.
+- Bound read-result UTF-8 JSON size across both MCP representations, return retry/narrow-query guidance, and record content-free result sizes/refusal codes.
+- Record broad BYO-harness channel support independently from LawHand inference metering; amend BK24 and preserve explicit capability/promotion residuals.
+- No migration, AI route change, or automatic execution authority.
+
+
 ## 2026.09.08.1 - Restore Word previews and focus Studio editing
 
 - Strip the narrowly validated local XYZ opening destination emitted by LibreOffice before PDF normalization; continue rejecting action dictionaries, additional actions, and malformed destinations.

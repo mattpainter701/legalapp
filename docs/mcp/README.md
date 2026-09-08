@@ -19,6 +19,10 @@ Keep the detailed source documents in the repository so behavior, security bound
 
 ## Choose the correct MCP product
 
+The accepted [BYO-harness channel contract](../byo-harness-channel-contract.md)
+separates broad external-assistant coverage from metered LawHand AI features and
+documents Workspace grant budgets. This does not expand the implemented catalog.
+
 | Product | Intended use | Identity and tenant boundary | Canonical source |
 | --- | --- | --- | --- |
 | Workspace MCP | Matter, task, document, artifact, review, and other tenant-workspace operations exposed to approved desktop and coding clients. | User OAuth identity, tenant membership, granted scopes, RBAC, RLS, capability policy, and audit controls. | [Workspace adapter](../workspace_mcp_adapter.md) and [matter automation architecture](../matter_automation_workspace_mcp.md). |

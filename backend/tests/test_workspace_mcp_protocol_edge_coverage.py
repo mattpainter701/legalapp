@@ -168,6 +168,7 @@ async def test_capability_dispatch_rolls_back_reads_denials_and_missing_handlers
 
     monkeypatch.setattr(protocol, "set_tenant_context", _none)
     monkeypatch.setattr(protocol, "append_workspace_mcp_audit", _none)
+    monkeypatch.setattr(protocol, "enforce_workspace_grant_call_budget", _none)
 
     async def read_handler(context, parsed):
         assert context.request_id == "idem"
