@@ -2,6 +2,7 @@
 
 **Status:** Architecture and release contract
 **Companion design:** `docs/matter_automation_workspace_mcp.md`
+**Execution plan:** `docs/capability-first-automation-scaling-plan-2026-09-08.md`
 
 ## Product outcome
 
