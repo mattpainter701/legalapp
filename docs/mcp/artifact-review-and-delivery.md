@@ -2,7 +2,7 @@
 
 This document owns the review and delivery contract for assistant-generated
 documents. Workspace MCP and LawHand Chat share the same proposal handlers.
-The [BYO-harness channel contract](byo-harness-channel-contract.md) owns channel
+The [BYO-harness channel contract](../byo-harness-channel-contract.md) owns channel
 positioning, platform AI metering, and connection budgets.
 
 ## Human review

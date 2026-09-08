@@ -14,6 +14,15 @@ Map template fields to the firm profile and maintain common contact details once
 - **Maintain firm details once.** Choose firm name, address, phone, email, or website as a template source. Smart Fill reads the current firm profile, even before a matter is selected.
 - **See shared values and missing setup.** The field library shows configured firm values and their template usage. Profile values are distinguished from AI confidence estimates, and personal document edits remain separate.
 
+## 2026.09.08.4 — Review exact document revisions before delivery
+
+Released September 8, 2026.
+
+Review assistant documents in a staff-and-attorney sequence or an attorney-only sequence, with a lasting record of the exact file approved.
+
+- **Review policy for your firm.** Choose the review sequence for new drafts. Assigned reviewers can approve, request changes, or record a reasoned attorney override in chat and the work board.
+- **Send the reviewed document.** Ask your assistant to attach an approved document to a client email. LawHand checks the exact file again and requires a separate email approval before sending.
+
 ## 2026.09.08.3 — Reuse templates and finish matter fields faster
 
 Released September 8, 2026.

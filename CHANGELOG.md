@@ -1,3 +1,10 @@
+## 2026.09.08.4 - Exact artifact review and approved attachments
+
+- Add migration165: tenant-scoped review requirements, immutable decisions and delivery receipts, exact content/file hashes, stage ordering, override evidence and revision supersession.
+- Add firm staff/attorney or attorney-only policy and authenticated review controls in chat and the work board.
+- Resolve optional approved artifact attachments through the shared email proposal handler; verify bytes before a bounded Microsoft, Google or SMTP send and preserve interrupted outcomes.
+- Add PostgreSQL migration/RLS rehearsal plus focused review, transport and UI tests.
+
 # 2026.09.06.4 - Durable workflow preparation
 
 ## 2026.09.08.5

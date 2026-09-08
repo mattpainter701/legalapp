@@ -19,6 +19,23 @@
       ]
     },
     {
+      "id": "2026.09.08.4",
+      "version": "2026.09.08.4",
+      "title": "Review exact document revisions before delivery",
+      "published_at": "2026-09-08",
+      "summary": "Review assistant documents in a staff-and-attorney sequence or an attorney-only sequence, with a lasting record of the exact file approved.",
+      "highlights": [
+        {
+          "title": "Review policy for your firm",
+          "description": "Choose the review sequence for new drafts. Assigned reviewers can approve, request changes, or record a reasoned attorney override in chat and the work board."
+        },
+        {
+          "title": "Send the reviewed document",
+          "description": "Ask your assistant to attach an approved document to a client email. LawHand checks the exact file again and requires a separate email approval before sending."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.3",
       "version": "2026.09.08.3",
       "title": "Reuse templates and finish matter fields faster",
