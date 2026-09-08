@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.1 — Restore Word previews in Template Studio
+
+Released September 8, 2026.
+
+Word page previews work with the installed converter, and the Studio workspace gives more room to document editing.
+
+- **See the original Word layout.** A standard initial-page setting from LibreOffice no longer causes valid document previews to fail.
+- **Keep working on fields.** Optional setup controls sit below the editor. Add field provides text-selection guidance when page rendering is unavailable or still loading.
+
 ## 2026.09.07.23 — Reliable background model pricing
 
 Released September 7, 2026.

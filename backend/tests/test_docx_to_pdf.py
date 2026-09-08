@@ -334,6 +334,88 @@ async def test_docx_to_pdf_rejects_active_content_in_the_converted_pdf(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "direct",
+        "indirect",
+        "wrong_page",
+        "wrong_view",
+        "short",
+        "string",
+        "action",
+        "additional_action",
+    ],
+)
+async def test_converter_opening_view_is_removed_without_accepting_actions(
+    tmp_path, monkeypatch, variant
+):
+    from pypdf import PdfReader
+    from pypdf.generic import (
+        ArrayObject,
+        DictionaryObject,
+        NameObject,
+        NullObject,
+        NumberObject,
+        TextStringObject,
+    )
+
+    executable = tmp_path / "converter"
+    executable.write_text("synthetic converter")
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    opening_view = ArrayObject(
+        [
+            page.indirect_reference,
+            NameObject("/XYZ"),
+            NullObject(),
+            NullObject(),
+            NumberObject(0),
+        ]
+    )
+    if variant == "wrong_page":
+        opening_view[0] = writer._add_object(DictionaryObject())
+    elif variant == "wrong_view":
+        opening_view[1] = NameObject("/JavaScript")
+    elif variant == "short":
+        opening_view.pop()
+    elif variant == "string":
+        opening_view[2] = TextStringObject("invalid coordinate")
+    elif variant == "action":
+        opening_view = DictionaryObject(
+            {
+                NameObject("/S"): NameObject("/JavaScript"),
+                NameObject("/JS"): TextStringObject("app.alert('test')"),
+            }
+        )
+    elif variant == "additional_action":
+        writer._root_object[NameObject("/AA")] = DictionaryObject()
+    writer._root_object[NameObject("/OpenAction")] = (
+        writer._add_object(opening_view) if variant == "indirect" else opening_view
+    )
+    output = BytesIO()
+    writer.write(output)
+
+    async def spawn(*args, **kwargs):
+        (Path(args[args.index("--outdir") + 1]) / "source.pdf").write_bytes(
+            output.getvalue()
+        )
+        return _CompletedConverter()
+
+    monkeypatch.setattr(
+        "app.services.docx_to_pdf.asyncio.create_subprocess_exec", spawn
+    )
+    if variant in ("direct", "indirect"):
+        result = await docx_to_pdf_bytes(_docx(), executable=str(executable))
+        reader = PdfReader(BytesIO(result))
+        assert len(reader.pages) == 1
+        assert "/OpenAction" not in reader.trailer["/Root"]
+    else:
+        with pytest.raises(DocxToPdfError, match="failed validation"):
+            await docx_to_pdf_bytes(_docx(), executable=str(executable))
+
+
+@pytest.mark.asyncio
 async def test_docx_to_pdf_is_byte_identical_for_the_same_source(tmp_path, monkeypatch):
     """Preview and save must produce the same bytes, so conversion is
     re-serialised with fixed metadata rather than LibreOffice's wall clock."""

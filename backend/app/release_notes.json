@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.08.1",
+      "version": "2026.09.08.1",
+      "title": "Restore Word previews in Template Studio",
+      "published_at": "2026-09-08",
+      "summary": "Word page previews work with the installed converter, and the Studio workspace gives more room to document editing.",
+      "highlights": [
+        {
+          "title": "See the original Word layout",
+          "description": "A standard initial-page setting from LibreOffice no longer causes valid document previews to fail."
+        },
+        {
+          "title": "Keep working on fields",
+          "description": "Optional setup controls sit below the editor. Add field provides text-selection guidance when page rendering is unavailable or still loading."
+        }
+      ]
+    },
+    {
       "id": "2026.09.07.23",
       "version": "2026.09.07.23",
       "title": "Reliable background model pricing",

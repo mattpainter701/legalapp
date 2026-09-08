@@ -83,14 +83,16 @@ export default function WordDocumentPreview({ templateId, sourceDigest, fields, 
   useEffect(() => { if (addFieldRequest) setView('fields') }, [addFieldRequest])
 
   const showDocument = view === 'document' && source && !failed
+  const canSelectOnPage = Boolean(onCreateField && source && !failed)
   return (
     <section className="min-w-0" aria-label="Word document and fields">
       <div className="flex gap-2 border-b border-brand-line p-3" role="group" aria-label="Word view">
         <PreviewButton aria-pressed={view === 'document'} onClick={() => setView('document')}>Document</PreviewButton>
         <PreviewButton aria-pressed={view === 'fields'} onClick={() => setView('fields')}>Fields</PreviewButton>
-        <PreviewButton onClick={() => { setView(onCreateField ? 'document' : 'fields'); setAdding(Boolean(onCreateField)) }}>{onCreateField ? 'Add field' : 'Add field from text'}</PreviewButton>
+        <PreviewButton onClick={() => { setView(canSelectOnPage ? 'document' : 'fields'); setAdding(true) }}>{onCreateField ? 'Add field' : 'Add field from text'}</PreviewButton>
       </div>
       {adding && view === 'document' && <p role="status" className="m-3 rounded border border-brand-accent bg-brand-accent/10 p-3 text-sm">Drag across the words to replace on the page. A field name box will open beside your selection.</p>}
+      {adding && view === 'fields' && <p role="status" className="m-3 rounded border border-brand-accent bg-brand-accent/10 p-3 text-sm">Select the words to replace in the text below, then choose Add field beside your selection. You can edit the field’s label and data source in Field properties.</p>}
       <p className="px-3 pt-3 text-xs text-brand-muted">Select words directly on the page to add a field. Named boxes show what will go there; click a box to edit it. Fields also lists replacements that could not be located on this page. Filled values can change pagination; review the generated PDF before sending.</p>
       {failed ? <div role="status" className="p-3 text-sm">{failed} <PreviewButton onClick={() => { setView('document'); setAttempt(value => value + 1) }}>Retry document preview</PreviewButton></div>
         : !source && <p role="status" className="p-3 text-sm">Preparing document pages… Use Fields to start mapping while the preview loads.</p>}

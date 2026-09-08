@@ -25,6 +25,18 @@ If conversion is busy or unavailable, the text mapping view stays available
 with Retry document preview. Source-integrity and access failures have distinct
 notices and never return a cached preview instead of an error.
 
+While pages are loading or unavailable, **Add field** opens text mapping and
+explains how to select words and confirm the selection. Optional Word-copy and
+template-applicability controls are below the editor; the compact header keeps
+the complete title and current publication status visible.
+
+The converter strips LibreOffice's passive local `/XYZ` opening destination
+before returning the normalized PDF. It accepts only a destination referencing
+one of the output pages with numeric or null view parameters. Executable action
+dictionaries, additional actions and malformed destinations remain rejected.
+This follows the distinction between destinations and actions in
+[PDF 32000-1, table 28](https://raw.githubusercontent.com/adobe/dc-acrobat-sdk-docs/master/docs/standards/pdfstandards/pdf/PDF32000_2008.pdf).
+
 Word uploads now start a rendered page preview immediately when a file is
 selected, in parallel with field detection and before creating a template.
 The Document view remains selected while conversion runs; choose Fields to

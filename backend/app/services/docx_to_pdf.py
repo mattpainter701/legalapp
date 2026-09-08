@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import math
 import os
 import shutil
 import signal
@@ -17,7 +18,13 @@ import tempfile
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import ArrayObject, ByteStringObject
+from pypdf.generic import (
+    ArrayObject,
+    ByteStringObject,
+    FloatObject,
+    NullObject,
+    NumberObject,
+)
 
 from app.services.docx_templates import TemplateDocxError, validate_docx_package
 
@@ -132,8 +139,30 @@ async def docx_to_pdf_bytes(
             if reader.is_encrypted or not 1 <= len(reader.pages) <= max_pages:
                 raise ValueError("invalid PDF boundary")
             root_object = reader.trailer["/Root"]
-            if any(key in root_object for key in ("/OpenAction", "/AA")):
+            if "/AA" in root_object:
                 raise ValueError("active PDF output")
+            if "/OpenAction" in root_object:
+                opening_view = root_object["/OpenAction"]
+                # LibreOffice emits a passive initial page/zoom destination.
+                # Accept only its local XYZ shape, then remove it altogether;
+                # action dictionaries (JavaScript, URI, Launch, etc.) still fail.
+                if (
+                    not isinstance(opening_view, ArrayObject)
+                    or len(opening_view) != 5
+                    or opening_view[1] != "/XYZ"
+                    or opening_view[0]
+                    not in [page.indirect_reference for page in reader.pages]
+                    or any(
+                        not isinstance(value, NullObject)
+                        and (
+                            not isinstance(value, (NumberObject, FloatObject))
+                            or not math.isfinite(value)
+                        )
+                        for value in opening_view[2:]
+                    )
+                ):
+                    raise ValueError("active or invalid PDF opening view")
+                del root_object["/OpenAction"]
             names = root_object.get("/Names")
             if names and any(key in names for key in ("/JavaScript", "/EmbeddedFiles")):
                 raise ValueError("active PDF output")

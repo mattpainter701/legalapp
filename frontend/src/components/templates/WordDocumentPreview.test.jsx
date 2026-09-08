@@ -18,6 +18,18 @@ beforeEach(() => { pdfState.error = ''; getTemplateSourcePreview.mockReset() })
 afterEach(cleanup)
 
 describe('Word document preview', () => {
+  it.each(['loading', 'failed'])('offers usable text selection when the document is %s', async state => {
+    getTemplateSourcePreview.mockImplementation(() => state === 'failed'
+      ? Promise.reject(new Error('converter unavailable'))
+      : new Promise(() => {}))
+    render(<WordDocumentPreview templateId="one" onCreateField={vi.fn()}><p>Text tools</p></WordDocumentPreview>)
+    if (state === 'failed') await screen.findByText(/Document preview is unavailable/)
+    fireEvent.click(screen.getByRole('button', { name: 'Add field', exact: true }))
+    expect(screen.getByRole('button', { name: 'Fields', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('Text tools')).toBeVisible()
+    expect(screen.getByText(/Select the words to replace in the text below/)).toBeVisible()
+    expect(screen.queryByText(/A field name box will open/)).not.toBeInTheDocument()
+  })
   it('keeps Add field on the document and explains direct selection', async () => {
     getTemplateSourcePreview.mockResolvedValue(new Blob(['pdf']))
     render(<WordDocumentPreview templateId="one" onCreateField={vi.fn()}><p>Text tools</p></WordDocumentPreview>)
