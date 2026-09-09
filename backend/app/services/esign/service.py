@@ -241,7 +241,10 @@ async def complete_request_if_done(
                 f"{request.source_document_sha256}."
             ),
             note_type="system",
-            created_by=None,
+            # A portal signer is not a firm user, so the timeline attributes the
+            # completion to the staff member who requested the signature, and
+            # otherwise to the matter's responsible user. The column is NOT NULL.
+            created_by=request.created_by_user_id or matter.user_id,
         )
     )
 

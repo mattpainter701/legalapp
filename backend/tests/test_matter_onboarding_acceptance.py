@@ -96,18 +96,19 @@ async def test_jane_doe_http_onboarding(
             ),
             201,
         )
+        conversion = {
+            "matter_name": "Jane Doe divorce",
+            "matter_type": "family",
+            "role": "Client",
+            "jurisdiction": "Illinois",
+            "status": "waiting_fee_agreement",
+        }
         converted = ok(
-            await client.post(
-                f"/api/intake/{lead['id']}/convert",
-                json={"matter_name": "Jane Doe divorce"},
-            )
+            await client.post(f"/api/intake/{lead['id']}/convert", json=conversion)
         )
         matter_id = converted["matter_id"]
         assert (
-            await client.post(
-                f"/api/intake/{lead['id']}/convert",
-                json={"matter_name": "Jane Doe divorce"},
-            )
+            await client.post(f"/api/intake/{lead['id']}/convert", json=conversion)
         ).status_code == 409
     assert await db_session.scalar(select(func.count()).select_from(Matter)) == 1
     assert await db_session.scalar(select(func.count()).select_from(MatterIntake)) == 0
@@ -118,14 +119,14 @@ async def test_jane_doe_http_onboarding(
     )
     agreement = ok(
         await client.post(
-            base + "/documents",
+            base + "/documents/upload",
             files={"file": ("Fee agreement.pdf", agreement_bytes, "application/pdf")},
         ),
         201,
     )
     form = ok(
         await client.post(
-            base + "/documents",
+            base + "/documents/upload",
             files={
                 "file": (
                     "General intake form.pdf",
@@ -331,3 +332,70 @@ async def test_jane_doe_http_onboarding(
             )
             == 1
         )
+
+
+@pytest.mark.asyncio
+async def test_linked_fee_agreement_keeps_the_direct_upload_ceiling(
+    client, db_session, test_user, monkeypatch, tmp_path
+):
+    """A reviewed agreement travels behind the secure link, not as an attachment.
+
+    Selecting one already filed in the matter used to inherit the 2 MiB email
+    attachment ceiling while uploading the identical PDF was allowed up to
+    20 MiB, so an ordinary scanned agreement could only be sent one of two ways.
+    """
+    from app.services import matter_file_store
+
+    monkeypatch.setattr(matter_file_store.settings, "UPLOAD_DIR", str(tmp_path))
+    await provision_tenant_rbac(db_session, test_user.tenant_id, test_user.id)
+    await db_session.commit()
+
+    async def capture_email(*args, **kwargs):
+        return SimpleNamespace(
+            delivery_certainty="confirmed_sent", provider="acceptance"
+        )
+
+    monkeypatch.setattr(intake, "send_client_email", capture_email)
+    contact = ok(
+        await client.post(
+            "/api/contacts",
+            json={"first_name": "Jane", "last_name": "Doe", "email": "jane@example.com"},
+        ),
+        201,
+    )
+    matter = ok(
+        await client.post(
+            "/api/matters",
+            json={"matter_name": "Jane Doe divorce", "client_contact_id": contact["id"]},
+        ),
+        201,
+    )
+    base = f"/api/matters/{matter['id']}"
+    # Comfortably past the 2 MiB attachment ceiling and inside the 20 MiB one.
+    scanned = pdf("Scanned fee agreement") + b"\n%% " + b"0" * (3 * 1024 * 1024)
+    assert len(scanned) > 2 * 1024 * 1024
+    agreement = ok(
+        await client.post(
+            base + "/documents/upload",
+            files={"file": ("Fee agreement.pdf", scanned, "application/pdf")},
+        ),
+        201,
+    )
+    packet = ok(
+        await client.post(
+            base + "/intake",
+            data={
+                "options": json.dumps(
+                    {
+                        "email": "jane@example.com",
+                        "channels": ["email"],
+                        "portal_after_signing": True,
+                        "agreement_document_id": agreement["id"],
+                        "questions": [{"key": "summary", "label": "Summary"}],
+                        "confirm_send": True,
+                    }
+                )
+            },
+        )
+    )
+    assert packet["status"] == "awaiting_documents"

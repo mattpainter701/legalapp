@@ -1007,6 +1007,14 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
                 <div className="mt-4 grid gap-2">
                   <button
                     type="button"
+                    onClick={() => setPreviewDocument(doc)}
+                    aria-label={`Preview ${doc.filename}`}
+                    className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-brand-line px-4 text-sm font-bold text-brand-ink hover:bg-brand-bg-soft"
+                  >
+                    <Eye size={16} aria-hidden="true" /> Preview
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onReviseDocument?.(doc)}
                     disabled={!revisionAvailable}
                     aria-label={`Revise ${doc.filename} with assistant`}
@@ -1273,6 +1281,15 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewDocument(doc)}
+                            aria-label={`Preview ${doc.filename}`}
+                            title="Preview"
+                            className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-brand-line px-2.5 text-xs font-bold text-brand-ink hover:border-brand-accent hover:bg-brand-bg-soft"
+                          >
+                            <Eye size={15} aria-hidden="true" /> Preview
+                          </button>
                           <button
                             type="button"
                             onClick={() => onReviseDocument?.(doc)}

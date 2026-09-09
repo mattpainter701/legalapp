@@ -167,10 +167,13 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
     matter = SimpleNamespace(
         id=matter_id,
         tenant_id=tenant_id,
+        user_id=uuid.uuid4(),
         slug="client-agreement",
         matter_name="Client Agreement",
         cloud_folder={"google_drive": {"id": "matter-folder"}},
     )
+
+    requester_id = uuid.uuid4()
 
     def completed_request(request_id):
         signer = SimpleNamespace(
@@ -196,6 +199,7 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
             completion_artifact_sha256=None,
             provider_envelope_id=None,
             completed_at=None,
+            created_by_user_id=requester_id,
         )
 
     class DB:
@@ -291,6 +295,14 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
     assert second.provider_object_id == "evidence-2"
     assert first_request.provider_envelope_id == str(first.id)
     assert second_request.provider_envelope_id == str(second.id)
+
+    # The client signer is not a firm user, so the timeline event is attributed
+    # to the staff member who requested the signature. The column is NOT NULL.
+    from app.models.plugin import MatterEvent
+
+    events = [row for row in db.added if isinstance(row, MatterEvent)]
+    assert len(events) == 2
+    assert {event.created_by for event in events} == {requester_id}
 
     # A retry of an already completed request returns the original artifact and
     # cannot upload or overwrite evidence again.

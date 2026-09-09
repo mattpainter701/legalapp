@@ -68,16 +68,22 @@ async def start(
         ) from exc
     matter = await staff_matter(db, user, matter_id)
     if body.agreement_document_id:
-        from app.services.matter_mail_attachments import reviewed_attachment
+        from app.services.matter_mail_attachments import reviewed_document
 
-        attachment, _ = await reviewed_attachment(
-            db, user.tenant_id, matter.id, body.agreement_document_id
+        # Intake delivers a secure portal link, not an email attachment, so the
+        # reviewed agreement keeps the same ceiling as a direct upload.
+        doc, content = await reviewed_document(
+            db,
+            user.tenant_id,
+            matter.id,
+            body.agreement_document_id,
+            service.MAX_AGREEMENT_BYTES,
         )
-        filename, content = attachment.filename, attachment.content
+        filename = doc.filename
     elif agreement is not None:
         filename, content = (
             agreement.filename or "Fee agreement.pdf",
-            await agreement.read(20 * 1024 * 1024 + 1),
+            await agreement.read(service.MAX_AGREEMENT_BYTES + 1),
         )
     else:
         raise HTTPException(

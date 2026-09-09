@@ -129,7 +129,14 @@ export default function ClientPortalMatterPage() {
             })
             .catch((err) => {
               if (requestSequence !== matterRequestSequence.current) return
-              if (!handleSessionExpiry(err)) setMediation(null)
+              // Only a genuinely expired session ends the visit. An initial
+              // paperwork link is denied this add-on by design, and treating
+              // that as a sign-out would strand the client before signing.
+              if (err?.response?.status === 401) {
+                setExpired(true)
+                return
+              }
+              setMediation(null)
             })
             .then(() => data)
         })

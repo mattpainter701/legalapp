@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import ClientIntakeChecklist from './ClientIntakeChecklist'
-import MatterIntakePanel from './MatterIntakePanel'
+import MatterIntakePanel, { startMatterIntake } from './MatterIntakePanel'
 import NewMatterModal from './NewMatterModal'
 import api, { getClientIntake, submitClientIntake, createMatterV2, getContacts, getAdminUsers, getPlugins } from '../api'
 
@@ -60,7 +60,7 @@ it('records the selected external document and verification note', async () => {
   const user = userEvent.setup()
   api.post.mockResolvedValue({ data: packet() })
   render(<MatterIntakePanel matterId="matter" documents={[{ id: 'doc', filename: 'Executed agreement.pdf' }]} />)
-  await user.click(await screen.findByText('Record a document received outside the portal'))
+  await user.click(await screen.findByText('Review received documents'))
   await user.selectOptions(screen.getByLabelText('Received document'), 'doc')
   await user.type(screen.getByLabelText('Verification note'), 'Reviewed signature')
   await user.click(screen.getByRole('button', { name: 'Confirm document is complete' }))
@@ -101,7 +101,7 @@ it('clears the previous intake when switching to a matter without a packet', asy
   await screen.findByText('Initial packet sent: Not yet')
   api.get.mockRejectedValue({ response: { status: 404 } })
   rerender(<MatterIntakePanel matterId="second" />)
-  await screen.findByRole('button', { name: 'Start intake & send portal invitation' })
+  await screen.findByRole('button', { name: 'Send client paperwork' })
   expect(screen.queryByText('Initial packet sent: Not yet')).not.toBeInTheDocument()
 })
 
@@ -116,4 +116,15 @@ it('keeps intake submission out of the historical import path', async () => {
   expect(api.post).not.toHaveBeenCalled()
   await user.click(screen.getByRole('button', { name: 'New matter' }))
   expect(screen.getByRole('button', { name: 'Create Matter & Start Intake' })).toBeInTheDocument()
+})
+
+it('sends the paperwork form as multipart so the server receives its fields', async () => {
+  api.post.mockResolvedValue({ data: packet() })
+  await startMatterIntake('matter', { email: 'jane@example.com' }, null)
+  const [path, body, config] = api.post.mock.calls.at(-1)
+  expect(path).toBe('/matters/matter/intake')
+  expect(body).toBeInstanceOf(FormData)
+  expect(body.get('options')).toContain('jane@example.com')
+  // The shared client defaults to JSON, which drops every form field.
+  expect(config.headers['Content-Type']).toBe('multipart/form-data')
 })

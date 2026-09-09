@@ -846,26 +846,23 @@ async def test_cancel_selected_signature_and_packet_message_labels(ctx):
 
 @pytest.mark.asyncio
 async def test_start_route_accepts_existing_reviewed_agreement(ctx, monkeypatch):
+    from types import SimpleNamespace
     from app.services import matter_mail_attachments
-    from app.services.mail_attachment import MailAttachment
 
     c = ctx
     body = start_body(c, agreement_document_id=c.doc.id)
     monkeypatch.setattr(r, "staff_matter", AsyncMock(return_value=c.matter))
     start = AsyncMock(return_value=c.packet)
     monkeypatch.setattr(s, "start_packet", start)
-    monkeypatch.setattr(
-        matter_mail_attachments,
-        "reviewed_attachment",
-        AsyncMock(
-            return_value=(
-                MailAttachment("fee.pdf", b"%PDF-reviewed", "application/pdf"),
-                "a" * 64,
-            )
-        ),
+    read = AsyncMock(
+        return_value=(SimpleNamespace(filename="fee.pdf"), b"%PDF-reviewed")
     )
+    monkeypatch.setattr(matter_mail_attachments, "reviewed_document", read)
     await r.start(c.matter.id, body.model_dump_json(), None, c.db, c.user)
     assert start.call_args.args[-2:] == ("fee.pdf", b"%PDF-reviewed")
+    # Intake links the agreement behind a secure portal link, so it reads to the
+    # direct-upload ceiling rather than the smaller mail-attachment one.
+    assert read.call_args.args[-1] == s.MAX_AGREEMENT_BYTES
     body.agreement_document_id = None
     with pytest.raises(HTTPException) as error:
         await r.start(c.matter.id, body.model_dump_json(), None, c.db, c.user)

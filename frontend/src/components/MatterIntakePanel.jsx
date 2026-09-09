@@ -4,7 +4,9 @@ import IntakeSetupFields, { defaultIntakeSetup, intakeOptions } from './IntakeSe
 
 export async function startMatterIntake(matterId, options, file) {
   const data = new FormData(); data.append('options', JSON.stringify(options)); if (file) data.append('agreement', file)
-  return (await api.post(`/matters/${matterId}/intake`, data)).data
+  // The shared client defaults to JSON, which sends this form without a
+  // multipart boundary and loses every field on the way to the server.
+  return (await api.post(`/matters/${matterId}/intake`, data, { headers: { 'Content-Type': 'multipart/form-data' } })).data
 }
 
 const date = value => value ? new Date(value).toLocaleString() : 'Not yet'

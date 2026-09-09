@@ -45,6 +45,9 @@ from app.services.task_workflow import append_task_event, transition_task
 from app.services.token_vault import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
+# The reviewed fee agreement travels behind a secure portal link, not as an
+# email attachment, so it keeps the direct-upload ceiling either way.
+MAX_AGREEMENT_BYTES = 20 * 1024 * 1024
 
 
 def now():
@@ -292,7 +295,7 @@ async def start_packet(db, user, matter, body, filename, content):
         raise HTTPException(
             422, "Assign intake to an active staff member with matter access."
         )
-    if not content.startswith(b"%PDF-") or len(content) > 20 * 1024 * 1024:
+    if not content.startswith(b"%PDF-") or len(content) > MAX_AGREEMENT_BYTES:
         raise HTTPException(
             422, "Upload the reviewed fee agreement as a PDF up to 20 MiB."
         )
@@ -1052,12 +1055,23 @@ async def process_packet(tenant_id, matter_id):
                     packet.config.get(f"calendar_owner:{kind}") or str(packet.owner_id),
                 )
                 await db.commit()
-                results = await remove_task_from_calendars_now(
-                    task_id, str(tenant_id), owner_id
-                )
+                # The helper raises unless both providers confirm removal. An
+                # unreachable or unconnected calendar keeps the flag set for the
+                # next pass instead of stopping this packet's other follow-ups.
+                try:
+                    await remove_task_from_calendars_now(
+                        task_id, str(tenant_id), owner_id
+                    )
+                    removed = True
+                except Exception:
+                    logger.warning(
+                        "Calendar cleanup for intake task %s is still pending",
+                        task_id,
+                    )
+                    removed = False
                 await set_tenant_context(db, str(tenant_id))
                 packet = await get_packet(db, tenant_id, matter_id, lock=True)
-                if not any(isinstance(result, Exception) for result in results):
+                if removed:
                     packet.config = {**packet.config, cleanup: False}
                     await db.commit()
             flag = f"staff_notified:{kind}"

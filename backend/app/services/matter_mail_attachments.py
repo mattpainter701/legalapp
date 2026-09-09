@@ -1,20 +1,29 @@
 """Review and deliver bounded matter documents using their exact content digest."""
 
 import hashlib
+import logging
 import uuid
 from fastapi import HTTPException
 from sqlalchemy import select
 from app.models.matter_document import MatterDocument
 from app.database import async_session_maker, set_tenant_context
 from app.services.mail_attachment import MailAttachment, MAX_ATTACHMENT_BYTES
-from app.services.matter_file_store import MatterFileStore
+from app.services.matter_file_store import MatterFileStore, MatterFileTooLarge
 from app.services.matter_document_revisions import (
     assert_no_legacy_assistant_derivative_release,
     DocumentRevisionServiceError,
 )
 
+logger = logging.getLogger(__name__)
 
-async def reviewed_attachment(db, tenant_id, matter_id, document_id, digest=None):
+
+async def reviewed_document(db, tenant_id, matter_id, document_id, max_bytes):
+    """Return the reviewed bytes of a tenant/matter-scoped document.
+
+    Callers that email the document wrap the result in a ``MailAttachment``,
+    which keeps its own message-sized ceiling. Callers that only deliver a
+    secure link to it, such as client intake, read up to their own limit.
+    """
     try:
         document_id = uuid.UUID(str(document_id))
     except ValueError as exc:
@@ -36,10 +45,6 @@ async def reviewed_attachment(db, tenant_id, matter_id, document_id, digest=None
         raise HTTPException(
             409, "This document requires its separate release workflow"
         ) from exc
-    filename, content_type = (
-        doc.filename,
-        doc.content_type or "application/octet-stream",
-    )
     try:
         async with async_session_maker() as storage_db:
             await set_tenant_context(storage_db, str(tenant_id))
@@ -47,14 +52,38 @@ async def reviewed_attachment(db, tenant_id, matter_id, document_id, digest=None
                 db=storage_db,
                 tenant_id=str(tenant_id),
                 document=doc,
-                max_bytes=MAX_ATTACHMENT_BYTES,
+                max_bytes=max_bytes,
             )
-        attachment = MailAttachment(
-            filename=filename, content=content, content_type=content_type
-        )
-    except Exception as exc:
+    except MatterFileTooLarge as exc:
         raise HTTPException(
-            422, "The attachment could not be read or exceeds the 2 MiB limit"
+            422, f"This document exceeds the {max_bytes // (1024 * 1024)} MiB limit"
+        ) from exc
+    except Exception as exc:
+        # Size is only one reason a read fails; reporting every failure as an
+        # oversize document sends staff looking for a problem that is not there.
+        logger.warning(
+            "Matter document %s could not be read for delivery: %s",
+            document_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(422, "This document could not be read") from exc
+    return doc, content
+
+
+async def reviewed_attachment(db, tenant_id, matter_id, document_id, digest=None):
+    doc, content = await reviewed_document(
+        db, tenant_id, matter_id, document_id, MAX_ATTACHMENT_BYTES
+    )
+    try:
+        attachment = MailAttachment(
+            filename=doc.filename,
+            content=content,
+            content_type=doc.content_type or "application/octet-stream",
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            422,
+            f"This document exceeds the {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB limit",
         ) from exc
     current = hashlib.sha256(content).hexdigest()
     if digest is not None and digest != current:
