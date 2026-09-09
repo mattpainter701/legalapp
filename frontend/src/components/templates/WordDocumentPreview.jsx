@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { getTemplateSourcePreview } from '../../api'
 import { PdfPageCanvas, PdfThumbnail, useTemplatePdfDocument } from './PdfDocumentCanvas'
 import WordPlaceholderLayer from './WordPlaceholderLayer'
+import { wordPlaceholderMatches } from './wordPlaceholderMatches'
 
 const UNAVAILABLE = 'Document preview is unavailable. You can continue mapping fields in the text view.'
 
@@ -16,6 +17,40 @@ function DocumentPages({ source, onUnavailable, active, fields, selectedIdentity
   const [zoom, setZoom] = useState(0.9)
   const [showPages, setShowPages] = useState(false)
   const [viewport, setViewport] = useState(null)
+  const [location, setLocation] = useState(null)
+  const locationRequest = useRef(0)
+  const pageText = useRef(new Map())
+  useEffect(() => {
+    pageText.current.clear()
+    return () => { locationRequest.current += 1 }
+  }, [document])
+  useEffect(() => {
+    locationRequest.current += 1
+    setLocation(null)
+  }, [selectedIdentity, fields, paragraphs])
+  const locateSelected = async () => {
+    const request = ++locationRequest.current
+    setLocation({ loading: true, pages: [] })
+    try {
+      const matches = []
+      for (const item of pages) {
+        let strings = pageText.current.get(item.page)
+        if (!strings) {
+          const pdfPage = await document.getPage(item.page)
+          const content = await pdfPage.getTextContent()
+          if (request !== locationRequest.current) return
+          strings = content.items.filter(item => typeof item.str === 'string').map(item => item.str)
+          pageText.current.set(item.page, strings)
+        }
+        if (wordPlaceholderMatches(strings, fields || [], paragraphs).some(match => match.identity === selectedIdentity)) matches.push(item.page)
+      }
+      if (request !== locationRequest.current) return
+      setLocation({ pages: matches })
+      if (matches.length === 1) setPageNumber(matches[0])
+    } catch {
+      if (request === locationRequest.current) setLocation({ pages: [], error: true })
+    }
+  }
   const scroller = useRef(null)
   const page = pages[pageNumber - 1]
   const width = (page?.rotation % 180 ? page?.height : page?.width) || 612
@@ -33,14 +68,22 @@ function DocumentPages({ source, onUnavailable, active, fields, selectedIdentity
         <PreviewButton aria-pressed={showPages} onClick={() => setShowPages(value => !value)}>Pages</PreviewButton>
         <PreviewButton aria-label="Previous page" disabled={pageNumber <= 1} onClick={() => setPageNumber(value => value - 1)}>‹</PreviewButton>
         <span role="status">Page {pageNumber} of {pages.length || '…'}</span>
+        {pages.length > 1 && <label className="inline-flex items-center gap-1 text-xs">Go to page<select aria-label="Go to document page" value={pageNumber} onChange={event => setPageNumber(Number(event.target.value))} className="rounded border border-brand-line bg-brand-surface-2 px-2 py-1.5 text-brand-ink">{pages.map(item => <option key={item.page} value={item.page}>{item.page}</option>)}</select></label>}
         <PreviewButton aria-label="Next page" disabled={pageNumber >= pages.length} onClick={() => setPageNumber(value => value + 1)}>›</PreviewButton>
         <PreviewButton aria-label="Zoom out document" disabled={zoom <= 0.35} onClick={() => setZoom(value => Math.max(0.35, value - 0.15))}>−</PreviewButton>
         <span>{Math.round(zoom * 100)}%</span>
         <PreviewButton aria-label="Zoom in document" disabled={zoom >= 2.5} onClick={() => setZoom(value => Math.min(2.5, value + 0.15))}>+</PreviewButton>
         <PreviewButton aria-label="Fit document width" onClick={() => setZoom(Math.max(0.35, Math.min(2.5, ((scroller.current?.clientWidth || 644) - 32) / width)))}>Fit width</PreviewButton>
+        {selectedIdentity && <PreviewButton disabled={!document || !pages.length || location?.loading} onClick={locateSelected}>{location?.loading ? 'Finding field…' : 'Find selected field'}</PreviewButton>}
       </div>
+      {location && <div role="status" className="border-b border-brand-line px-3 py-2 text-xs">
+        {location.loading ? 'Checking document pages for this field…' : location.pages.length ? <>
+          {location.pages.length === 1 ? 'Field found on' : 'This field appears on multiple pages. Inspect each replacement:'}
+          {location.pages.map(number => <button key={number} type="button" onClick={() => setPageNumber(number)} className="ml-2 rounded border border-brand-line px-2 py-1 underline">Page {number}</button>)}
+        </> : location.error ? 'Could not search the document. Use Go to page to inspect the source.' : 'No verified location found. The source outline may be incomplete or the text may be ambiguous. Use Go to page to inspect the source; this field has not been marked reviewed.'}
+      </div>}
       <div className={`grid min-w-0 ${showPages ? 'lg:grid-cols-[88px_minmax(0,1fr)]' : ''}`}>
-        <nav hidden={!showPages} aria-label="Document pages" className="max-h-[65vh] space-y-2 overflow-y-auto border-r border-brand-line p-2">
+        <nav hidden={!showPages} aria-label="Document pages" className="max-h-40 overflow-auto border-r border-brand-line p-2 lg:max-h-[65vh]">
           {pages.map(item => <PdfThumbnail key={item.page} document={document} pageNumber={item.page} active={item.page === pageNumber} onSelect={() => setPageNumber(item.page)} />)}
         </nav>
         <div ref={scroller} className="studio-word-scroll max-h-[65vh] min-w-0 overflow-auto bg-brand-bg p-4">

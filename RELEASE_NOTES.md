@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.13 — Review long Word templates with confidence
+
+Released September 8, 2026.
+
+Find fields across document pages, work through uncertain mappings, and distinguish a draft preview from a publication test.
+
+- **Find the detail you need.** Search labels and source text, filter fields needing review, and locate selected fields across pages without guessing ambiguous locations.
+- **Keep long documents reviewable.** Long Word imports retain more complete source context. Jump directly to a page and move between document and fields on smaller screens.
+- **Know what your test proves.** Draft output says Preview ready. Separate progress messages and a clear next step guide you toward testing and publication.
+
 ## 2026.09.08.12 — Prepare recurring matter work with named service identities
 
 Released September 8, 2026.

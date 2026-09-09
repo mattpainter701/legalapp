@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.08.13",
+      "version": "2026.09.08.13",
+      "title": "Review long Word templates with confidence",
+      "published_at": "2026-09-08",
+      "summary": "Find fields across document pages, work through uncertain mappings, and distinguish a draft preview from a publication test.",
+      "highlights": [
+        {
+          "title": "Find the detail you need",
+          "description": "Search labels and source text, filter fields needing review, and locate selected fields across pages without guessing ambiguous locations."
+        },
+        {
+          "title": "Keep long documents reviewable",
+          "description": "Long Word imports retain more complete source context. Jump directly to a page and move between document and fields on smaller screens."
+        },
+        {
+          "title": "Know what your test proves",
+          "description": "Draft output says Preview ready. Separate progress messages and a clear next step guide you toward testing and publication."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.12",
       "version": "2026.09.08.12",
       "title": "Prepare recurring matter work with named service identities",

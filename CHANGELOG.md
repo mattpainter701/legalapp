@@ -1,3 +1,9 @@
+## 2026.09.08.13 - Guided Word template review
+
+- Add searchable review queues, source context, mobile section navigation, cross-page field lookup with ambiguous/missing results, and direct page selection.
+- Separate bounded complete Word navigation context (100,000 characters) from the 20,000-character editor preview.
+- Distinguish diagnostic preview results and busy states from publication tests; align review counts and guide empty generation back to the library.
+
 ## 2026.09.08.12 - Approved automation service rules
 
 - Add named noninteractive service identities with immutable narrow grants; services cannot sign in, hold roles, consume a seat, consent to MCP, or approve legal work.

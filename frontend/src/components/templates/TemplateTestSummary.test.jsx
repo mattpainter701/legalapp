@@ -27,6 +27,8 @@ it('identifies missing values by label and shows render failures without stale s
 })
 it('distinguishes diagnostic output from publication evidence', () => {
   show({ outputReady: true, diagnostic: true })
+  expect(row('Generate output').getByText('Preview ready')).toBeVisible()
+  expect(row('Generate output').queryByText('Passed')).not.toBeInTheDocument()
   expect(screen.getByText(/Run the representative test to record publication evidence/)).toBeVisible()
 })
 it('names malformed or duplicate fields and missing sources', () => {
