@@ -641,6 +641,15 @@ jobs:
           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO clarity_app;
           SQL
 
+      - name: Verify real Word-to-PDF preview and save determinism
+        if: matrix.shard == 1
+        working-directory: backend
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libreoffice-writer
+          command -v libreoffice
+          python -m pytest -q tests/test_docx_render_determinism.py
+
       - name: Select this shard's test files
         id: split
         working-directory: backend

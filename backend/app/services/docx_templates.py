@@ -839,14 +839,25 @@ def fill_docx_template(
     output = io.BytesIO()
     try:
         document.save(output)
-        _open_docx(output.getvalue())
+        # python-docx stamps each ZIP entry with the current local time. Preview
+        # and save refill independently, and the PDF converter derives its file
+        # identity from these bytes. Keep package timestamps fixed so unchanged
+        # reviewed content remains byte-identical; preserve every part verbatim.
+        stable_output = io.BytesIO()
+        with zipfile.ZipFile(output) as package, zipfile.ZipFile(
+            stable_output, "w"
+        ) as stable_package:
+            for entry in package.infolist():
+                entry.date_time = (1980, 1, 1, 0, 0, 0)
+                stable_package.writestr(entry, package.read(entry.filename))
+        _open_docx(stable_output.getvalue())
     except TemplateDocxError:
         raise
     except Exception as exc:
         raise TemplateDocxError(
             "The generated Word document could not be finalized."
         ) from exc
-    return output.getvalue()
+    return stable_output.getvalue()
 
 
 def docx_placeholder_names(content: bytes) -> list[str]:

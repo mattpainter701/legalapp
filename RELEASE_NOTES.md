@@ -5,6 +5,14 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.15 — Save reviewed Word-to-PDF documents reliably
+
+Released September 8, 2026.
+
+Unchanged Word template values remain consistent between preview and saving to a matter.
+
+- **Finish the reviewed document workflow.** Save a reviewed Word-to-PDF document without a false mismatch caused by its internal file timestamps. Changed values still require a fresh preview.
+
 ## 2026.09.08.14 — Review generated PDFs directly in Studio
 
 Released September 8, 2026.
