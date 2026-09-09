@@ -1244,9 +1244,9 @@ function MatterPicker({ matters, selectedMatterId, onSelect, loading, disabled =
   )
 }
 
-function RenderModal({ template, matters, matterLoading, onClose }) {
+export function RenderModal({ template, matters = [], matterLoading = false, onClose, fixedMatterId, folderId, onSaved }) {
   const [variables, setVariables] = useState({})
-  const [matterId, setMatterId] = useState('')
+  const [matterId, setMatterId] = useState(fixedMatterId || '')
   const [rendered, setRendered] = useState(null)
   const [matterDocId, setMatterDocId] = useState(null)
   const [savedDownloadUrl, setSavedDownloadUrl] = useState('')
@@ -1568,6 +1568,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       const res = await renderTemplate(template.id, {
         variables: saveVariables,
         matter_id: saveMatterId,
+        ...(folderId ? { folder_id: folderId } : {}),
         ...(isDocxTemplate ? { convert_to_pdf: convertDocxToPdf } : {}),
         ...(isPdfOutput ? { preview_id: savePreviewId } : {}),
       })
@@ -1585,6 +1586,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       if (res.matter_document_id) {
         setMatterDocId(res.matter_document_id)
         setSaved(true)
+        onSaved?.(res)
       } else {
         setError('The server rendered the text but did not return a saved matter document.')
       }
@@ -1618,7 +1620,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           </div>
         )}
 
-        <MatterPicker
+        {fixedMatterId ? <p className="text-sm font-semibold">Saving to this matter</p> : <><MatterPicker
           matters={matters}
           selectedMatterId={matterId}
           onSelect={selectMatter}
@@ -1641,6 +1643,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             placeholder="Paste matter UUID if the matter is not listed"
           />
         </details>
+
+        </>}
 
         {names.length > 0 && (
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border border-brand-line rounded bg-brand-bg px-3 py-2">

@@ -74,6 +74,7 @@ class OAuthCallbackExchangeResponse(TokenResponse):
 
 
 class UserInfo(BaseModel):
+    hidden_matter_panels: list[str] = Field(default_factory=list)
     id: str
     tenant_id: str
     email: str

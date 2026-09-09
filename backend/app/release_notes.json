@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.08.16",
+      "version": "2026.09.08.16",
+      "title": "Prepare client paperwork from the matter workspace",
+      "published_at": "2026-09-08",
+      "summary": "Choose forms, organize documents, and follow up when the fee agreement is signed.",
+      "highlights": [
+        {
+          "title": "Work from a simpler matter view",
+          "description": "Customize visible matter fields with the gear, use Folder or Detailed views, preview a document before sending it, and attach reviewed templates from the library."
+        },
+        {
+          "title": "Send and track selected paperwork",
+          "description": "Choose forms, review them before signing, and track signatures separately. Stored fee-signing evidence opens portal access and creates the 24-hour follow-up."
+        },
+        {
+          "title": "Prepare templates and email attachments",
+          "description": "Draw named fields and whiteout areas in Studio. Review files before emailing them, and copy documents into another folder without changing the source."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.15",
       "version": "2026.09.08.15",
       "title": "Save reviewed Word-to-PDF documents reliably",

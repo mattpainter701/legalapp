@@ -161,6 +161,7 @@ class DocumentTemplateQueueResponse(BaseModel):
 
 
 class DocumentTemplateRenderRequest(BaseModel):
+    folder_id: Optional[uuid.UUID] = None
     variables: dict[str, str] = Field(default_factory=dict, max_length=200)
     matter_id: Optional[str] = None
     include_suggestions: bool = False

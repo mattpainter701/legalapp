@@ -1028,6 +1028,7 @@ jobs:
       TOKEN_ENCRYPTION_KEY: KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY=
       DEV_MODE: "true"
       E2E_TEST: "true"
+      E2E_ONBOARDING_ACCEPTANCE: "true"
       PUBLIC_SIGNUP_ENABLED: "false"
       RUN_SCHEDULER: "false"
       LITELLM_ENABLED: "false"

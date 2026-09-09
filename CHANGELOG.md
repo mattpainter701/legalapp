@@ -1,3 +1,12 @@
+## 2026.09.08.16 — Matter workspace and selected intake paperwork
+
+- Add matter-local Template Studio attachment and destination-folder persistence, reviewed email attachment digests, and multi-attachment provider delivery.
+- Add personal field visibility, tenant presentation policy, primary matter navigation, Folder/Detailed layouts, and idempotent private document copies.
+- Add drawn field and whiteout rectangles to Studio, preserving its existing geometry and undo/save contracts.
+- Extend intake with an existing attorney-prepared agreement, independently tracked selected forms, requested client uploads, scoped pre-signing access, and a fee-signature portal-delivery/24-hour task milestone.
+- Keep current logical filing semantics for Move. No physical cloud move, database migration, deployment, or merge is included.
+- Require stored signing evidence before completion, show clients the source PDF, and atomically create the post-signing follow-up. Rehearse real HTTP and browser onboarding with a disposable database.
+
 ## 2026.09.08.15 - Stable reviewed Word-to-PDF saves
 
 - Normalize generated DOCX ZIP entry timestamps before conversion so independent preview/save fills have identical bytes and PDF identifiers.

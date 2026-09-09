@@ -2,9 +2,12 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import MatterTransferSettings from './MatterTransferSettings'
 import MatterImportWizard from './MatterImportWizard'
 import MatterIntakePanel from './MatterIntakePanel'
+import MatterDocumentPreview from './documents/MatterDocumentPreview'
+import MatterTemplatePicker from './templates/MatterTemplatePicker'
 import { format, parseISO } from 'date-fns'
-import {
+import api, {
   uploadMatterDocument,
+  getMatterDocuments,
   updateMatterDocument,
   deleteMatterDocument,
   getMatterDocumentDownloadUrl,
@@ -268,6 +271,38 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
     refreshDocuments,
   } = explorer
   const [intakeOpen, setIntakeOpen] = useState(false)
+  const [intakeDocuments, setIntakeDocuments] = useState([])
+  useEffect(() => {
+    if (!intakeOpen) return undefined
+    let cancelled = false
+    getMatterDocuments(matterId).then(data => { if (!cancelled) setIntakeDocuments(data.items || []) }).catch(() => { if (!cancelled) toast.error('Could not load paperwork documents') })
+    return () => { cancelled = true }
+  }, [intakeOpen, matterId, toast])
+  const [templateOpen, setTemplateOpen] = useState(false)
+  const [documentView, setDocumentView] = useState(() => { try { return localStorage.getItem(`document-view:${matterId}`) === 'folder' ? 'folder' : 'detailed' } catch { return 'detailed' } })
+  useEffect(() => { try { localStorage.setItem(`document-view:${matterId}`, documentView) } catch { /* Optional preference. */ } }, [matterId, documentView])
+  const [filingMode, setFilingMode] = useState('move')
+  const [filingBusy, setFilingBusy] = useState(false)
+  const [filingError, setFilingError] = useState('')
+  const [destination, setDestination] = useState('__root')
+  const copyRequest = useRef(null)
+  function openFiling(doc, mode) { setFilingDocument(doc); setFilingMode(mode); setFilingError(''); setDestination('__root'); copyRequest.current = crypto.randomUUID() }
+  async function submitFiling() {
+    setFilingBusy(true); setFilingError('')
+    try {
+      const target = destination === '__root' ? null : destination
+      if (filingMode === 'copy') await api.post(`/matters/${matterId}/documents/copy`, { document_id: filingDocument.id, folder_id: target, copy_id: copyRequest.current })
+      else await fileDocuments([filingDocument.id], target)
+      await Promise.all([refreshDocuments(), refreshFolders()]); setFilingDocument(null)
+    } catch (error) { setFilingError(typeof error.response?.data?.detail === 'string' ? error.response.data.detail : 'The operation did not finish. Retry or cancel.') }
+    finally { setFilingBusy(false) }
+  }
+  useEffect(() => {
+    if (documentView === 'folder') { setIncludeSubfolders(false); if (folderId === ALL_DOCUMENTS) setFolderId(ROOT_FOLDER) }
+  }, [documentView, folderId, setFolderId, setIncludeSubfolders])
+  function selectFolder(value) { if (value === ALL_DOCUMENTS) setDocumentView('detailed'); setFolderId(value) }
+  const [previewDocument, setPreviewDocument] = useState(null)
+  const [filingDocument, setFilingDocument] = useState(null)
   const [cloudFiles, setCloudFiles] = useState(null)
 
   // Upload form state
@@ -533,46 +568,6 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
 
   return (
     <div className="space-y-6">
-      {/* Cloud folder status */}
-      <CloudFolderCard
-        matterId={matterId}
-        onFolderChange={onCloudFolderChange}
-        onSynced={setCloudFiles}
-      />
-
-      {cloudFiles?.length > 0 && (
-        <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
-          <div className="px-5 py-3.5 border-b border-brand-line bg-brand-bg-soft/50 flex items-center justify-between">
-            <h3 className="text-[13px] font-bold font-sans text-brand-ink uppercase tracking-wider">
-              Synced Cloud Files
-            </h3>
-            <span className="text-[12px] text-brand-muted font-sans">{cloudFiles.length}</span>
-          </div>
-          <div className="divide-y divide-brand-line/60">
-            {cloudFiles.slice(0, 12).map((file, i) => (
-              <a
-                key={file.id || i}
-                href={file.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-3 px-5 py-3 hover:bg-brand-bg-soft transition-colors"
-              >
-                <Cloud size={15} className="text-brand-accent shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13px] font-semibold text-brand-ink font-sans truncate">
-                    {file.title}
-                  </div>
-                  <div className="text-[11px] text-brand-muted font-sans uppercase tracking-wide">
-                    {file.provider} / {file.source}
-                  </div>
-                </div>
-                <ExternalLink size={13} className="text-brand-muted shrink-0" />
-              </a>
-            ))}
-          </div>
-        </div>
-      )}
-
       {uploadNotice && (
         <div
           className={`border rounded-xl px-4 py-3 text-[13px] font-sans ${
@@ -586,14 +581,14 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
           <FileText size={20} className="text-brand-accent" /> Case Documents
           <span className="ml-2 text-[13px] font-sans font-medium text-brand-muted">
             ({docs.length})
           </span>
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => startCreateFolder(folderId === ALL_DOCUMENTS || folderId === ROOT_FOLDER ? null : folderId)}
             className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink hover:bg-brand-bg-soft transition-colors shadow-sm"
@@ -606,8 +601,11 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
           >
             <Upload size={16} /> Upload Document
           </button>
+          <button type="button" onClick={() => setTemplateOpen(true)} className="rounded-lg bg-brand-ink px-4 py-2 text-sm font-medium text-white">Attach template</button>
         </div>
       </div>
+
+      {templateOpen && <MatterTemplatePicker matterId={matterId} folderId={folderId === ALL_DOCUMENTS || folderId === ROOT_FOLDER ? null : folderId} onClose={() => setTemplateOpen(false)} onSaved={() => { refreshDocuments(); refreshFolders() }} />}
 
       {/* Folder name entry — create or rename */}
       {folderDraft && (
@@ -650,21 +648,60 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
         </div>
       )}
 
-      <button type="button" className="border border-brand-line rounded-lg px-4 py-2" disabled={explorer.listing} onClick={async () => {
-        try { await Promise.all([refreshDocuments(), refreshFolders()]) } catch { toast.error('Could not refresh documents', { message: 'Please retry.' }) }
-      }}>Refresh document list</button>
-      <details className="border border-brand-line rounded-lg p-3">
-        <summary className="cursor-pointer font-semibold">Portal upload-folder link</summary>
-        <MatterTransferSettings matterId={matterId} />
-      </details>
-      <details className="border border-brand-line rounded-lg p-3">
-        <summary className="cursor-pointer font-semibold">Import files &amp; emails</summary>
-        <MatterImportWizard matterId={matterId} onComplete={() => { refreshDocuments(); refreshFolders() }} />
-      </details>
-      <details className="border border-brand-line rounded-lg p-3">
-        <summary className="cursor-pointer font-semibold" onClick={() => setIntakeOpen(value => !value)}>Client intake, portal invitations &amp; follow-ups</summary>
-        {intakeOpen && <MatterIntakePanel matterId={matterId} documents={docs} />}
-      </details>
+      <div className="flex flex-wrap items-start gap-3">
+        <button type="button" className="rounded-lg border border-brand-line px-3 py-2 text-sm" aria-expanded={intakeOpen} onClick={() => setIntakeOpen(value => !value)}>Client paperwork</button>
+        <button type="button" className="rounded-lg border border-brand-line px-3 py-2 text-sm" disabled={explorer.listing} onClick={async () => {
+          try { await Promise.all([refreshDocuments(), refreshFolders()]) } catch { toast.error('Could not refresh documents', { message: 'Please retry.' }) }
+        }}>Refresh document list</button>
+        <details className="min-w-0 flex-1 rounded-lg border border-brand-line p-2 text-sm">
+          <summary className="cursor-pointer">Document tools</summary>
+          <div className="mt-3 space-y-3">
+      {/* Cloud folder status */}
+      <CloudFolderCard
+        matterId={matterId}
+        onFolderChange={onCloudFolderChange}
+        onSynced={setCloudFiles}
+      />
+
+      {cloudFiles?.length > 0 && (
+        <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
+          <div className="px-5 py-3.5 border-b border-brand-line bg-brand-bg-soft/50 flex items-center justify-between">
+            <h3 className="text-[13px] font-bold font-sans text-brand-ink uppercase tracking-wider">
+              Synced Cloud Files
+            </h3>
+            <span className="text-[12px] text-brand-muted font-sans">{cloudFiles.length}</span>
+          </div>
+          <div className="divide-y divide-brand-line/60">
+            {cloudFiles.slice(0, 12).map((file, i) => (
+              <a
+                key={file.id || i}
+                href={file.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 px-5 py-3 hover:bg-brand-bg-soft transition-colors"
+              >
+                <Cloud size={15} className="text-brand-accent shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-semibold text-brand-ink font-sans truncate">
+                    {file.title}
+                  </div>
+                  <div className="text-[11px] text-brand-muted font-sans uppercase tracking-wide">
+                    {file.provider} / {file.source}
+                  </div>
+                </div>
+                <ExternalLink size={13} className="text-brand-muted shrink-0" />
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+            <details><summary className="cursor-pointer font-semibold">Portal upload-folder link</summary><MatterTransferSettings matterId={matterId} /></details>
+            <details><summary className="cursor-pointer font-semibold">Import files &amp; emails</summary><MatterImportWizard matterId={matterId} onComplete={() => { refreshDocuments(); refreshFolders() }} /></details>
+          </div>
+        </details>
+      </div>
+      {intakeOpen && <MatterIntakePanel matterId={matterId} documents={intakeDocuments} />}
       {/* Upload form */}
       {showUpload && (
         <div className="bg-brand-bg border border-brand-line rounded-xl p-6 space-y-4">
@@ -769,7 +806,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
             rootDocumentCount={rootDocumentCount}
             totalDocumentCount={totalDocumentCount}
             selectedFolderId={folderId}
-            onSelectFolder={setFolderId}
+            onSelectFolder={selectFolder}
             onCreateFolder={startCreateFolder}
             onRenameFolder={startRenameFolder}
             onDeleteFolder={handleDeleteFolder}
@@ -784,7 +821,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
               <nav aria-label="Folder path" className="flex min-w-0 flex-wrap items-center gap-1 text-[13px] font-sans">
                 <button
                   type="button"
-                  onClick={() => setFolderId(ALL_DOCUMENTS)}
+                  onClick={() => selectFolder(ALL_DOCUMENTS)}
                   className={`rounded px-1.5 py-0.5 ${folderId === ALL_DOCUMENTS ? 'font-bold text-brand-ink' : 'text-brand-accent hover:underline'}`}
                 >
                   All documents
@@ -864,8 +901,15 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
             </div>
           </div>
 
+      <div className="flex items-center gap-2" aria-label="Document view">
+        {['folder', 'detailed'].map(value => <button type="button" key={value} aria-pressed={documentView === value} onClick={() => { setDocumentView(value); if (value === 'folder') { setIncludeSubfolders(false); if (folderId === ALL_DOCUMENTS) setFolderId(ROOT_FOLDER) } }} className="rounded border border-brand-line px-3 py-2 text-sm">{value === 'folder' ? 'Folder' : 'Detailed'}</button>)}
+      </div>
+      {previewDocument && <section aria-label="Document preview" className="rounded-xl border border-brand-line bg-brand-surface p-4"><div className="flex justify-between"><strong>{previewDocument.filename}</strong><button type="button" onClick={() => setPreviewDocument(null)}>Close preview</button></div><MatterDocumentPreview key={previewDocument.id} matterId={matterId} document={previewDocument} /></section>}
+      {filingDocument && <section aria-label="File operation" className="rounded-xl border p-4"><p>{filingMode === 'copy' ? 'Copy' : 'Move'} {filingDocument.filename} to:</p>{filingMode === 'move' && <p className="text-xs text-brand-muted">Organize within this matter. The existing cloud storage path is preserved.</p>}<select aria-label="Destination folder" value={destination} disabled={filingBusy} onChange={event => { setDestination(event.target.value); copyRequest.current = crypto.randomUUID() }}><option value="__root">Unfiled</option>{folderOptions.map(folder => <option key={folder.id} value={folder.id}>{folder.path}</option>)}</select>{filingError && <p role="alert">{filingError}</p>}<button type="button" disabled={filingBusy} onClick={submitFiling}>{filingBusy ? 'Saving…' : filingMode === 'copy' ? 'Copy here' : 'Move here'}</button><button type="button" disabled={filingBusy} onClick={() => setFilingDocument(null)}>Cancel</button></section>}
+      {documentView === 'folder' && <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Folder contents">{folders.filter(folder => (folder.parent_id || null) === (folderId === ROOT_FOLDER || folderId === ALL_DOCUMENTS ? null : folderId)).map(folder => <button type="button" key={folder.id} onClick={() => setFolderId(folder.id)} className="rounded-xl border bg-brand-surface p-4 text-left"><Folder size={28} /><span className="mt-2 block break-words">{folder.name}</span></button>)}{docs.map(doc => <article key={doc.id} className="rounded-xl border bg-brand-surface p-4"><button type="button" onClick={() => setPreviewDocument(doc)} className="text-left"><FileText size={28} /><span className="mt-2 block break-words">{doc.filename}</span></button><button type="button" onClick={() => openFiling(doc, 'move')} className="mt-3 block text-sm underline">Move to…</button><button type="button" onClick={() => openFiling(doc, 'copy')} className="mt-2 text-sm underline">Copy to…</button></article>)}</div>}
+      {documentView === 'detailed' && docs.length > 0 && <div className="flex gap-3 py-2"><select aria-label="Move or copy a document" value="" onChange={event => { const [mode, id] = event.target.value.split(':'); openFiling(docs.find(doc => doc.id === id), mode) }} className="max-w-full rounded border p-2 text-sm"><option value="">Move or copy…</option>{docs.map(doc => <optgroup key={doc.id} label={doc.filename}><option value={`move:${doc.id}`}>Move {doc.filename}</option><option value={`copy:${doc.id}`}>Copy {doc.filename}</option></optgroup>)}</select></div>}
       {/* Documents table */}
-      {listing && docs.length === 0 ? (
+      {documentView === 'folder' ? null : listing && docs.length === 0 ? (
         <div className="py-10 text-center text-[13px] font-sans text-brand-muted">Loading documents…</div>
       ) : docs.length === 0 ? (
         <div className="text-center py-16 bg-brand-surface border border-brand-line rounded-2xl">
@@ -961,6 +1005,14 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
                 )}
 
                 <div className="mt-4 grid gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewDocument(doc)}
+                    aria-label={`Preview ${doc.filename}`}
+                    className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-brand-line px-4 text-sm font-bold text-brand-ink hover:bg-brand-bg-soft"
+                  >
+                    <Eye size={16} aria-hidden="true" /> Preview
+                  </button>
                   <button
                     type="button"
                     onClick={() => onReviseDocument?.(doc)}
@@ -1229,6 +1281,15 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewDocument(doc)}
+                            aria-label={`Preview ${doc.filename}`}
+                            title="Preview"
+                            className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-brand-line px-2.5 text-xs font-bold text-brand-ink hover:border-brand-accent hover:bg-brand-bg-soft"
+                          >
+                            <Eye size={15} aria-hidden="true" /> Preview
+                          </button>
                           <button
                             type="button"
                             onClick={() => onReviseDocument?.(doc)}

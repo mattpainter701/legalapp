@@ -129,6 +129,16 @@ describe('ClientPortalMatterPage', () => {
     expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('stays open when a pre-signing paperwork link is denied the mediation add-on', async () => {
+    // The restricted initial link is denied everything but its own paperwork.
+    // Reading that denial as a sign-out stranded the client before signing.
+    getClientPortalMediation.mockRejectedValue(Object.assign(new Error('denied'), { response: { status: 403 } }))
+    render(<ClientPortalMatterPage />)
+
+    expect(await screen.findByText('Unread messages')).toBeInTheDocument()
+    expect(screen.queryByText("You've been signed out")).not.toBeInTheDocument()
+  })
+
   it('does not hide an expired session as an unavailable mediation add-on', async () => {
     getClientPortalMediation.mockRejectedValue(sessionExpired())
     render(<ClientPortalMatterPage />)
