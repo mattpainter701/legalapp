@@ -86,3 +86,11 @@ actionable field review, full-document location recovery, and durable render
 job UI integration after checking the backend's actual supported capabilities.
 The initial source review's proposed job integration is a design item, not a
 live-verified backend availability claim.
+
+## Live completion and reviewed-PDF save regression
+
+On deployed `cb290ab1`, the required-first Missing queue retained its filter and moved from Review Note to the optional Firm Email. The full generated PDF was visually inspected with correct Cedar Ridge, client, firm and preparer values. The QA cover sheet was published as version 2.
+
+Saving from that published version exposed a separate blocker: unchanged values produced a different PDF hash. `python-docx` stamps each regenerated ZIP member with the current time, while the PDF converter derives its identifier from the filled DOCX bytes. The regression test reproduces different bytes across two simulated fill times with identical document parts. Normalize only the generated package entry timestamps, preserving every document part and the existing exact-preview hash check. CI also exercises independent fills through actual LibreOffice, including a changed-matter negative comparison.
+
+The production save was rejected before storage. Completion still requires repeating preview/save after the fix is deployed and inspecting the saved matter document. The firm profile has no email configured; the QA document explicitly records that absence rather than changing the shared profile. The firm-settings link opens the correct Settings tab, but its delayed-loaded branding section does not automatically scroll into view; that navigation refinement remains a follow-up.

@@ -1,3 +1,9 @@
+## 2026.09.08.15 - Stable reviewed Word-to-PDF saves
+
+- Normalize generated DOCX ZIP entry timestamps before conversion so independent preview/save fills have identical bytes and PDF identifiers.
+- Preserve exact output-hash comparison and source contents; changed values still invalidate reviewed evidence.
+- Exercise independent fills through real LibreOffice in CI, alongside the timestamp and content-change regression tests.
+
 ## 2026.09.08.14 - Generated PDF review inside Studio
 
 - Reuse the existing PDF.js renderer for generated PDF and Word-to-PDF previews, with responsive fit, zoom, page selection, loading and failure states.
