@@ -12,6 +12,7 @@ Released September 8, 2026.
 Inspect generated documents without depending on a browser PDF plug-in.
 
 - **Check every page before continuing.** Generated PDF and Word-to-PDF previews include page navigation, fit-to-width and zoom, with clear loading and error messages.
+- **Finish missing information faster.** Keep required blanks and unreviewed suggestions visible, move through the current review queue, and open firm or matter details to correct the source without losing entered values.
 
 ## 2026.09.08.13 — Review long Word templates with confidence
 

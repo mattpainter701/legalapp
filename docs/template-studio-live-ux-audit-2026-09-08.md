@@ -78,6 +78,8 @@ The follow-up replaces that native object with the existing PDF.js canvas render
 
 Local browser verification rendered a synthetic three-page PDF, selected the final page, changed zoom, and scrolled through its footer. Focused component and workflow tests cover the exact returned Blob, page boundaries, resizing, errors, and invalidation after field edits.
 
+The reviewer walk-through also found that Next field selected an optional blank ahead of a required blank and reset the Missing filter. The follow-up prioritizes required blanks, cycles within the selected queue, retains a focused input until the reviewer moves on, keeps completion controls visible, and distinguishes required missing, optional unfilled, and unreviewed suggestions. Source-repair links open firm settings or the selected matter in a separate tab; returning and refreshing preserves manual entries and exposes changed source values for explicit acceptance. These states are shown in the review panel, not painted onto the final saved PDF.
+
 Track fixes on `fix/template-studio-ux-audit`, based on the deployed main SHA.
 Include clear preview/test states, consistent publication terminology,
 actionable field review, full-document location recovery, and durable render

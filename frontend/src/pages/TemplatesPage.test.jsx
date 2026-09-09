@@ -81,6 +81,37 @@ const renderStudioRoute = (route) => rtlRender(
 )
 
 describe('document template workflow', () => {
+  it('prioritizes required blanks, preserves the missing filter while typing, and links to source repair without leaving the form', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{ id: 'review-queue', title: 'Review queue', body: '{{firm_email}} {{review_note}}', is_active: true, variable_schema: { fields: [
+      { name: 'firm_email', label: 'Firm email', binding: 'firm.email' },
+      { name: 'review_note', label: 'Review note', required: true },
+    ] } }] })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
+    expect(screen.getByRole('link', { name: 'Open matter details (new tab)' })).toHaveAttribute('href', '/matters/matter-1')
+    const firmLink = screen.getByRole('link', { name: 'Open firm settings (new tab)' })
+    expect(firmLink).toHaveAttribute('href', '/admin?tab=settings#firm-branding')
+    expect(firmLink).toHaveAttribute('target', '_blank')
+    expect(firmLink).toHaveAttribute('rel', 'noreferrer')
+    expect(screen.getByText('Required — missing')).toBeVisible()
+    expect(screen.getByText('Optional — not filled')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Missing (2)' }))
+    const next = screen.getByRole('button', { name: 'Next field needing attention' })
+    await user.click(next)
+    expect(screen.getByLabelText('Review note *')).toHaveFocus()
+    await user.type(screen.getByLabelText('Review note *'), 'Full manual note')
+    expect(screen.getByLabelText('Review note *')).toHaveValue('Full manual note')
+    expect(screen.getByRole('button', { name: 'Missing (1)' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(next)
+    expect(screen.getByLabelText('Firm email')).toHaveFocus()
+    expect(screen.queryByLabelText('Review note *')).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Firm email'), 'qa@example.test')
+    expect(next).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'All fields (2)' }))
+    expect(screen.getByLabelText('Review note *')).toHaveValue('Full manual note')
+  })
   it('keeps a signing date out of required fill inputs and the render payload', async () => {
     getTemplates.mockResolvedValueOnce({ items: [{ id: 'signing', title: 'Signing draft', format: 'pdf', source_filename: 'form.pdf', source_sha256: 'a'.repeat(64), is_active: false, variable_schema: { fields: [
       { name: 'signed_on', label: 'Signing date', field_type: 'date', signer_role: 'client', required: true },
@@ -1132,6 +1163,7 @@ describe('document template workflow', () => {
     expect(screen.getByPlaceholderText('Enter Fee')).toHaveFocus()
     await user.type(screen.getByPlaceholderText('Enter Fee'), '0')
     expect(screen.getByText(/100% complete/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'All fields (2)' }))
     await user.click(screen.getByRole('button', { name: 'Confirm Client name' }))
     expect(screen.getByRole('button', { name: 'Review suggestions (0)' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Refresh matter values' }))

@@ -11,6 +11,10 @@
         {
           "title": "Check every page before continuing",
           "description": "Generated PDF and Word-to-PDF previews include page navigation, fit-to-width and zoom, with clear loading and error messages."
+        },
+        {
+          "title": "Finish missing information faster",
+          "description": "Keep required blanks and unreviewed suggestions visible, move through the current review queue, and open firm or matter details to correct the source without losing entered values."
         }
       ]
     },
