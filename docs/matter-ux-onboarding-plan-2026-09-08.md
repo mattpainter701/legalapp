@@ -19,6 +19,8 @@ User requirements:
 - Prefer one initial email. Explain signing separately from attaching ordinary files.
 - Notify staff when the client signs; provide a 24-hour follow-up and email/SMS portal access after signing.
 - Reduce matter UI clutter; move Team and Workflow configuration out of the primary tab strip.
+- Add a gear to the matter panel so users can hide fields and sections and restore them later.
+- Redesign the Documents layout as a simple everyday workspace: familiar Windows file-manager organization with the restrained presentation and quick preview users associate with macOS.
 
 ## What main already provides
 
@@ -43,9 +45,38 @@ Related implementation must reconcile with [capability-first automation](capabil
 
 Use five primary destinations: **Overview, Documents, Activity, Client Portal, Billing**. Activity contains correspondence and communication history as progressive disclosure, not simultaneous full panels. Keep assistant Chat reachable through a labeled secondary action. Put a labeled **Settings** control in the header, containing Team, Workflow configuration, matter details, AI context, and file connections. Preserve workflow status and pending human actions on Overview; hiding configuration must not hide overdue work.
 
-Overview emphasizes client, responsible attorney, matter status, next action, and outstanding onboarding items. Put **Email client** and **Start client intake** where users can find them, without duplicating the full intake editor on Overview. Start client intake opens the existing Documents intake flow. Do not build user-configurable tab layouts in the first pass.
+Overview emphasizes client, responsible attorney, matter status, next action, and outstanding onboarding items. Put **Email client** and **Start client intake** where users can find them, without duplicating the full intake editor on Overview. Start client intake opens the existing Documents intake flow. Include the field-visibility gear described below in the first pass. Keep primary navigation consistent; configurable field visibility does not require configurable tab layouts.
 
 Preserve old `?tab=team`, `workflow`, `correspondence`, `chat`, and `settings` links with compatible routing, browser history, and selected-section state. Preserve permissions and discoverability for authorized staff. Keep the portfolio list distinct from the matter detail redesign; evaluate it separately rather than rewriting both at once.
+
+### Matter panel gear: Customize view
+
+The matter panel must have a visible gear with an accessible **Customize view** label. It opens a compact checklist of optional fields and sections, grouped using their existing names. A user can hide a field, hide a section, show it again, or **Reset to default**. Apply changes immediately and keep focus predictable. This is a required part of the UX work, not a deferred enhancement.
+
+Proposed preference scope: save the user's choices within the firm and apply them across that user's matter views, surviving reload and navigation. Do not change another staff member's layout or the matter data. Resolve the existing user-preference storage contract before implementation; do not make per-matter configuration the default. New optional fields follow the default layout until customized; removed field keys are ignored safely.
+
+Start with a short useful summary and put less frequently used metadata behind the gear. Keep matter identity and actionable alerts visible. Hidden fields remain available in Edit Details and in Customize view; hiding never clears their values, changes permissions, or bypasses required-field validation. A validation error for a hidden required field must provide a direct route to that field. Explain any field that cannot be hidden. Include custom fields in the visibility model where supported.
+
+Keep **Customize view** separate from **Matter settings**: the gear changes what this user sees; settings manages Team, Workflow, and matter configuration. Avoid an undifferentiated menu containing both personal display choices and operational changes.
+
+### Documents layout: a workspace people can stay in
+
+Use familiar file-manager behavior with restrained styling. The goal is a calm, predictable place to organize, inspect, prepare, and send documents throughout the day. Use consistent spacing, readable filenames, a clear selection state, and text labels for important actions. Avoid a stack of large cards, repeated toolbars, or multiple editors open at once.
+
+Desktop layout:
+
+- **One top toolbar:** Upload, Attach template, New folder, and search. Show secondary actions in a labeled More menu. Keep search scope visible and make clearing filters obvious.
+- **Folder sidebar:** a collapsible hierarchy with All documents and the current folder clearly selected. Use breadcrumbs above the file list. Reuse existing folders and tags rather than inventing another filing model.
+- **Main file list:** compact readable rows with filename, modified date, and document/share status; optional columns can be configured. Sort and filter in place. Avoid a row full of action buttons; show relevant commands when an item is selected.
+- **Optional preview pane:** selecting a file shows its preview and useful details on the right without losing the folder, scroll position, or selection. Provide an explicit Open action for full editing and a clear Close preview action. The same document context continues into template completion and email review.
+- **Selection actions:** expose Preview/Open, Rename, Move, Download, Email, and sharing/signing actions only where supported and permitted. Provide visible menu equivalents for shortcuts or context-menu actions. Bulk actions show the selected count and apply only to eligible documents; existing release restrictions remain enforced.
+- **Compact intake entry:** show intake status and the next action near the toolbar; open the intake workflow on demand. Do not let an expanded intake form push the working file list down the page by default.
+
+On narrow screens, collapse folders into a labeled control and show either the file list or preview/editor with an explicit Back action that restores list state. Do not squeeze three panes into a phone viewport. Support keyboard navigation, Enter to open, Escape to close preview, clear focus indicators, and labeled controls. Drag-and-drop can supplement Upload/Move but must not be the only route.
+
+Remember folder, sort, visible columns, and preview preference while navigating within the matter. Use stable loading, empty, no-results, failed-preview, and failed-upload states without replacing the entire workspace. Show progress and retry near the affected item. Template completion returns to and highlights the saved matter document; composing email preserves the file selection and does not strand the user on a separate library page.
+
+Before implementation, reviewers should approve desktop and narrow-screen wireframes for the normal file-list state, selected-file preview, and Customize view panel. Evaluate a realistic populated matter, including long filenames and many documents. A successful design lets a user find, preview, attach, and return to a document without repeatedly navigating away from the matter.
 
 ### Documents → Attach template (first delivery)
 
@@ -86,13 +117,14 @@ Each row is a future implementation PR, not a commit bundled into this planning 
 | PR | Outcome and likely files | Depends on | Acceptance and focused validation |
 | --- | --- | --- | --- |
 | MUX-01 | **Attach template from Documents**. MatterDocumentsTab, reusable fill/picker extracted from TemplatesPage, existing template API. | None; coordinate with Template Studio owner before shared-file edits. | Search/select/fill/preview/save without leaving matter context; selected folder retained; library source unchanged; exact reviewed bytes saved; invalidated preview, storage error/retry, inaccessible template, and cross-matter access tests. Extend MatterDocumentsTab and TemplatesPage tests. |
-| MUX-02 | **Simplify matter navigation**. MatterDetailPage and MatterNavigation tests; move Team/Workflow configuration to Settings and retain operational status. | Can follow MUX-01 independently of backend packet work. | Five primary destinations; visible Documents and Email client actions; all prior destinations reachable; deep-link/back/forward tests; keyboard, narrow-screen, and focus checks; permission-gated settings remain gated. |
+| MUX-02 | **Simplify matter navigation and add field-visibility gear**. MatterDetailPage, user-view preferences, and MatterNavigation tests; move Team/Workflow configuration to Settings and retain operational status. | Can follow MUX-01 independently of backend packet work. | Five primary destinations; visible Documents and Email client actions; all prior destinations reachable; deep-link/back/forward tests; keyboard, narrow-screen, and focus checks; permission-gated settings remain gated; gear hides/restores fields and sections; personal preferences persist without affecting colleagues or data; reset, custom fields, hidden-field validation, and keyboard focus tests. |
+| MUX-02B | **Redesign Documents as a file workspace**. MatterDocumentsTab, useMatterDocumentExplorer, document preview and existing folder controls. Coordinate shared-file ownership with MUX-01. | MUX-01; agree shell conventions with MUX-02. | Approve desktop/mobile wireframes; one toolbar, folder navigation, sortable file list and optional preview; restore selection/scroll after preview or composition; long filenames, many files, search/empty/error states, keyboard access, responsive panes, and permitted selection actions tested. Intake stays compact by default. |
 | MUX-03 | **Reviewed email attachments**. ComposeEmailModal, API contract, email_matter_client, connected-mail attachment plumbing. Reuse MUX-01 picker. | MUX-01. | Matter/local/template file attachment and removal; preview bytes equal delivered bytes; stale/unauthorized/release-locked files rejected; provider size/storage failure paths; successful, failed, ambiguous delivery and double-submit tests. Extend composer and connected-mail route/service tests. |
 | MUX-04 | **Flexible intake requirements and attorney agreement selection**. matter_intake model/schema/router/service, IntakeSetupFields, MatterIntakePanel, ClientPortalMatterPage. | Agree shared packet/event contracts first; build on main's intake. | Separate questionnaire and intake form; configurable required uploads; existing matter agreement selection with attorney review; client submissions retained in matter; staff acceptance/needs-changes; legacy two-requirement packets retain their meaning; tenant, portal identity, migration/RLS, and concurrent completion tests. |
 | MUX-05 | **Consolidated welcome delivery and post-sign follow-up**. Existing intake delivery/reconciliation, signature milestone integration, portal invites and tasks. | MUX-03/04 and native/provider delivery decision. | One initial native welcome email; working pre-sign portal access; signature-triggered alert/task and post-sign portal delivery; distinct all-signer state; duplicate/out-of-order events, restart, cancellation, quiet-hour/SMS opt-out, failed/unknown delivery, and exact 24-hour boundary tests. Preserve existing seven-day and completion scheduling tests. |
-| MUX-06 | **End-to-end usability and integration polish** across the above owners. | MUX-01 through 05. | Staff opens matter, prepares attorney agreement, adds library documents, previews, sends; client signs and submits forms/files; staff sees follow-up; completed documents remain in matter. Test native signing plus supported external-provider variant, desktop/mobile and keyboard, with fake recipients/provider adapters. Document remaining limitations. |
+| MUX-06 | **End-to-end usability and integration polish** across the above owners. | MUX-01 through 05, including MUX-02B. | Staff opens matter, prepares attorney agreement, adds library documents, previews, sends; client signs and submits forms/files; staff sees follow-up; completed documents remain in matter. Test native signing plus supported external-provider variant, desktop/mobile and keyboard, with fake recipients/provider adapters. Document remaining limitations. |
 
-Suggested order: deliver MUX-01 first for immediate value; then navigation and email work; settle the checklist/event contract before MUX-04/05. Schema migrations must be sequenced centrally under AGENTS.md, never assigned independently by agents. A runtime/framework rewrite is outside scope.
+Suggested order: deliver MUX-01 first for immediate value; then navigation with the field gear, Documents layout (MUX-02B), and email work; settle the checklist/event contract before MUX-04/05. Schema migrations must be sequenced centrally under AGENTS.md, never assigned independently by agents. A runtime/framework rewrite is outside scope.
 
 ## Collaboration decisions to settle before dependent code
 
@@ -105,7 +137,8 @@ Suggested order: deliver MUX-01 first for immediate value; then navigation and e
 | Upload completion policy | Client upload means submitted; staff accepts or requests changes. Decide which required items block overall intake completion and scheduling. | MUX-04 |
 | Packet editing/reopening | Define versioning and treatment of already-sent/completed legacy packets before relaxing today's one-packet/immutable-completion limits. | MUX-04 |
 | Notifications | Responsible staff gets durable in-app alert/task; client gets portal continuation by email and eligible selected SMS. Decide optional staff external alerts separately. | MUX-05 |
-| UI arrangement | Five primary destinations; labeled Settings for Team/Workflow configuration. Validate before larger portfolio redesign. | MUX-02 |
+| UI arrangement | Five primary destinations; separate Customize view gear and Matter settings. Field hiding is required; confirm optional-field defaults and personal preference storage. Validate before larger portfolio redesign. | MUX-02 |
+| Documents layout | Folder sidebar, compact file list, optional preview, one toolbar; approve populated desktop/mobile wireframes before code. | MUX-02B |
 
 Agents should claim a row with task, branch, worktree, current main SHA, owned files, and dependencies. Shared hotspots are MatterDetailPage, TemplatesPage, api.js, matter_intake.py, and migrations. Coordinate ownership before edits. Review current implementation and merged PRs again so an already-shipped improvement becomes reuse, not duplicate work. Record decisions in this document or the planning PR discussion; leave this planning PR unmerged as requested.
 
