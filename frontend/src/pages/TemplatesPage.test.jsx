@@ -23,6 +23,10 @@ import {
 const originalCreateObjectURL = URL.createObjectURL
 const originalRevokeObjectURL = URL.revokeObjectURL
 
+vi.mock('../components/templates/GeneratedPdfPreview', () => ({
+  default: ({ source, title }) => <section aria-label={`Preview of ${title}`} data-output-bytes={source.size} />,
+}))
+
 vi.mock('../api', () => ({
   getTemplate: vi.fn(),
   getTemplateSource: vi.fn().mockRejectedValue(new Error('source unavailable in tests')),
@@ -929,13 +933,13 @@ describe('document template workflow', () => {
       preview_purpose: 'generation',
     }))
     expect(renderTemplate).not.toHaveBeenCalled()
-    expect(screen.getByTitle('Preview of Court Form')).toHaveAttribute('data', 'blob:pdf-preview')
+    expect(screen.getByRole('region', { name: 'Preview of Court Form' })).toHaveAttribute('data-output-bytes', String(pdfBlob.size))
     expect(screen.getByRole('button', { name: 'Download preview' })).toBeInTheDocument()
     expect(URL.createObjectURL).toHaveBeenCalledWith(pdfBlob)
 
     expect(screen.getByText(/These exact values and this matter are previewed/)).toBeInTheDocument()
     await user.type(screen.getByPlaceholderText('Enter Client Name'), ' Lovelace')
-    await waitFor(() => expect(screen.queryByTitle('Preview of Court Form')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Preview of Court Form' })).not.toBeInTheDocument())
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:pdf-preview')
 
   })
@@ -1001,7 +1005,7 @@ describe('document template workflow', () => {
         convert_to_pdf: true,
       }),
     ))
-    expect(screen.getByTitle('Preview of Signature Packet')).toHaveAttribute('data', 'blob:docx-pdf-preview')
+    expect(screen.getByRole('region', { name: 'Preview of Signature Packet' })).toBeVisible()
     expect(screen.getByText(/These exact values and this matter are previewed/)).toBeInTheDocument()
   })
 

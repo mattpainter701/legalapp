@@ -5,6 +5,14 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.08.14 — Review generated PDFs directly in Studio
+
+Released September 8, 2026.
+
+Inspect generated documents without depending on a browser PDF plug-in.
+
+- **Check every page before continuing.** Generated PDF and Word-to-PDF previews include page navigation, fit-to-width and zoom, with clear loading and error messages.
+
 ## 2026.09.08.13 — Review long Word templates with confidence
 
 Released September 8, 2026.

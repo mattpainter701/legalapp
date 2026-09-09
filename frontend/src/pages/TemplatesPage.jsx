@@ -9,6 +9,7 @@ import TemplateTestSummary from '../components/templates/TemplateTestSummary'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
 import TemplateFillProgress from '../components/templates/TemplateFillProgress'
 import TemplateFillSource from '../components/templates/TemplateFillSource'
+import GeneratedPdfPreview from '../components/templates/GeneratedPdfPreview'
 import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues, isSigningField, suggestionConfidenceLabel } from '../components/templates/templateFillReview'
 import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
@@ -1886,9 +1887,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             </div>
             {isPdfOutput ? (
               <>
-                <object title={`Preview of ${template.title}`} data={filePreviewUrl} type="application/pdf" className="h-[65vh] min-h-[480px] w-full rounded border border-brand-line bg-white">
-                  <p className="p-4 text-sm text-brand-muted">This browser cannot display the PDF inline. Use Download preview instead.</p>
-                </object>
+                <GeneratedPdfPreview key={filePreviewUrl} source={filePreview.blob} title={template.title} />
                 <p className="mt-2 text-xs font-medium text-brand-green" role="status">
                   {previewPurpose === 'generation'
                     ? 'These exact values and this matter are previewed. Inspect every page, then save without changing the fields.'
