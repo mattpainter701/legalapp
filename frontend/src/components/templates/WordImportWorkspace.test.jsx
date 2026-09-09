@@ -8,6 +8,36 @@ vi.mock('../../api', () => ({ previewWordUpload: vi.fn() }))
 afterEach(cleanup)
 const file = new File(['word'], 'sample.docx')
 
+it('searches source text, recovers an empty filter, and cycles review candidates without certifying them', () => {
+  const change = vi.fn()
+  const fields = [
+    { name: 'one', label: 'First', source_text: 'Sample person', review_required: true },
+    { name: 'two', label: 'Second', source_text: 'Other person', confidence: 0.5 },
+    { name: 'three', label: 'Excluded', included: false, review_required: true },
+  ]
+  render(<WordImportWorkspace file={file} fields={fields} analysis={{}} onFieldsChange={change} />)
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Other person' } })
+  expect(screen.getByRole('button', { name: 'Select Second' })).toBeVisible()
+  expect(screen.queryByRole('button', { name: 'Select First' })).not.toBeInTheDocument()
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'no match' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Show all fields' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Needs review (2)' }))
+  expect(screen.queryByRole('button', { name: 'Select Excluded' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Next field to review' }))
+  expect(screen.getByLabelText('Imported field label')).toHaveValue('Second')
+  fireEvent.click(screen.getByRole('button', { name: 'Next field to review' }))
+  expect(screen.getByLabelText('Imported field label')).toHaveValue('First')
+  expect(change).not.toHaveBeenCalled()
+})
+
+it('shows source paragraph context and honestly explains a truncated outline', () => {
+  const fields = [{ name: 'early', docx_anchor: { paragraph_ordinal: 2 } }, { name: 'late', docx_anchor: { paragraph_ordinal: 999 } }]
+  render(<WordImportWorkspace file={file} fields={fields} analysis={{ source_paragraphs: [{ ordinal: 2, text: 'Complete source paragraph' }] }} />)
+  expect(screen.getByText('Complete source paragraph')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Select late' }))
+  expect(screen.getByText(/beyond the available text outline/)).toBeVisible()
+})
+
 it('shows the upload while detection is still running', () => {
   render(<WordImportWorkspace file={file} fields={[]} />)
   expect(screen.getByText('Preview: sample.docx')).toBeVisible()

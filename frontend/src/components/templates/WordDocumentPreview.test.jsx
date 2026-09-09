@@ -4,20 +4,63 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getTemplateSourcePreview } from '../../api'
 import WordDocumentPreview from './WordDocumentPreview'
 
-const pdfState = vi.hoisted(() => ({ error: '' }))
+const pdfState = vi.hoisted(() => ({ error: '', document: { getPage: vi.fn() } }))
 vi.mock('../../api', () => ({ getTemplateSourcePreview: vi.fn() }))
 vi.mock('./WordPlaceholderLayer', () => ({ default: ({ pageNumber, fields, onSelectField }) => <button onClick={() => onSelectField?.(`${fields?.[0]?.name}:0`)}>Highlight page {pageNumber}</button> }))
 vi.mock('./PdfDocumentCanvas', () => ({
-  useTemplatePdfDocument: () => ({ document: {}, pages: [{ page: 1, width: 612, height: 792 }, { page: 2, width: 612, height: 792 }], error: pdfState.error }),
+  useTemplatePdfDocument: () => ({ document: pdfState.document, pages: [{ page: 1, width: 612, height: 792 }, { page: 2, width: 612, height: 792 }], error: pdfState.error }),
   PdfPageCanvas: ({ pageNumber, zoom, onError }) => <div data-testid="page" data-zoom={zoom}>Rendered page {pageNumber}<button onClick={onError}>Fail canvas</button></div>,
   PdfThumbnail: ({ pageNumber, onSelect }) => <button onClick={onSelect}>Thumbnail {pageNumber}</button>,
 }))
 
 const component = (id = 'one', digest = 'sha') => <WordDocumentPreview templateId={id} sourceDigest={digest}><p>Editable source fields</p></WordDocumentPreview>
-beforeEach(() => { pdfState.error = ''; getTemplateSourcePreview.mockReset() })
+beforeEach(() => { pdfState.error = ''; getTemplateSourcePreview.mockReset(); pdfState.document.getPage.mockReset() })
 afterEach(cleanup)
 
 describe('Word document preview', () => {
+  it('discards a pending search when the selected field changes', async () => {
+    getTemplateSourcePreview.mockResolvedValue(new Blob(['pdf']))
+    let finish
+    pdfState.document.getPage.mockResolvedValue({ getTextContent: () => new Promise(resolve => { finish = resolve }) })
+    const fields = [{ name: 'client' }, { name: 'signature' }]
+    const { rerender } = render(<WordDocumentPreview templateId="one" fields={fields} selectedIdentity="client:0" />)
+    await screen.findByTestId('page')
+    fireEvent.click(screen.getByRole('button', { name: 'Find selected field' }))
+    await waitFor(() => expect(finish).toBeDefined())
+    rerender(<WordDocumentPreview templateId="one" fields={fields} selectedIdentity="signature:1" />)
+    await act(async () => finish({ items: [{ str: '{{client}}' }] }))
+    expect(screen.queryByText('Field found on')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Find selected field' })).toBeEnabled()
+    expect(screen.getByText('Rendered page 1')).toBeVisible()
+  })
+  it.each(['unique', 'repeated', 'missing', 'error'])('finds selected fields across pages with an honest %s result', async kind => {
+    getTemplateSourcePreview.mockResolvedValue(new Blob(['pdf']))
+    pdfState.document.getPage.mockImplementation(async number => {
+      if (kind === 'error') throw new Error('private details')
+      return { getTextContent: async () => ({ items: [{ str: kind === 'repeated' || (kind === 'unique' && number === 2) ? '{{client}}' : 'Other text' }] }) }
+    })
+    render(<WordDocumentPreview templateId="one" fields={[{ name: 'client' }]} selectedIdentity="client:0" />)
+    await screen.findByTestId('page')
+    fireEvent.click(screen.getByRole('button', { name: 'Find selected field' }))
+    if (kind === 'unique') {
+      expect(await screen.findByRole('button', { name: 'Page 2', exact: true })).toBeVisible()
+      expect(screen.getByText('Rendered page 2')).toBeVisible()
+      fireEvent.change(screen.getByLabelText('Go to document page'), { target: { value: '1' } })
+      expect(screen.getByText('Rendered page 1')).toBeVisible()
+      fireEvent.click(screen.getByRole('button', { name: 'Find selected field' }))
+      await screen.findByText('Rendered page 2')
+      expect(pdfState.document.getPage).toHaveBeenCalledTimes(2)
+    } else if (kind === 'repeated') {
+      await screen.findByText(/multiple pages/)
+      expect(screen.getByText('Rendered page 1')).toBeVisible()
+      fireEvent.click(screen.getByRole('button', { name: 'Page 2', exact: true }))
+      expect(screen.getByText('Rendered page 2')).toBeVisible()
+    } else {
+      await screen.findByText(kind === 'error' ? /Could not search/ : /No verified location found/)
+      expect(screen.queryByText(/private details/)).not.toBeInTheDocument()
+      expect(screen.getByText('Rendered page 1')).toBeVisible()
+    }
+  })
   it.each(['loading', 'failed'])('offers usable text selection when the document is %s', async state => {
     getTemplateSourcePreview.mockImplementation(() => state === 'failed'
       ? Promise.reject(new Error('converter unavailable'))

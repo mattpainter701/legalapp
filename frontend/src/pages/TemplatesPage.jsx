@@ -711,8 +711,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const isPdfAnalysis = String(analysis?.format || '').toLowerCase() === 'pdf'
   const hasPdfMappings = fields.some((field) => field?.included !== false && (field?.pdf_field_name || field?.pdf_overlay || field?.pdf_overlays?.length))
   const requiresHumanReview = fieldsRequireHumanReview(fields, analysis)
-  const lowConfidenceFieldCount = fields.filter((field) => (
-    Number(field?.confidence ?? 1) < 0.75 || field?.ai_suggested
+  const lowConfidenceFieldCount = reviewConfirmed ? 0 : fields.filter((field) => (
+    field?.included !== false && (field?.review_required || Number(field?.confidence ?? 1) < 0.75 || field?.ai_suggested)
   )).length
   const unmappedAiSuggestions = analysis?.suggested_variable_schema?.unmapped_ai_suggestions || []
   const handleWorkspaceFieldsChange = (nextFields) => {
@@ -1259,6 +1259,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const [previewPurpose, setPreviewPurpose] = useState('')
   const [convertDocxToPdf, setConvertDocxToPdf] = useState(false)
   const [rendering, setRendering] = useState(false)
+  const [renderPurpose, setRenderPurpose] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState(null)
@@ -1467,6 +1468,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     const requestVariables = { ...variables }
     const requestMatterId = isPdfOutput && canSaveToMatter ? matterId.trim() : null
     setRendering(true)
+    setRenderPurpose(previewPurpose)
     setError(null)
     try {
       const payload = {
@@ -1805,7 +1807,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                 className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-brand-ink border border-brand-line bg-brand-surface hover:bg-brand-surface-2 rounded disabled:opacity-50"
               >
                 <Eye size={16} />
-                {rendering ? 'Rendering...' : 'Preview draft'}
+                {rendering && renderPurpose === 'draft' ? 'Preparing preview…' : 'Preview draft'}
               </button>
               <button
                 onClick={() => handleRender('activation')}
@@ -1813,7 +1815,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                 className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
               >
                 <Check size={16} />
-                {rendering ? 'Testing...' : 'Test this draft'}
+                {rendering && renderPurpose === 'activation' ? 'Testing this draft…' : 'Test this draft'}
               </button>
             </>
           ) : (
@@ -1851,7 +1853,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           </button>
         </div>
 
-        {!canSaveToMatter && <TemplateTestSummary template={template} error={error} rendering={rendering} outputReady={Boolean(filePreview || rendered)} missing={requiredUnresolvedNames} diagnostic={isPdfTemplate && previewPurpose !== 'activation'} />}
+        {!canSaveToMatter && <TemplateTestSummary template={template} error={error} rendering={rendering} outputReady={Boolean(filePreview || rendered)} missing={requiredUnresolvedNames} diagnostic={renderPurpose !== 'activation'} />}
 
         </div><section aria-label="Document preview" className="min-w-0 rounded-xl border border-brand-line bg-brand-bg p-4 lg:max-h-[78vh] lg:overflow-auto">
         {!filePreview && !rendered && <><div className="mb-3"><h3 className="text-sm font-semibold text-brand-ink">Document reference</h3><p className="mt-1 text-xs text-brand-muted">Click a highlighted field to complete it. Choose Preview to check the generated document with your current values.</p></div><TemplateFillSource template={template} fields={Object.values(fieldDefinitions).filter(field => field.included !== false)} values={variables} onSelectField={name => { pendingFocus.current = name; setFieldFilter('all'); requestAnimationFrame(() => document.getElementById(`template-variable-${name}`)?.focus()) }} /></>}
@@ -1892,7 +1894,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                     ? 'These exact values and this matter are previewed. Inspect every page, then save without changing the fields.'
                     : previewPurpose === 'activation'
                       ? 'Representative activation preview recorded. Inspect every page, then activate this unchanged template.'
-                      : 'Draft preview only. This is diagnostic and does not record activation evidence. Use Record activation preview after every field has a representative value.'}
+                      : 'Draft preview only. To record a publication test, choose Test this draft after entering representative values. Review every generated page before publishing.'}
                 </p>
               </>
             ) : (
@@ -2598,7 +2600,9 @@ export default function TemplatesPage() {
           )}
           {!generationLoading && activeGenerationTemplates.length === 0 && (
             <div className="border border-dashed border-brand-line rounded p-6 text-center md:col-span-2">
-              <p className="text-sm text-brand-muted">Activate a verified template before generating matter documents.</p>
+              <h3 className="font-semibold text-brand-ink">Your first reusable document starts here</h3>
+              <p className="mt-2 text-sm text-brand-muted">Import a sample, review its fields, and test the output. Publish it when it is ready for your team to use with matters.</p>
+              <button type="button" onClick={() => setActiveTab('templates')} className="mt-4 rounded bg-brand-ink px-4 py-2 text-sm font-semibold text-white">Open template library</button>
             </div>
           )}
         </div>
@@ -2736,7 +2740,7 @@ export default function TemplatesPage() {
             <Pencil size={16} className="text-brand-muted" />
           </div>
           <p className="mt-2 text-2xl font-semibold text-brand-ink">{libraryMeta.summary.inactive}</p>
-          <p className="mt-0.5 text-xs text-brand-muted">Awaiting activation</p>
+          <p className="mt-0.5 text-xs text-brand-muted">Drafts to test and publish</p>
         </div>
         <div className="rounded-xl border border-brand-line bg-brand-surface-2 p-4 shadow-sm">
           <div className="flex items-center justify-between">

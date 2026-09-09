@@ -503,14 +503,15 @@ def analyze_template_upload(
         body, fields, body_warnings = _suggest_docx_template(file_bytes, cleaned)
         outline = docx_outline(file_bytes)
         # This metadata also travels with the short-lived analysis snapshot.
-        # Bound it to the intake text budget; partial context cannot establish
+        # Page navigation needs complete context beyond the short editor body.
+        # Keep a separate bounded budget; partial context cannot establish
         # uniqueness and must never position an anchored field on a page.
         complete_outline = (
             not outline.get("truncated")
             and sum(
                 len(item.get("text") or "") for item in outline.get("paragraphs", [])
             )
-            <= 20_000
+            <= 100_000
         )
         source_paragraphs = (
             []
@@ -522,7 +523,7 @@ def analyze_template_upload(
         )
         if not complete_outline:
             warnings.append(
-                "Some Word field boxes cannot be located on the page because the source outline exceeds the preview limit. Use Fields to review their exact source locations."
+                "Some Word field boxes cannot be located on the page because the source outline exceeds the preview limit. Use the document page selector to inspect every page before confirming source review."
             )
         warnings.extend(_docx_coverage_warnings(file_bytes))
     else:

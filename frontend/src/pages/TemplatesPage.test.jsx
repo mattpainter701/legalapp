@@ -1299,7 +1299,7 @@ describe('document template workflow', () => {
       preview_purpose: 'draft',
       variables: { client_name: '', notes: '', approved: 'false' },
     }))
-    expect(screen.getByText(/Draft preview only.*does not record activation evidence/)).toBeInTheDocument()
+    expect(screen.getByText(/Draft preview only.*choose Test this draft/)).toBeInTheDocument()
 
     await user.click(within(dialog).getByRole('button', { name: 'Test this draft' }))
     expect(await screen.findByText(/Enter representative values for every non-signature PDF field/)).toBeInTheDocument()
@@ -1345,7 +1345,9 @@ describe('document template workflow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Close' }))
     await user.click(screen.getByRole('tab', { name: 'Generate / Smart Fill' }))
-    expect(screen.getByText('Activate a verified template before generating matter documents.')).toBeInTheDocument()
+    expect(screen.getByText('Your first reusable document starts here')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Open template library' }))
+    expect(screen.getByRole('tab', { name: 'Templates', exact: true })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('edits only PDF metadata instead of presenting a non-functional body editor', async () => {

@@ -1113,7 +1113,7 @@ def test_docx_analysis_exposes_bounded_source_paragraphs_aligned_with_anchors():
 
 @pytest.mark.parametrize("outline", [
     {"truncated": True, "paragraphs": [{"ordinal": 0, "text": "Client name: ___"}]},
-    {"truncated": False, "paragraphs": [{"ordinal": 0, "text": "x" * 20_001}]},
+    {"truncated": False, "paragraphs": [{"ordinal": 0, "text": "x" * 100_001}]},
 ])
 def test_docx_analysis_refuses_partial_or_oversized_page_context(monkeypatch, outline):
     from docx import Document
@@ -1125,6 +1125,21 @@ def test_docx_analysis_refuses_partial_or_oversized_page_context(monkeypatch, ou
     analysis = analyze_template_upload(file_bytes=source.getvalue(), filename="sample.docx", content_type=None)
     assert analysis.as_dict()["source_paragraphs"] == []
     assert any("preview limit" in warning for warning in analysis.warnings)
+
+
+def test_long_word_import_keeps_complete_context_for_final_page_fields():
+    from docx import Document
+    document = Document()
+    for index in range(120):
+        document.add_paragraph(f"Section {index}. " + "Synthetic standard terms. " * 10)
+    document.add_paragraph("Final signature: ___")
+    source = BytesIO()
+    document.save(source)
+    analysis = analyze_template_upload(file_bytes=source.getvalue(), filename="long.docx", content_type=None)
+    assert len(analysis.extracted_text) <= 20_000
+    assert {"ordinal": 120, "text": "Final signature: ___"} in analysis.source_paragraphs
+    assert sum(len(item["text"]) for item in analysis.source_paragraphs) > 20_000
+    assert not any("source outline exceeds" in warning for warning in analysis.warnings)
 
 
 def test_docx_intake_recognizes_bracket_placeholders_and_ignores_static_brackets():
