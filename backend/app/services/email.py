@@ -483,6 +483,7 @@ class EmailService:
                         item.content,
                         _subtype=item.content_type.split("/", 1)[1],
                     )
+                    part.set_type(item.content_type)
                     part.add_header(
                         "Content-Disposition", "attachment", filename=item.filename
                     )

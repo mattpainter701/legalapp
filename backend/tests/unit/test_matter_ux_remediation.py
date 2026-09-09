@@ -383,15 +383,17 @@ async def test_smtp_keeps_attachment_parts(monkeypatch):
         html_body="Review",
         attachments=[
             MailAttachment("fee.pdf", b"fee", "application/pdf"),
-            MailAttachment("intake.pdf", b"intake", "application/pdf"),
+            MailAttachment("intake.txt", b"intake", "text/plain"),
         ],
     )
     assert result == email.EmailDeliveryResult.SENT
     parts = send.call_args.args[0].get_payload()[1:]
     assert [(p.get_filename(), p.get_payload(decode=True)) for p in parts] == [
         ("fee.pdf", b"fee"),
-        ("intake.pdf", b"intake"),
+        ("intake.txt", b"intake"),
     ]
+
+    assert [p.get_content_type() for p in parts] == ["application/pdf", "text/plain"]
 
 
 @pytest.mark.asyncio
