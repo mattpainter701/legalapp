@@ -22,8 +22,9 @@ export default function EmailAttachments({ matterId, items, onChange, disabled }
     try {
       const { data } = await api.get(`/matters/${matterId}/email-attachments/${id}/preview`)
       const bytes = Uint8Array.from(atob(data.content_base64), char => char.charCodeAt(0))
-      const url = URL.createObjectURL(new Blob([bytes], { type: data.content_type }))
-      urls.current.push(url); setPreview({ ...data, url })
+      const blob = new Blob([bytes], { type: data.content_type })
+      const url = URL.createObjectURL(blob)
+      urls.current.push(url); setPreview({ ...data, url, blob })
     } catch (e) { setError(typeof e.response?.data?.detail === 'string' ? e.response.data.detail : 'Could not preview this document.') }
     finally { setBusy(false) }
   }
@@ -42,6 +43,6 @@ export default function EmailAttachments({ matterId, items, onChange, disabled }
     {open && <div className="mt-3 space-y-2"><label className="block text-sm">Upload into this matter<input type="file" disabled={disabled || busy} onChange={upload} /></label>{documents.map(doc => <button type="button" key={doc.id} disabled={disabled || busy} onClick={() => review(doc.id)} className="block text-sm underline">Preview {doc.filename}</button>)}<button type="button" onClick={() => setOpen(false)}>Close file picker</button></div>}
     {busy && <p role="status">Preparing document…</p>}{error && <p role="alert">{error}</p>}
     {templates && <MatterTemplatePicker matterId={matterId} onClose={() => setTemplates(false)} onSaved={result => { setTemplates(false); review(result.matter_document_id) }} />}
-    {preview && <div className="mt-3 rounded border p-3"><strong>{preview.filename}</strong>{preview.content_type === 'application/pdf' ? <GeneratedPdfPreview key={preview.url} title={preview.filename} source={preview.url} /> : <a href={preview.url} download={preview.filename} className="my-2 block underline">Download document for review</a>}<button type="button" disabled={disabled || busy} onClick={() => { onChange([...items.filter(item => item.document_id !== preview.document_id), { document_id: preview.document_id, sha256: preview.sha256, filename: preview.filename }]); setPreview(null) }} className="mr-3 rounded border p-2">Reviewed — attach this version</button><button type="button" onClick={() => setPreview(null)}>Close preview</button></div>}
+    {preview && <div className="mt-3 rounded border p-3"><strong>{preview.filename}</strong>{preview.content_type === 'application/pdf' ? <GeneratedPdfPreview key={preview.url} title={preview.filename} source={preview.blob} /> : <a href={preview.url} download={preview.filename} className="my-2 block underline">Download document for review</a>}<button type="button" disabled={disabled || busy} onClick={() => { onChange([...items.filter(item => item.document_id !== preview.document_id), { document_id: preview.document_id, sha256: preview.sha256, filename: preview.filename }]); setPreview(null) }} className="mr-3 rounded border p-2">Reviewed — attach this version</button><button type="button" onClick={() => setPreview(null)}>Close preview</button></div>}
   </section>
 }
