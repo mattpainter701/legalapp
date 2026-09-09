@@ -844,9 +844,10 @@ def fill_docx_template(
         # identity from these bytes. Keep package timestamps fixed so unchanged
         # reviewed content remains byte-identical; preserve every part verbatim.
         stable_output = io.BytesIO()
-        with zipfile.ZipFile(output) as package, zipfile.ZipFile(
-            stable_output, "w"
-        ) as stable_package:
+        with (
+            zipfile.ZipFile(output) as package,
+            zipfile.ZipFile(stable_output, "w") as stable_package,
+        ):
             for entry in package.infolist():
                 entry.date_time = (1980, 1, 1, 0, 0, 0)
                 stable_package.writestr(entry, package.read(entry.filename))
