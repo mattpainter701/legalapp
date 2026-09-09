@@ -40,3 +40,11 @@ All selected document/folder queries constrain tenant and matter. Fee and extra 
 - Tests cover scoped paperwork endpoints, stale attachment digests, provider MIME parts, copy failure/replay/source preservation, template field/whiteout persistence, personal/tenant view preferences, and browser navigation through the matter workspace.
 - Browser tests use synthetic local API fixtures; they do not send email/SMS or exercise live cloud providers. Existing provider tests use controlled adapters. Production deployment is outside this PR.
 - Further work retained from the collaborative plan: durable physical cloud Move operations and cleanup queue; bulk file actions; preference sync across devices; full live-provider acceptance of the complete onboarding journey. These are not represented as delivered by logical filing or fixture tests.
+
+## Mission-critical acceptance pass
+
+The follow-up acceptance pass adds real HTTP/PostgreSQL coverage for both manual matter creation and lead conversion, plus a browser journey against the actual FastAPI application and disposable PostgreSQL database. Only outbound delivery is captured; browser API responses and document storage are real. The browser host is guarded by DEV_MODE, E2E_TEST, a database name containing e2e, and explicit E2E_ONBOARDING_ACCEPTANCE. Production startup never imports it.
+
+Client signing now includes a PDF preview/download and explicit source review. Failed evidence storage cannot complete signing. Storage token refresh uses a separate database session so it cannot commit a partial signer action. Successful signing commits the evidence, portal-access milestone, and assigned 24-hour task together; the existing worker delivers the queued welcome. The intake panel loads the selected client's email and labels the initial send as paperwork.
+
+Acceptance assertions include no paperwork sent merely by opening a matter, replay without duplicate packets, restricted pre-sign access, consent required, recoverable storage failure, the fee milestone while other forms remain outstanding, exactly one follow-up, retained certificate bytes, questionnaire submission, client_uploads routing, staff review and the distinct scheduling task. Live Microsoft/Google/SMS provider acceptance remains separate from these captured-delivery checks.

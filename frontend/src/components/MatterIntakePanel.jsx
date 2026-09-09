@@ -16,6 +16,7 @@ export default function MatterIntakePanel({ matterId, documents = [] }) {
   const [error, setError] = useState('')
   const [setup, setSetup] = useState(defaultIntakeSetup)
   const [file, setFile] = useState(null)
+  const [clientEmail, setClientEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [receipt, setReceipt] = useState({ requirement: 'fee_agreement', document_id: '', note: '' })
   const [meeting, setMeeting] = useState({ kind: 'conference_call', starts_at: '', details: '' })
@@ -27,6 +28,14 @@ export default function MatterIntakePanel({ matterId, documents = [] }) {
     finally { setLoading(false) }
   }, [matterId])
   useEffect(() => { setPacket(null); setLoading(true); load(); const timer = setInterval(load, 30000); return () => clearInterval(timer) }, [load])
+  useEffect(() => {
+    let active = true
+    setClientEmail('')
+    api.get(`/matters/${matterId}`).then(({ data }) => data.client_contact_id ? api.get(`/contacts/${data.client_contact_id}`) : null)
+      .then(result => { if (active) setClientEmail(result?.data?.email || '') })
+      .catch(() => {})
+    return () => { active = false }
+  }, [matterId])
   async function action(path, body) {
     setBusy(true); setError('')
     try { setPacket((await api.post(`/matters/${matterId}/intake/${path}`, body)).data) }
@@ -34,23 +43,23 @@ export default function MatterIntakePanel({ matterId, documents = [] }) {
   }
   async function start() {
     setBusy(true); setError('')
-    try { setPacket(await startMatterIntake(matterId, intakeOptions(setup), file)) }
+    try { setPacket(await startMatterIntake(matterId, intakeOptions(setup, clientEmail), file)) }
     catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   if (loading) return <p role="status">Loading intake…</p>
   return <section className="space-y-4 p-4" aria-label="Matter intake">
     <div className="flex justify-between"><h3 className="font-semibold text-lg">Client intake</h3><button type="button" onClick={load}>Refresh intake</button></div>
-    {!packet && <><IntakeSetupFields value={setup} onChange={setSetup} onFile={setFile} documents={documents} /><button type="button" className={input} disabled={busy || (!file && !setup.agreement_document_id)} onClick={start}>Start intake & send portal invitation</button></>}
+    {!packet && <><IntakeSetupFields value={setup} onChange={setSetup} onFile={setFile} documents={documents} clientEmail={clientEmail} /><button type="button" className={input} disabled={busy || (!file && !setup.agreement_document_id)} onClick={start}>Send client paperwork</button></>}
     {packet && <>
       <p role="status">{packet.status.replaceAll('_', ' ')}</p>
-      <ul>{Object.entries(packet.requirements).map(([key, state]) => <li key={key}>{state.label || (key === 'fee_agreement' ? 'Fee agreement' : 'Questionnaire')}: {state.completed ? `Complete — ${date(state.completed_at)}` : 'Outstanding'}</li>)}</ul>
+      <ul>{Object.entries(packet.requirements).map(([key, state]) => <li key={key}>{state.label || (key === 'fee_agreement' ? 'Fee agreement' : 'Questionnaire')}: {state.completed ? `Complete — ${date(state.completed_at)}` : state.submitted_document_id ? 'Submitted — awaiting staff review' : 'Outstanding'}</li>)}</ul>
       <p>Initial packet sent: {date(packet.sent_at)}</p>
       {packet.signing_followup_due_at && <p className="font-semibold">Fee agreement signed — follow up by {date(packet.signing_followup_due_at)}</p>}
       {packet.scheduling_due_at && <p className="font-semibold">Contact client to schedule by {date(packet.scheduling_due_at)}</p>}
       <ul>{Object.entries(packet.delivery).map(([key, state]) => <li key={key}>{key.replace(':', ' · ')}: {state.state} {state.detail || ''}{['failed', 'blocked', 'unknown'].includes(state.state) && <button type="button" className="ml-2 underline" onClick={() => setRetryKey(key)}>Review delivery</button>}</li>)}</ul>
       {retryKey && <div className="border rounded p-3"><p>Check {retryKey} in the provider’s delivery records before retrying. An unknown result may already have reached the client.</p><button type="button" disabled={busy} onClick={async () => { await action('retry', { delivery_key: retryKey, confirm_not_sent: true }); setRetryKey('') }}>I verified it was not sent — retry</button><button type="button" onClick={() => setRetryKey('')}>Close</button></div>}
       {Object.keys(packet.answers).length > 0 && <details><summary>View completed questionnaire</summary>{packet.questions.map(q => <div className="py-2" key={q.key}><strong>{q.label}</strong><p className="whitespace-pre-wrap">{packet.answers[q.key]}</p></div>)}</details>}
-      {packet.status === 'awaiting_documents' && <details><summary>Record a document received outside the portal</summary><div className="space-y-2 p-2">
+      {packet.status === 'awaiting_documents' && <details><summary>Review received documents</summary><div className="space-y-2 p-2">
         <label>Requirement<select className={input} value={receipt.requirement} onChange={e => setReceipt({ ...receipt, requirement: e.target.value })}>{Object.entries(packet.requirements).map(([key, state]) => <option key={key} value={key}>{state.label || key.replaceAll('_', ' ')}</option>)}</select></label>
         <label>Received document<select className={input} value={receipt.document_id} onChange={e => setReceipt({ ...receipt, document_id: e.target.value })}><option value="">Choose an uploaded matter document</option>{documents.map(doc => <option key={doc.id} value={doc.id}>{doc.filename}</option>)}</select></label>
         <label>Verification note<input className={input} value={receipt.note} onChange={e => setReceipt({ ...receipt, note: e.target.value })} /></label>

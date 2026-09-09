@@ -34,7 +34,7 @@ export default defineConfig({
   },
   webServer: [
     ...(process.env.E2E_API_FIXTURES_ONLY === 'true' ? [] : [{
-      command: `${python} -m uvicorn app.main:app --host 127.0.0.1 --port ${backendPort}`,
+      command: `${python} -m uvicorn ${process.env.E2E_ONBOARDING_ACCEPTANCE === 'true' ? 'scripts.matter_onboarding_e2e:app' : 'app.main:app'} --host 127.0.0.1 --port ${backendPort}`,
       cwd: backendDir,
       env: {
         ...runtimeEnv,

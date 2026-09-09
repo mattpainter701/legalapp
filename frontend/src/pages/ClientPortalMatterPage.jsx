@@ -1,3 +1,4 @@
+import ClientSignatureDocument from '../components/ClientSignatureDocument'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import PortalDocumentTransfer from '../components/PortalDocumentTransfer'
 import ClientIntakeChecklist from '../components/ClientIntakeChecklist'
@@ -939,6 +940,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
   const [declining, setDeclining] = useState(null)
   const [typedByRequest, setTypedByRequest] = useState({})
   const [acceptedByRequest, setAcceptedByRequest] = useState({})
+  const [reviewedByRequest, setReviewedByRequest] = useState({})
   const [declineReasonByRequest, setDeclineReasonByRequest] = useState({})
   const [err, setErr] = useState('')
   const [success, setSuccess] = useState('')
@@ -963,6 +965,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
     setSuccess('')
     const typed = (typedByRequest[req.id] || '').trim()
     if (!typed) { setErr('Type your full legal name exactly as you want it to appear on the signature certificate.'); return }
+    if (!reviewedByRequest[req.id]) { setErr('Review every page of the document before signing.'); return }
     if (!acceptedByRequest[req.id]) { setErr('Review and accept the electronic signature consent before signing.'); return }
     setSigning(req.id)
     try {
@@ -1074,6 +1077,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
 
             {canAct ? (
               <>
+                <ClientSignatureDocument request={req} reviewed={Boolean(reviewedByRequest[req.id])} onReviewed={value => setReviewedByRequest(previous => ({ ...previous, [req.id]: value }))} />
                 <label htmlFor={`signature-${req.id}`} className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Typed signature</label>
                 <input
                   id={`signature-${req.id}`}
@@ -1095,7 +1099,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
                 <div className="mt-4 flex flex-col sm:flex-row gap-2">
                   <button
                     onClick={() => sign(req)}
-                    disabled={signing === req.id || !typed.trim() || !accepted}
+                    disabled={signing === req.id || !typed.trim() || !accepted || !reviewedByRequest[req.id]}
                     className="w-full sm:w-auto px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {signing === req.id ? 'Capturing signature…' : 'Sign document'}

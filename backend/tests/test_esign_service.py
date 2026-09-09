@@ -212,6 +212,15 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
             if isinstance(row, MatterDocument):
                 self.documents[row.id] = row
 
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+
+    @asynccontextmanager
+    async def storage_session():
+        yield SimpleNamespace()
+
+    monkeypatch.setattr(esign_service, "async_session_maker", storage_session)
+    monkeypatch.setattr(esign_service, "set_tenant_context", AsyncMock())
     uploads = []
 
     async def fake_store(**kwargs):
@@ -235,6 +244,29 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
     db = DB()
     first_request = completed_request(uuid.uuid4())
     second_request = completed_request(uuid.uuid4())
+
+    from fastapi import HTTPException
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        esign_service._file_store,
+        "store_matter_file_result",
+        AsyncMock(
+            return_value=StorageResult(
+                provider="google", backend="google_drive", error="unavailable"
+            )
+        ),
+    )
+    with pytest.raises(HTTPException) as failure:
+        await complete_request_if_done(db, first_request, matter)
+    assert failure.value.status_code == 503
+    assert first_request.status == "partially_signed"
+    assert first_request.completed_at is None
+    assert first_request.provider_envelope_id is None
+    assert db.added == []
+    monkeypatch.setattr(
+        esign_service._file_store, "store_matter_file_result", fake_store
+    )
 
     first = await complete_request_if_done(db, first_request, matter)
     second = await complete_request_if_done(db, second_request, matter)

@@ -811,6 +811,17 @@ async def portal_sign(
 
     matter = await db.get(Matter, req.matter_id)
     await complete_request_if_done(db, req, matter)
+    # Evidence and onboarding milestone commit together; provider delivery is
+    # handled by the durable worker after this transaction succeeds.
+    if req.status == "completed":
+        from app.services import matter_intake
+
+        await db.flush()
+        packet = await matter_intake.get_packet(
+            db, req.tenant_id, req.matter_id, lock=True
+        )
+        if packet is not None:
+            await matter_intake.reconcile(db, packet)
     if req.status == "partially_signed":
         await notify_actionable_signers(req)
     await db.commit()
