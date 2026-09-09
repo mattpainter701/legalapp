@@ -1,3 +1,11 @@
+## 2026.09.09.1 — Standard client paperwork for every new matter
+
+- Add a server-owned intake starter pack: a standard fee agreement, a client intake form, and matter-type questionnaires for family, criminal, injury, estate, employment, business, real estate, immigration, bankruptcy, litigation, mediation, and general matters.
+- Resolve the questionnaire from either free-text label a firm typed — matter type first, then practice area — with specific aliases beating generic ones and an unrecognised matter still receiving questions.
+- Install the two documents as unapproved drafts, idempotently by title, so jurisdiction-regulated fee, trust, and contingency terms reach an attorney before a client; a firm's own template of the same name is never touched.
+- Declare every placeholder against the server binding catalogue, keeping fee amounts, scope, and exclusions manual so no fee term is inferred from a record.
+- Add `GET /api/intake-starter-pack`, `GET /api/intake-starter-pack/practices`, and `POST /api/intake-starter-pack/documents`, with Template Studio and intake-setup controls that load or install on request rather than automatically.
+
 ## 2026.09.08.16 — Matter workspace and selected intake paperwork
 
 - Add matter-local Template Studio attachment and destination-folder persistence, reviewed email attachment digests, and multi-attachment provider delivery.
