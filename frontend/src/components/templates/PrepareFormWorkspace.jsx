@@ -1,3 +1,4 @@
+import DrawFieldLayer from './DrawFieldLayer'
 import {
   useCallback,
   useEffect,
@@ -71,6 +72,7 @@ export default function PrepareFormWorkspace({
   const [externalReviewOpened, setExternalReviewOpened] = useState(false)
   const [viewport, setViewport] = useState(null)
   const [mode, setMode] = useState('edit')
+  const [drawing, setDrawing] = useState(false)
   const [previewValues, setPreviewValues] = useState({})
   const [historyVersion, setHistoryVersion] = useState(0)
   const undoStack = useRef([])
@@ -428,6 +430,12 @@ export default function PrepareFormWorkspace({
               />
             )}
 
+            {drawing && mode === 'edit' && <DrawFieldLayer key={`${pageNumber}:${zoom}`} mode="field" width={canvasWidth} height={canvasHeight} names={fields.map(field => field.name)} onCancel={() => setDrawing(false)} onCreate={(geometry, name) => {
+              let field = createManualField('text', { page, pageNumber, fields })
+              const overlays = geometryToOverlays(field, 0, geometry, { page, pageNumber, viewport: pdfSample ? viewport : null, scale: pdfSample ? 1 : zoom, canvasWidth, canvasHeight })
+              field = { ...field, name, label: name, rect: overlays[0].rect, pdf_overlay: overlays[0], pdf_overlays: overlays }
+              commitFields([...fields, field]); setSelectedIdentity(field.pdf_source_key); setDrawing(false)
+            }} />}
             {(!pdfSample || viewport || canUseExternalFallback) && visiblePlacements.map(({ entry, overlay, index }) => {
               if (mode === 'preview' && entry.field.included === false) return null
               const geometry = overlayToCanvasRect(overlay, page, pdfSample ? viewport : null, pdfSample ? 1 : zoom)
@@ -508,6 +516,7 @@ export default function PrepareFormWorkspace({
       <aside className="max-h-[70vh] space-y-3 overflow-y-auto rounded-lg border border-brand-line bg-brand-bg p-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Add field</p>
+          <button type="button" disabled={!canPlaceFields} onClick={() => { setMode('edit'); setDrawing(true) }} className="mt-2 rounded border px-3 py-2 text-sm">Draw field</button>
           <div className="mt-2 grid grid-cols-2 gap-1.5">
             {FIELD_TOOLS.map(({ kind, label, icon: Icon }) => (
               <button

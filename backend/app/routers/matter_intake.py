@@ -17,6 +17,7 @@ from app.schemas.matter_intake import (
     IntakeReceipt,
     IntakeRetry,
     IntakeStart,
+    IntakeSubmission,
 )
 from app.services import matter_intake as service
 from app.services.access_control import require_capability
@@ -55,7 +56,7 @@ async def staff_packet(db, user, matter_id):
 async def start(
     matter_id: uuid.UUID,
     options: str = Form(...),
-    agreement: UploadFile = File(...),
+    agreement: UploadFile | None = File(None),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_capability("manage_matters")),
 ):
@@ -66,13 +67,30 @@ async def start(
             422, "Check the email, questions, delivery channels and timezone."
         ) from exc
     matter = await staff_matter(db, user, matter_id)
+    if body.agreement_document_id:
+        from app.services.matter_mail_attachments import reviewed_attachment
+
+        attachment, _ = await reviewed_attachment(
+            db, user.tenant_id, matter.id, body.agreement_document_id
+        )
+        filename, content = attachment.filename, attachment.content
+    elif agreement is not None:
+        filename, content = (
+            agreement.filename or "Fee agreement.pdf",
+            await agreement.read(20 * 1024 * 1024 + 1),
+        )
+    else:
+        raise HTTPException(
+            422,
+            "Choose an attorney-reviewed fee agreement from the matter or upload it",
+        )
     packet = await service.start_packet(
         db,
         user,
         matter,
         body,
-        agreement.filename or "Fee agreement.pdf",
-        await agreement.read(20 * 1024 * 1024 + 1),
+        filename,
+        content,
     )
     return service.public_packet(packet)
 
@@ -108,10 +126,13 @@ async def receipt(
     )
     if doc is None:
         raise HTTPException(404, "Document not found")
+    if body.requirement not in packet.requirements:
+        raise HTTPException(422, "Unknown intake requirement")
     if not packet.requirements[body.requirement]["completed"]:
         packet.requirements = {
             **packet.requirements,
             body.requirement: {
+                **packet.requirements[body.requirement],
                 "completed": True,
                 "completed_at": service.now().isoformat(),
                 "document_id": str(doc.id),
@@ -126,8 +147,13 @@ async def receipt(
             "Intake document receipt verified",
             f"{body.requirement}: document {doc.id}; verified by {user.id}.",
         )
-    if body.requirement == "fee_agreement":
-        signature = await db.get(service.SignatureRequest, packet.signature_id)
+    signature_id = (
+        packet.signature_id
+        if body.requirement == "fee_agreement"
+        else packet.requirements[body.requirement].get("signature_id")
+    )
+    if signature_id:
+        signature = await db.get(service.SignatureRequest, uuid.UUID(str(signature_id)))
         if signature and signature.status not in ("completed", "voided"):
             signature.status = "voided"
             signature.voided_at = service.now()
@@ -384,5 +410,52 @@ async def submit(
             "Client submitted the intake questionnaire with all required answers.",
         )
     await service.reconcile(db, packet)
+    await db.commit()
+    return service.public_packet(packet, client=True)
+
+
+@portal_router.post("/requirements/{requirement_key}/submission")
+async def submit_requirement(
+    requirement_key: str,
+    body: IntakeSubmission,
+    resolved=Depends(portal_matter_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    packet = await client_packet(db, resolved)
+    requirement = packet.requirements.get(requirement_key)
+    if (
+        packet.status != "awaiting_documents"
+        or not requirement
+        or requirement.get("kind") not in {"document", "upload"}
+        or requirement.get("completed")
+    ):
+        raise HTTPException(409, "This requirement is not accepting uploads")
+    doc = await db.scalar(
+        select(MatterDocument).where(
+            MatterDocument.id == body.document_id,
+            MatterDocument.tenant_id == packet.tenant_id,
+            MatterDocument.matter_id == packet.matter_id,
+            MatterDocument.uploaded_by_user_id.is_(None),
+            MatterDocument.document_category == "client_uploads",
+        )
+    )
+    if doc is None:
+        raise HTTPException(404, "Client upload not found")
+    if requirement.get("submitted_document_id") == str(doc.id):
+        return service.public_packet(packet, client=True)
+    packet.requirements = {
+        **packet.requirements,
+        requirement_key: {
+            **requirement,
+            "submitted_document_id": str(doc.id),
+            "submitted_at": service.now().isoformat(),
+        },
+    }
+    service.event(
+        db,
+        packet,
+        "Client document submitted",
+        f"Client submitted a document for {requirement.get('label', requirement_key)}; staff review required.",
+    )
     await db.commit()
     return service.public_packet(packet, client=True)

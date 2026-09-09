@@ -3,7 +3,7 @@ import api from '../api'
 import IntakeSetupFields, { defaultIntakeSetup, intakeOptions } from './IntakeSetupFields'
 
 export async function startMatterIntake(matterId, options, file) {
-  const data = new FormData(); data.append('options', JSON.stringify(options)); data.append('agreement', file)
+  const data = new FormData(); data.append('options', JSON.stringify(options)); if (file) data.append('agreement', file)
   return (await api.post(`/matters/${matterId}/intake`, data)).data
 }
 
@@ -40,17 +40,18 @@ export default function MatterIntakePanel({ matterId, documents = [] }) {
   if (loading) return <p role="status">Loading intake…</p>
   return <section className="space-y-4 p-4" aria-label="Matter intake">
     <div className="flex justify-between"><h3 className="font-semibold text-lg">Client intake</h3><button type="button" onClick={load}>Refresh intake</button></div>
-    {!packet && <><IntakeSetupFields value={setup} onChange={setSetup} onFile={setFile} /><button type="button" className={input} disabled={busy || !file} onClick={start}>Start intake & send portal invitation</button></>}
+    {!packet && <><IntakeSetupFields value={setup} onChange={setSetup} onFile={setFile} documents={documents} /><button type="button" className={input} disabled={busy || (!file && !setup.agreement_document_id)} onClick={start}>Start intake & send portal invitation</button></>}
     {packet && <>
       <p role="status">{packet.status.replaceAll('_', ' ')}</p>
-      <ul>{Object.entries(packet.requirements).map(([key, state]) => <li key={key}>{key === 'fee_agreement' ? 'Fee agreement' : 'Questionnaire'}: {state.completed ? `Complete — ${date(state.completed_at)}` : 'Outstanding'}</li>)}</ul>
+      <ul>{Object.entries(packet.requirements).map(([key, state]) => <li key={key}>{state.label || (key === 'fee_agreement' ? 'Fee agreement' : 'Questionnaire')}: {state.completed ? `Complete — ${date(state.completed_at)}` : 'Outstanding'}</li>)}</ul>
       <p>Initial packet sent: {date(packet.sent_at)}</p>
+      {packet.signing_followup_due_at && <p className="font-semibold">Fee agreement signed — follow up by {date(packet.signing_followup_due_at)}</p>}
       {packet.scheduling_due_at && <p className="font-semibold">Contact client to schedule by {date(packet.scheduling_due_at)}</p>}
       <ul>{Object.entries(packet.delivery).map(([key, state]) => <li key={key}>{key.replace(':', ' · ')}: {state.state} {state.detail || ''}{['failed', 'blocked', 'unknown'].includes(state.state) && <button type="button" className="ml-2 underline" onClick={() => setRetryKey(key)}>Review delivery</button>}</li>)}</ul>
       {retryKey && <div className="border rounded p-3"><p>Check {retryKey} in the provider’s delivery records before retrying. An unknown result may already have reached the client.</p><button type="button" disabled={busy} onClick={async () => { await action('retry', { delivery_key: retryKey, confirm_not_sent: true }); setRetryKey('') }}>I verified it was not sent — retry</button><button type="button" onClick={() => setRetryKey('')}>Close</button></div>}
       {Object.keys(packet.answers).length > 0 && <details><summary>View completed questionnaire</summary>{packet.questions.map(q => <div className="py-2" key={q.key}><strong>{q.label}</strong><p className="whitespace-pre-wrap">{packet.answers[q.key]}</p></div>)}</details>}
       {packet.status === 'awaiting_documents' && <details><summary>Record a document received outside the portal</summary><div className="space-y-2 p-2">
-        <label>Requirement<select className={input} value={receipt.requirement} onChange={e => setReceipt({ ...receipt, requirement: e.target.value })}><option value="fee_agreement">Signed fee agreement</option><option value="questionnaire">Completed questionnaire</option></select></label>
+        <label>Requirement<select className={input} value={receipt.requirement} onChange={e => setReceipt({ ...receipt, requirement: e.target.value })}>{Object.entries(packet.requirements).map(([key, state]) => <option key={key} value={key}>{state.label || key.replaceAll('_', ' ')}</option>)}</select></label>
         <label>Received document<select className={input} value={receipt.document_id} onChange={e => setReceipt({ ...receipt, document_id: e.target.value })}><option value="">Choose an uploaded matter document</option>{documents.map(doc => <option key={doc.id} value={doc.id}>{doc.filename}</option>)}</select></label>
         <label>Verification note<input className={input} value={receipt.note} onChange={e => setReceipt({ ...receipt, note: e.target.value })} /></label>
         <button type="button" disabled={busy || !receipt.document_id || !receipt.note} onClick={() => action('receipt', receipt)}>Confirm document is complete</button>

@@ -1,4 +1,4 @@
-"""Durable intake: two requirements, explicit delivery claims and timed staff work."""
+"""Durable intake: selected requirements, explicit delivery claims and timed staff work."""
 
 from __future__ import annotations
 
@@ -66,6 +66,7 @@ def public_packet(packet, *, client=False):
         else None,
         "meeting": packet.meeting,
         "signature_id": str(packet.signature_id),
+        "signing_followup_due_at": packet.config.get("signing_followup_due_at"),
     }
     if not client:
         data.update(delivery=packet.delivery, owner_id=str(packet.owner_id))
@@ -74,7 +75,18 @@ def public_packet(packet, *, client=False):
             name: {
                 key: value
                 for key, value in requirement.items()
-                if key in ("completed", "completed_at", "sent_at")
+                if key
+                in (
+                    "completed",
+                    "completed_at",
+                    "sent_at",
+                    "label",
+                    "kind",
+                    "document_id",
+                    "signature_id",
+                    "required",
+                    "submitted_document_id",
+                )
             }
             for name, requirement in packet.requirements.items()
         }
@@ -342,32 +354,52 @@ async def start_packet(db, user, matter, body, filename, content):
             )
             contact.sms_opt_in = True
             contact.sms_opt_in_at = consent.consented_at
-    stored = await store_file(
-        user.tenant_id, matter, f"intake-{packet_id}.pdf", content, "application/pdf"
-    )
-    if not stored.succeeded:
-        raise HTTPException(
-            503, "Agreement storage is unavailable. Reconnect storage and retry."
+    if body.agreement_document_id:
+        document = await db.scalar(
+            select(MatterDocument).where(
+                MatterDocument.id == body.agreement_document_id,
+                MatterDocument.tenant_id == user.tenant_id,
+                MatterDocument.matter_id == matter.id,
+            )
         )
-    document = MatterDocument(
-        id=uuid.uuid4(),
-        tenant_id=user.tenant_id,
-        matter_id=matter.id,
-        uploaded_by_user_id=user.id,
-        filename=filename[:250],
-        content_type="application/pdf",
-        file_size=len(content),
-        document_category="contract",
-        portal_visible=True,
-        storage_path=stored.storage_path,
-        storage_provider=stored.provider,
-        storage_backend=stored.backend,
-        provider_object_id=stored.provider_item_id,
-        provider_drive_id=stored.drive_id,
-        provider_parent_id=stored.parent_id,
-    )
-    db.add(document)
-    await db.flush()
+        if document is None:
+            raise HTTPException(404, "Fee agreement not found")
+        if document.signing_placement_required or document.positioned_fields:
+            raise HTTPException(
+                422, "Positioned signing fields require the document signing workflow"
+            )
+        document.portal_visible = True
+    else:
+        stored = await store_file(
+            user.tenant_id,
+            matter,
+            f"intake-{packet_id}.pdf",
+            content,
+            "application/pdf",
+        )
+        if not stored.succeeded:
+            raise HTTPException(
+                503, "Agreement storage is unavailable. Reconnect storage and retry."
+            )
+        document = MatterDocument(
+            id=uuid.uuid4(),
+            tenant_id=user.tenant_id,
+            matter_id=matter.id,
+            uploaded_by_user_id=user.id,
+            filename=filename[:250],
+            content_type="application/pdf",
+            file_size=len(content),
+            document_category="contract",
+            portal_visible=True,
+            storage_path=stored.storage_path,
+            storage_provider=stored.provider,
+            storage_backend=stored.backend,
+            provider_object_id=stored.provider_item_id,
+            provider_drive_id=stored.drive_id,
+            provider_parent_id=stored.parent_id,
+        )
+        db.add(document)
+        await db.flush()
     signature = SignatureRequest(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -429,11 +461,90 @@ async def start_packet(db, user, matter, body, filename, content):
         },
         requirements={
             "fee_agreement": {"completed": False},
-            "questionnaire": {"completed": False},
+            "questionnaire": {
+                "completed": not body.include_questionnaire,
+                "required": body.include_questionnaire,
+                "completed_at": None,
+            },
         },
         answers={},
         delivery={},
     )
+    for upload in body.upload_requirements:
+        packet.requirements[upload.key] = {
+            "completed": False,
+            "kind": "upload",
+            "label": upload.label,
+            "required": upload.required,
+        }
+    for selection in body.selected_documents:
+        from app.services.matter_mail_attachments import reviewed_attachment
+
+        attachment, digest = await reviewed_attachment(
+            db, user.tenant_id, matter.id, selection.document_id
+        )
+        selected_doc = await db.scalar(
+            select(MatterDocument).where(
+                MatterDocument.id == selection.document_id,
+                MatterDocument.tenant_id == user.tenant_id,
+                MatterDocument.matter_id == matter.id,
+            )
+        )
+        if selected_doc is None:
+            raise HTTPException(404, "Selected document not found")
+        selected_doc.portal_visible = True
+        signature_id = None
+        if selection.requires_signature:
+            if (
+                selected_doc.signing_placement_required
+                or selected_doc.positioned_fields
+            ):
+                raise HTTPException(
+                    422,
+                    "Positioned signing fields require the document signing workflow",
+                )
+            if not attachment.content.startswith(b"%PDF-"):
+                raise HTTPException(422, "Signature documents must be reviewed PDFs")
+            extra = SignatureRequest(
+                id=uuid.uuid4(),
+                tenant_id=user.tenant_id,
+                matter_id=matter.id,
+                document_id=selection.document_id,
+                status="sent",
+                provider="internal",
+                source_document_sha256=digest,
+                source_document_size=len(attachment.content),
+                source_document_filename=attachment.filename,
+                created_by_user_id=user.id,
+                sent_at=now(),
+                expires_at=now() + timedelta(days=30),
+                reminders={},
+            )
+            db.add(extra)
+            await db.flush()
+            db.add(
+                SignatureSigner(
+                    id=uuid.uuid4(),
+                    tenant_id=user.tenant_id,
+                    request_id=extra.id,
+                    contact_id=contact.id,
+                    name=contact.display_name or str(body.email),
+                    email=str(body.email),
+                    role="signer",
+                    sign_order=0,
+                    status="pending",
+                )
+            )
+            signature_id = str(extra.id)
+        packet.requirements[f"document_{selection.document_id.hex}"] = {
+            "completed": False,
+            "required": True,
+            "kind": "signature" if signature_id else "document",
+            "label": selection.label,
+            "document_id": str(selection.document_id),
+            "signature_id": signature_id,
+            "source_sha256": digest,
+        }
     queue(packet, "welcome")
     db.add(packet)
     matter.portal_enabled = True
@@ -450,7 +561,7 @@ async def start_packet(db, user, matter, body, filename, content):
 
 async def cancel_packet(db, packet, reason):
     packet.status = "cancelled"
-    for kind in ("documents", "scheduling", "delivery"):
+    for kind in ("documents", "scheduling", "delivery", "signed"):
         await close_task(db, packet, kind, reason)
     signature = await db.scalar(
         select(SignatureRequest).where(
@@ -462,6 +573,25 @@ async def cancel_packet(db, packet, reason):
         signature.status = "voided"
         signature.voided_at = now()
         signature.void_reason = reason
+    for requirement in packet.requirements.values():
+        extra_id = (
+            requirement.get("signature_id")
+            if requirement.get("kind") == "signature"
+            else None
+        )
+        if extra_id:
+            extra = await db.scalar(
+                select(SignatureRequest).where(
+                    SignatureRequest.id == uuid.UUID(extra_id),
+                    SignatureRequest.tenant_id == packet.tenant_id,
+                )
+            )
+            if extra and extra.status not in ("completed", "voided"):
+                extra.status, extra.voided_at, extra.void_reason = (
+                    "voided",
+                    now(),
+                    reason,
+                )
     packet.delivery = {
         key: {**state, "state": "cancelled"}
         if state["state"] in ("queued", "blocked", "failed")
@@ -522,18 +652,80 @@ async def reconcile(db, packet):
                     "signature_id": str(signature.id),
                 },
             }
-    complete = all(
-        packet.requirements[k]["completed"] for k in ("fee_agreement", "questionnaire")
-    )
+    for key, requirement in list(packet.requirements.items()):
+        if requirement.get("kind") != "signature" or requirement.get("completed"):
+            continue
+        extra = await db.scalar(
+            select(SignatureRequest).where(
+                SignatureRequest.id == uuid.UUID(requirement["signature_id"]),
+                SignatureRequest.tenant_id == packet.tenant_id,
+                SignatureRequest.matter_id == packet.matter_id,
+            )
+        )
+        if (
+            extra
+            and extra.status == "completed"
+            and extra.completed_at
+            and extra.completion_artifact_sha256
+            and extra.source_document_sha256 == requirement["source_sha256"]
+        ):
+            try:
+                artifact_id = uuid.UUID(extra.provider_envelope_id or "")
+            except ValueError:
+                continue
+            artifact = await db.scalar(
+                select(MatterDocument.id).where(
+                    MatterDocument.id == artifact_id,
+                    MatterDocument.tenant_id == packet.tenant_id,
+                    MatterDocument.matter_id == packet.matter_id,
+                )
+            )
+            if not artifact:
+                continue
+            packet.requirements = {
+                **packet.requirements,
+                key: {
+                    **requirement,
+                    "completed": True,
+                    "completed_at": extra.completed_at.isoformat(),
+                },
+            }
+    agreement = packet.requirements["fee_agreement"]
+    if (
+        packet.config.get("portal_after_signing")
+        and agreement["completed"]
+        and not packet.config.get("signing_followup_due_at")
+    ):
+        signed_at = datetime.fromisoformat(agreement["completed_at"])
+        due = signed_at + timedelta(hours=24)
+        await ensure_task(
+            db, packet, "signed", "Fee agreement signed — follow up with client", due
+        )
+        packet.config = {**packet.config, "signing_followup_due_at": due.isoformat()}
+        queue(packet, "signed")
+        event(
+            db,
+            packet,
+            "Fee agreement signed",
+            "Portal delivery queued. Follow up with the client within 24 hours.",
+        )
+    required_keys = [
+        key
+        for key, requirement in packet.requirements.items()
+        if requirement.get("required", True)
+    ]
+    complete = all(packet.requirements[key]["completed"] for key in required_keys)
     if complete and packet.completed_at is None:
         times = [
             datetime.fromisoformat(packet.requirements[k]["completed_at"])
-            for k in ("fee_agreement", "questionnaire")
+            for k in required_keys
         ]
         packet.completed_at = max(times)
         packet.status = "documents_complete"
         await set_intake_stage(db, matter, "Intake / Schedule Initial Meeting")
-        await close_task(db, packet, "documents", "Both intake requirements completed")
+        await close_task(
+            db, packet, "documents", "All required intake documents completed"
+        )
         await ensure_task(
             db,
             packet,
@@ -545,7 +737,7 @@ async def reconcile(db, packet):
             db,
             packet,
             "Intake documents complete",
-            "Fee agreement and questionnaire complete. Schedule the initial meeting within 24 hours.",
+            "All required intake documents complete. Schedule the initial meeting within 24 hours.",
         )
         queue(packet, "complete")
     elif not complete and packet.sent_at:
@@ -561,6 +753,20 @@ async def reconcile(db, packet):
 
 
 def message(packet, kind, url):
+    if kind == "signed":
+        return (
+            "Your client portal is ready",
+            f"Your fee agreement signature was received. Complete remaining paperwork and upload requested records here: {url}",
+        )
+    if kind == "welcome" and packet.config.get("portal_after_signing"):
+        labels = [
+            "Fee agreement",
+            *[item["label"] for item in packet.config.get("selected_documents", [])],
+        ]
+        return (
+            "Review your paperwork",
+            f"Please review and complete each document: {', '.join(labels)}. Secure paperwork link: {url}. Your general client portal link will follow after the fee agreement is signed.",
+        )
     if kind == "welcome":
         return (
             "Welcome — complete your intake",
@@ -568,12 +774,9 @@ def message(packet, kind, url):
         )
     if kind == "reminder":
         missing = [
-            label
-            for key, label in (
-                ("fee_agreement", "fee agreement"),
-                ("questionnaire", "questionnaire"),
-            )
-            if not packet.requirements[key]["completed"]
+            item.get("label", key.replace("_", " "))
+            for key, item in packet.requirements.items()
+            if item.get("required", True) and not item["completed"]
         ]
         return (
             "Your intake needs attention",
@@ -839,7 +1042,7 @@ async def process_packet(tenant_id, matter_id):
             remove_task_from_calendars_now,
         )
 
-        for kind in ("documents", "scheduling", "delivery"):
+        for kind in ("documents", "scheduling", "delivery", "signed"):
             await set_tenant_context(db, str(tenant_id))
             packet = await get_packet(db, tenant_id, matter_id, lock=True)
             cleanup = f"calendar_cleanup:{kind}"

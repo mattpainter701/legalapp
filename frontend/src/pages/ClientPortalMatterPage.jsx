@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import PortalDocumentTransfer from '../components/PortalDocumentTransfer'
 import ClientIntakeChecklist from '../components/ClientIntakeChecklist'
 import {
+  getClientIntake,
   getClientPortalSession,
   logoutClientPortal,
   getClientPortalMatter,
@@ -148,6 +149,13 @@ export default function ClientPortalMatterPage() {
     if (!mediation && tab === 'mediation') setTab('overview')
   }, [mediation, tab])
 
+  useEffect(() => {
+    if (!matter?.paperwork_only) return undefined
+    if (!['overview', 'signatures'].includes(tab)) setTab('overview')
+    const timer = setInterval(() => { getClientIntake().then(() => refreshMatter()).catch(() => {}) }, 15000)
+    return () => clearInterval(timer)
+  }, [matter?.paperwork_only, refreshMatter, tab])
+
   const signOut = async () => {
     setSigningOut(true)
     try {
@@ -208,7 +216,7 @@ export default function ClientPortalMatterPage() {
             <ShieldCheck size={26} strokeWidth={1.5} className="shrink-0" />
             <div className="min-w-0">
               <p className="text-xs uppercase tracking-wide text-white/60 font-sans">
-                LawHand — Client Portal
+                {matter.paperwork_only ? 'LawHand — Complete your paperwork' : 'LawHand — Client Portal'}
               </p>
               <h1 className="font-serif font-bold text-xl truncate">{matter.matter_name}</h1>
             </div>
@@ -233,7 +241,7 @@ export default function ClientPortalMatterPage() {
       <div className="max-w-5xl mx-auto px-4">
         <nav role="tablist" aria-label="Client portal sections"
           className="flex gap-1 border-b border-brand-line overflow-x-auto">
-          {[...TABS, ...(mediation ? [{ key: 'mediation', label: 'Mediation', icon: Handshake }] : [])].map(({ key, label, icon: Icon }) => (
+          {[...TABS.filter(item => !matter.paperwork_only || ['overview', 'signatures'].includes(item.key)), ...(mediation ? [{ key: 'mediation', label: 'Mediation', icon: Handshake }] : [])].map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               role="tab"
@@ -266,7 +274,7 @@ export default function ClientPortalMatterPage() {
           aria-labelledby={`portal-tab-${tab}`}
           className="py-6"
         >
-          {tab === 'overview' && <><ClientIntakeChecklist onSign={() => setTab('signatures')} /><OverviewTab {...tabProps} onNavigate={setTab} /></>}
+          {tab === 'overview' && <><ClientIntakeChecklist onSign={() => setTab('signatures')} />{!matter.paperwork_only && <OverviewTab {...tabProps} onNavigate={setTab} />}</>}
           {tab === 'messages' && <MessagesTab {...tabProps} />}
           {tab === 'documents' && <DocumentsTab {...tabProps} />}
           {tab === 'signatures' && <SignaturesTab {...tabProps} />}

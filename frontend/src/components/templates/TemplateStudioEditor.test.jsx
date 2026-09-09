@@ -273,6 +273,23 @@ describe('TemplateStudioEditor', () => {
     ])
   })
 
+  it('draws named fields and whiteout rectangles into the saved template schema', async () => {
+    const onSave = vi.fn().mockResolvedValue({})
+    render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Draw field' }))
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Draw field rectangle' }), { key: 'Enter' })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tag / variable name' }), { target: { value: 'client_name' } })
+    fireEvent.click(screen.getByText('Create field'))
+    fireEvent.click(screen.getByRole('button', { name: 'Whiteout' }))
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Draw whiteout rectangle' }), { key: 'Enter' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save fields' }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    const schema = onSave.mock.calls[0][0]
+    expect(schema.fields[0].name).toBe('client_name')
+    expect(schema.fields[0].pdf_overlay.rect).toHaveLength(4)
+    expect(schema.cover_regions[0]).toMatchObject({ page: 1, erase_source: true, source_kind: 'manual' })
+  })
+
   it('places a field at the clicked PDF point, supports cancellation and keyboard placement', async () => {
     const onSave = vi.fn().mockResolvedValue({})
     render(<TemplateStudioEditor template={templateWith([])} source={pdfSource()} onSave={onSave} />)

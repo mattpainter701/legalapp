@@ -2326,6 +2326,35 @@ async def get_matter_dashboard_summary(
 # ── Email Client ──────────────────────────────────────────────────────────────
 
 
+@router.get("/{matter_id}/email-attachments/{document_id}/preview")
+async def preview_email_attachment(
+    matter_id: str,
+    document_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    import base64
+    from app.services.matter_mail_attachments import reviewed_attachment
+
+    user = await get_current_user(request, db)
+    matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
+    attachment, digest = await reviewed_attachment(
+        db, user.tenant_id, matter.id, document_id
+    )
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        {
+            "document_id": document_id,
+            "filename": attachment.filename,
+            "content_type": attachment.content_type,
+            "sha256": digest,
+            "content_base64": base64.b64encode(attachment.content).decode("ascii"),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.post("/{matter_id}/email-client")
 async def email_matter_client(
     matter_id: str,
@@ -2368,6 +2397,11 @@ async def email_matter_client(
     # identifiers before selecting the actor's or firm's connected mailbox.
     tenant_id, actor_id = user.tenant_id, user.id
     authorized_matter_id, contact_id = matter.id, matter.client_contact_id
+    from app.services.matter_mail_attachments import collect_reviewed_attachments
+
+    attachments = await collect_reviewed_attachments(
+        db, tenant_id, authorized_matter_id, body.get("attachments", [])
+    )
     delivery = await send_client_email(
         db,
         tenant_id=tenant_id,
@@ -2377,6 +2411,7 @@ async def email_matter_client(
         html_body=html_body,
         text_body=email_body,
         smtp_service=EmailService(),
+        **({"attachments": attachments} if attachments else {}),
     )
     sent = delivery.result == EmailDeliveryResult.SENT
     uncertain = delivery.delivery_certainty == DELIVERY_OUTCOME_UNKNOWN

@@ -359,6 +359,7 @@ class TenantUpdate(BaseModel):
     premium_llm_provider: Optional[str] = None
     premium_llm_model: Optional[str] = None
     llm_routing_profile_id: Optional[str] = None
+    hidden_matter_panels: Optional[list[str]] = None
     enabled_modules: Optional[list[str]] = None
     default_module: Optional[str] = None
     plan: Optional[str] = None
@@ -924,6 +925,9 @@ async def get_tenant_detail(
                 else None
             ),
         },
+        "hidden_matter_panels": (ts.custom_config or {}).get("hidden_matter_panels", [])
+        if ts
+        else [],
         "module_config": {
             "enabled_modules": (ts.custom_config or {}).get("enabled_modules")
             if ts
@@ -1045,6 +1049,28 @@ async def update_tenant(
             "to": body.seat_count,
         }
         tenant.flat_seat_count = body.seat_count
+
+    if _field_was_sent(body, "hidden_matter_panels"):
+        from app.services.matter_panel_visibility import validate_hidden_panels
+
+        try:
+            hidden = validate_hidden_panels(body.hidden_matter_panels)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        ts = await db.scalar(
+            select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+        )
+        if ts is None:
+            ts = TenantSettings(tenant_id=tenant.id)
+            db.add(ts)
+            await db.flush()
+        config = dict(ts.custom_config or {})
+        audit_changes["hidden_matter_panels"] = {
+            "from": config.get("hidden_matter_panels", []),
+            "to": hidden,
+        }
+        config["hidden_matter_panels"] = hidden
+        ts.custom_config = config
 
     module_config_sent = _field_was_sent(body, "enabled_modules") or _field_was_sent(
         body, "default_module"
