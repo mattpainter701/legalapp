@@ -371,7 +371,8 @@ async def start_packet(db, user, matter, body, filename, content):
             raise HTTPException(
                 422, "Positioned signing fields require the document signing workflow"
             )
-        document.portal_visible = True
+        # The packet entitles its own recipient to read this agreement. A
+        # matter-wide visibility bit would hand it to every other live invite.
     else:
         stored = await store_file(
             user.tenant_id,
@@ -393,7 +394,6 @@ async def start_packet(db, user, matter, body, filename, content):
             content_type="application/pdf",
             file_size=len(content),
             document_category="contract",
-            portal_visible=True,
             storage_path=stored.storage_path,
             storage_provider=stored.provider,
             storage_backend=stored.backend,
@@ -495,7 +495,6 @@ async def start_packet(db, user, matter, body, filename, content):
         )
         if selected_doc is None:
             raise HTTPException(404, "Selected document not found")
-        selected_doc.portal_visible = True
         signature_id = None
         if selection.requires_signature:
             if (

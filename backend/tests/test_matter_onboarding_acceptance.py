@@ -399,3 +399,109 @@ async def test_linked_fee_agreement_keeps_the_direct_upload_ceiling(
         )
     )
     assert packet["status"] == "awaiting_documents"
+
+
+@pytest.mark.asyncio
+async def test_selected_paperwork_stays_with_its_own_portal_invite(
+    client, db_session, test_user, monkeypatch, tmp_path
+):
+    """A second portal recipient must not receive this client's paperwork.
+
+    A matter can hold live invites for several contacts, and only the recipient
+    holding the intake packet is restricted to paperwork. Selecting documents
+    for one client's packet must not disclose them to anybody else's invite.
+    """
+    from app.services import matter_file_store
+
+    monkeypatch.setattr(matter_file_store.settings, "UPLOAD_DIR", str(tmp_path))
+    await provision_tenant_rbac(db_session, test_user.tenant_id, test_user.id)
+    await db_session.commit()
+
+    async def capture_email(*args, **kwargs):
+        return SimpleNamespace(
+            delivery_certainty="confirmed_sent", provider="acceptance"
+        )
+
+    monkeypatch.setattr(intake, "send_client_email", capture_email)
+    contact = ok(
+        await client.post(
+            "/api/contacts",
+            json={
+                "first_name": "Jane",
+                "last_name": "Doe",
+                "email": "jane@example.com",
+            },
+        ),
+        201,
+    )
+    matter = ok(
+        await client.post(
+            "/api/matters",
+            json={
+                "matter_name": "Jane Doe divorce",
+                "client_contact_id": contact["id"],
+            },
+        ),
+        201,
+    )
+    base = f"/api/matters/{matter['id']}"
+    documents = {
+        name: ok(
+            await client.post(
+                base + "/documents/upload",
+                files={"file": (name, pdf(name), "application/pdf")},
+            ),
+            201,
+        )
+        for name in ("Fee agreement.pdf", "Private strategy memo.pdf")
+    }
+    # A co-party on the same matter holds an ordinary, unrestricted invite.
+    other = ok(
+        await client.post(
+            base + "/portal/invite",
+            json={"email": "co-party@example.com"},
+        ),
+        201,
+    )
+    ok(
+        await client.post(
+            base + "/intake",
+            data={
+                "options": json.dumps(
+                    {
+                        "email": "jane@example.com",
+                        "channels": ["email"],
+                        "portal_after_signing": True,
+                        "agreement_document_id": documents["Fee agreement.pdf"]["id"],
+                        "selected_documents": [
+                            {
+                                "document_id": documents["Private strategy memo.pdf"][
+                                    "id"
+                                ],
+                                "label": "Private strategy memo",
+                                "requires_signature": False,
+                            }
+                        ],
+                        "questions": [{"key": "summary", "label": "Summary"}],
+                        "confirm_send": True,
+                    }
+                )
+            },
+        )
+    )
+    await db_session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as portal:
+        token = re.search(r"token=([A-Za-z0-9_-]+)", other["invite_url"]).group(1)
+        ok(await portal.post("/api/portal/client/accept", json={"token": token}))
+        assert ok(await portal.get("/api/portal/client/matter"))["paperwork_only"] is (
+            False
+        )
+        listed = ok(await portal.get("/api/portal/client/documents"))
+        assert [item["filename"] for item in listed] == []
+        memo = documents["Private strategy memo.pdf"]["id"]
+        assert (
+            await portal.get(f"/api/portal/client/documents/{memo}/download")
+        ).status_code == 404

@@ -239,9 +239,13 @@ class ClientPortalContext:
         jti: str | None = None,
         paperwork_only: bool = False,
         paperwork_signature_ids: list[str] | None = None,
+        packet_document_ids: list[str] | None = None,
     ):
         self.paperwork_only = paperwork_only
         self.paperwork_signature_ids = paperwork_signature_ids or []
+        # Documents this recipient's own intake packet entitles them to read,
+        # in place of a matter-wide visibility bit every invite would share.
+        self.packet_document_ids = packet_document_ids or []
         self.tenant_id = tenant_id
         self.matter_id = matter_id
         self.contact_id = contact_id
@@ -403,8 +407,12 @@ async def get_client_portal_context(
         and packet.config.get("portal_after_signing")
         and not packet.requirements.get("fee_agreement", {}).get("completed")
     )
+    # The packet is the grant for its own paperwork. A matter can hold live
+    # invites for several contacts, so these documents are never made visible
+    # matter-wide: only the recipient holding this packet reads them.
     signature_ids = []
-    if paperwork_only:
+    document_ids = []
+    if packet is not None:
         signature_ids = [
             str(packet.signature_id),
             *[
@@ -426,6 +434,7 @@ async def get_client_portal_context(
         )
         if fee_document:
             document_ids.append(str(fee_document))
+    if paperwork_only:
         path = request.url.path.rstrip("/")
         allowed = path in {
             "/api/portal/client/matter",
@@ -461,6 +470,7 @@ async def get_client_portal_context(
     return ClientPortalContext(
         paperwork_only=paperwork_only,
         paperwork_signature_ids=signature_ids,
+        packet_document_ids=document_ids,
         tenant_id=str(tenant_id),
         matter_id=str(matter_id),
         contact_id=payload.get("contact_id"),
@@ -1421,6 +1431,24 @@ async def _notify_firm_of_message(
 # ── Documents ───────────────────────────────────────────────────────────────
 
 
+def _readable_documents(ctx):
+    """Documents a portal recipient may read: shared with the matter's client,
+    plus the paperwork their own intake packet entitles them to."""
+    shared = MatterDocument.portal_visible.is_(True)
+    grants = _packet_document_uuids(ctx)
+    return or_(shared, MatterDocument.id.in_(grants)) if grants else shared
+
+
+def _packet_document_uuids(ctx):
+    grants = []
+    for value in getattr(ctx, "packet_document_ids", []) or []:
+        try:
+            grants.append(uuid.UUID(str(value)))
+        except (TypeError, ValueError):
+            continue
+    return grants
+
+
 @router.get("/documents", response_model=List[PortalDocumentResponse])
 async def portal_list_documents(
     resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
@@ -1432,7 +1460,7 @@ async def portal_list_documents(
         .where(
             MatterDocument.matter_id == ctx.matter_id,
             MatterDocument.tenant_id == ctx.tenant_id,
-            MatterDocument.portal_visible.is_(True),
+            _readable_documents(ctx),
         )
         .order_by(MatterDocument.created_at.desc())
     )
@@ -1727,7 +1755,7 @@ async def portal_download_document(
             MatterDocument.id == doc_id,
             MatterDocument.matter_id == ctx.matter_id,
             MatterDocument.tenant_id == ctx.tenant_id,
-            MatterDocument.portal_visible.is_(True),
+            _readable_documents(ctx),
         )
     )
     doc = result.scalar_one_or_none()
