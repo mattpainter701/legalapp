@@ -10,7 +10,11 @@ import pytest
 from app.routers import intake_starter_pack as router
 from app.routers.document_templates import CATEGORIES, extract_template_variables
 from app.schemas.document_template import DocumentTemplateCreate
-from app.schemas.matter_intake import IntakeQuestion, IntakeStart, IntakeUploadRequirement
+from app.schemas.matter_intake import (
+    IntakeQuestion,
+    IntakeStart,
+    IntakeUploadRequirement,
+)
 from app.services import intake_starter_pack as pack
 from app.services.template_bindings import is_valid_binding
 
@@ -40,7 +44,9 @@ def test_free_text_matter_types_resolve_to_a_practice(matter_type, expected):
     assert pack.resolve_practice(matter_type).slug == expected
 
 
-@pytest.mark.parametrize("matter_type", ["", None, "   ", "Something we have never handled"])
+@pytest.mark.parametrize(
+    "matter_type", ["", None, "   ", "Something we have never handled"]
+)
 def test_an_unrecognised_type_still_gets_a_questionnaire(matter_type):
     """A client always receives questions; nothing falls through to an empty pack."""
 
@@ -68,7 +74,7 @@ def test_the_practice_area_answers_when_the_type_says_nothing(
 
 
 def test_a_specific_alias_beats_a_generic_one_from_another_practice():
-    """"Contract" belongs to business; "breach of contract" is still a dispute."""
+    """ "Contract" belongs to business; "breach of contract" is still a dispute."""
 
     assert pack.resolve_practice("Contract review").slug == "business"
     assert pack.resolve_practice("Breach of contract").slug == "litigation"
@@ -78,7 +84,9 @@ def test_every_alias_is_claimed_by_exactly_one_practice():
     seen: dict[str, str] = {}
     for practice in pack.practices():
         for alias in practice.aliases:
-            assert alias not in seen, f"{alias} claimed by {seen.get(alias)} and {practice.slug}"
+            assert alias not in seen, (
+                f"{alias} claimed by {seen.get(alias)} and {practice.slug}"
+            )
             seen[alias] = practice.slug
 
 
@@ -232,9 +240,7 @@ async def test_install_leaves_a_firms_own_template_alone():
 
 
 def _user():
-    return SimpleNamespace(
-        id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="attorney"
-    )
+    return SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="attorney")
 
 
 @pytest.mark.asyncio

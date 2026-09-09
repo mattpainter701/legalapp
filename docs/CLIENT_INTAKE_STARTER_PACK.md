@@ -84,6 +84,27 @@ The MCP surface does not create templates: its write-like tools only produce
 reviewable proposals. Installing the starter templates goes through the endpoint
 above or Template Studio.
 
+## Fillable PDF versions
+
+`backend/scripts/generate_intake_starter_pdfs.py` renders the same markdown
+sources as fillable AcroForm PDFs — the fee agreement, the intake form, and one
+questionnaire per practice:
+
+    python backend/scripts/generate_intake_starter_pdfs.py --out build/intake-pack
+
+Every form field is named after the template's own variable or the question's
+own key, so a returned PDF maps back onto the same bindings, and Template
+Studio's existing AcroForm discovery finds the fields when the PDF is uploaded
+as a source-backed template. Regenerate after changing any template body or
+question; `backend/tests/unit/test_intake_starter_pdfs.py` fails if the printed
+form and the template stop agreeing.
+
+Two differences from the rendered markdown are deliberate. The fee agreement's
+conditional fee sections (`{{#if hourly_rate}}` and the rest) all print, since a
+paper form has no renderer to choose between them — strike the arrangements that
+do not apply. And signature lines stay hand-signed: the portal signature flow is
+separate.
+
 ## Where staff see it
 
 * **Template Studio home** — "Standard client paperwork" adds the fee agreement
