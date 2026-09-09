@@ -1,3 +1,9 @@
+## 2026.09.08.14 - Generated PDF review inside Studio
+
+- Reuse the existing PDF.js renderer for generated PDF and Word-to-PDF previews, with responsive fit, zoom, page selection, loading and failure states.
+- Remount the viewer for each returned output so page and render state cannot carry over from an earlier preview. Preserve value-bound publication and save evidence.
+- Keep completion controls visible, prioritize required blanks, retain the current input while typing in a filtered review queue, and link to firm/matter source repair without leaving the fill session.
+
 ## 2026.09.08.13 - Guided Word template review
 
 - Add searchable review queues, source context, mobile section navigation, cross-page field lookup with ambiguous/missing results, and direct page selection.

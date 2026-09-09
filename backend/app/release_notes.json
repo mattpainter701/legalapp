@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.08.14",
+      "version": "2026.09.08.14",
+      "title": "Review generated PDFs directly in Studio",
+      "published_at": "2026-09-08",
+      "summary": "Inspect generated documents without depending on a browser PDF plug-in.",
+      "highlights": [
+        {
+          "title": "Check every page before continuing",
+          "description": "Generated PDF and Word-to-PDF previews include page navigation, fit-to-width and zoom, with clear loading and error messages."
+        },
+        {
+          "title": "Finish missing information faster",
+          "description": "Keep required blanks and unreviewed suggestions visible, move through the current review queue, and open firm or matter details to correct the source without losing entered values."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.13",
       "version": "2026.09.08.13",
       "title": "Review long Word templates with confidence",

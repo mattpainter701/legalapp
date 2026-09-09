@@ -9,6 +9,7 @@ import TemplateTestSummary from '../components/templates/TemplateTestSummary'
 import TemplateFactReview from '../components/templates/TemplateFactReview'
 import TemplateFillProgress from '../components/templates/TemplateFillProgress'
 import TemplateFillSource from '../components/templates/TemplateFillSource'
+import GeneratedPdfPreview from '../components/templates/GeneratedPdfPreview'
 import { applyFillSuggestions, discoverySuggestions, fillReview, fillValue, initialFillValues, isSigningField, suggestionConfidenceLabel } from '../components/templates/templateFillReview'
 import TemplateFieldLibrary from '../components/templates/TemplateFieldLibrary'
 import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
@@ -1269,6 +1270,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const [latestSuggestions, setLatestSuggestions] = useState({})
   const [reviewedValues, setReviewedValues] = useState({})
   const [fieldFilter, setFieldFilter] = useState('all')
+  const [focusedFillName, setFocusedFillName] = useState(null)
   const pendingFocus = useRef(null)
   const previewRequestGenerationRef = useRef(0)
   const smartFillRequestGenerationRef = useRef(0)
@@ -1291,12 +1293,21 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   )
   const progress = fillReview(names, fieldDefinitions, variables, fieldSources, reviewedValues)
   const hasFirmFields = fillableNames.some(name => fieldDefinitions[name]?.binding?.startsWith('firm.'))
-  const visibleNames = fieldFilter === 'all' ? names : (fieldFilter === 'remaining' ? progress.remaining : progress.review).map(row => row.name)
+  const filteredNames = fieldFilter === 'all' ? names : (fieldFilter === 'remaining' ? progress.remaining : progress.review).map(row => row.name)
+  // Keep the current input mounted until the reviewer moves on; typing the
+  // first character must not remove it from a missing-only queue.
+  const visibleNames = focusedFillName && !filteredNames.includes(focusedFillName) ? [...filteredNames, focusedFillName] : filteredNames
+  const lastAttentionField = useRef(null)
   const nextField = () => {
-    const name = progress.remaining[0]?.name || progress.review[0]?.name
+    const missing = [...progress.remaining].sort((a, b) => Number(Boolean(fieldDefinitions[b.name]?.required)) - Number(Boolean(fieldDefinitions[a.name]?.required)))
+    const queue = fieldFilter === 'review' ? progress.review : fieldFilter === 'remaining' ? missing : [...missing, ...progress.review]
+    const index = queue.findIndex(row => row.name === lastAttentionField.current)
+    const name = queue[(index + 1) % queue.length]?.name
     if (!name) return
-    if (fieldFilter === 'all') document.getElementById(`template-variable-${name}`)?.focus()
-    else { pendingFocus.current = name; setFieldFilter('all') }
+    lastAttentionField.current = name
+    const input = document.getElementById(`template-variable-${name}`)
+    input?.scrollIntoView?.({ block: 'center' })
+    input?.focus({ preventScroll: true })
   }
   useEffect(() => {
     if (pendingFocus.current) {
@@ -1327,6 +1338,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     setLatestSuggestions({})
     setReviewedValues({})
     setFieldFilter('all')
+    setFocusedFillName(null)
+    lastAttentionField.current = null
     setSaved(false)
     setRendered(null)
     setMatterDocId(null)
@@ -1387,6 +1400,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   }
 
   const selectMatter = (id) => {
+    setFocusedFillName(null)
+    lastAttentionField.current = null
     if (id === matterId) return
     setMatterId(id)
     setVariables(initialFillValues(fillableNames, fieldDefinitions))
@@ -1646,6 +1661,15 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           </div>
         )}
 
+        {(matterId.trim() || hasFirmFields) && <div className="rounded border border-brand-line bg-brand-bg p-3 text-xs">
+          <p className="font-semibold">Correct the source once</p>
+          <div className="mt-2 flex flex-wrap gap-3">
+            {matterId.trim() && <a href={`/matters/${encodeURIComponent(matterId.trim())}`} target="_blank" rel="noreferrer" className="underline">Open matter details (new tab)</a>}
+            {hasFirmFields && <a href="/admin?tab=settings#firm-branding" target="_blank" rel="noreferrer" className="underline">Open firm settings (new tab)</a>}
+          </div>
+          <p className="mt-2 text-brand-muted">Keep this document open. After saving changes to the source, return and refresh values. Your entries stay intact; changed suggestions are yours to accept. Firm changes require an administrator.</p>
+        </div>}
+
         <TemplateFactReview matterId={matterId.trim()} fields={Object.values(fieldDefinitions)} onAccepted={() => { setFieldSources({}); invalidatePreview() }} />
         {smartFillMessage && (
           <div className={`text-sm border px-3 py-2 ${
@@ -1661,7 +1685,9 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
 
         {names.length > 0 && (
           <div>
-            <TemplateFillProgress progress={progress} filter={fieldFilter} onFilter={setFieldFilter} onNext={nextField} />
+            <div className="sticky top-0 z-20 bg-brand-surface pb-2">
+              <TemplateFillProgress progress={progress} requiredMissing={requiredUnresolvedNames.length} filter={fieldFilter} onFilter={value => { lastAttentionField.current = null; setFocusedFillName(null); setFieldFilter(value) }} onNext={nextField} />
+            </div>
             <h3 className="text-sm font-medium text-brand-ink mb-2">
               Fields
             </h3>
@@ -1680,7 +1706,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                     : { value: option, label: option }
                 ))
                 return (
-                <div key={name} className={signingField ? 'border border-brand-line rounded bg-brand-bg px-3 py-2' : ''}>
+                <div key={name} onFocus={() => setFocusedFillName(name)} className={signingField ? 'border border-brand-line rounded bg-brand-bg px-3 py-2' : ''}>
                   {signingField ? (
                     <p className="block text-xs font-medium text-brand-muted mb-0.5">
                       {label}
@@ -1690,6 +1716,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                       {label}{field.required ? ' *' : ''}
                     </label>
                   )}
+                  {review && !review.present && <p className={`mb-1 text-xs font-semibold ${field.required ? 'text-brand-rose' : 'text-brand-amber'}`}>{field.required ? 'Required — missing' : 'Optional — not filled'}</p>}
                   {fieldSources[name] && <p className="mb-1 text-xs text-brand-muted">{fieldSources[name].suggested_value == null ? 'Missing: review or enter a value' : `From ${fieldSources[name].provenance?.binding_label || fieldSources[name].source_type || 'record'} · verify current accuracy`}{fieldSources[name].provenance?.updated_at ? ` · Updated ${new Date(fieldSources[name].provenance.updated_at).toLocaleDateString()}` : ''}</p>}
                   {field.binding?.startsWith('firm.') && <p className="mb-1 text-xs text-brand-muted">Shared firm profile. Missing or outdated details can be updated once by a firm administrator in Firm settings, then refreshed here with Smart Fill.</p>}
                   {fieldSources[name]?.provenance?.source_document_id && <a className="block mb-1 text-xs underline" href={getMatterDocumentDownloadUrl(matterId, fieldSources[name].provenance.source_document_id)} target="_blank" rel="noreferrer">Open reviewed source document</a>}
@@ -1886,9 +1913,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             </div>
             {isPdfOutput ? (
               <>
-                <object title={`Preview of ${template.title}`} data={filePreviewUrl} type="application/pdf" className="h-[65vh] min-h-[480px] w-full rounded border border-brand-line bg-white">
-                  <p className="p-4 text-sm text-brand-muted">This browser cannot display the PDF inline. Use Download preview instead.</p>
-                </object>
+                <GeneratedPdfPreview key={filePreviewUrl} source={filePreview.blob} title={template.title} />
                 <p className="mt-2 text-xs font-medium text-brand-green" role="status">
                   {previewPurpose === 'generation'
                     ? 'These exact values and this matter are previewed. Inspect every page, then save without changing the fields.'
