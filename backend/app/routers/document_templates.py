@@ -4716,6 +4716,11 @@ async def render_template_endpoint(
             lock=False,
         )
         if existing_document:
+            if getattr(existing_document, "folder_id", None) != payload.folder_id:
+                raise HTTPException(
+                    409,
+                    "This preview was already saved to a different folder. Create a new preview or move the saved document.",
+                )
             return _existing_document_response(existing_document, matter_id=matter.id)
     output_filename = _safe_generated_filename(
         template.title,
@@ -4991,6 +4996,11 @@ async def render_template_endpoint(
                     output_sha256=output_sha256,
                     document_id=doc_id,
                 )
+                if getattr(existing_document, "folder_id", None) != payload.folder_id:
+                    raise HTTPException(
+                        409,
+                        "This preview was already saved to a different folder. Create a new preview or move the saved document.",
+                    )
                 return _existing_document_response(
                     existing_document,
                     matter_id=parsed_matter_id,

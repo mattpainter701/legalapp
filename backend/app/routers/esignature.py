@@ -715,7 +715,7 @@ async def portal_list_signatures(
         .order_by(SignatureRequest.created_at.desc())
     )
     all_requests = result.scalars().all()
-    if ctx.paperwork_only:
+    if getattr(ctx, "paperwork_only", False):
         all_requests = [
             item for item in all_requests if str(item.id) in ctx.paperwork_signature_ids
         ]

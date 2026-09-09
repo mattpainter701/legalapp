@@ -905,7 +905,7 @@ async def portal_matter(
     db: AsyncSession = Depends(get_db),
 ):
     ctx, matter = resolved
-    if ctx.paperwork_only:
+    if getattr(ctx, "paperwork_only", False):
         return PortalMatterView(
             matter_id=str(matter.id),
             matter_name=matter.matter_name,

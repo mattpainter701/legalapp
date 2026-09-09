@@ -281,14 +281,27 @@ async def test_generated_pdf_persists_positioned_signing_descriptor_and_lists_it
         },
     )
     assert preview.status_code == 200, preview.text
-    generated = await client.post(
-        f"/api/templates/{template_id}/render",
-        json={
-            "variables": values,
-            "matter_id": str(matter.id),
-            "preview_id": preview.headers["x-clarity-preview-id"],
-        },
+    folder = await client.post(
+        f"/api/matters/{matter.id}/document-folders",
+        json={"name": "Prepared paperwork"},
     )
+    assert folder.status_code == 201, folder.text
+    payload = {
+        "variables": values,
+        "matter_id": str(matter.id),
+        "preview_id": preview.headers["x-clarity-preview-id"],
+        "folder_id": folder.json()["id"],
+    }
+    missing_matter = await client.post(
+        f"/api/templates/{template_id}/render", json={**payload, "matter_id": None}
+    )
+    assert missing_matter.status_code == 400
+    foreign_folder = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={**payload, "folder_id": str(uuid.uuid4())},
+    )
+    assert foreign_folder.status_code == 404
+    generated = await client.post(f"/api/templates/{template_id}/render", json=payload)
     assert generated.status_code == 200, generated.text
     document = (
         (
@@ -301,6 +314,11 @@ async def test_generated_pdf_persists_positioned_signing_descriptor_and_lists_it
         .scalars()
         .first()
     )
+    assert str(document.folder_id) == folder.json()["id"]
+    wrong_destination = await client.post(
+        f"/api/templates/{template_id}/render", json={**payload, "folder_id": None}
+    )
+    assert wrong_destination.status_code == 409
     assert document.positioned_fields and len(document.positioned_fields) == 3
     assert document.signing_placement_required is True
     assert document.signing_roles == ["attorney", "client"]
@@ -1107,37 +1125,56 @@ def test_docx_analysis_exposes_bounded_source_paragraphs_aligned_with_anchors():
     for field in fields:
         anchor = field.get("docx_anchor")
         if anchor:
-            paragraph = next(item for item in paragraphs if item["ordinal"] == anchor["paragraph_ordinal"])
-            assert paragraph["text"][anchor["start"] : anchor["end"]] == field["source_text"]
+            paragraph = next(
+                item
+                for item in paragraphs
+                if item["ordinal"] == anchor["paragraph_ordinal"]
+            )
+            assert (
+                paragraph["text"][anchor["start"] : anchor["end"]]
+                == field["source_text"]
+            )
 
 
-@pytest.mark.parametrize("outline", [
-    {"truncated": True, "paragraphs": [{"ordinal": 0, "text": "Client name: ___"}]},
-    {"truncated": False, "paragraphs": [{"ordinal": 0, "text": "x" * 100_001}]},
-])
+@pytest.mark.parametrize(
+    "outline",
+    [
+        {"truncated": True, "paragraphs": [{"ordinal": 0, "text": "Client name: ___"}]},
+        {"truncated": False, "paragraphs": [{"ordinal": 0, "text": "x" * 100_001}]},
+    ],
+)
 def test_docx_analysis_refuses_partial_or_oversized_page_context(monkeypatch, outline):
     from docx import Document
+
     document = Document()
     document.add_paragraph("Client name: ___")
     source = BytesIO()
     document.save(source)
     monkeypatch.setattr("app.services.template_intake.docx_outline", lambda _: outline)
-    analysis = analyze_template_upload(file_bytes=source.getvalue(), filename="sample.docx", content_type=None)
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(), filename="sample.docx", content_type=None
+    )
     assert analysis.as_dict()["source_paragraphs"] == []
     assert any("preview limit" in warning for warning in analysis.warnings)
 
 
 def test_long_word_import_keeps_complete_context_for_final_page_fields():
     from docx import Document
+
     document = Document()
     for index in range(120):
         document.add_paragraph(f"Section {index}. " + "Synthetic standard terms. " * 10)
     document.add_paragraph("Final signature: ___")
     source = BytesIO()
     document.save(source)
-    analysis = analyze_template_upload(file_bytes=source.getvalue(), filename="long.docx", content_type=None)
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(), filename="long.docx", content_type=None
+    )
     assert len(analysis.extracted_text) <= 20_000
-    assert {"ordinal": 120, "text": "Final signature: ___"} in analysis.source_paragraphs
+    assert {
+        "ordinal": 120,
+        "text": "Final signature: ___",
+    } in analysis.source_paragraphs
     assert sum(len(item["text"]) for item in analysis.source_paragraphs) > 20_000
     assert not any("source outline exceeds" in warning for warning in analysis.warnings)
 
@@ -4211,8 +4248,13 @@ async def test_premium_ai_proposal_is_audited_and_reconciled_locally(monkeypatch
         return None
 
     from app.services.template_ai_profile import TemplateAiRoute
+
     async def premium_route(_db):
-        return TemplateAiRoute(requested_route="template-premium", resolved_route="template-premium", gateway_alias="premium-test")
+        return TemplateAiRoute(
+            requested_route="template-premium",
+            resolved_route="template-premium",
+            gateway_alias="premium-test",
+        )
 
     monkeypatch.setattr(template_ai_service, "check_token_budget", allow_budget)
     monkeypatch.setattr(template_ai_service, "resolve_template_ai_route", premium_route)

@@ -297,6 +297,10 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
     } catch (error) { setFilingError(typeof error.response?.data?.detail === 'string' ? error.response.data.detail : 'The operation did not finish. Retry or cancel.') }
     finally { setFilingBusy(false) }
   }
+  useEffect(() => {
+    if (documentView === 'folder') { setIncludeSubfolders(false); if (folderId === ALL_DOCUMENTS) setFolderId(ROOT_FOLDER) }
+  }, [documentView, folderId, setFolderId, setIncludeSubfolders])
+  function selectFolder(value) { if (value === ALL_DOCUMENTS) setDocumentView('detailed'); setFolderId(value) }
   const [previewDocument, setPreviewDocument] = useState(null)
   const [filingDocument, setFilingDocument] = useState(null)
   const [cloudFiles, setCloudFiles] = useState(null)
@@ -802,7 +806,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
             rootDocumentCount={rootDocumentCount}
             totalDocumentCount={totalDocumentCount}
             selectedFolderId={folderId}
-            onSelectFolder={setFolderId}
+            onSelectFolder={selectFolder}
             onCreateFolder={startCreateFolder}
             onRenameFolder={startRenameFolder}
             onDeleteFolder={handleDeleteFolder}
@@ -817,7 +821,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
               <nav aria-label="Folder path" className="flex min-w-0 flex-wrap items-center gap-1 text-[13px] font-sans">
                 <button
                   type="button"
-                  onClick={() => setFolderId(ALL_DOCUMENTS)}
+                  onClick={() => selectFolder(ALL_DOCUMENTS)}
                   className={`rounded px-1.5 py-0.5 ${folderId === ALL_DOCUMENTS ? 'font-bold text-brand-ink' : 'text-brand-accent hover:underline'}`}
                 >
                   All documents

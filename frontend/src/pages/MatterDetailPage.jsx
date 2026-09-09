@@ -884,7 +884,7 @@ function MatterWorkspace() {
                     ? differenceInDays(new Date(), parseISO(dashboard.last_activity_at)) > 14
                     : false,
                 },
-              ].filter(() => !view.hidden.includes('Summary statistics')).map((s, i) => (
+              ].filter(stat => stat.alert || !view.hidden.includes('Summary statistics')).map((s, i) => (
                 <div key={i} className={`bg-brand-surface border rounded-2xl p-5 shadow-sm ${s.alert ? 'border-brand-rose/30' : 'border-brand-line'}`}>
                   <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">{s.label}</div>
                   <div className={`text-[28px] font-serif font-bold ${s.alert ? 'text-brand-rose' : 'text-brand-ink'}`}>{s.value}</div>
