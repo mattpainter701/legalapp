@@ -12,7 +12,7 @@ Released September 8, 2026.
 Choose forms, organize documents, and follow up when the fee agreement is signed.
 
 - **Work from a simpler matter view.** Customize visible matter fields with the gear, use Folder or Detailed document views, and attach reviewed templates from the library. Secondary document tools are grouped together.
-- **Send and track selected paperwork.** Choose forms and requested uploads, and track signatures separately. Fee-agreement completion opens portal access and creates a follow-up due within 24 hours.
+- **Send and track selected paperwork.** Choose forms, review them before signing, and track signatures separately. Stored fee-signing evidence opens portal access and creates the 24-hour follow-up.
 - **Prepare templates and email attachments.** Draw named fields and whiteout areas in Studio. Review files before emailing them, and copy documents into another folder without changing the source.
 
 ## 2026.09.08.15 — Save reviewed Word-to-PDF documents reliably
