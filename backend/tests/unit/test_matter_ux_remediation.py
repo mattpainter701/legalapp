@@ -12,6 +12,18 @@ from app.services.connected_mail import _gmail_message, _send_microsoft
 from app.services.mail_attachment import MailAttachment
 
 
+@pytest.fixture(autouse=True)
+def isolated_attachment_storage_session(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def session():
+        yield SimpleNamespace()
+
+    monkeypatch.setattr(attachments, "async_session_maker", session)
+    monkeypatch.setattr(attachments, "set_tenant_context", AsyncMock())
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [(None, []), ([], []), (["chat", "chat", "team"], ["chat", "team"])],
@@ -326,3 +338,156 @@ async def test_attachment_read_failure_and_release_guard(monkeypatch):
             db, uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
         )
     assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_review_endpoint_returns_no_store_exact_bytes(monkeypatch):
+    import json
+    from app.routers import matters
+
+    tid, mid, did = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(
+        matters,
+        "get_current_user",
+        AsyncMock(return_value=SimpleNamespace(tenant_id=tid)),
+    )
+    monkeypatch.setattr(
+        matters, "_get_matter_or_404", AsyncMock(return_value=SimpleNamespace(id=mid))
+    )
+    monkeypatch.setattr(
+        attachments,
+        "reviewed_attachment",
+        AsyncMock(
+            return_value=(
+                MailAttachment("fee.pdf", b"reviewed", "application/pdf"),
+                "a" * 64,
+            )
+        ),
+    )
+    response = await matters.preview_email_attachment(str(mid), str(did), None, None)
+    assert response.headers["cache-control"] == "no-store"
+    assert base64.b64decode(json.loads(response.body)["content_base64"]) == b"reviewed"
+
+
+@pytest.mark.asyncio
+async def test_smtp_keeps_attachment_parts(monkeypatch):
+    from app.services import email
+
+    sender = email.EmailService()
+    monkeypatch.setattr(sender, "configuration_status", lambda: None)
+    send = AsyncMock()
+    monkeypatch.setattr(email.aiosmtplib, "send", send)
+    result = await sender.send_email(
+        to=["jane@example.com"],
+        subject="Paperwork",
+        html_body="Review",
+        attachments=[
+            MailAttachment("fee.pdf", b"fee", "application/pdf"),
+            MailAttachment("intake.pdf", b"intake", "application/pdf"),
+        ],
+    )
+    assert result == email.EmailDeliveryResult.SENT
+    parts = send.call_args.args[0].get_payload()[1:]
+    assert [(p.get_filename(), p.get_payload(decode=True)) for p in parts] == [
+        ("fee.pdf", b"fee"),
+        ("intake.pdf", b"intake"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "existing,value", [(False, ["team", "workflow"]), (True, []), (True, ["dashboard"])]
+)
+async def test_platform_panel_update_preserves_configuration_and_audits(
+    monkeypatch, existing, value
+):
+    from app.routers import platform
+    from app.models.tenant import TenantSettings
+
+    tid = uuid.uuid4()
+    tenant = SimpleNamespace(
+        id=tid,
+        name="Firm",
+        domain="firm.example",
+        tenant_type="production",
+        billing_tier="flat",
+    )
+    settings = TenantSettings(tenant_id=tid, custom_config={"unrelated": True})
+    added = []
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(scalar_one_or_none=lambda: tenant)
+        ),
+        scalar=AsyncMock(return_value=settings if existing else None),
+        add=lambda row: added.append(row),
+        flush=AsyncMock(),
+        commit=AsyncMock(),
+    )
+    monkeypatch.setattr(platform, "_require_platform_key", lambda request: None)
+    monkeypatch.setattr(platform, "set_tenant_context", AsyncMock())
+    audit = AsyncMock()
+    monkeypatch.setattr(platform, "record_operator_audit", audit)
+    request = SimpleNamespace(headers={}, client=None, state=SimpleNamespace())
+    if "dashboard" in value:
+        with pytest.raises(HTTPException):
+            await platform.update_tenant(
+                str(tid), platform.TenantUpdate(hidden_matter_panels=value), request, db
+            )
+        audit.assert_not_called()
+    else:
+        await platform.update_tenant(
+            str(tid), platform.TenantUpdate(hidden_matter_panels=value), request, db
+        )
+        stored = settings if existing else added[0]
+        assert stored.custom_config["hidden_matter_panels"] == value
+        if existing:
+            assert stored.custom_config["unrelated"]
+        assert audit.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_paperwork_matter_response_does_not_load_general_case_information():
+    from app.routers import client_portal
+
+    ctx = client_portal.ClientPortalContext(
+        tenant_id=str(uuid.uuid4()),
+        matter_id=str(uuid.uuid4()),
+        contact_id=None,
+        paperwork_only=True,
+        paperwork_signature_ids=["fee"],
+    )
+    matter = SimpleNamespace(id=ctx.matter_id, matter_name="Jane Doe divorce")
+    response = await client_portal.portal_matter((ctx, matter), None)
+    assert response.paperwork_only and response.pending_signature_count == 1
+
+
+@pytest.mark.asyncio
+async def test_signature_list_filters_requests_outside_selected_packet(monkeypatch):
+    from app.routers import esignature
+
+    tid, mid, selected, other = [uuid.uuid4() for _ in range(4)]
+    ctx = SimpleNamespace(
+        tenant_id=tid,
+        matter_id=mid,
+        paperwork_only=True,
+        paperwork_signature_ids=[str(selected)],
+    )
+    requests = [SimpleNamespace(id=key, signers=[]) for key in [selected, other]]
+    monkeypatch.setattr(
+        esignature, "get_client_portal_context", AsyncMock(return_value=ctx)
+    )
+    checked = []
+    monkeypatch.setattr(
+        esignature,
+        "mark_request_expired_if_needed",
+        lambda req: checked.append(req.id) or False,
+    )
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: requests)
+            )
+        )
+    )
+    assert await esignature.portal_list_signatures(None, db) == []
+    assert checked == [selected]
