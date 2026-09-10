@@ -202,6 +202,17 @@ its credentials are revoked. Do not give the runner account Docker membership,
 read access to `/srv/lawhand/app` or `/etc/lawhand/core.env`, or general sudo
 rights.
 
+## In-deploy user notice
+
+Once preflight passes, `deploy_prod.sh` writes `release-window.json` into the
+host-status directory (the read-only mount the backend already uses for disk
+status). While that file exists, every signed-in user — portal clients
+included — sees a slim, kindly worded banner via `GET /api/release-window`
+explaining that a release is in flight. An EXIT trap removes the file on every
+exit path (success or failure), the backend reader auto-expires a stranded
+marker after two hours, and a failed marker write only warns — it never blocks
+the deploy.
+
 ## Recovery
 
 If the IONOS runner is offline, inspect its systemd service and outbound HTTPS

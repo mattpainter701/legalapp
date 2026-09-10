@@ -1,3 +1,9 @@
+## 2026.09.10.2 — In-deploy maintenance heads-up banner
+
+- Add `GET /api/release-window`, a public endpoint (like `/api/version`) that reads `release-window.json` from the read-only host-status mount beside the host disk status and returns only `active`/`window_id`/`message`; the strict reader fails closed on a missing, malformed, symlinked, or stale marker and caps the message length, so no host or build detail reaches the browser.
+- `deploy_prod.sh` writes the marker after preflight and before the databases come up (maximizing lead time), removes it via an EXIT trap on every exit path — folded into the scheduler cutover trap mid-script and re-armed for the post-cutover gates — and treats a failed write as warn-and-continue so an advisory can never block a deploy.
+- Add `ReleaseWindowBanner`, a slim dismissible top banner polled every 30 seconds, shown to every signed-in user including portal clients (unlike `ReleaseAnnouncement`), dismissed per user per window id.
+
 ## 2026.09.10.1 — Human-readable matter numbers
 
 - Add `matters.matter_number` / `matter_number_seq` and `tenants.matter_prefix` / `matter_sequence_counter` (migration 170), backfilling every existing tenant with a prefix derived from its company or tenant name and numbering its matters in `created_at` order.

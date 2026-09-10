@@ -137,6 +137,53 @@ if [[ ! -r nginx/ssl/fullchain.pem || ! -r nginx/ssl/privkey.pem ]]; then
   exit 3
 fi
 
+# D: publish a kindly worded advisory banner for logged-in users (including
+# portal clients) for the duration of this deploy. The backend serves
+# /api/release-window from this file on the read-only host-status mount. The
+# EXIT trap removes it on every exit path, and the backend reader also
+# auto-expires a stranded marker, so the banner can never outlive the deploy.
+# The marker carries no hostnames or build detail — only a window id and a
+# fixed message. A failed write must never block a deploy, so it warns and
+# continues without the banner.
+release_window_file="$host_status_dir/release-window.json"
+release_window_cleanup() {
+  local status="$?"
+  trap - EXIT
+  rm -f -- "$release_window_file" 2>/dev/null || true
+  exit "$status"
+}
+trap release_window_cleanup EXIT
+if python3 - "$release_window_file" "${APP_COMMIT:0:12}" <<'PY'
+import datetime
+import json
+import os
+import sys
+
+path, window_id = sys.argv[1], sys.argv[2]
+payload = {
+    "active": True,
+    "window_id": window_id,
+    "message": (
+        "We're giving LawHand a quick polish to keep everything running "
+        "smoothly. Over the next few minutes you may briefly see a "
+        "\u201cWe'll be right back\u201d message \u2014 that's us, hard at "
+        "work. Everything you've saved is safe and will be right where you "
+        "left it."
+    ),
+    "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+}
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh)
+os.chmod(tmp, 0o644)
+os.replace(tmp, path)
+PY
+then
+  echo "==> Release window marker published: logged-in users see the maintenance heads-up"
+else
+  echo "WARNING: release window marker could not be written; continuing without the advisory banner" >&2
+fi
+
 # Bring up both private databases before the dual data guard. This supports an
 # existing deployment and first boot without exposing either database.
 "${compose[@]}" up -d postgres litellm-postgres
@@ -307,6 +354,7 @@ scheduler_cutover_complete=false
 restore_previous_scheduler_on_cutover_failure() {
   local status="$?" previous_state
   trap - EXIT
+  rm -f -- "$release_window_file" 2>/dev/null || true
   if (( status != 0 )) && [[ "$scheduler_cutover_complete" != true && -n "$previous_scheduler_id" ]]; then
     previous_state="$(docker inspect --format '{{.State.Status}}' "$previous_scheduler_id" 2>/dev/null || true)"
     if [[ -n "$previous_state" && "$previous_state" != running ]]; then
@@ -373,6 +421,11 @@ fi
 "${compose[@]}" up -d nginx
 scheduler_cutover_complete=true
 trap - EXIT
+# The scheduler cutover trap above is retired; keep the release-window cleanup
+# armed for the remaining gates (health waits, heartbeats, production checks).
+# On natural success the same trap fires with status 0 and removes the marker,
+# so the banner never outlives the deploy.
+trap release_window_cleanup EXIT
 
 for _ in $(seq 1 90); do
   backend_id="$("${compose[@]}" ps -q backend 2>/dev/null || true)"

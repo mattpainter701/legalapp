@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.10.2 — A friendly heads-up while we polish things
+
+Released September 10, 2026.
+
+When a new version of LawHand is on its way, everyone signed in — clients included — now sees a short, kindly worded notice before anything changes.
+
+- **A gentle warning before an update.** During the few minutes a release takes, a slim banner explains that LawHand is being polished and saved work is safe. It never blocks you and vanishes when the update finishes.
+- **Clients see it too.** Portal users get the same heads-up as firm staff, so a brief maintenance message never comes as a surprise.
+
 ## 2026.09.10.1 — Every matter now has a number you can say out loud
 
 Released September 10, 2026.

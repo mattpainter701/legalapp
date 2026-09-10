@@ -5,6 +5,7 @@ import os
 import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Request
@@ -107,6 +108,7 @@ from app.services.workspace_mcp_protocol import (
 from app.services.scheduler import LegalScheduler
 from app.services.matter_file_store import MatterFileStoragePolicyError
 from app.services.host_disk_status import HostDiskStatusError, read_host_disk_status
+from app.services.release_window import ReleaseWindowError, read_release_window
 from app.services.backup_status import BackupStatusError, read_backup_status
 from app.release_notes import build_release_catalog
 from app.routers.chat import cache_manager
@@ -750,6 +752,31 @@ async def app_version():
         **_build_metadata(),
         **build_release_catalog(),
     }
+
+
+@app.get("/api/release-window", tags=["health"])
+async def release_window_notice():
+    """Advisory maintenance-window notice for the in-deploy banner.
+
+    Public like /api/version and carrying no tenant data, hostnames, or build
+    detail. The marker exists only while a deploy is in flight; any read
+    problem fails closed to "no active window" so the banner can never break
+    sign-in or navigation.
+    """
+    notice: dict = {"active": False, "window_id": None, "message": None}
+    if settings.HOST_DISK_STATUS_FILE:
+        marker_path = (
+            Path(settings.HOST_DISK_STATUS_FILE).parent / "release-window.json"
+        )
+        try:
+            notice.update(
+                await asyncio.to_thread(read_release_window, str(marker_path))
+            )
+        except ReleaseWindowError as exc:
+            logger.info("Release window marker ignored: %s", exc)
+        except Exception:
+            logger.exception("Release window marker probe failed")
+    return notice
 
 
 @app.get("/health/llm", tags=["health"])
