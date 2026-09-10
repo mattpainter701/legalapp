@@ -123,7 +123,11 @@ is green:
 > longer recreated with the stack, and serves a branded maintenance page while
 > the app tier restarts, so the hard ingress outage approaches zero and users
 > see "back soon" for the few minutes of the core-migration-plus-frontend
-> window instead of a connection failure. Advance scheduling is still
+> window instead of a connection failure. The LiteLLM AI gateway now also
+> deploys only when its content hash changes (`legalapp-litellm:src-<hash>`),
+> with the gateway rollback ledger at
+> `~/.local/state/clarity-legal/releases/litellm-gateway.tsv`. Advance
+> scheduling is still
 > recommended until the advance-notice workstream lands. The isolated Skynet
 > QA gate validates the exact SHA before this operation; it does not remove
 > the public restart until the IONOS blue/green edge design is implemented.

@@ -99,6 +99,29 @@ if [[ "$studio_render_enabled" == "true" ]]; then
   release_services+=(studio-render-worker)
 fi
 
+# B2: the LiteLLM gateway gets its own release cadence, keyed by a content
+# hash over exactly what litellm/Dockerfile builds from (its COPY list, the
+# Dockerfile itself, and the digest-pinned base). The hash script fails
+# closed on an unpinned FROM, so a content-hash tag's existence on the host
+# means this gateway content is already built.
+litellm_src_hash="$(python3 scripts/litellm_src_hash.py)"
+litellm_src_tag="legalapp-litellm:src-${litellm_src_hash}"
+# Unchanged requires BOTH the src-tagged image AND a running litellm
+# container: the image can exist while the container is missing/stopped
+# (e.g. first boot after an incident), and a skip would then leave the
+# gateway down.
+if docker image inspect "$litellm_src_tag" >/dev/null 2>&1 \
+  && [[ -n "$("${compose[@]}" ps -q litellm 2>/dev/null || true)" ]]; then
+  litellm_gateway_changed=false
+  echo "==> LiteLLM gateway unchanged (content hash ${litellm_src_hash} already built and running); skipping gateway build and recreate"
+  # Give the existing image this release's commit tag so the commit-tagged
+  # reference compose uses resolves without a build.
+  docker image tag "$litellm_src_tag" "legalapp-litellm:${APP_COMMIT}"
+else
+  litellm_gateway_changed=true
+  echo "==> LiteLLM gateway content changed (no built image tagged ${litellm_src_tag}); deploying gateway"
+fi
+
 echo "==> Deploying $APP_VERSION with the hardened production topology"
 ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash scripts/prod_env_preflight.sh
 
@@ -238,8 +261,30 @@ echo "==> Building application images sequentially"
 # several independent Node/Python image builds to peak concurrently. Sequential
 # builds trade a few minutes of release time for a deterministic memory ceiling.
 for service in backend scheduler migrator frontend office-addin nginx litellm; do
+  if [[ "$service" == "litellm" && "$litellm_gateway_changed" != true ]]; then
+    continue
+  fi
   COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build "$service"
 done
+
+if [[ "$litellm_gateway_changed" == true ]]; then
+  # Durable content-keyed tags: the src tag makes future unchanged releases
+  # skip the gateway build, and the clarity-legal rollback tag is the
+  # prune-resistant handle for a gateway-only rollback. The ledger row lets
+  # an operator retag any past image_id back to legalapp-litellm:src-<hash>
+  # and recreate the gateway, independent of app-release manifests.
+  litellm_rollback_tag="clarity-legal/litellm:gateway-src-${litellm_src_hash}"
+  docker image tag "legalapp-litellm:${APP_COMMIT}" "$litellm_src_tag"
+  docker image tag "legalapp-litellm:${APP_COMMIT}" "$litellm_rollback_tag"
+  litellm_gateway_image_id="$(docker image inspect -f '{{.Id}}' "legalapp-litellm:${APP_COMMIT}")"
+  litellm_gateway_ledger="$release_state_dir/litellm-gateway.tsv"
+  [[ -f "$litellm_gateway_ledger" ]] || \
+    printf 'recorded_at\tsrc_hash\timage_id\timage_tag\n' > "$litellm_gateway_ledger"
+  printf '%s\t%s\t%s\t%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$litellm_src_hash" \
+    "$litellm_gateway_image_id" "$litellm_rollback_tag" >> "$litellm_gateway_ledger"
+  echo "==> LiteLLM gateway tagged: $litellm_src_tag and $litellm_rollback_tag (ledger: $litellm_gateway_ledger)"
+fi
 
 echo "==> Proving backend UID 10001 can write, read, and delete the upload bind"
 upload_probe=".legalapp-upload-probe-$release_tag-$$"
@@ -292,21 +337,36 @@ echo "==> Starting services; the one-shot migrator gates API and scheduler start
 # collateral of an application release.
 "${compose[@]}" up -d postgres redis litellm-postgres
 # Scope --force-recreate to the release set. --no-deps keeps the datastores
-# above out of the blast radius. The LiteLLM one-shot migrators are named
-# explicitly (they are not release services, but the gateway's depends_on
-# completion conditions must run in this same convergence); the core migrator
-# is already in release_services.
+# above out of the blast radius. The LiteLLM one-shot migrators run in this
+# same convergence only when the gateway changed (see below); the core
+# migrator is already in release_services.
 # nginx must survive releases: keep it out of the force-recreate set. The
 # resolver in nginx.conf re-resolves restarted backends at request time, and
 # release_services still lists nginx for the rollback manifest and build loop
 # above, so filter it out here into a recreate-only set.
+# B2: an unchanged gateway is also filtered out here, and its one-shot
+# migrators are named only when the gateway actually changed (an empty,
+# guarded list otherwise — bash-safe under set -u). The migrators only gate
+# the gateway's own start; with an unchanged image there is nothing new to
+# apply, and nothing public waits on them (backend/scheduler use
+# service_started since #411). Tradeoff: schema-reconciliation drift
+# detection now rides on gateway-content changes or explicit gateway
+# redeploys.
 recreate_services=()
+gateway_migrator_services=()
 for service in "${release_services[@]}"; do
   [[ "$service" == "nginx" ]] && continue
+  if [[ "$service" == "litellm" && "$litellm_gateway_changed" != true ]]; then
+    continue
+  fi
   recreate_services+=("$service")
 done
+if [[ "$litellm_gateway_changed" == true ]]; then
+  gateway_migrator_services=(litellm-migrator litellm-schema-migrator)
+fi
 "${compose[@]}" up -d --force-recreate --no-deps \
-  litellm-migrator litellm-schema-migrator "${recreate_services[@]}"
+  ${gateway_migrator_services[@]+"${gateway_migrator_services[@]}"} \
+  "${recreate_services[@]}"
 # Plain up: nginx is recreated only when its own image/config changed;
 # otherwise it keeps serving through the deploy and re-resolves the restarted
 # backends via the resolver.
