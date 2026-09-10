@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowRight, CircleCheck, Clock3, Pencil } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import StarterPaperworkCard from './StarterPaperworkCard'
 
 const sourceMissing = (template) => {
   if (!['pdf', 'docx'].includes(template?.format)) return false
@@ -40,7 +41,7 @@ function StudioQueue({ title, count, icon: Icon, empty, templates }) {
   )
 }
 
-export default function TemplateStudioHome({ templates, summary, queues }) {
+export default function TemplateStudioHome({ templates, summary, queues, onRefresh }) {
   const fallback = {
     needs_attention: { total: summary.source_missing || 0, items: templates.filter(sourceMissing).slice(0, 3) },
     continue_setup: { total: summary.inactive || 0, items: templates.filter((template) => !template.is_active && !sourceMissing(template)).slice(0, 3) },
@@ -58,6 +59,7 @@ export default function TemplateStudioHome({ templates, summary, queues }) {
         </div>
         <Link to="/templates/new" className="text-sm font-semibold text-brand-accent-2 hover:underline">Start a new template</Link>
       </div>
+      <StarterPaperworkCard onInstalled={onRefresh} />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StudioQueue title="Continue setup" count={studioQueues.continue_setup.total} icon={Pencil} templates={studioQueues.continue_setup.items} empty="No draft templates are waiting for setup." />
         <StudioQueue title="Needs attention" count={studioQueues.needs_attention.total} icon={AlertTriangle} templates={studioQueues.needs_attention.items} empty="No templates have a missing source." />

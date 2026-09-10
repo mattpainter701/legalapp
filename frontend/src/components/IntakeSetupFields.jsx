@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import { getIntakeStarterPack } from '../api'
+
 export const defaultIntakeSetup = {
   agreement_document_id: '', selected_documents: [], upload_requirements: '', include_questionnaire: true, portal_after_signing: true,
   email: '', channels: ['email'], timezone: 'America/Chicago', owner_id: '', sms_permission_verified: false,
@@ -18,8 +21,20 @@ export function intakeOptions(setup, clientEmail = '') {
   }
 }
 
-export default function IntakeSetupFields({ value, onChange, onFile, clientEmail = '', users = [], documents = [] }) {
+export default function IntakeSetupFields({ value, onChange, onFile, clientEmail = '', users = [], documents = [], matterType = '', practiceArea = '', matterId = '' }) {
   const field = (key, next) => onChange({ ...value, [key]: next })
+  const [packNote, setPackNote] = useState('')
+  // The standard pack is loaded on request, never silently: it replaces
+  // whatever is in the questionnaire and upload boxes, which staff may have
+  // already tailored for this client.
+  async function loadStarterPack() {
+    setPackNote('Loading the standard questions…')
+    try {
+      const pack = await getIntakeStarterPack(matterId ? { matter_id: matterId } : { matter_type: matterType, practice_area: practiceArea })
+      onChange({ ...value, questions: pack.questions.map(q => q.label).join('\n'), upload_requirements: pack.upload_requirements.map(u => u.label).join('\n') })
+      setPackNote(`Loaded the ${pack.practice_label} questions and requested uploads. Review and edit them before sending.`)
+    } catch { setPackNote('Could not load the standard questions. Enter them below.') }
+  }
   const input = 'block w-full border border-brand-line rounded-lg p-2 bg-white text-brand-ink'
   return <fieldset className="space-y-3 border border-brand-line rounded-lg p-3">
     <legend className="font-semibold">Client intake packet</legend>
@@ -33,6 +48,8 @@ export default function IntakeSetupFields({ value, onChange, onFile, clientEmail
     {users.length > 0 && <label className="block">Responsible staff<select className={input} value={value.owner_id} onChange={e => field('owner_id', e.target.value)}><option value="">Assign to me</option>{users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}</select></label>}
     <label className="block"><input type="checkbox" checked={value.include_questionnaire !== false} onChange={event => field('include_questionnaire', event.target.checked)} /> Include client questionnaire</label>
     {documents.length > 0 && <fieldset><legend>Additional forms from matter Documents</legend>{documents.filter(doc => doc.id !== value.agreement_document_id).map(doc => { const chosen = (value.selected_documents || []).find(item => item.document_id === doc.id); return <div key={doc.id} className="my-2"><label><input type="checkbox" checked={Boolean(chosen)} onChange={event => field('selected_documents', event.target.checked ? [...(value.selected_documents || []), { document_id: doc.id, label: doc.filename, requires_signature: doc.content_type === 'application/pdf' }] : value.selected_documents.filter(item => item.document_id !== doc.id))} /> {doc.filename}</label>{chosen && <label className="ml-3 text-sm"><input type="checkbox" checked={chosen.requires_signature} onChange={event => field('selected_documents', value.selected_documents.map(item => item.document_id === doc.id ? { ...item, requires_signature: event.target.checked } : item))} /> Track signature (PDF)</label>}</div> })}</fieldset>}
+    <div className="space-y-1"><button type="button" className="underline" onClick={loadStarterPack}>Use the standard questions for this matter type</button>
+      {packNote && <p role="status" className="text-sm">{packNote}</p>}</div>
     <label className="block">Requested client uploads — one per line<textarea className={input} rows={3} value={value.upload_requirements || ''} onChange={event => field('upload_requirements', event.target.value)} placeholder="Marriage certificate&#10;Recent bank statements" /></label>
     <label className="block">Questionnaire — one required question per line<textarea className={input} rows={5} value={value.questions} onChange={e => field('questions', e.target.value)} /></label>
     <p className="text-sm">Fee agreement signing triggers portal delivery and a staff follow-up due within 24 hours. Outstanding paperwork is followed up after 7 days. Completing required paperwork creates the separate meeting-scheduling task. SMS uses recorded permission and quiet hours; email uses the connected Microsoft or Google mailbox when available.</p>
