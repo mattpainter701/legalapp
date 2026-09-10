@@ -98,6 +98,17 @@ the site with it. The Compose dependency contradicts it. Relaxing the gate is
 therefore not a loosening of safety — it makes the topology agree with what the
 code already does.
 
+Worth recording: `docker-compose.prod.yml:27-29` **already removed** the
+`backend → litellm` dependency in the layered non-IONOS files, and runtime
+readiness never included LiteLLM — `/health/readiness` (`main.py:610-743`)
+probes disk, database, redis, scheduler and queue only, and
+`app/services/readiness_wait.py` polls that endpoint. Only
+`docker-compose.hypervisor.yml` — the standalone file IONOS actually runs —
+still gates both `backend` and `scheduler` on `litellm: service_healthy`, and
+only the lifespan probe at `main.py:266-272` treats gateway reachability as
+log-and-continue. The topology the plan proposes is the one the rest of the
+system already assumes.
+
 The compose healthcheck comment is the sharpest statement of the risk
 (`docker-compose.hypervisor.yml`):
 
@@ -178,6 +189,14 @@ So **B = the Compose change *plus* distinguishing "never sent" from "unknown"
 in the broker.** This is a defect B would expose rather than create; it exists
 today and is simply unreachable behind the gate.
 
+Blast-radius note from validation: parked `unknown` reservations are not
+permanent. The scheduler's `background-ai-reconcile` job (15-minute interval)
+queries the LiteLLM spend ledger and settles or releases them automatically
+once the gateway is back (`scheduler.py:697-712`). The broker fix remains
+correct — a request that provably never left should release its reservation
+immediately rather than wait up to 15 minutes and a ledger round-trip — but
+the failure mode is *temporary quota held*, not *quota lost*.
+
 ### B2. Separate LiteLLM's release cadence *(medium — highest leverage per unit of work)*
 
 LiteLLM is simultaneously **the slowest component to start** (2m40s measured,
@@ -210,12 +229,42 @@ one is the wrong one:
   `scripts/deploy_prod.sh:224` already reads per-service image IDs, so the
   primitive exists.
 
-**One blocker to fix first.** The service is declared
-`image: legalapp-litellm:${APP_COMMIT:-dev}`, so the tag changes on every
-release even when the content is byte-identical. Change detection must compare
-the resolved image **ID**, not the tag — or, better, tag the gateway by a hash
-of its own build inputs so identical inputs produce an identical tag and the
-skip becomes self-evident rather than computed.
+**The build input set is now confirmed** (the investigation item this rested
+on, resolved by reading `litellm/Dockerfile` against the compose build
+declaration):
+
+- Base image is pinned by digest (`docker.litellm.ai/...:main-latest@sha256:…`).
+- The Dockerfile COPYs exactly four files:
+  - `litellm_config.yaml` — **at the repo root, outside `litellm/`**
+  - `litellm/reconcile_schema.sh`
+  - `litellm/litellm_schema_repair_v1_93_0.sql`
+  - `litellm/runtime_entrypoint.sh`
+- No `ARG` declarations; `APP_COMMIT` affects only the image **tag**, never
+  its content (verified: no commit/version build args anywhere in the
+  Dockerfiles).
+
+Two consequences:
+
+1. A `litellm/**` path filter would miss `litellm_config.yaml` — the fail-open
+   risk is concrete, not hypothetical. The true input set spans a repo-root
+   file.
+2. Docker image IDs are **not reproducible** (layer/config metadata carries
+   build timestamps), so "build, then compare the image ID with the running
+   container's" always differs and degenerates to always-redeploy. Image-ID
+   comparison at `deploy_prod.sh:224` is sound for *rollback tagging* (both
+   sides already exist) but not for *change detection* (one side is freshly
+   built).
+
+**Recommended mechanism: content-hash tagging.** Compute a hash over exactly
+the confirmed input set — the four copied files, the Dockerfile, the pinned
+base digest, and (for completeness) the frontend-style build args, of which
+there are none — and tag `legalapp-litellm:src-<hash>`. The deploy script
+skips the gateway's build/recreate when that tag already exists on the host.
+Identical inputs produce an identical tag, the skip is self-evident, and
+nothing can drift because the hashed set *is* the Dockerfile's COPY list; a
+pre-commit check can assert the hash script's file list still matches the
+Dockerfile's COPY directives. Keep the commit tag as a secondary label for
+traceability if wanted, but never as the change-detection key.
 
 #### Model aliases are data, not image — which resolves the skew question
 
@@ -241,10 +290,17 @@ that references it? Proposed rule, for discussion:
 #### What LiteLLM actually is, for scoping purposes
 
 It is worth being accurate, because "it is just the chat assistant" would
-under-scope this. LiteLLM is the AI **gateway** for roughly eleven surfaces —
-chat, RAG and the retrieval planner, embeddings, assistant document revision,
-Template Studio AI, the Office add-in, the email agent, call-intake
-preparation, Firm Memory, MCP, and the plugin executor.
+under-scope this. LiteLLM is the AI **gateway** for eleven LLM-calling
+surfaces — chat, RAG and the retrieval planner, embeddings, assistant document
+revision, Template Studio AI, the Office add-in assistant, the email agent,
+call-intake preparation, Firm Memory auto-summarization, the plugin executor,
+and prompt-admin test/preview.
+
+One correction from validation: an earlier draft listed MCP. MCP has **no
+direct LiteLLM call** — its product price is an upstream-API call fee, not
+model inference — so it is a surface the gateway's *availability* matters to
+only indirectly. If B2 ships, the MCP documentation note in the PR handoff
+should be reworded accordingly.
 
 It also carries responsibilities that are not inference at all:
 
@@ -259,10 +315,20 @@ So it holds billing-relevant state, not only prompts. Two mitigating facts
 keep it off the critical path regardless:
 
 1. Billing reconciliation runs from the scheduler as a background job, not on
-   any request path.
-2. Embeddings already fall back to a direct provider (OpenAI, then OpenRouter)
-   when LiteLLM is disabled — see `app/services/embeddings.py`. LiteLLM is a
-   routing layer, not the only route to a model.
+   any request path: `scheduler.py:697-712` registers
+   `background-ai-reconcile` on a **15-minute interval**, which queries the
+   LiteLLM spend ledger and settles or releases ambiguous reservations
+   (`background_ai_reconciliation.py:235`). This also bounds the blast radius
+   of the workstream B warm-up defect: reservations parked as `unknown` are
+   swept automatically once the gateway is back, so the broker fix is about
+   correctness and latency, not about preventing permanent quota loss.
+2. Embeddings fall back to a direct provider (OpenAI, then OpenRouter) when
+   LiteLLM is **disabled** (`embeddings.py:40-65`) — verified. Note the
+   limitation, which an earlier draft overstated: when LiteLLM is *enabled but
+   unreachable at request time*, there is no runtime fallback; `embed_text`
+   catches the failure and returns `None` (`embeddings.py:153-155`). That is
+   still graceful degradation, not an outage, but it belongs in workstream B's
+   UI scope: an embeddings outage is silent today.
 
 No non-AI workflow depends on it. Matters, documents, the client portal,
 signing, tasks, intake and invoicing all function without it; the Jane Doe
@@ -289,6 +355,12 @@ it running and let it explain itself:
   now start before its upstreams exist. With `resolver` this should serve the
   maintenance page and recover, but it needs proving — including that nginx
   does not cache an NXDOMAIN and wedge.
+- **Defect found during validation, fix inside C:** `office-addin` declares
+  **no healthcheck** (`docker-compose.hypervisor.yml:358-370`), so nginx's
+  `condition: service_healthy` on it has no health status to key on. Whatever
+  Compose does with that today, it is not doing it on purpose. C should either
+  add an office-addin healthcheck or drop that edge when nginx's hard
+  dependencies go.
 - **Open question:** the maintenance page must not leak build or host detail,
   and should be readable by a client on the portal, not only firm staff.
 
@@ -299,7 +371,10 @@ a fee-agreement send thirty seconds before the stack goes down.
 
 `frontend/src/components/ReleaseAnnouncement.jsx` is an existing precedent for
 a dismissible, per-user, server-driven in-app notice, and is the obvious thing
-to model on.
+to model on. Validation added one relevant fact: it **skips the client role
+entirely** (`ReleaseAnnouncement.jsx:39`) — the current precedent is
+staff-only. That is a decision made by default today, and workstream D should
+revisit it deliberately rather than inherit it.
 
 Open questions, all genuinely undecided:
 
@@ -316,8 +391,9 @@ Open questions, all genuinely undecided:
 ### E. Look again at core migrations *(investigation, not yet a proposal)*
 
 Once B lands, core DB migrations (2m06s measured) become the critical path.
-Before proposing anything we should know whether that is Alembic replaying 169
-revisions, genuine data work, or container startup overhead. Measure first.
+Before proposing anything we should know whether that is Alembic replaying 173
+revision files (`backend/migrations/versions/`, head revision `169`), genuine
+data work, or container startup overhead. Measure first.
 
 ## Expected outcome
 
@@ -353,6 +429,36 @@ model than this problem justifies on a single host.
 the backend runs at a time. It becomes a hard prerequisite the moment
 blue/green or rolling updates arrive, and should be revisited then.
 
+## Validation record
+
+Every code reference above was re-verified against the tree on
+2026-09-10 (branch `claude/jane-doe-acceptance-pass-mjzhj7`, head
+`8c925da3`), including line numbers against `origin/main`, on which they
+still hold. Twelve of the plan's load-bearing claims checked out exactly.
+The corrections from validation are already folded into the text above;
+they are collected here so a reader can see what changed and why:
+
+1. **Embeddings fallback is disabled-only, not outage-time**
+   (`embeddings.py:40-65` vs `:153-155`). Corrected in the LiteLLM scoping
+   section; adds silent-embeddings-failure to B's UI scope.
+2. **MCP is not a direct LLM surface.** The eleven-surface list swapped MCP
+   for prompt-admin test/preview. The PR's MCP handoff note needs rewording
+   when B2 ships.
+3. **Alembic count:** 173 revision files under `backend/migrations/versions/`,
+   head revision `169` — not "169 revisions".
+4. **`office-addin` has no healthcheck**, so nginx's `service_healthy` edge to
+   it is accidental, not deliberate. Folded into C as a fix item.
+5. **No commit/version build args are baked into any image** — favorable for
+   change detection, but Docker image IDs are not reproducible, so image-ID
+   comparison cannot drive skip decisions. This is what elevates content-hash
+   tagging from "better" to "the mechanism". Folded into B2.
+6. **The 15-minute `background-ai-reconcile` sweep exists** and bounds the
+   warm-up quota defect to temporary quota hold, not loss. Folded into B.
+7. **`docker-compose.prod.yml` already removed `backend → litellm`** and
+   runtime readiness never included LiteLLM — only the hypervisor file gates
+   on it. Folded into root cause 2.
+8. **`ReleaseAnnouncement` skips the client role** (`:39`). Folded into D.
+
 ## Decisions needed before implementation
 
 1. Is ~3m of maintenance page (A + B + C) an acceptable resting point, or is
@@ -363,39 +469,61 @@ blue/green or rolling updates arrive, and should be revisited then.
    informs.
 4. Does the maintenance page need to reach portal clients, or staff only?
 
+**Recommended resolutions** (added after validation; owner to confirm):
+
+1. **Accept A + B + C as this round's target; E stays measurement-only.**
+   Once B lands, one timed run tells us what the 2m06s migrator is made of —
+   that measurement is an hour of work, not a workstream. Optimization
+   proposals wait for the data.
+2. **B2 is in scope, with content-hash tagging as the mechanism** (see that
+   section). Alias skew is handled as a data-ordering rule, and the spend
+   ledger needs no new guard beyond what exists: gateway deploys never touch
+   `litellm-postgres` (it is excluded from recreation once A lands, and B2
+   recreates the proxy only), the existing pre-deploy data guard already
+   dumps and counts the LiteLLM database, and the 15-minute reconciliation
+   sweep self-heals ledger gaps. Rollback for a gateway-only deploy reuses
+   the existing rollback-manifest pattern keyed by gateway input hash
+   instead of app commit.
+3. **D, v1: trigger on the stage dispatch itself.** A stage run is already a
+   deliberate, confirmation-gated operator action
+   (`deploy-ionos-candidate.yml` requires typing `STAGE-IONOS-CANDIDATE`),
+   so the workflow start *is* the notice event — no new trigger machinery.
+   The release-gate job passes minutes before the ionos job mutates
+   anything; posting the banner at gate pass gives natural lead time
+   (operator dispatch → gate → banner → deploy). Advisory, not blocking, for
+   v1: discourage starting long actions inside the window, never hard-block
+   clients mid-signature. Lead time is then whatever the operator chooses;
+   recommend documenting "dispatch when the window is acceptable" rather
+   than building timers.
+4. **The maintenance page is edge-served, so it reaches portal clients
+   automatically** — nginx answers every route including the portal. That is
+   the point of C. The deliberate choice left for D is whether the *advance
+   in-app banner* also goes to clients, given `ReleaseAnnouncement`
+   currently excludes them.
+
 ## Remaining steps
 
-Decided: **both B and B2 are in scope**, conditional on the change detection in
-B2 being reliable rather than a path filter. Nothing below is implemented, and
-these are the questions still open before anyone writes code.
-
-### Needs investigation
-
-1. **Confirm the gateway's true build input set** — read what `litellm/Dockerfile`
-   actually copies out of the `context: .` build. That set defines change
-   detection, and it is the one fact the whole of B2 rests on.
-2. **Decide the tagging scheme** — tag by a hash of the gateway's own build
-   inputs, or keep the commit tag and compare resolved image IDs. The former
-   makes a skipped deploy self-evident; the latter is a smaller change.
-3. **Measure core migrations** (workstream E). They become the critical path
-   the moment B lands, and 2m06s is currently unexplained: Alembic replaying
-   169 revisions, real data work, or container startup overhead.
+Decided: **both B and B2 are in scope**, with B2's change detection specified
+as content-hash tagging over the confirmed input set. Nothing below is
+implemented. Investigation items 1–3 from the previous draft are resolved
+above (build input set confirmed; tagging scheme chosen; migration
+measurement defined). Still open before code:
 
 ### Needs a decision
 
-4. **Where the gateway-deploy decision lives** — a separate workflow, or a
-   conditional job inside the existing one. A separate workflow is easier to
-   reason about and to run on its own; a conditional job keeps one release
-   path.
-5. **Rollback for a gateway-only deploy.** The current rollback manifest is
-   written per application release
-   (`~/.local/state/clarity-legal/releases/<sha>.images.tsv`). A gateway that
-   deploys independently needs its own rollback story.
-6. **Spend-ledger continuity** across gateway deploys, and whether a
-   gateway-only deploy needs its own data guard.
-7. **Workstream D**, unchanged and still needing product input: lead time,
-   trigger, audience, and whether advance notice blocks starting a long action
-   or only informs.
+1. **Where the gateway-deploy decision lives** — recommendation: inside the
+   existing deploy script and workflow. The decision is a tag-existence
+   check on the IONOS host inside `deploy_prod.sh`, where the images and the
+   rollback manifest already live; a separate workflow would re-implement
+   host state checks that the script already has. The workflow gains no new
+   surface — it still dispatches one `stage` operation.
+2. **Rollback for a gateway-only deploy** — reuse the existing rollback
+   manifest, keyed by gateway input hash alongside the app-release entries.
+   Confirm the retention/pruning story so a rollback tag is not pruned
+   before it can be used.
+3. **Workstream D** — per the recommendations above: trigger on dispatch,
+   advisory-only v1, audience decision (staff-only vs. include clients) is
+   the one genuinely product-facing call left.
 
 ### Sequencing
 
@@ -404,7 +532,13 @@ model and should not gate the downtime fix. Suggested order:
 
 **A** (scope `--force-recreate`) → **B** (readiness + the broker fix) →
 **C** (nginx resolver and maintenance page) → **B2** (gateway release cadence)
-→ **D** (advance notice) → **E** (core migrations, if still warranted).
+→ **D** (advance notice) → **E** (core migrations, if the measurement
+warrants it).
+
+A and B are each small and land in the same two files (compose + deploy
+script, plus the broker for B); they can ship as one PR or two, but B's
+broker fix must not ship without B's compose change, and vice versa — the
+defect is only unreachable behind the gate today.
 
 C is the one that turns an outage into a maintenance window, so it should not
 slip behind B2 despite being listed after it.
