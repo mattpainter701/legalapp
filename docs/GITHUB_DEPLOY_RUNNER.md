@@ -47,7 +47,11 @@ and the stack no longer waits for the AI gateway before serving). nginx is no
 longer recreated when unchanged — it resolves backends at request time and
 serves a branded maintenance page while the app tier restarts — so the hard
 ingress outage is gone, but users do see the maintenance page for a few
-minutes. Schedule it as maintenance work; it is not a private candidate or an
+minutes. The AI gateway (LiteLLM) is rebuilt and recreated only when its own
+content hash changes (`legalapp-litellm:src-<hash>`), so most stages no longer
+restart it; gateway rollback state is recorded in
+`~/.local/state/clarity-legal/releases/litellm-gateway.tsv`. Schedule it as
+maintenance work; it is not a private candidate or an
 instant deployment.
 
 After staging, run **Production acceptance** from `main` with the full SHA
