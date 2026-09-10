@@ -56,13 +56,13 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|postcss|^8.5.26|devDependencies|frontend/package.json|
 |npm|tailwindcss|^3.4.17|devDependencies|frontend/package.json|
 |npm|vite|^6.0.3|devDependencies|frontend/package.json|
-|npm|vitest|^4.1.10|devDependencies|frontend/package.json|
+|npm|vitest|^4.1.11|devDependencies|frontend/package.json|
 |npm|@azure/msal-browser|^5.0.0|dependencies|office-addin/package.json|
 |npm|@types/office-js|^1.0.585|devDependencies|office-addin/package.json|
 |npm|rollup|npm:@rollup/wasm-node@4.62.3|devDependencies|office-addin/package.json|
 |npm|typescript|^5.8.3|devDependencies|office-addin/package.json|
 |npm|vite|^6.0.3|devDependencies|office-addin/package.json|
-|npm|vitest|^4.1.10|devDependencies|office-addin/package.json|
+|npm|vitest|^4.1.11|devDependencies|office-addin/package.json|
 |pypi|pyinstaller|>=6.6|optional:build|agent/pyproject.toml|
 |pypi|pywin32|>=306;sys_platform=='win32'|optional:build|agent/pyproject.toml|
 |pypi|pytest|>=8.0|optional:dev|agent/pyproject.toml|
