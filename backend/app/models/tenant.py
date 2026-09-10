@@ -39,6 +39,17 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     domain: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Matter numbering (added in migration 170). The prefix is the four-character
+    # stem every matter number for this firm starts with; the counter is the
+    # highest sequence handed out so far, incremented under a row lock by
+    # app/services/matter_number.py. Both are nullable/zero for a tenant that has
+    # not yet created a matter -- the prefix is derived on first use.
+    matter_prefix: Mapped[str | None] = mapped_column(
+        String(4), nullable=True, unique=True
+    )
+    matter_sequence_counter: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     staff_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)

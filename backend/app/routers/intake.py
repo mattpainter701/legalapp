@@ -34,6 +34,7 @@ from app.schemas.intake_dashboard import (
     IntakeCallDraftResponse,
     IntakeCallDraftUpsertRequest,
 )
+from app.services.matter_number import assign_matter_number
 
 router = APIRouter(prefix="/api/intake", tags=["intake"])
 
@@ -372,6 +373,8 @@ async def convert_lead_to_matter(
         billing_method=payload.billing_method or "hourly",
         hourly_rate=payload.hourly_rate,
     )
+    # Human-readable matter number, assigned once at creation.
+    await assign_matter_number(db, matter)
     db.add(matter)
     await db.flush()
 

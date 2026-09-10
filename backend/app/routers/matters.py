@@ -83,6 +83,10 @@ from app.services.matter_budget import (
 from app.services.task_notifications import remove_task_from_calendars_now
 from app.services.task_visibility import task_is_sms_expression
 from app.services.durable_workflow_automations import enqueue_matter_event
+from app.services.matter_number import (
+    assign_matter_number,
+    normalize_matter_number,
+)
 
 _cloud_search = CloudSearchService()
 _cloud_sync = CloudSyncService()
@@ -96,19 +100,48 @@ SUPPORTED_CLOUD_FOLDER_PROVIDERS = {"onedrive", "google_drive", "sharepoint"}
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
+def _matter_detail_query():
+    """Base matter select with the relationships every detail response reads."""
+    return select(Matter).options(
+        selectinload(Matter.assignments).selectinload(MatterAssignment.user),
+        selectinload(Matter.client),
+        selectinload(Matter.attorney_of_record),
+        selectinload(Matter.partner_attorney),
+    )
+
+
 async def _get_matter_or_404(
     db: AsyncSession, matter_id: str, tenant_id: uuid.UUID
 ) -> Matter:
     """Fetch a matter by ID, verifying tenant ownership, or raise 404."""
+    try:
+        matter_uuid = uuid.UUID(str(matter_id))
+    except (ValueError, AttributeError, TypeError):
+        # A path segment that is not a UUID is a miss, not a server error.
+        # Without this the comparison reaches Postgres and fails casting.
+        raise HTTPException(status_code=404, detail="Matter not found")
     result = await db.execute(
-        select(Matter)
-        .options(
-            selectinload(Matter.assignments).selectinload(MatterAssignment.user),
-            selectinload(Matter.client),
-            selectinload(Matter.attorney_of_record),
-            selectinload(Matter.partner_attorney),
+        _matter_detail_query().where(
+            Matter.id == matter_uuid, Matter.tenant_id == tenant_id
         )
-        .where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
+    )
+    matter = result.scalar_one_or_none()
+    if not matter:
+        raise HTTPException(status_code=404, detail="Matter not found")
+    return matter
+
+
+async def _get_matter_by_number_or_404(
+    db: AsyncSession, matter_number: str, tenant_id: uuid.UUID
+) -> Matter:
+    """Fetch a matter by its human-readable number within the tenant."""
+    normalized = normalize_matter_number(matter_number)
+    if not normalized:
+        raise HTTPException(status_code=404, detail="Matter not found")
+    result = await db.execute(
+        _matter_detail_query().where(
+            Matter.matter_number == normalized, Matter.tenant_id == tenant_id
+        )
     )
     matter = result.scalar_one_or_none()
     if not matter:
@@ -403,6 +436,7 @@ def _matter_to_response(
     return MatterResponse(
         id=str(matter.id),
         slug=_matter_slug(matter),
+        matter_number=matter.matter_number,
         matter_name=matter.matter_name or "Untitled matter",
         description=matter.description,
         matter_type=matter.matter_type,
@@ -617,6 +651,7 @@ async def list_matters(
             MatterSummary(
                 id=str(m.id),
                 slug=_matter_slug(m),
+                matter_number=m.matter_number,
                 matter_name=m.matter_name or "Untitled matter",
                 description=m.description,
                 matter_type=m.matter_type,
@@ -764,6 +799,8 @@ async def create_matter(
         primary_plugin=_validate_primary_plugin(body.primary_plugin),
         plugin_workflow_state=body.plugin_workflow_state,
     )
+    # Human-readable matter number, assigned once at creation.
+    await assign_matter_number(db, matter)
     db.add(matter)
     await db.flush()
 
@@ -1012,6 +1049,7 @@ async def get_my_matters(
             MatterSummaryMyMatters(
                 id=str(m.id),
                 slug=_matter_slug(m),
+                matter_number=m.matter_number,
                 matter_name=m.matter_name or "Untitled matter",
                 description=m.description,
                 matter_type=m.matter_type,
@@ -1168,6 +1206,39 @@ async def get_matter_stats(
     )
 
 
+async def _matter_detail_response(
+    db: AsyncSession, matter: Matter, tenant_id: uuid.UUID
+) -> MatterResponse:
+    """Build the full detail response, including computed budget utilization."""
+    budget = await _compute_budget_utilization(db, matter.id, tenant_id)
+    budget.budget_amount = matter.budget_amount
+    budget.budget_currency = matter.budget_currency or "USD"
+    if budget.budget_amount and budget.budget_amount > 0:
+        budget.utilization_pct = round(
+            float(budget.total_billed / budget.budget_amount * 100), 1
+        )
+        budget.remaining = budget.budget_amount - budget.total_billed
+    return _matter_to_response(matter, budget)
+
+
+@router.get("/by-number/{matter_number}", response_model=MatterResponse)
+async def get_matter_by_number(
+    matter_number: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve a human-readable matter number to full matter detail.
+
+    This is what turns ``SMIT0001`` -- read off a letter, quoted on a call, or
+    typed into the address bar -- back into a matter.  Resolution is
+    tenant-scoped, so one firm's number never resolves inside another's
+    workspace even when the numbers coincide.
+    """
+    user = await get_current_user(request, db)
+    matter = await _get_matter_by_number_or_404(db, matter_number, user.tenant_id)
+    return await _matter_detail_response(db, matter, user.tenant_id)
+
+
 @router.get("/{matter_id}", response_model=MatterResponse)
 async def get_matter(
     matter_id: str,
@@ -1177,15 +1248,7 @@ async def get_matter(
     """Get full matter detail with assignments, budget, and client info."""
     user = await get_current_user(request, db)
     matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
-    budget = await _compute_budget_utilization(db, matter.id, user.tenant_id)
-    budget.budget_amount = matter.budget_amount
-    budget.budget_currency = matter.budget_currency or "USD"
-    if budget.budget_amount and budget.budget_amount > 0:
-        budget.utilization_pct = round(
-            float(budget.total_billed / budget.budget_amount * 100), 1
-        )
-        budget.remaining = budget.budget_amount - budget.total_billed
-    return _matter_to_response(matter, budget)
+    return await _matter_detail_response(db, matter, user.tenant_id)
 
 
 @router.patch("/{matter_id}", response_model=MatterResponse)

@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.10.1 — Every matter now has a number you can say out loud
+
+Released September 10, 2026.
+
+Matters carry a short, readable number like SMIT0001 that you can share, bookmark, and quote to a client.
+
+- **A readable number on every matter.** Each matter gets a number built from your firm's name and a running count, shown at the top of the matter with one click to copy it.
+- **Open a matter by its number.** A link like /matters/SMIT0001 opens the matter, so a number written in an email or read over the phone leads straight to the right place.
+- **Clients can quote their matter number.** The portal shows the same number, giving clients a reference to use when they call or write. A number is unique to your firm and never changes.
+
 ## 2026.09.09.1 — Standard client paperwork for every new matter
 
 Released September 9, 2026.
