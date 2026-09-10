@@ -146,6 +146,45 @@ def test_every_declared_binding_is_in_the_server_catalogue(document):
         assert is_valid_binding(field.binding), f"{document.key}.{field.name}"
 
 
+def test_a_jurisdiction_drafted_template_records_which_one():
+    """A firm must be able to see what law the wording was written against."""
+
+    assert pack.HOURLY_FEE_AGREEMENT_ND.jurisdiction == "North Dakota"
+    assert pack.FEE_AGREEMENT.jurisdiction == ""
+
+
+@pytest.mark.asyncio
+async def test_install_stores_the_jurisdiction_on_the_template():
+    db = FakeDB()
+    await pack.install(db, uuid.uuid4())
+
+    stored = {row.title: row.jurisdiction for row in db.added}
+
+    assert stored[pack.HOURLY_FEE_AGREEMENT_ND.title] == "North Dakota"
+    assert stored[pack.FEE_AGREEMENT.title] is None
+
+
+def test_only_settled_terms_carry_a_default():
+    """A convention can be suggested; a fee, rate or amount cannot."""
+
+    defaults = {
+        field.name: field.default
+        for field in pack.HOURLY_FEE_AGREEMENT_ND.fields
+        if field.default
+    }
+
+    assert defaults["billing_increment"] == "0.1 hour (six minutes)"
+    assert "North Dakota" in defaults["confidentiality_rule"]
+    assert not {
+        "retainer_amount",
+        "hourly_rate",
+        "staff_rate_range",
+        "attorney_rate_range",
+        "trial_fee_amount",
+        "venue",
+    } & set(defaults)
+
+
 def test_fee_terms_are_never_bound_to_a_record():
     """A fee, deposit, or contingency term is decided by a person, never inferred."""
 
@@ -168,8 +207,7 @@ def test_the_pack_names_the_documents_that_travel_with_it():
     payload = pack.pack("Divorce")
     assert payload["practice"] == "family"
     assert [document["key"] for document in payload["documents"]] == [
-        "fee_agreement",
-        "client_intake_form",
+        document.key for document in pack.documents()
     ]
     assert payload["questions"] and payload["upload_requirements"]
 
@@ -209,8 +247,8 @@ async def test_install_adds_both_documents_as_unapproved_drafts():
 
     installed = await pack.install(db, tenant)
 
-    assert [row["created"] for row in installed] == [True, True]
-    assert len(db.added) == 2
+    assert [row["created"] for row in installed] == [True] * len(pack.documents())
+    assert len(db.added) == len(pack.documents())
     for row in db.added:
         assert row.tenant_id == tenant
         assert row.status == "draft"
@@ -233,8 +271,8 @@ async def test_install_leaves_a_firms_own_template_alone():
 
     again = await pack.install(db, tenant)
 
-    assert [row["created"] for row in again] == [False, False]
-    assert len(db.added) == 2
+    assert [row["created"] for row in again] == [False] * len(pack.documents())
+    assert len(db.added) == len(pack.documents())
     assert theirs.body == "The firm's own reviewed terms"
     assert again[0]["template_id"] == str(theirs.id)
 
@@ -313,7 +351,7 @@ async def test_installing_documents_is_tenant_scoped(monkeypatch):
 
     payload = await router.install_documents(db=db, user=user)
 
-    assert len(payload["documents"]) == 2
+    assert len(payload["documents"]) == len(pack.documents())
     assert tenant_context.await_args.args[1] == str(user.tenant_id)
     assert all(row.tenant_id == user.tenant_id for row in db.added)
 

@@ -26,9 +26,17 @@ jurisdiction and approves them through the normal template path. Installing
 again never touches a template of the same name that is already there: a firm
 that edited or approved its own agreement keeps it.
 
-The bodies leave explicit places for jurisdiction-specific language —
-`{{trust_account_terms}}`, `{{dispute_resolution_terms}}`,
-`{{jurisdiction_required_terms}}` — rather than guessing at a rule.
+The jurisdiction-neutral agreement leaves explicit places for jurisdiction-
+specific language — `{{trust_account_terms}}`, `{{dispute_resolution_terms}}`,
+`{{jurisdiction_required_terms}}` — rather than guessing at a rule. The North
+Dakota variant answers them in its own wording and records the jurisdiction it
+was drafted for on the template row, so a firm can see what law the text was
+written against.
+
+A field may carry a `default` only where a jurisdiction or a settled convention
+decides it — the billing increment, the confidentiality rule, the days a
+statement is due. Rates, retainers, trial fees, and venue never carry one: those
+are the firm's to set, and a suggested number would be read as advice.
 
 ## How a matter type picks the questions
 
@@ -104,6 +112,18 @@ conditional fee sections (`{{#if hourly_rate}}` and the rest) all print, since a
 paper form has no renderer to choose between them — strike the arrangements that
 do not apply. And signature lines stay hand-signed: the portal signature flow is
 separate.
+
+## A completed sample for review
+
+A partner reviewing a template wants to read a finished agreement, not a form of
+placeholders:
+
+    python backend/scripts/render_starter_sample.py --document hourly_fee_agreement_nd
+
+It fills the template through the product's own renderer and writes a `.docx`.
+The sample values are fictional and exist to show the wording; they are not a
+recommendation about any firm's rates or terms. `--values` takes a JSON file to
+override them.
 
 ## Where staff see it
 
