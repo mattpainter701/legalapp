@@ -52,8 +52,34 @@ The current Platform MCP catalog is intentionally review-first:
 - **Proposals:** `propose_task`, `propose_client_email`, and
   `propose_matter_document`; `propose_document_from_template` renders an active
   DOCX or Markdown firm template into the same review workflow.
+- **Pushed documents:** `propose_matter_document_file` accepts a DOCX the
+  connected assistant authored itself, uploaded as base64. LawHand extracts the
+  reviewer's preview from those exact bytes, refuses macros, encryption, and
+  embedded objects, and routes the file through the same staff-then-attorney
+  review as any other prepared document.
+- **Pushed matter artifacts:** `propose_matter_file` attaches the evidence and
+  correspondence that arrives alongside work product — PNG or JPEG screenshots
+  and scanned exhibits, PDFs, `.eml` and `.msg` saved emails, CSV, TXT, ICS, and
+  media files. LawHand verifies the uploaded bytes against the filename's
+  extension, so an executable renamed `.png`, an archive, or a legacy
+  macro-bearing Office file is refused rather than stored. The file is attached
+  to the matter as **not client-portal-visible** and awaiting a person's triage;
+  a firm user decides its category and whether it is ever released.
+- **Pushed templates:** `propose_document_template` saves a firm template the
+  assistant authored as an **inactive draft** that cannot render client work
+  until a user with template permissions activates it in Template Studio.
+  Fillable PDFs are the preferred form: LawHand discovers the field map from the
+  PDF's own AcroForm widgets, so the template arrives ready for review. Word
+  templates are analysed the same way, anchoring each variable to the exact
+  source text it replaces, and Markdown templates carry a `{{variable}}` body
+  inline. A flat or scanned PDF has no discoverable fields and is refused —
+  placing fields on a page image is human work that belongs in the template
+  intake review canvas. The tool never edits a template the firm is already
+  using: a proposed replacement for a live template is saved as a separate draft
+  that records what it supersedes.
 
-There are no MCP calls for approval, filing, sending, delivery, or execution.
+There are no MCP calls for approval, template activation, filing, sending,
+delivery, or execution.
 Proposals create auditable LawHand Review work; a human reviewer must complete
 the required workflow before deterministic platform workers can act. Document
 and template text is untrusted evidence and must not be treated as an

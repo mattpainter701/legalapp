@@ -52,8 +52,8 @@ result bounded:
 | Intake | `search_intakes`, `get_intake` | — |
 | Matters | `search_matters`, `find_matter`, `get_matter_context`, `list_matter_recipients` | `propose_client_email` |
 | Tasks | `search_tasks`, `get_task`, `list_matter_tasks` | `propose_task` |
-| Documents | `list_matter_documents`, `get_matter_document_text` | `propose_matter_document` |
-| Templates | `list_document_templates`, `get_document_template_text` | `propose_document_from_template` |
+| Documents | `list_matter_documents`, `get_matter_document_text` | `propose_matter_document`, `propose_matter_document_file`, `propose_matter_file` |
+| Templates | `list_document_templates`, `get_document_template_text` | `propose_document_from_template`, `propose_document_template` |
 
 Firm Memory adds the read-only `search_firm_memory` tool to the Documents area.
 It requires the existing user-bound Workspace grant with `matters:read` and
@@ -74,6 +74,79 @@ download routes as well as IDs that can be passed to
 There are deliberately no MCP tools for approval, filing, sending, delivery,
 or execution. Proposed work lands in LawHand Review; deterministic platform
 workers act only after a human completes the required review workflow.
+
+### Pushing work authored outside LawHand
+
+A connected client that built a document or template on its own — Claude,
+Codex, or any other consented MCP client — pushes it in through two tools.
+Neither one approves, activates, sends, or delivers anything.
+
+`propose_matter_document_file` takes the finished DOCX itself as base64 in
+`content_base64`, with an optional `content_sha256` the server verifies and an
+optional `.docx` `filename`. The caller never supplies review text: LawHand
+extracts the reviewer's preview from the uploaded bytes through the same
+exact-byte adoption gate described under **Document compatibility boundary**,
+so what a reviewer reads is always what the cloud copy contains. The file then
+enters the identical lifecycle as `propose_matter_document` — written to the
+tenant cloud matter folder, bound to a staff → attorney Review task, and
+approved only against the verified bytes. Pushed files are capped at 4 MiB
+(`WORKSPACE_MCP_MAX_REQUEST_BYTES` bounds the whole request at 8 MiB by
+default); macros, encryption, embedded objects, and unsafe packages are refused
+by code, not by convention.
+
+`propose_matter_file` covers everything that is not Word work product: the
+evidence and correspondence that arrives alongside it — a PNG or JPEG
+screenshot or scanned exhibit, a PDF, an `.eml` or `.msg` saved email, a CSV,
+TXT, ICS, or media file. LawHand checks the uploaded bytes against the
+filename's extension, so an executable renamed `.png`, an archive, or a legacy
+macro-bearing Office container is refused rather than stored. The file lands in
+the matter's cloud folder as a document that is **not** portal-visible, with
+`document_status` `in_review` and its MCP provenance recorded, so a human
+decides what it is and whether the client ever sees it. It is not routed
+through artifact review, because it is not work product the firm is approving.
+
+### Pushing a firm template
+
+`propose_document_template` saves an authored firm template as an **inactive
+draft**: `is_active` is false and `status` is `draft`, which is exactly the
+state `list_document_templates` and `propose_document_from_template` refuse to
+render. A pushed template therefore cannot produce client work until a LawHand
+user with template permissions reviews and activates it in Template Studio.
+
+Three source formats are accepted, and in every one the field map is
+**discovered from the file**, never taken from the caller:
+
+- **`pdf` — the preferred form.** A PDF carrying real AcroForm fields arrives
+  complete: LawHand reads each widget's name, type, required flag, options, and
+  page rectangle straight out of the form, so the template is ready for review
+  with no hand placement at all. A flat or scanned PDF has no such fields and is
+  refused with `pdf_not_fillable` — placing an overlay on a page image is a
+  human judgement, and it belongs in the template intake review canvas. Prefer
+  building templates as fillable PDFs for exactly this reason.
+- **`docx`.** Analysis anchors every discovered variable to the exact source
+  text it replaces, which is the same contract the intake canvas enforces, and
+  retains the original file so later renders reproduce the firm's layout.
+- **`markdown`.** A `{{variable}}` body supplied inline, with an optional
+  `variable_schema` that may only name variables the body actually contains.
+
+For `docx` and `pdf`, send the file as base64 in `content_base64` with a
+matching `filename`; `content_sha256` is verified when supplied. The declared
+format must agree with the bytes — a PDF sent as `docx` is refused rather than
+stored under a contract it cannot honour. The retained source is written before
+the template row, hashed, and read back through that hash on every render. A
+template's format is fixed once it exists: `template_format_immutable` refuses
+an in-place conversion.
+
+- `template_id` revises a template that is still a draft, appending an
+  immutable version row.
+- `supersedes_template_id` proposes a replacement for a template the firm is
+  already using. It creates a *separate* draft that records what it supersedes
+  and inherits the live template's jurisdiction, module, stage, and kind unless
+  overridden. The live template is never modified, so production keeps working
+  while the proposal waits for review.
+- `client_request_id` (or a stable `X-Idempotency-Key`) makes a retry return the
+  same draft instead of creating a second one; reusing that key for different
+  content fails with `idempotency_conflict`.
 
 `propose_document_from_template` accepts an active template ID and bounded
 variable map. For approved DOCX templates, LawHand verifies the retained source
@@ -253,8 +326,8 @@ The production metadata advertises these bounded scopes:
 
 - reads: `matters:read`, `tasks:read`, `contacts:read`, `intakes:read`,
   `documents:read`, and `templates:read`
-- proposals: `tasks:propose`, `communications:propose`, and
-  `documents:propose`
+- proposals: `tasks:propose`, `communications:propose`, `documents:propose`,
+  and `templates:propose`
 
 The consent screen identifies the user, tenant, client, and requested scopes.
 Each authorization request has its own screen state. Following another consent
