@@ -79,6 +79,7 @@ from app.services.plugin_entitlements import (
     plugin_entitlement_is_active,
 )
 from app.services.rbac_service import get_user_capabilities
+from app.services.matter_number import assign_matter_number
 
 settings = get_settings()
 
@@ -182,6 +183,8 @@ async def _resolve_or_create_matter(
         budget_amount=body.fixed_fee,
         client_contact_id=_as_uuid(body.client_contact_id),
     )
+    # Human-readable matter number, assigned once at creation.
+    await assign_matter_number(db, matter)
     db.add(matter)
     return matter
 

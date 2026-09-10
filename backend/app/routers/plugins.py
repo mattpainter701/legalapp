@@ -97,6 +97,7 @@ from app.services.retrieval_planner import RetrievalPlanner
 from app.services.template_ocr import TemplateOcrError, ocr_pdf
 from app.utils.guardrails import prepare_provider_text
 from app.utils.text_processing import extract_text
+from app.services.matter_number import assign_matter_number
 
 settings = get_settings()
 router = APIRouter(prefix="/plugins", tags=["plugins"])
@@ -881,6 +882,8 @@ async def create_matter(
         legal_hold_issued=False,
         is_closed=False,
     )
+    # Human-readable matter number, assigned once at creation.
+    await assign_matter_number(db, matter)
     db.add(matter)
     await db.flush()
 

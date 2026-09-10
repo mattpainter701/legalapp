@@ -227,6 +227,14 @@ export default function ClientPortalMatterPage() {
                 {matter.paperwork_only ? 'LawHand — Complete your paperwork' : 'LawHand — Client Portal'}
               </p>
               <h1 className="font-serif font-bold text-xl truncate">{matter.matter_name}</h1>
+              {matter.matter_number && (
+                // The reference a client quotes when they call or write. The
+                // portal URL stays session-scoped, so this is shown, never
+                // navigated to.
+                <p className="font-mono text-xs tracking-wide text-white/70">
+                  Matter <span className="font-semibold text-white/90">{matter.matter_number}</span>
+                </p>
+              )}
             </div>
           </div>
           <div className="text-right shrink-0">
