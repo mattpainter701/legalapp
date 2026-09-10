@@ -300,6 +300,9 @@ api.interceptors.response.use(
 export const getAppVersion = () =>
   api.get('/version', { _suppressAuthRedirect: true }).then((r) => r.data)
 
+export const getReleaseWindow = () =>
+  api.get('/release-window', { _suppressAuthRedirect: true }).then((r) => r.data)
+
 export const getMe = (config = {}) => api.get('/auth/me', config).then((r) => r.data)
 export const createDemoSession = (data) => api.post('/demo/session', data).then((r) => r.data)
 
