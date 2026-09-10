@@ -96,6 +96,19 @@
     },
     {
       "category": "court_forms",
+      "description": "Delaware Petition for Standby Guardianship 126S. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 115,
+      "filename": "court_forms/delaware-petition-for-standby-guardianship-126s.pdf",
+      "jurisdictions": [
+        "Delaware"
+      ],
+      "sha256": "60c40b6030e15c6d6ded88e78176242ffb8fbf44d89eb9daa9c39b318a75986e",
+      "size_bytes": 293346,
+      "slug": "delaware-petition-for-standby-guardianship-126s",
+      "title": "Delaware Petition for Standby Guardianship 126S"
+    },
+    {
+      "category": "court_forms",
       "description": "Massachusetts Caregiver Authorization Affidavit. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 37,
       "filename": "court_forms/massachusetts-caregiver-authorization-affidavit.pdf",
@@ -322,6 +335,17 @@
       "size_bytes": 245714,
       "slug": "alaska-sublease-agreement",
       "title": "Alaska Sublease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Apartment Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 53,
+      "filename": "other/apartment-lease-agreement.pdf",
+      "jurisdictions": [],
+      "sha256": "3ea324c13380beb036e7b4779140d0f7833e4bb31ea9e56f52e0dce1f23a8f80",
+      "size_bytes": 216076,
+      "slug": "apartment-lease-agreement",
+      "title": "Apartment Lease Agreement"
     },
     {
       "category": "other",
@@ -583,15 +607,26 @@
     {
       "category": "other",
       "description": "Commercial Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
-      "field_count": 97,
+      "field_count": 99,
       "filename": "other/commercial-lease-agreement-2.pdf",
+      "jurisdictions": [],
+      "sha256": "94feb9a321f5b978fb508141a224ff633de5205ffeab372e02b4750d71ba67f7",
+      "size_bytes": 246326,
+      "slug": "commercial-lease-agreement-2",
+      "title": "Commercial Lease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Commercial Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 97,
+      "filename": "other/commercial-lease-agreement-3.pdf",
       "jurisdictions": [
         "Arkansas",
         "Kansas"
       ],
       "sha256": "d40457491f21dd974f0c9ef180c35aefe8837ad2da1a806d0092b2dd8ca0c381",
       "size_bytes": 280112,
-      "slug": "commercial-lease-agreement-2",
+      "slug": "commercial-lease-agreement-3",
       "title": "Commercial Lease Agreement"
     },
     {
@@ -607,6 +642,30 @@
     },
     {
       "category": "other",
+      "description": "Condominium Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 84,
+      "filename": "other/condominium-lease-agreement.pdf",
+      "jurisdictions": [],
+      "sha256": "ae613d607f547e5afae27567e23068a7f49ea155d6dd073f22264152cb736387",
+      "size_bytes": 173081,
+      "slug": "condominium-lease-agreement",
+      "title": "Condominium Lease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Connecticut Advance Directive. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 62,
+      "filename": "other/connecticut-advance-directive.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "46c2c5aaf08fefe2e37a65247213a1dee0685860f777438fa06338e8cd5beffd",
+      "size_bytes": 205242,
+      "slug": "connecticut-advance-directive",
+      "title": "Connecticut Advance Directive"
+    },
+    {
+      "category": "other",
       "description": "Connecticut Commercial Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 96,
       "filename": "other/connecticut-commercial-lease-agreement.pdf",
@@ -617,6 +676,19 @@
       "size_bytes": 280568,
       "slug": "connecticut-commercial-lease-agreement",
       "title": "Connecticut Commercial Lease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Connecticut Designation of a Standby Guardian of a Minor. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 52,
+      "filename": "other/connecticut-designation-of-a-standby-guardian-of-a-minor.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "6d8ce4ef1b0bd045673a53484e3df193f275af9171731d4e79a7a2a6766d5266",
+      "size_bytes": 626035,
+      "slug": "connecticut-designation-of-a-standby-guardian-of-a-minor",
+      "title": "Connecticut Designation of a Standby Guardian of a Minor"
     },
     {
       "category": "other",
@@ -669,6 +741,19 @@
       "size_bytes": 209488,
       "slug": "connecticut-sublease-agreement",
       "title": "Connecticut Sublease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Delaware Advance Directive. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 125,
+      "filename": "other/delaware-advance-directive.pdf",
+      "jurisdictions": [
+        "Delaware"
+      ],
+      "sha256": "a2ea9a1608e3b95781dfb2f621315a5f0439dd6366decbbfd96def959e2e79c1",
+      "size_bytes": 237994,
+      "slug": "delaware-advance-directive",
+      "title": "Delaware Advance Directive"
     },
     {
       "category": "other",
@@ -759,14 +844,14 @@
     },
     {
       "category": "other",
-      "description": "Disclosure of Information on Lead Based Paint and or Lead Ba. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
-      "field_count": 17,
-      "filename": "other/disclosure-of-information-on-lead-based-paint-and-or-lead-ba.pdf",
+      "description": "Equipment Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 40,
+      "filename": "other/equipment-lease-agreement.pdf",
       "jurisdictions": [],
-      "sha256": "c7542242efcf37bf6cf36a125b1597c55c397d03fe2ddb6ee02bba898217672b",
-      "size_bytes": 199189,
-      "slug": "disclosure-of-information-on-lead-based-paint-and-or-lead-ba",
-      "title": "Disclosure of Information on Lead Based Paint and or Lead Ba"
+      "sha256": "b32fb7c3d041d0542949a55b80066b9216aa09455d4605b569cc8a6dffe8b310",
+      "size_bytes": 158893,
+      "slug": "equipment-lease-agreement",
+      "title": "Equipment Lease Agreement"
     },
     {
       "category": "other",
@@ -869,6 +954,28 @@
       "size_bytes": 194595,
       "slug": "florida-sublease-agreement",
       "title": "Florida Sublease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Form12. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 79,
+      "filename": "other/form12.pdf",
+      "jurisdictions": [],
+      "sha256": "69daeea23330900118585a60fe9e53fb461563631a4a3c45117d30ac80c87ccf",
+      "size_bytes": 723632,
+      "slug": "form12",
+      "title": "Form12"
+    },
+    {
+      "category": "other",
+      "description": "Form31. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 85,
+      "filename": "other/form31.pdf",
+      "jurisdictions": [],
+      "sha256": "e44f0554d7d6f818625e27cf429f0eeea386b340d942c69cd1fa6fd533366806",
+      "size_bytes": 905741,
+      "slug": "form31",
+      "title": "Form31"
     },
     {
       "category": "other",
@@ -1076,6 +1183,17 @@
     },
     {
       "category": "other",
+      "description": "House Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 52,
+      "filename": "other/house-lease-agreement.pdf",
+      "jurisdictions": [],
+      "sha256": "55646c1b9b91151e41b61201c621d8b7dc60c8cb377f2b58cc31ffb89972e2ef",
+      "size_bytes": 212359,
+      "slug": "house-lease-agreement",
+      "title": "House Lease Agreement"
+    },
+    {
+      "category": "other",
       "description": "Idaho Advance Directive. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 38,
       "filename": "other/idaho-advance-directive.pdf",
@@ -1167,6 +1285,19 @@
     },
     {
       "category": "other",
+      "description": "Illinois Advance Directive. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 28,
+      "filename": "other/illinois-advance-directive.pdf",
+      "jurisdictions": [
+        "Illinois"
+      ],
+      "sha256": "51333b76298c20cdff2f311cee43560cab16d85c4c0ff21b17c273d6662e296b",
+      "size_bytes": 415632,
+      "slug": "illinois-advance-directive",
+      "title": "Illinois Advance Directive"
+    },
+    {
+      "category": "other",
       "description": "Illinois Association of Realtors Residential Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 140,
       "filename": "other/illinois-association-of-realtors-residential-lease-agreement.pdf",
@@ -1255,6 +1386,19 @@
       "size_bytes": 85883,
       "slug": "illinois-sublease-agreement",
       "title": "Illinois Sublease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Indiana Advance Directive. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 23,
+      "filename": "other/indiana-advance-directive.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "2e342b65bc978e85306eff5115e15b9ac246e5940f7391c78fdc9a87013faa89",
+      "size_bytes": 587248,
+      "slug": "indiana-advance-directive",
+      "title": "Indiana Advance Directive"
     },
     {
       "category": "other",
@@ -1398,17 +1542,6 @@
       "size_bytes": 87072,
       "slug": "iowa-roommate-agreement",
       "title": "Iowa Roommate Agreement"
-    },
-    {
-      "category": "other",
-      "description": "IRS Tax Information Authorization 8821. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
-      "field_count": 41,
-      "filename": "other/irs-tax-information-authorization-8821.pdf",
-      "jurisdictions": [],
-      "sha256": "3210e8c4130aea50ee3a4297bb1eb1db2ce276a731a407dde549715f3de6a4c5",
-      "size_bytes": 660385,
-      "slug": "irs-tax-information-authorization-8821",
-      "title": "IRS Tax Information Authorization 8821"
     },
     {
       "category": "other",
@@ -2740,14 +2873,11 @@
     {
       "category": "other",
       "description": "Month to Month Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
-      "field_count": 47,
+      "field_count": 51,
       "filename": "other/month-to-month-lease-agreement.pdf",
-      "jurisdictions": [
-        "Arkansas",
-        "Kansas"
-      ],
-      "sha256": "81993e585f9ed563812766beab3f25bd8114d36572a36d909a1a82806b90c48c",
-      "size_bytes": 179143,
+      "jurisdictions": [],
+      "sha256": "2942c6c2a537ab0ed8c3d86266ba35018ab001703c8e89ca3a3d9b8b41b2669d",
+      "size_bytes": 170447,
       "slug": "month-to-month-lease-agreement",
       "title": "Month to Month Lease Agreement"
     },
@@ -2757,12 +2887,26 @@
       "field_count": 47,
       "filename": "other/month-to-month-lease-agreement-2.pdf",
       "jurisdictions": [
+        "Arkansas",
+        "Kansas"
+      ],
+      "sha256": "81993e585f9ed563812766beab3f25bd8114d36572a36d909a1a82806b90c48c",
+      "size_bytes": 179143,
+      "slug": "month-to-month-lease-agreement-2",
+      "title": "Month to Month Lease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Month to Month Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 47,
+      "filename": "other/month-to-month-lease-agreement-3.pdf",
+      "jurisdictions": [
         "Virginia",
         "West Virginia"
       ],
       "sha256": "f841848af087accae27a196e650c6b6fc0187755f75895e3ced9104d50248b7c",
       "size_bytes": 176461,
-      "slug": "month-to-month-lease-agreement-2",
+      "slug": "month-to-month-lease-agreement-3",
       "title": "Month to Month Lease Agreement"
     },
     {
@@ -3467,6 +3611,19 @@
     },
     {
       "category": "other",
+      "description": "Ohio Firearm Gun Bill of Sale. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 29,
+      "filename": "other/ohio-firearm-gun-bill-of-sale.pdf",
+      "jurisdictions": [
+        "Ohio"
+      ],
+      "sha256": "fc99a84c1878623c44e2bb1d8b560a1e4ca94bc485ad4bec53dc9b11c7b589da",
+      "size_bytes": 183071,
+      "slug": "ohio-firearm-gun-bill-of-sale",
+      "title": "Ohio Firearm Gun Bill of Sale"
+    },
+    {
+      "category": "other",
       "description": "Ohio Month to Month Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 17,
       "filename": "other/ohio-month-to-month-lease-agreement.pdf",
@@ -3830,6 +3987,17 @@
     },
     {
       "category": "other",
+      "description": "Rent to Own Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 35,
+      "filename": "other/rent-to-own-lease-agreement.pdf",
+      "jurisdictions": [],
+      "sha256": "481c0ea3ff408952ed142f1eda267ace8dcdc533508b4ee4b922b6ff0961725e",
+      "size_bytes": 160544,
+      "slug": "rent-to-own-lease-agreement",
+      "title": "Rent to Own Lease Agreement"
+    },
+    {
+      "category": "other",
       "description": "Rental Application Approval Letter. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 20,
       "filename": "other/rental-application-approval-letter.pdf",
@@ -3979,6 +4147,17 @@
       "size_bytes": 130920,
       "slug": "roommate-agreement-2",
       "title": "Roommate Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Roommate Room Rental Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 32,
+      "filename": "other/roommate-room-rental-agreement.pdf",
+      "jurisdictions": [],
+      "sha256": "6a8c8b47275bac0f3e436c77e287dbdf88f39af61826ae7c41b3fbbcac4c907d",
+      "size_bytes": 127193,
+      "slug": "roommate-room-rental-agreement",
+      "title": "Roommate Room Rental Agreement"
     },
     {
       "category": "other",
@@ -4145,6 +4324,17 @@
     },
     {
       "category": "other",
+      "description": "Standard Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 53,
+      "filename": "other/standard-lease-agreement.pdf",
+      "jurisdictions": [],
+      "sha256": "5530875e13d19429f9ca0f4c617c07ffccc5d37c6bd889b0d855c05d1a55b93f",
+      "size_bytes": 208710,
+      "slug": "standard-lease-agreement",
+      "title": "Standard Lease Agreement"
+    },
+    {
+      "category": "other",
       "description": "Standard Residential Lease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 51,
       "filename": "other/standard-residential-lease-agreement.pdf",
@@ -4171,41 +4361,54 @@
     {
       "category": "other",
       "description": "Sublease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
-      "field_count": 25,
+      "field_count": 47,
       "filename": "other/sublease-agreement.pdf",
-      "jurisdictions": [
-        "Virginia",
-        "West Virginia"
-      ],
-      "sha256": "bcbda7418bd83e8ccd7869f04f2df271e02e53ebc77148a3c769a3521016aafc",
-      "size_bytes": 173207,
+      "jurisdictions": [],
+      "sha256": "2b38c76f320f1382ea3113b0e401c226126af9ebb6fd3b4168f86f203cb82fcc",
+      "size_bytes": 175460,
       "slug": "sublease-agreement",
       "title": "Sublease Agreement"
     },
     {
       "category": "other",
       "description": "Sublease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
-      "field_count": 47,
+      "field_count": 25,
       "filename": "other/sublease-agreement-2.pdf",
+      "jurisdictions": [
+        "Virginia",
+        "West Virginia"
+      ],
+      "sha256": "bcbda7418bd83e8ccd7869f04f2df271e02e53ebc77148a3c769a3521016aafc",
+      "size_bytes": 173207,
+      "slug": "sublease-agreement-2",
+      "title": "Sublease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Sublease Agreement. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 47,
+      "filename": "other/sublease-agreement-3.pdf",
       "jurisdictions": [
         "Arkansas",
         "Kansas"
       ],
       "sha256": "f1902f0729379347c626b8c1855fa846bc80e249989cbc26c3179d8982ac39dc",
       "size_bytes": 191572,
-      "slug": "sublease-agreement-2",
+      "slug": "sublease-agreement-3",
       "title": "Sublease Agreement"
     },
     {
       "category": "other",
-      "description": "Tenant Information Release. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
-      "field_count": 5,
-      "filename": "other/tenant-information-release.pdf",
-      "jurisdictions": [],
-      "sha256": "3cfdc83791fbbcfd0deb2904d5c86df8ac37581bdc999181318ea7f60e7326d5",
-      "size_bytes": 154236,
-      "slug": "tenant-information-release",
-      "title": "Tenant Information Release"
+      "description": "Tennessee Advance Directive. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 49,
+      "filename": "other/tennessee-advance-directive.pdf",
+      "jurisdictions": [
+        "Tennessee"
+      ],
+      "sha256": "9935d51484b9bd88be16a7b4f032b812b6cb0110751a42ebe7e6b0caed0014e8",
+      "size_bytes": 170004,
+      "slug": "tennessee-advance-directive",
+      "title": "Tennessee Advance Directive"
     },
     {
       "category": "other",
@@ -4542,6 +4745,19 @@
       "size_bytes": 93683,
       "slug": "virginia-sublease-agreement",
       "title": "Virginia Sublease Agreement"
+    },
+    {
+      "category": "other",
+      "description": "Washington Advance Directive. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 56,
+      "filename": "other/washington-advance-directive.pdf",
+      "jurisdictions": [
+        "Washington"
+      ],
+      "sha256": "3c3bbd00b62023b9e64541dd1724615be99f3636717e4823a5ff4d06992e9d93",
+      "size_bytes": 1427620,
+      "slug": "washington-advance-directive",
+      "title": "Washington Advance Directive"
     },
     {
       "category": "other",
@@ -5130,6 +5346,162 @@
     },
     {
       "category": "power_of_attorney",
+      "description": "Connecticut General Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 21,
+      "filename": "power_of_attorney/connecticut-general-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "3a7267f709e1b83daa95582bb8cbf1ac1612ab048cc809e65dd77caff1ba4688",
+      "size_bytes": 53172,
+      "slug": "connecticut-general-power-of-attorney",
+      "title": "Connecticut General Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Connecticut Limited Special Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 26,
+      "filename": "power_of_attorney/connecticut-limited-special-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "85a7bf14fc2d08ad1e31e38d9a1718a503a1b0876b3e8f1e3c26f4f13e356020",
+      "size_bytes": 45487,
+      "slug": "connecticut-limited-special-power-of-attorney",
+      "title": "Connecticut Limited Special Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Connecticut Medical Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 26,
+      "filename": "power_of_attorney/connecticut-medical-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "8089c68d09eecc1495edb42402de24b0cf085eb9832137515920694b657200bc",
+      "size_bytes": 69785,
+      "slug": "connecticut-medical-power-of-attorney",
+      "title": "Connecticut Medical Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Connecticut Motor Vehicle Power of Attorney A 83. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 10,
+      "filename": "power_of_attorney/connecticut-motor-vehicle-power-of-attorney-a-83.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "c6256b6b4b81ae8a8ae593ef1d03b0cc1fe400f8a86b2ced5d354b5d6c127d80",
+      "size_bytes": 181314,
+      "slug": "connecticut-motor-vehicle-power-of-attorney-a-83",
+      "title": "Connecticut Motor Vehicle Power of Attorney A 83"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Connecticut Real Estate Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 48,
+      "filename": "power_of_attorney/connecticut-real-estate-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "14f786d9d4b629a447ba44071c73e43831b5b6fd2bec3a125c0cdf3241b5e968",
+      "size_bytes": 173524,
+      "slug": "connecticut-real-estate-power-of-attorney",
+      "title": "Connecticut Real Estate Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Connecticut Revocation of Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 22,
+      "filename": "power_of_attorney/connecticut-revocation-of-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "cda7321452d0a213578e284c35820987bcfacefbaa5276f40bf2d30b78515251",
+      "size_bytes": 140766,
+      "slug": "connecticut-revocation-of-power-of-attorney",
+      "title": "Connecticut Revocation of Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Connecticut Tax Power of Attorney LGL 001. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 46,
+      "filename": "power_of_attorney/connecticut-tax-power-of-attorney-lgl-001.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "a7c53ddcfad3380ceecd107a084e18d4424975979e8827a3f3d1917fe3464504",
+      "size_bytes": 235675,
+      "slug": "connecticut-tax-power-of-attorney-lgl-001",
+      "title": "Connecticut Tax Power of Attorney LGL 001"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Delaware General Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 48,
+      "filename": "power_of_attorney/delaware-general-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Delaware"
+      ],
+      "sha256": "c8aa354839c551f539e2bbcb5e53c6dc9e085c9fa22a369af95835c3fee0fcb1",
+      "size_bytes": 215776,
+      "slug": "delaware-general-power-of-attorney",
+      "title": "Delaware General Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Delaware Motor Vehicle Power of Attorney MV386. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 18,
+      "filename": "power_of_attorney/delaware-motor-vehicle-power-of-attorney-mv386.pdf",
+      "jurisdictions": [
+        "Delaware"
+      ],
+      "sha256": "17258788a4722687c4372871f4eee7a4db7a69c04b366b5c7beb2c4d0933b3c3",
+      "size_bytes": 77574,
+      "slug": "delaware-motor-vehicle-power-of-attorney-mv386",
+      "title": "Delaware Motor Vehicle Power of Attorney MV386"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Delaware Real Estate Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 48,
+      "filename": "power_of_attorney/delaware-real-estate-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Delaware"
+      ],
+      "sha256": "541324c76d64a3c98ca0812543da37728f12ed4060f8dc9456dfbe2c03d67d39",
+      "size_bytes": 170836,
+      "slug": "delaware-real-estate-power-of-attorney",
+      "title": "Delaware Real Estate Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Delaware Revocation of Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 23,
+      "filename": "power_of_attorney/delaware-revocation-of-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Delaware"
+      ],
+      "sha256": "f7592a3ca8cf5455bf71e398b61ae892a81812da93a0d60ccf61d6b8a7998e15",
+      "size_bytes": 62859,
+      "slug": "delaware-revocation-of-power-of-attorney",
+      "title": "Delaware Revocation of Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Delaware State Tax Power of Attorney 2848. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 91,
+      "filename": "power_of_attorney/delaware-state-tax-power-of-attorney-2848.pdf",
+      "jurisdictions": [
+        "Delaware"
+      ],
+      "sha256": "e29ac6560c878cae0926cd0accac0cd14bd1cf04058f2c7bded1980cf985df10",
+      "size_bytes": 162198,
+      "slug": "delaware-state-tax-power-of-attorney-2848",
+      "title": "Delaware State Tax Power of Attorney 2848"
+    },
+    {
+      "category": "power_of_attorney",
       "description": "Durable Financial Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 45,
       "filename": "power_of_attorney/durable-financial-power-of-attorney.pdf",
@@ -5548,6 +5920,32 @@
     },
     {
       "category": "power_of_attorney",
+      "description": "Illinois General Financial Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 63,
+      "filename": "power_of_attorney/illinois-general-financial-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Illinois"
+      ],
+      "sha256": "0101aaf29258e2b955ed187b2ddebe15abf7c238f18c2cc93204ba74fe2678f2",
+      "size_bytes": 274334,
+      "slug": "illinois-general-financial-power-of-attorney",
+      "title": "Illinois General Financial Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Illinois Limited Special Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 47,
+      "filename": "power_of_attorney/illinois-limited-special-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Illinois"
+      ],
+      "sha256": "21ce88fbf6a0468452b667e7e6e51af3dcbf04df8230d7a30ee6f74703ea60df",
+      "size_bytes": 150915,
+      "slug": "illinois-limited-special-power-of-attorney",
+      "title": "Illinois Limited Special Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
       "description": "Illinois Medical Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 23,
       "filename": "power_of_attorney/illinois-medical-power-of-attorney.pdf",
@@ -5610,6 +6008,110 @@
       "size_bytes": 129716,
       "slug": "illinois-tax-power-of-attorney-il-2848",
       "title": "Illinois Tax Power of Attorney IL 2848"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Indiana General Financial Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 59,
+      "filename": "power_of_attorney/indiana-general-financial-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "a1aad74707a863c580e5bccaa05f0ce07b8f4819397e5d92b4a1701486853260",
+      "size_bytes": 170467,
+      "slug": "indiana-general-financial-power-of-attorney",
+      "title": "Indiana General Financial Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Indiana Limited Special Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 48,
+      "filename": "power_of_attorney/indiana-limited-special-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "746da09bb717e6220141219b535ff6ef760cb679053c74bdfc94c654f25c7bec",
+      "size_bytes": 152711,
+      "slug": "indiana-limited-special-power-of-attorney",
+      "title": "Indiana Limited Special Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Indiana Medical Power of Attorney 56184. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 14,
+      "filename": "power_of_attorney/indiana-medical-power-of-attorney-56184.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "172ecd8fa4ad0a9042513638fbeb6273d515911e25f16979f78f698f6b19c66e",
+      "size_bytes": 932919,
+      "slug": "indiana-medical-power-of-attorney-56184",
+      "title": "Indiana Medical Power of Attorney 56184"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Indiana Minor Child Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 38,
+      "filename": "power_of_attorney/indiana-minor-child-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "d2a3a48e212b2fe6fce3a878e5c15e4f38abc35dc65aabeaa005dbee189b26c8",
+      "size_bytes": 169970,
+      "slug": "indiana-minor-child-power-of-attorney",
+      "title": "Indiana Minor Child Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Indiana Motor Vehicle Power of Attorney 01940. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 27,
+      "filename": "power_of_attorney/indiana-motor-vehicle-power-of-attorney-01940.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "51d636e34ff86076526f8b52d373c2eefaf17b956614a64c1878a0e87ef5927e",
+      "size_bytes": 1006225,
+      "slug": "indiana-motor-vehicle-power-of-attorney-01940",
+      "title": "Indiana Motor Vehicle Power of Attorney 01940"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Indiana Real Estate Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 48,
+      "filename": "power_of_attorney/indiana-real-estate-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "c1c50158ade3263e018f3874f8ee2ba0fc47c0d369d27f81d67381d1c5fc1795",
+      "size_bytes": 171260,
+      "slug": "indiana-real-estate-power-of-attorney",
+      "title": "Indiana Real Estate Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Indiana Revocation of Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 27,
+      "filename": "power_of_attorney/indiana-revocation-of-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "3e5f11ff38ee34cad07f95c42256c80ca8d6790e325837657acd72373b3e94ab",
+      "size_bytes": 87393,
+      "slug": "indiana-revocation-of-power-of-attorney",
+      "title": "Indiana Revocation of Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Indiana Tax Power of Attorney 49357. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 78,
+      "filename": "power_of_attorney/indiana-tax-power-of-attorney-49357.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "0a7f5bcd9d9da26dd210b97664627954dc1294ff3f089f26a1d3c7d547f85b31",
+      "size_bytes": 858612,
+      "slug": "indiana-tax-power-of-attorney-49357",
+      "title": "Indiana Tax Power of Attorney 49357"
     },
     {
       "category": "power_of_attorney",
@@ -6756,6 +7258,71 @@
       "size_bytes": 64545,
       "slug": "mississippi-tax-power-of-attorney-21-002",
       "title": "Mississippi Tax Power of Attorney 21 002"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Missouri General Financial Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 82,
+      "filename": "power_of_attorney/missouri-general-financial-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Missouri"
+      ],
+      "sha256": "7e1b24145d28857d8c0d43309c387d82c2754deef4b18f6387568e19ce9cb2ad",
+      "size_bytes": 256158,
+      "slug": "missouri-general-financial-power-of-attorney",
+      "title": "Missouri General Financial Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Missouri Limited Special Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 50,
+      "filename": "power_of_attorney/missouri-limited-special-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Missouri"
+      ],
+      "sha256": "083752f109e63eddd012a9601779a8fe446bd7ab2b6451c3dc9720b447e64d34",
+      "size_bytes": 449597,
+      "slug": "missouri-limited-special-power-of-attorney",
+      "title": "Missouri Limited Special Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Missouri Minor Child Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 37,
+      "filename": "power_of_attorney/missouri-minor-child-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Missouri"
+      ],
+      "sha256": "7308e028fabd40f9be4204fb0be3f8906b0da69fca15412bbb119c15eb952763",
+      "size_bytes": 74050,
+      "slug": "missouri-minor-child-power-of-attorney",
+      "title": "Missouri Minor Child Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Missouri Real Estate Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 48,
+      "filename": "power_of_attorney/missouri-real-estate-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Missouri"
+      ],
+      "sha256": "933a69c10918fc3ca90f6e10c394861fdfcfe3098b07b2c80fdf0f4b3968f3c4",
+      "size_bytes": 172022,
+      "slug": "missouri-real-estate-power-of-attorney",
+      "title": "Missouri Real Estate Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Missouri Revocation of Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 27,
+      "filename": "power_of_attorney/missouri-revocation-of-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Missouri"
+      ],
+      "sha256": "596337bdd5136ee076688dd6d732472b793eff152909fbc5301714576d1ef6bd",
+      "size_bytes": 88395,
+      "slug": "missouri-revocation-of-power-of-attorney",
+      "title": "Missouri Revocation of Power of Attorney"
     },
     {
       "category": "power_of_attorney",
@@ -8582,6 +9149,97 @@
     },
     {
       "category": "power_of_attorney",
+      "description": "Tennessee General Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 55,
+      "filename": "power_of_attorney/tennessee-general-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Tennessee"
+      ],
+      "sha256": "4f2b75af46813d35a548629f1d5eee2852c2b855666b0a087c0d438ebf6a72c0",
+      "size_bytes": 206942,
+      "slug": "tennessee-general-power-of-attorney",
+      "title": "Tennessee General Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Tennessee Limited Special Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 11,
+      "filename": "power_of_attorney/tennessee-limited-special-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Tennessee"
+      ],
+      "sha256": "f43ae2f0e7c4964286d1f77359610ce161bcbe8afcd1ca59f232894267d63b97",
+      "size_bytes": 25710,
+      "slug": "tennessee-limited-special-power-of-attorney",
+      "title": "Tennessee Limited Special Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Tennessee Minor Child Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 55,
+      "filename": "power_of_attorney/tennessee-minor-child-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Tennessee"
+      ],
+      "sha256": "560bc77b5aa83b86535a9b2b6791306e6d6e88deef3e78a7e71806127dca53af",
+      "size_bytes": 176392,
+      "slug": "tennessee-minor-child-power-of-attorney",
+      "title": "Tennessee Minor Child Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Tennessee Motor Vehicle Power of Attorney RV F1311401.p. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 33,
+      "filename": "power_of_attorney/tennessee-motor-vehicle-power-of-attorney-rv-f1311401-p.pdf",
+      "jurisdictions": [
+        "Tennessee"
+      ],
+      "sha256": "3216f14d3390623b9c8b8067081c49272ec18ee6181fc65d35f5f207a9197bc4",
+      "size_bytes": 288566,
+      "slug": "tennessee-motor-vehicle-power-of-attorney-rv-f1311401-p",
+      "title": "Tennessee Motor Vehicle Power of Attorney RV F1311401.p"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Tennessee Real Estate Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 58,
+      "filename": "power_of_attorney/tennessee-real-estate-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Tennessee"
+      ],
+      "sha256": "862f12a2fe2fee1ac5b39797408cd279a1b7ae35c1fe230e52e12325490271d4",
+      "size_bytes": 190195,
+      "slug": "tennessee-real-estate-power-of-attorney",
+      "title": "Tennessee Real Estate Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Tennessee Revocation of Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 23,
+      "filename": "power_of_attorney/tennessee-revocation-of-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Tennessee"
+      ],
+      "sha256": "1c60291d683c2ea9427356c298a688655fb69e675e6503f6c96b10cb5c2e4007",
+      "size_bytes": 77778,
+      "slug": "tennessee-revocation-of-power-of-attorney",
+      "title": "Tennessee Revocation of Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Tennessee Tax Power of Attorney RV F0103801. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 23,
+      "filename": "power_of_attorney/tennessee-tax-power-of-attorney-rv-f0103801.pdf",
+      "jurisdictions": [
+        "Tennessee"
+      ],
+      "sha256": "cada1c9a9625bd5a0991876ea445f41b58d8620ccb07e9e9c4f1485e2418bd0a",
+      "size_bytes": 113781,
+      "slug": "tennessee-tax-power-of-attorney-rv-f0103801",
+      "title": "Tennessee Tax Power of Attorney RV F0103801"
+    },
+    {
+      "category": "power_of_attorney",
       "description": "Texas Durable Financial Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 40,
       "filename": "power_of_attorney/texas-durable-financial-power-of-attorney.pdf",
@@ -8943,6 +9601,97 @@
       "size_bytes": 267257,
       "slug": "virginia-tax-power-of-attorney-par-101",
       "title": "Virginia Tax Power of Attorney PAR 101"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Washington General Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 56,
+      "filename": "power_of_attorney/washington-general-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Washington"
+      ],
+      "sha256": "9335a9e4c361e02ea2a04916fa17c3a387dea5e5d0515a6c7d77a6d6da6556be",
+      "size_bytes": 201461,
+      "slug": "washington-general-power-of-attorney",
+      "title": "Washington General Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Washington Limited Special Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 17,
+      "filename": "power_of_attorney/washington-limited-special-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Washington"
+      ],
+      "sha256": "51413aeb1463921897ef8600f5786f3d9dd97557cb243d272da4f7e66b2f14db",
+      "size_bytes": 56168,
+      "slug": "washington-limited-special-power-of-attorney",
+      "title": "Washington Limited Special Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Washington Medical Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 13,
+      "filename": "power_of_attorney/washington-medical-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Washington"
+      ],
+      "sha256": "0fda237c085d9a9f3e2f9dd8e0adb63330835f92427bd030a419ee380457593b",
+      "size_bytes": 687903,
+      "slug": "washington-medical-power-of-attorney",
+      "title": "Washington Medical Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Washington Minor Child Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 77,
+      "filename": "power_of_attorney/washington-minor-child-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Washington"
+      ],
+      "sha256": "9ec014b41a8f77098b1b8dc008daf6725b46df8c55579f7425873d946f5bbfba",
+      "size_bytes": 281353,
+      "slug": "washington-minor-child-power-of-attorney",
+      "title": "Washington Minor Child Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Washington Real Estate Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 40,
+      "filename": "power_of_attorney/washington-real-estate-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Washington"
+      ],
+      "sha256": "c8a8f2a7c3598fb8a42ddf5e1cf55af19ec8037670e5840e44cd3115ebf1d1ae",
+      "size_bytes": 122662,
+      "slug": "washington-real-estate-power-of-attorney",
+      "title": "Washington Real Estate Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Washington Revocation of Power of Attorney. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 9,
+      "filename": "power_of_attorney/washington-revocation-of-power-of-attorney.pdf",
+      "jurisdictions": [
+        "Washington"
+      ],
+      "sha256": "e9e9367ae4dd0fddd178e5657e09cf617ee6b43d7b98491ea4920518778b2798",
+      "size_bytes": 475572,
+      "slug": "washington-revocation-of-power-of-attorney",
+      "title": "Washington Revocation of Power of Attorney"
+    },
+    {
+      "category": "power_of_attorney",
+      "description": "Washington Tax Power of Attorney REV 27 0060. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 43,
+      "filename": "power_of_attorney/washington-tax-power-of-attorney-rev-27-0060.pdf",
+      "jurisdictions": [
+        "Washington"
+      ],
+      "sha256": "ce5616e491f14624bf78eb0e3a654522fe590faa0d1169c895db8aa2c1b3ae19",
+      "size_bytes": 312928,
+      "slug": "washington-tax-power-of-attorney-rev-27-0060",
+      "title": "Washington Tax Power of Attorney REV 27 0060"
     },
     {
       "category": "power_of_attorney",
@@ -9335,14 +10084,27 @@
     {
       "category": "wills_trusts",
       "description": "Connecticut Living Will. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
-      "field_count": 49,
+      "field_count": 40,
       "filename": "wills_trusts/connecticut-living-will.pdf",
+      "jurisdictions": [
+        "Connecticut"
+      ],
+      "sha256": "0680835a4e446f6a25048da17504db34f1861e5f23228f5e60618a1413475b9a",
+      "size_bytes": 96900,
+      "slug": "connecticut-living-will",
+      "title": "Connecticut Living Will"
+    },
+    {
+      "category": "wills_trusts",
+      "description": "Connecticut Living Will. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 49,
+      "filename": "wills_trusts/connecticut-living-will-2.pdf",
       "jurisdictions": [
         "Connecticut"
       ],
       "sha256": "4ca1adc9b9f973dac2503a10499b66af672306f31dcaa38eb27484f4f2e32dc5",
       "size_bytes": 175134,
-      "slug": "connecticut-living-will",
+      "slug": "connecticut-living-will-2",
       "title": "Connecticut Living Will"
     },
     {
@@ -9472,6 +10234,19 @@
       "size_bytes": 925715,
       "slug": "indiana-living-will",
       "title": "Indiana Living Will"
+    },
+    {
+      "category": "wills_trusts",
+      "description": "Indiana Living Will 55316. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 9,
+      "filename": "wills_trusts/indiana-living-will-55316.pdf",
+      "jurisdictions": [
+        "Indiana"
+      ],
+      "sha256": "d5539e0089b601ce585fd235f7013de195d01816734e2f8215837ad4f7d202f2",
+      "size_bytes": 928958,
+      "slug": "indiana-living-will-55316",
+      "title": "Indiana Living Will 55316"
     },
     {
       "category": "wills_trusts",
@@ -9957,6 +10732,19 @@
     },
     {
       "category": "wills_trusts",
+      "description": "Ohio Last Will and Testament. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 57,
+      "filename": "wills_trusts/ohio-last-will-and-testament.pdf",
+      "jurisdictions": [
+        "Ohio"
+      ],
+      "sha256": "3e68b3dbef6ff8858919ff68bce9b280a378a6273d5d79115984bfcaa6438e45",
+      "size_bytes": 121324,
+      "slug": "ohio-last-will-and-testament",
+      "title": "Ohio Last Will and Testament"
+    },
+    {
+      "category": "wills_trusts",
       "description": "Ohio Living Will. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
       "field_count": 50,
       "filename": "wills_trusts/ohio-living-will.pdf",
@@ -10147,6 +10935,19 @@
       "size_bytes": 63477,
       "slug": "utah-living-will",
       "title": "Utah Living Will"
+    },
+    {
+      "category": "wills_trusts",
+      "description": "Washington Living Will. Fillable starter form from the public sample library; verify jurisdiction-specific requirements before use.",
+      "field_count": 43,
+      "filename": "wills_trusts/washington-living-will.pdf",
+      "jurisdictions": [
+        "Washington"
+      ],
+      "sha256": "131282b9a92381b329934285c3c5e535f6f4c080962b2644d371682f9ef5adaf",
+      "size_bytes": 552776,
+      "slug": "washington-living-will",
+      "title": "Washington Living Will"
     },
     {
       "category": "wills_trusts",
