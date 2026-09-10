@@ -12,12 +12,23 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from pypdf import PdfReader
 
 from app.models.sample_template import SampleTemplate
 from app.routers import sample_templates
 from app.services.pdf_templates import TemplatePdfError, discover_pdf_fields
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "sample_templates"
+
+# Third-party source/copyright branding that must never ship in the catalog.
+_SOURCE_MARKERS = (
+    "ilovepdf", "freeforms", "made fillable by", "freeprintablelegalforms",
+    "justia", "downloaded from", "honoring choices", "honoringchoices",
+    "vhha.com", "aoausa.com", "caanet.org", "rocketlawyer", "legalzoom",
+    "lawdepot", "formswift", "uslegalforms", "findlegalforms",
+    "templateroller", "this form is provided by", "provided courtesy of",
+    "esign.com", "www.esign",
+)
 
 
 def _manifest() -> dict:
@@ -57,6 +68,23 @@ def test_catalog_is_platform_owned_and_not_tenant_scoped():
     # Shared content must not carry a tenant_id; tenants read the same rows.
     column_names = [column.name for column in SampleTemplate.__table__.columns]
     assert "tenant_id" not in column_names
+
+
+def test_catalog_has_no_source_branding_or_metadata():
+    # Source identity must never leak: no authoring metadata and no visible
+    # third-party source/copyright watermark in any committed sample.
+    for form in _manifest()["forms"]:
+        source = SEED_DIR / form["filename"]
+        reader = PdfReader(source, strict=False)
+        if reader.is_encrypted:
+            reader.decrypt("")
+        assert not reader.metadata, f"{form['slug']} still carries PDF metadata"
+        text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        lowered = text.lower()
+        for marker in _SOURCE_MARKERS:
+            assert marker not in lowered, (
+                f"{form['slug']} contains source marker {marker!r}"
+            )
 
 
 def test_catalog_router_exposes_no_tenant_mutation_endpoints():

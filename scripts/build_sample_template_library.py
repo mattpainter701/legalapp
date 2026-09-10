@@ -2,19 +2,23 @@
 """Build the curated global sample-template library from the raw forms library.
 
 The raw ``legal_forms_library`` contains hundreds of downloaded ``.pdf`` files,
-many of which are HTML landing pages (not PDFs), and many of which are
-byte-identical duplicates (for example, one generic last-will template renamed
-``Printable_<State>_Last_Will...`` for every state).
+many of which are HTML landing pages (not PDFs), many of which are byte-identical
+duplicates (for example, one generic last-will template renamed
+``Printable_<State>_Last_Will...`` for every state), and some of which are
+statutes or carry third-party source/copyright watermarks.
 
 This script:
 
-* keeps only files that are valid, fillable PDFs (AcroForm fields present);
+* keeps only files that are valid, fillable PDFs (AcroForm fields present) that
+  the template studio will actually accept (no active content);
+* strips PDF metadata (author/producer/creator) so no source identity leaks;
+* rejects forms whose visible text carries third-party source or copyright
+  branding (e.g. ``www.aoausa.com``, ``Honoring Choices``, ``ilovepdf``);
+* rejects statute/code documents (e.g. ``sec. 3955``);
 * deduplicates by SHA-256 so identical content is stored once;
 * normalizes a human title and a stable slug;
-* assigns a category (``business_forms`` / ``court_forms`` /
-  ``wills_trusts`` / ``power_of_attorney`` / ``other``);
-* attaches the source's state claims as ``jurisdictions`` tags;
-* copies each unique PDF into ``backend/seed/sample_templates/<category>/``
+* assigns a category and attaches the source's state claims as ``jurisdictions``;
+* copies each cleaned PDF into ``backend/seed/sample_templates/<category>/``
   and writes ``backend/seed/sample_templates/manifest.json``.
 
 The manifest is metadata only. Field schemas are derived at seed time by
@@ -29,6 +33,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -55,8 +60,10 @@ os.environ.setdefault(
     base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(),
 )
 
-from app.services.pdf_templates import TemplatePdfError, discover_pdf_fields  # noqa: E402
+from pypdf import PdfReader, PdfWriter  # noqa: E402
+from pypdf.generic import NameObject  # noqa: E402
 
+from app.services.pdf_templates import discover_pdf_fields  # noqa: E402
 
 
 _US_STATES = [
@@ -87,17 +94,53 @@ _CATEGORY_RULES = [
                      "Affidavit", "Waiver", "Petition", "Writ"]),
 ]
 
+# Third-party source/copyright branding that must not ship in the library.
+_SOURCE_MARKERS = [
+    "ilovepdf",
+    "freeforms",
+    "made fillable by",
+    "freeprintablelegalforms",
+    "justia",
+    "downloaded from",
+    "honoring choices",
+    "honoringchoices",
+    "vhha.com",
+    "aoausa.com",
+    "caanet.org",
+    "rocketlawyer",
+    "legalzoom",
+    "lawdepot",
+    "formswift",
+    "uslegalforms",
+    "findlegalforms",
+    "templateroller",
+    "this form is provided by",
+    "provided courtesy of",
+    "esign.com",
+    "www.esign",
+]
+
+_JUNK_TITLES = {
+    "adobe", "adobe pdf", "form", "blank form", "untitled", "document",
+    "document1", "scan", "scanned", "image", "page", "sheet", "new form",
+}
+_JUNK_TITLE_PREFIXES = ("adobe", "microsoft", "foxit", "nitro", "untitled", "scan")
+
 
 def _clean_title(filename: str) -> str:
     base = Path(filename).name
     base = re.sub(r"\.pdf_[0-9a-f]{8}\.pdf$", "", base)
     base = re.sub(r"\.pdf$", "", base)
-    base = base.replace("_", " ")
-    base = re.sub(r"\b(Free )?Printable\b", "", base, flags=re.IGNORECASE)
-    base = re.sub(r"\bPrint an?\b", "", base, flags=re.IGNORECASE)
-    base = re.sub(r"\bBlank\b", "", base, flags=re.IGNORECASE)
-    base = re.sub(r"\b(Form|PDF|PD|Docx?)\b", "", base, flags=re.IGNORECASE)
-    base = re.sub(r"\b(and Testament|of Attorney) P\b", r"\1", base, flags=re.IGNORECASE)
+    base = base.replace("_", " ").replace("-", " ")
+    for word in (
+        "Free Printable", "Printable", "Print a", "Free", "Blank", "Form",
+        "PDF", "PD", "Docx", "Doc", "Template", "Templates",
+    ):
+        base = re.sub(rf"\b{re.escape(word)}\b", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"\b(and Testament|of Attorney)\s+P\b", r"\1", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+", " ", base).strip(" -")
+    # Drop a dangling single-letter token left by a truncated filename.
+    base = re.sub(r"\s+[A-Za-z]\s*$", "", base)
     return re.sub(r"\s+", " ", base).strip(" -")
 
 
@@ -119,11 +162,81 @@ def _states(title: str) -> list[str]:
     return found or []
 
 
-_JUNK_TITLES = {
-    "adobe", "adobe pdf", "form", "blank form", "untitled", "document",
-    "document1", "scan", "scanned", "image", "page", "sheet", "new form",
-}
-_JUNK_TITLE_PREFIXES = ("adobe", "microsoft", "foxit", "nitro", "untitled", "scan")
+def _is_statute(title: str) -> bool:
+    lowered = title.lower().strip()
+    if re.match(r"^(sec|section|chapter|title|art)\b", lowered):
+        return True
+    return bool(re.search(r"\b(u\.?s\.?c\.?|public law|statute|code of|civil code)\b", lowered))
+
+
+_STRIP_KEYS = (
+    "/A", "/AA", "/JavaScript", "/JS", "/Launch", "/SubmitForm",
+    "/ImportData", "/GoToR", "/GoToE", "/OpenAction", "/Metadata", "/XFA",
+)
+
+
+def _sanitize(content: bytes) -> bytes:
+    """Strip active content and metadata while preserving the AcroForm fields.
+
+    Scraped forms frequently ship hyperlink actions (``/URI``) that the studio
+    validator rejects, plus source identity in metadata (``/Author``,
+    ``/Producer``) and an XMP stream. This removes those so the form is both
+    renderable and free of source info.
+    """
+    reader = PdfReader(io.BytesIO(content), strict=False)
+    if reader.is_encrypted:
+        reader.decrypt("")
+    writer = PdfWriter()
+    writer.clone_document_from_reader(reader)
+
+    seen: set[int] = set()
+    stack = [writer._root_object]
+    while stack:
+        raw = stack.pop()
+        try:
+            value = raw.get_object() if hasattr(raw, "get_object") else raw
+        except Exception:
+            continue
+        marker = id(value)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if isinstance(value, dict):
+            for key in _STRIP_KEYS:
+                value.pop(NameObject(key), None)
+            stack.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            stack.extend(value)
+
+    root = writer._root_object
+    names = root.get("/Names")
+    if names is not None:
+        names = names.get_object() if hasattr(names, "get_object") else names
+        if isinstance(names, dict):
+            names.pop(NameObject("/EmbeddedFiles"), None)
+
+    writer._info = None
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _extract_text(content: bytes) -> str:
+    reader = PdfReader(io.BytesIO(content), strict=False)
+    if reader.is_encrypted:
+        reader.decrypt("")
+    parts = []
+    for page in reader.pages:
+        try:
+            parts.append(page.extract_text() or "")
+        except Exception:
+            continue
+    return "\n".join(parts)
+
+
+def _has_source_branding(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in _SOURCE_MARKERS)
 
 
 def _usable_field_count(content: bytes) -> int | None:
@@ -132,38 +245,55 @@ def _usable_field_count(content: bytes) -> int | None:
         return None
     try:
         fields = discover_pdf_fields(content)
-    except TemplatePdfError:
+    except Exception:
         return None
     return len(fields) or None
 
 
-def build(source: Path) -> dict:
-    groups: dict[str, dict] = defaultdict(
-        lambda: {"titles": [], "size": 0, "fields": 0}
-    )
+def build(source: Path) -> tuple[dict, dict[str, bytes]]:
+    groups: dict[str, dict] = defaultdict(lambda: {"titles": [], "content": b""})
     for path in sorted(source.glob("*.pdf")):
         content = path.read_bytes()
-        field_count = _usable_field_count(content)
+        if not content.startswith(b"%PDF-"):
+            continue
+        # Cheap pre-filter: skip anything that has no AcroForm fields at all
+        # before paying for sanitize + discovery on it.
+        try:
+            reader = PdfReader(io.BytesIO(content), strict=False)
+            if reader.is_encrypted:
+                reader.decrypt("")
+            if not (reader.get_fields() or {}):
+                continue
+        except Exception:
+            continue
+        try:
+            cleaned = _sanitize(content)
+        except Exception:
+            continue
+        field_count = _usable_field_count(cleaned)
         if field_count is None:
             continue
-        digest = hashlib.sha256(content).hexdigest()
+        digest = hashlib.sha256(cleaned).hexdigest()
         entry = groups[digest]
         entry["titles"].append(_clean_title(path.name))
-        entry["size"] = len(content)
+        entry["content"] = cleaned
         entry["fields"] = field_count
         entry["digest"] = digest
 
     manifest_forms = []
+    cleaned_by_digest: dict[str, bytes] = {}
     seen_slugs: dict[str, int] = {}
     for digest, entry in sorted(groups.items()):
-        # Canonical title: prefer the shortest non-state-stamped name so the
-        # generic form is not pinned to a single state.
         titles = sorted(entry["titles"], key=lambda t: (len(t), t.lower()))
         title = titles[0]
         lowered = title.lower()
         if len(title) < 4 or lowered in _JUNK_TITLES:
             continue
         if lowered.startswith(_JUNK_TITLE_PREFIXES):
+            continue
+        if _is_statute(title):
+            continue
+        if _has_source_branding(_extract_text(entry["content"])):
             continue
         all_states = sorted({s for t in titles for s in _states(t)})
         if len(all_states) > 1:
@@ -196,13 +326,14 @@ def build(source: Path) -> dict:
                 ),
                 "filename": f"{category}/{slug}.pdf",
                 "sha256": digest,
-                "size_bytes": entry["size"],
+                "size_bytes": len(entry["content"]),
                 "field_count": entry["fields"],
             }
         )
+        cleaned_by_digest[digest] = entry["content"]
 
     manifest_forms.sort(key=lambda f: (f["category"], f["title"].lower()))
-    return {"forms": manifest_forms}
+    return {"forms": manifest_forms}, cleaned_by_digest
 
 
 def main() -> int:
@@ -215,21 +346,16 @@ def main() -> int:
     if not source.is_dir():
         raise SystemExit(f"Source library not found: {source}")
 
-    manifest = build(source)
+    manifest, cleaned_by_digest = build(source)
     out = args.out
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
 
     for form in manifest["forms"]:
-        # Locate the original by digest (any duplicate copy is identical).
-        src = next(
-            p for p in sorted(source.glob("*.pdf"))
-            if hashlib.sha256(p.read_bytes()).hexdigest() == form["sha256"]
-        )
         dest = out / form["filename"]
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
+        dest.write_bytes(cleaned_by_digest[form["sha256"]])
 
     (out / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
