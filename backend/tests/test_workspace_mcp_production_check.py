@@ -18,6 +18,7 @@ def test_workspace_mcp_production_check_accepts_all_published_scopes() -> None:
         "offline_access",
         "tasks:propose",
         "tasks:read",
+        "templates:propose",
         "templates:read",
     }
 

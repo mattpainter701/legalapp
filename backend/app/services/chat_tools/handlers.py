@@ -16,6 +16,8 @@ itself. Execution belongs to ``task_automation`` and only after a human approves
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import uuid
@@ -50,7 +52,12 @@ from app.schemas.chat_action import (
     SmsClientAction,
     normalize_single_mailbox,
 )
-from app.schemas.workspace_mcp import ProposeDocumentFromTemplateArgs
+from app.schemas.workspace_mcp import (
+    MAX_DOCUMENT_BYTES,
+    ProposeDocumentFromTemplateArgs,
+    ProposeDocumentTemplateArgs,
+    ProposeMatterDocumentFileArgs,
+)
 from app.schemas.task import OPEN_TASK_STATUSES
 from app.services.automation_capabilities import CapabilityContext, CapabilityError
 from app.services.corpus_revision import advance_rag_corpus_revision
@@ -69,6 +76,11 @@ from app.services.cloud_artifact_materialization import (
     CloudArtifactMaterializationError,
     cloud_artifact_materializer,
 )
+from app.services.cloud_docx_snapshot import (
+    CloudDocxSnapshotError,
+    inspect_cloud_docx_snapshot,
+)
+from app.services.document_template_push import push_workspace_template
 from app.services.document_template_workspace import render_workspace_template
 from app.services.rbac_service import get_user_capabilities
 
@@ -1198,6 +1210,84 @@ async def propose_document_from_template(
     result["template_title"] = rendered.template.title
     result["filled_variables"] = sorted(rendered.variable_snapshot)
     return result
+
+
+async def propose_matter_document_file(
+    context: ChatToolContext, args: ProposeMatterDocumentFileArgs
+) -> dict[str, Any]:
+    """Adopt a DOCX an outside agent authored as staged matter review work.
+
+    The caller supplies bytes, never review text: the preview bound to the
+    review task is extracted from the file itself, so what a reviewer reads is
+    always what the cloud copy actually contains.
+    """
+
+    source = _decoded_pushed_docx(args)
+    try:
+        snapshot = await asyncio.to_thread(
+            inspect_cloud_docx_snapshot,
+            source,
+            filename=args.filename,
+        )
+    except CloudDocxSnapshotError as exc:
+        raise ChatToolError(exc.code, exc.message) from exc
+
+    if args.content_sha256 and args.content_sha256 != snapshot.source_sha256:
+        raise ChatToolError(
+            "document_integrity_failed",
+            "The uploaded document does not match content_sha256",
+        )
+
+    proposal = ProposeMatterDocumentArgs(
+        matter_id=args.matter_id,
+        client_request_id=args.client_request_id,
+        title=args.title,
+        document_kind=args.document_kind,
+        body=snapshot.review_text,
+        due_date=args.due_date,
+        source_ids=args.source_ids,
+        staff_reviewer_user_id=args.staff_reviewer_user_id,
+        attorney_reviewer_user_id=args.attorney_reviewer_user_id,
+    )
+    result = await _propose_matter_document(
+        context,
+        proposal,
+        source_docx_bytes=source,
+        document_preview_truncated=snapshot.preview_truncated,
+    )
+    result["uploaded_sha256"] = snapshot.source_sha256
+    result["uploaded_size"] = snapshot.source_size
+    result["document_preview_truncated"] = snapshot.preview_truncated
+    return result
+
+
+def _decoded_pushed_docx(args: ProposeMatterDocumentFileArgs) -> bytes:
+    """Decode strictly: padding and alphabet errors are caller errors."""
+
+    try:
+        source = base64.b64decode(args.content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ChatToolError(
+            "invalid_document_encoding",
+            "content_base64 is not valid standard base64",
+        ) from exc
+    if not source:
+        raise ChatToolError("empty_document", "The uploaded document is empty")
+    if len(source) > MAX_DOCUMENT_BYTES:
+        raise ChatToolError(
+            "document_too_large",
+            f"The uploaded document exceeds the {MAX_DOCUMENT_BYTES}-byte limit",
+        )
+    return source
+
+
+async def propose_document_template(
+    context: ChatToolContext, args: ProposeDocumentTemplateArgs
+) -> dict[str, Any]:
+    """Save an authored Markdown firm template as an inactive draft."""
+
+    async with context.db.begin_nested():
+        return await push_workspace_template(context, args)
 
 
 async def propose_client_email(

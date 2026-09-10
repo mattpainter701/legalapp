@@ -8,6 +8,7 @@ export const WORKSPACE_MCP_SCOPE_LABELS = {
   'tasks:propose': 'Create tasks that start in human review',
   'communications:propose': 'Draft client email proposals without sending',
   'documents:propose': 'Create cloud-backed DOCX drafts for staged review',
+  'templates:propose': 'Save authored firm templates as inactive drafts',
 }
 
 const scopeId = (scope) => scope?.id || scope?.name || scope?.scope || scope?.value

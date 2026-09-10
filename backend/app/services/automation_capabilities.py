@@ -44,6 +44,8 @@ from app.schemas.workspace_mcp import (
     GetIntakeArgs,
     GetTaskArgs,
     ProposeDocumentFromTemplateArgs,
+    ProposeDocumentTemplateArgs,
+    ProposeMatterDocumentFileArgs,
     SearchClientsArgs,
     SearchFirmMemoryArgs,
     SearchIntakesArgs,
@@ -510,6 +512,40 @@ CAPABILITY_SPECS: tuple[CapabilitySpec, ...] = (
             "templates:read",
             "documents:propose",
         ),
+        audiences=("workspace_mcp",),
+    ),
+    CapabilitySpec(
+        name="propose_matter_document_file",
+        description=(
+            "Push a DOCX you authored outside LawHand into the tenant cloud "
+            "matter folder as staged review work. Send the file as base64 in "
+            "content_base64; LawHand extracts the reviewer's preview from those "
+            "exact bytes, rejects macros and embedded objects, and binds "
+            "approval to the verified file. It never approves, sends, files, or "
+            "delivers the document."
+        ),
+        args_model=ProposeMatterDocumentFileArgs,
+        handler_name="propose_matter_document_file",
+        effect=CapabilityEffect.PROPOSE,
+        approval_policy=ApprovalPolicy.LAWHAND_REVIEW,
+        required_scopes=("matters:read", "documents:propose"),
+        audiences=("workspace_mcp",),
+    ),
+    CapabilitySpec(
+        name="propose_document_template",
+        description=(
+            "Save a Markdown firm template you authored as an inactive LawHand "
+            "draft with its {{variable}} field map. Pass template_id to revise a "
+            "draft you already pushed, or supersedes_template_id to propose a "
+            "replacement for a live template without changing the one the firm "
+            "is using. A drafted template cannot render client work until a "
+            "LawHand user reviews and activates it."
+        ),
+        args_model=ProposeDocumentTemplateArgs,
+        handler_name="propose_document_template",
+        effect=CapabilityEffect.PROPOSE,
+        approval_policy=ApprovalPolicy.LAWHAND_REVIEW,
+        required_scopes=("templates:read", "templates:propose"),
         audiences=("workspace_mcp",),
     ),
 )

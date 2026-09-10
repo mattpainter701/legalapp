@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.schemas.chat_action import ChatActionModel
+
+#: A pushed DOCX is bounded well below the transport cap so an oversized file
+#: is refused with a named argument error rather than a bare HTTP 413.
+MAX_DOCUMENT_BYTES = 4 * 1024 * 1024
+MAX_DOCUMENT_BASE64_CHARS = ((MAX_DOCUMENT_BYTES + 2) // 3) * 4
+MAX_TEMPLATE_BODY_CHARS = 200_000
 
 
 class SearchClientsArgs(ChatActionModel):
@@ -138,3 +144,99 @@ class ProposeDocumentFromTemplateArgs(ChatActionModel):
         if total > 20_000:
             raise ValueError("Combined template variables exceed 20,000 characters")
         return normalized
+
+
+class ProposeMatterDocumentFileArgs(ChatActionModel):
+    """Adopt an externally authored DOCX as reviewable cloud matter work.
+
+    ``content_base64`` carries the exact file an outside agent produced.  The
+    review preview is always extracted from those bytes server-side, so a
+    caller cannot describe the document as something other than what the firm
+    will actually approve.
+    """
+
+    matter_id: UUID
+    content_base64: str = Field(min_length=1, max_length=MAX_DOCUMENT_BASE64_CHARS)
+    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
+    filename: str | None = Field(default=None, min_length=1, max_length=255)
+    client_request_id: UUID | None = None
+    title: str = Field(min_length=1, max_length=300)
+    document_kind: str = Field(default="other", min_length=1, max_length=80)
+    due_date: date | None = None
+    source_ids: list[str] = Field(default_factory=list, max_length=10)
+    staff_reviewer_user_id: UUID | None = None
+    attorney_reviewer_user_id: UUID | None = None
+
+    @field_validator("content_base64")
+    @classmethod
+    def strip_base64(cls, value: str) -> str:
+        # Wire formats wrap long base64. Whitespace is not part of the payload.
+        compact = "".join(str(value).split())
+        if not compact:
+            raise ValueError("content_base64 must not be blank")
+        return compact
+
+    @field_validator("content_sha256")
+    @classmethod
+    def normalize_digest(cls, value: str | None) -> str | None:
+        return value.lower() if value else None
+
+    @field_validator("filename")
+    @classmethod
+    def validate_filename(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name = str(value).strip()
+        if not name or any(character in name for character in ("/", "\\", "\x00")):
+            raise ValueError("filename must not contain a path")
+        if not name.casefold().endswith(".docx"):
+            raise ValueError("Only .docx files can be adopted")
+        return name
+
+
+class ProposeDocumentTemplateArgs(ChatActionModel):
+    """Push an authored Markdown firm template into LawHand as a draft.
+
+    A pushed template is never active.  ``template_id`` revises a template that
+    is still a draft; ``supersedes_template_id`` proposes a replacement draft
+    for a live template without touching the one the firm is using today.
+    """
+
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(min_length=1, max_length=MAX_TEMPLATE_BODY_CHARS)
+    category: str = Field(default="other", min_length=1, max_length=50)
+    description: str | None = Field(default=None, max_length=2_000)
+    module: str | None = Field(default=None, min_length=1, max_length=100)
+    stage: str | None = Field(default=None, min_length=1, max_length=200)
+    jurisdiction: str | None = Field(default=None, min_length=1, max_length=300)
+    kind: str | None = Field(default=None, min_length=1, max_length=100)
+    variable_schema: dict[str, Any] | None = None
+    template_id: UUID | None = None
+    supersedes_template_id: UUID | None = None
+    client_request_id: UUID | None = None
+    change_summary: str | None = Field(default=None, max_length=500)
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        title = " ".join(str(value).split())
+        if not title:
+            raise ValueError("title must not be blank")
+        return title
+
+    @field_validator("body")
+    @classmethod
+    def validate_body(cls, value: str) -> str:
+        body = str(value).strip()
+        if not body:
+            raise ValueError("body must not be blank")
+        return body
+
+    @model_validator(mode="after")
+    def one_revision_target(self) -> "ProposeDocumentTemplateArgs":
+        if self.template_id is not None and self.supersedes_template_id is not None:
+            raise ValueError(
+                "Pass template_id to revise a draft or supersedes_template_id to "
+                "replace a live template, not both"
+            )
+        return self

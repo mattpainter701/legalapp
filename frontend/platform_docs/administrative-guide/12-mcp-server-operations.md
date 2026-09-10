@@ -52,8 +52,21 @@ The current Platform MCP catalog is intentionally review-first:
 - **Proposals:** `propose_task`, `propose_client_email`, and
   `propose_matter_document`; `propose_document_from_template` renders an active
   DOCX or Markdown firm template into the same review workflow.
+- **Pushed work:** `propose_matter_document_file` accepts a DOCX the connected
+  assistant authored itself, uploaded as base64. LawHand extracts the
+  reviewer's preview from those exact bytes, refuses macros, encryption, and
+  embedded objects, and routes the file through the same staff-then-attorney
+  review as any other prepared document. `propose_document_template` saves a
+  Markdown firm template the assistant authored as an **inactive draft** that
+  cannot render client work until a user with template permissions activates it
+  in Template Studio. It never edits a template the firm is already using: a
+  proposed replacement for a live template is saved as a separate draft that
+  records what it supersedes. Word and PDF templates keep their retained source
+  file and human-anchored field map, so they must still be created and revised
+  through template intake rather than MCP.
 
-There are no MCP calls for approval, filing, sending, delivery, or execution.
+There are no MCP calls for approval, template activation, filing, sending,
+delivery, or execution.
 Proposals create auditable LawHand Review work; a human reviewer must complete
 the required workflow before deterministic platform workers can act. Document
 and template text is untrusted evidence and must not be treated as an
