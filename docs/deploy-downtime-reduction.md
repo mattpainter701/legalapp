@@ -155,6 +155,29 @@ degraded until the gateway is live.
   for 62s each. Can they run concurrently, or does the schema reconciliation
   genuinely depend on the Prisma deploy completing?
 
+**B is not only a Compose change.** The `service_healthy` gate is currently the
+only thing keeping a latent defect unreachable. During warm-up an AI request
+gets connection-refused, which surfaces as:
+
+`httpx.TransportError` → `AIRequestUnknown` → `quota_ledger.mark_unknown(reservation)`
+
+and that exception is documented *"The provider may have accepted work; do not
+retry automatically."* Remove the gate as-is and every release leaves quota
+reservations parked in **unknown** with retries blocked, for requests that
+provably never reached a provider.
+
+`ai_request_broker.py:610` conflates two different situations, because
+`ConnectError` and `TimeoutException` are both `TransportError`:
+
+| Situation | Truth | Correct handling |
+| --- | --- | --- |
+| Connection refused (gateway not listening) | Request definitively never left | Release the reservation; allow retry |
+| Timeout after connect | Genuinely ambiguous | `mark_unknown`; block retry |
+
+So **B = the Compose change *plus* distinguishing "never sent" from "unknown"
+in the broker.** This is a defect B would expose rather than create; it exists
+today and is simply unreachable behind the gate.
+
 ### B2. Separate LiteLLM's release cadence *(medium — highest leverage per unit of work)*
 
 LiteLLM is simultaneously **the slowest component to start** (2m40s measured,
@@ -171,11 +194,49 @@ coupled is lifecycle, not architecture. Giving it a deploy path of its own
 would take it off the critical path for most releases entirely, and composes
 with B rather than replacing it.
 
-- **Open question:** how do we prevent model-alias version skew between the
-  application and a separately-deployed gateway? A release that adds a new
-  route alias would need the gateway updated first.
-- **Open question:** the spend ledger (below) lives in LiteLLM's database.
-  What is the continuity requirement across its own deploys?
+#### How CI would know when to deploy the gateway
+
+B2 is only safe if this decision is reliable. Two mechanisms, and the obvious
+one is the wrong one:
+
+- **Path filters** (`litellm/**`, `litellm_config.yaml`) — **rejected as the
+  primary mechanism.** The service builds with `context: .`, so its true input
+  set is whatever the Dockerfile copies, not a directory. A hand-maintained
+  filter silently drifts from that and fails open: a missed path means the
+  gateway silently does not get the change it needed.
+- **Content-addressed image comparison** — build the image, compare its ID with
+  the one the running container was created from, and recreate only on a real
+  difference. This cannot drift, because the image *is* the input set.
+  `scripts/deploy_prod.sh:224` already reads per-service image IDs, so the
+  primitive exists.
+
+**One blocker to fix first.** The service is declared
+`image: legalapp-litellm:${APP_COMMIT:-dev}`, so the tag changes on every
+release even when the content is byte-identical. Change detection must compare
+the resolved image **ID**, not the tag — or, better, tag the gateway by a hash
+of its own build inputs so identical inputs produce an identical tag and the
+skip becomes self-evident rather than computed.
+
+#### Model aliases are data, not image — which resolves the skew question
+
+The service sets `STORE_MODEL_IN_DB: "True"`. The model registry is
+authoritative in LiteLLM's own database, with `litellm_config.yaml` acting as
+bootstrap. Most routing and alias changes are therefore **data changes that
+need no redeploy at all**, which strengthens the case for B2: the image
+genuinely changes rarely.
+
+It also reframes the version-skew risk. Skew is a *data-ordering* problem, not
+an image-versioning one: does the alias exist in the gateway before the release
+that references it? Proposed rule, for discussion:
+
+1. Alias additions land in the gateway ahead of the application release that
+   uses them.
+2. The application treats an unknown alias as `degraded` rather than an error,
+   so the ordering is forgiving rather than a hard coupling.
+
+- **Open question:** the spend ledger lives in LiteLLM's database. What is the
+  continuity requirement across the gateway's own deploys, and does a
+  gateway-only deploy need its own data guard?
 
 #### What LiteLLM actually is, for scoping purposes
 
@@ -301,3 +362,49 @@ blue/green or rolling updates arrive, and should be revisited then.
 3. Workstream D: lead time, trigger, audience, and whether it blocks or only
    informs.
 4. Does the maintenance page need to reach portal clients, or staff only?
+
+## Remaining steps
+
+Decided: **both B and B2 are in scope**, conditional on the change detection in
+B2 being reliable rather than a path filter. Nothing below is implemented, and
+these are the questions still open before anyone writes code.
+
+### Needs investigation
+
+1. **Confirm the gateway's true build input set** — read what `litellm/Dockerfile`
+   actually copies out of the `context: .` build. That set defines change
+   detection, and it is the one fact the whole of B2 rests on.
+2. **Decide the tagging scheme** — tag by a hash of the gateway's own build
+   inputs, or keep the commit tag and compare resolved image IDs. The former
+   makes a skipped deploy self-evident; the latter is a smaller change.
+3. **Measure core migrations** (workstream E). They become the critical path
+   the moment B lands, and 2m06s is currently unexplained: Alembic replaying
+   169 revisions, real data work, or container startup overhead.
+
+### Needs a decision
+
+4. **Where the gateway-deploy decision lives** — a separate workflow, or a
+   conditional job inside the existing one. A separate workflow is easier to
+   reason about and to run on its own; a conditional job keeps one release
+   path.
+5. **Rollback for a gateway-only deploy.** The current rollback manifest is
+   written per application release
+   (`~/.local/state/clarity-legal/releases/<sha>.images.tsv`). A gateway that
+   deploys independently needs its own rollback story.
+6. **Spend-ledger continuity** across gateway deploys, and whether a
+   gateway-only deploy needs its own data guard.
+7. **Workstream D**, unchanged and still needing product input: lead time,
+   trigger, audience, and whether advance notice blocks starting a long action
+   or only informs.
+
+### Sequencing
+
+A and B are independent of B2 and can land first; B2 changes the deployment
+model and should not gate the downtime fix. Suggested order:
+
+**A** (scope `--force-recreate`) → **B** (readiness + the broker fix) →
+**C** (nginx resolver and maintenance page) → **B2** (gateway release cadence)
+→ **D** (advance notice) → **E** (core migrations, if still warranted).
+
+C is the one that turns an outage into a maintenance window, so it should not
+slip behind B2 despite being listed after it.
