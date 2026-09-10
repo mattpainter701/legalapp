@@ -80,6 +80,7 @@ _SCOPE_APP_CAPABILITIES: dict[str, frozenset[str]] = {
     "tasks:propose": frozenset({"manage_matters"}),
     "communications:propose": frozenset({"manage_matters"}),
     "documents:propose": frozenset({"manage_matters", "manage_documents"}),
+    "templates:propose": frozenset({"manage_documents"}),
 }
 
 

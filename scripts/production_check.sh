@@ -180,7 +180,7 @@ require_workspace_bearer_challenge() {
   local metadata_url headers status challenge_count challenge expected_scope
   local -a curl_args
   metadata_url="https://mcp.${DOMAIN}/.well-known/oauth-protected-resource/api/mcp/workspace"
-  expected_scope="communications:propose contacts:read documents:propose documents:read intakes:read matters:read tasks:propose tasks:read templates:read"
+  expected_scope="communications:propose contacts:read documents:propose documents:read intakes:read matters:read tasks:propose tasks:read templates:propose templates:read"
   curl_args=(
     -sS --max-time 15 -D - -o /dev/null
     -X POST
@@ -226,6 +226,7 @@ expected={
     "offline_access",
     "tasks:propose",
     "tasks:read",
+    "templates:propose",
     "templates:read",
 }
 assert payload.get("resource") == resource
