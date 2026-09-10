@@ -468,7 +468,7 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
           </details>
 
           <label className="block font-semibold"><input type="checkbox" checked={intakeEnabled} disabled={Boolean(savedMatter)} onChange={e => setIntakeEnabled(e.target.checked)} /> Start client intake with this matter</label>
-          {intakeEnabled && <IntakeSetupFields value={intakeSetup} onChange={setIntakeSetup} onFile={setAgreement} clientEmail={contacts.find(c => c.id === form.client_contact_id)?.email || ''} users={users} />}
+          {intakeEnabled && <IntakeSetupFields value={intakeSetup} onChange={setIntakeSetup} onFile={setAgreement} clientEmail={contacts.find(c => c.id === form.client_contact_id)?.email || ''} users={users} matterType={form.matter_type} practiceArea={form.practice_area} />}
           {savedMatter && <p>The matter is saved. Retry sending this intake packet, or <a className="underline" href={`/matters/${savedMatter.id}`}>open the created matter</a>.</p>}
           {error && (
             <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-brand-rose text-sm font-sans">
