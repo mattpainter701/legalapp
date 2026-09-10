@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     Numeric,
@@ -163,6 +164,10 @@ class Matter(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "slug", name="uq_matters_tenant_slug"),
         UniqueConstraint("tenant_id", "id", name="uq_matters_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "matter_number", name="uq_matters_tenant_matter_number"
+        ),
+        Index("ix_matters_matter_number", "matter_number"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -181,6 +186,13 @@ class Matter(Base):
         nullable=False,
     )
     slug: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Human-readable identifier, e.g. "SMIT0001" (added in migration 170).
+    # Assigned once at creation by app/services/matter_number.py and never
+    # changed -- a renamed matter keeps the number the client was given.
+    # Nullable only for rows predating the backfill; every creation path stamps
+    # it, and no API surface can set or update it.
+    matter_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    matter_number_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
     matter_name: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     matter_type: Mapped[str] = mapped_column(

@@ -14,8 +14,9 @@ import {
   getMatterDocuments, createSignatureRequest, listSignatureRequests,
   sendSignatureRequest, resendSignatureRequest, voidSignatureRequest, getMatterDocumentDownloadUrl, getMatterDocumentSigningSource,
   syncMatterCloudFolder, listTrustAccounts,
-  getContacts, getAdminUsers,
+  getContacts, getAdminUsers, getMatterByNumber,
 } from '../api'
+import { looksLikeMatterNumber, normalizeMatterNumber } from '../utils/matterNumber'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterViewGear, { MatterViewContext, useFieldHidden, useMatterView } from '../components/MatterViewGear'
 import WorkflowRunsPanel from '../components/workflows/WorkflowRunsPanel'
@@ -39,6 +40,7 @@ const Icons = {
   arrowRight: 'M5 12h14M12 5l7 7-7 7',
   edit: 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z',
   check: 'M20 6L9 17l-5-5',
+  copy: 'M9 9h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V11a2 2 0 0 1 2-2zM5 15H4a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1',
   x: 'M18 6L6 18M6 6l12 12',
   clock: 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zm0-14v4l3 3',
   users: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
@@ -234,7 +236,107 @@ const MATTER_SECTIONS = new Set(['dashboard', 'activity', 'team', 'workflow', 'd
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function MatterDetailPage() {
   const { id } = useParams()
+  // A matter number in the URL is resolved to the matter's UUID before the
+  // workspace mounts. Every loader below keys off `id`, so letting a number
+  // through would fire a dozen requests that all 404.
+  if (looksLikeMatterNumber(id)) return <MatterNumberResolver matterNumber={id} />
   return <MatterWorkspace key={id} />
+}
+
+/**
+ * The matter number, with one click to copy it.
+ *
+ * This is the identifier a client is given and a colleague is told over the
+ * phone, so it needs to be readable at a glance and grabbable without
+ * selecting text by hand. Renders nothing for a matter created before numbers
+ * existed and never backfilled.
+ */
+export function MatterNumberBadge({ matterNumber, className = '' }) {
+  const [copied, setCopied] = useState(false)
+  const resetTimer = useRef(null)
+
+  useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current) }, [])
+
+  if (!matterNumber) return null
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(matterNumber)
+      setCopied(true)
+      if (resetTimer.current) clearTimeout(resetTimer.current)
+      // Revert the confirmation so the control reads as re-usable rather than
+      // stuck in a success state.
+      resetTimer.current = setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard access can be denied (insecure origin, permission policy).
+      // The number is on screen either way, so this stays silent.
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={copied ? 'Copied' : `Copy matter number ${matterNumber}`}
+      aria-label={copied ? `Matter number ${matterNumber} copied` : `Copy matter number ${matterNumber}`}
+      className={`group inline-flex items-center gap-1.5 rounded-lg border border-brand-line bg-brand-bg-soft px-2 py-1 font-mono text-[12px] font-semibold tracking-wide text-brand-ink-2 transition-colors hover:border-brand-accent/40 hover:text-brand-ink ${className}`}
+    >
+      {matterNumber}
+      <Icon d={copied ? Icons.check : Icons.copy} size={12} className={copied ? 'text-brand-accent' : 'opacity-50 group-hover:opacity-100'} />
+      <span className="sr-only" role="status" aria-live="polite">{copied ? 'Copied to clipboard' : ''}</span>
+    </button>
+  )
+}
+
+/**
+ * Swap a /matters/SMIT0001 URL for /matters/:uuid.
+ *
+ * The replace is deliberate: the number URL is an entry point, not a step in
+ * history, so Back returns wherever the person came from rather than bouncing
+ * them through the redirect again.
+ */
+function MatterNumberResolver({ matterNumber }) {
+  const navigate = useNavigate()
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    getMatterByNumber(matterNumber)
+      .then(matter => {
+        if (cancelled) return
+        if (matter?.id) navigate(`/matters/${matter.id}`, { replace: true })
+        else setFailed(true)
+      })
+      .catch(() => { if (!cancelled) setFailed(true) })
+    return () => { cancelled = true }
+  }, [matterNumber, navigate])
+
+  if (failed) {
+    return (
+      <div className="min-h-screen bg-brand-bg flex items-center justify-center px-4">
+        <div className="text-center">
+          <p className="font-serif text-xl font-bold text-brand-ink mb-2">Matter not found</p>
+          <p className="text-brand-ink-2 font-sans text-sm mb-6">
+            No matter in this workspace has the number{' '}
+            <span className="font-mono">{normalizeMatterNumber(matterNumber) || matterNumber}</span>.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate('/matters')}
+            className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2"
+          >
+            Back to Matter Portfolio
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-brand-bg flex items-center justify-center" role="status" aria-live="polite">
+      <p className="text-brand-ink-2 font-sans text-sm">Opening matter…</p>
+    </div>
+  )
 }
 
 function MatterWorkspace() {
@@ -702,6 +804,7 @@ function MatterWorkspace() {
           </button>
           <div className="h-4 w-px bg-brand-line flex-shrink-0" />
           <span className="font-serif font-bold text-base md:text-lg text-brand-ink tracking-tight truncate">{matter.matter_name}</span>
+          <MatterNumberBadge matterNumber={matter.matter_number} className="hidden sm:inline-flex flex-shrink-0" />
         </div>
         <div className="flex gap-2 md:gap-3 flex-shrink-0">
           <MatterViewGear hidden={view.hidden} onChange={view.save} />
@@ -727,6 +830,11 @@ function MatterWorkspace() {
         {/* Hero */}
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-4 md:mb-8">
           <div className="flex-1 min-w-0">
+            {matter.matter_number && (
+              <div className="mb-2 flex items-center gap-2">
+                <MatterNumberBadge matterNumber={matter.matter_number} />
+              </div>
+            )}
             <h1 className="sr-only md:not-sr-only md:font-serif md:text-4xl md:break-words md:font-bold md:text-brand-ink md:tracking-tight md:mb-3 md:leading-tight">{matter.matter_name}</h1>
             {matter.description && (
               <p className="text-brand-ink-2 font-sans text-[15px] mb-4 leading-relaxed max-w-2xl">{matter.description}</p>

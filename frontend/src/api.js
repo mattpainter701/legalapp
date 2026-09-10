@@ -2306,6 +2306,11 @@ export const createMatterV2 = (data) =>
   api.post('/matters', data).then(r => r.data)
 export const getMatterV2 = (id) =>
   api.get(`/matters/${id}`).then(r => r.data)
+// Resolve a human-readable matter number ("SMIT0001") to full matter detail.
+// Tenant-scoped server-side, so a number only ever resolves within the signed-in
+// firm's workspace.
+export const getMatterByNumber = (matterNumber) =>
+  api.get(`/matters/by-number/${encodeURIComponent(matterNumber)}`).then(r => r.data)
 export const updateMatterV2 = (id, data) =>
   api.patch(`/matters/${id}`, data).then(r => r.data)
 export const closeMatterV2 = (id) =>
