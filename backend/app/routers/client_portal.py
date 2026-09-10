@@ -237,7 +237,15 @@ class ClientPortalContext:
         invite_expires_at: datetime | None = None,
         messages_seen_at: datetime | None = None,
         jti: str | None = None,
+        paperwork_only: bool = False,
+        paperwork_signature_ids: list[str] | None = None,
+        packet_document_ids: list[str] | None = None,
     ):
+        self.paperwork_only = paperwork_only
+        self.paperwork_signature_ids = paperwork_signature_ids or []
+        # Documents this recipient's own intake packet entitles them to read,
+        # in place of a matter-wide visibility bit every invite would share.
+        self.packet_document_ids = packet_document_ids or []
         self.tenant_id = tenant_id
         self.matter_id = matter_id
         self.contact_id = contact_id
@@ -385,8 +393,84 @@ async def get_client_portal_context(
 
     await _touch_last_seen(db, invite, now)
 
+    from app.models.matter_intake import MatterIntake
+
+    packet = await db.scalar(
+        select(MatterIntake).where(
+            MatterIntake.tenant_id == tenant_id,
+            MatterIntake.matter_id == uuid.UUID(str(matter_id)),
+            MatterIntake.invite_id == invite.id,
+        )
+    )
+    paperwork_only = bool(
+        packet
+        and packet.config.get("portal_after_signing")
+        and not packet.requirements.get("fee_agreement", {}).get("completed")
+    )
+    # The packet is the grant for its own paperwork. A matter can hold live
+    # invites for several contacts, so these documents are never made visible
+    # matter-wide: only the recipient holding this packet reads them.
+    signature_ids = []
+    document_ids = []
+    if packet is not None:
+        signature_ids = [
+            str(packet.signature_id),
+            *[
+                item["signature_id"]
+                for item in packet.requirements.values()
+                if item.get("signature_id")
+            ],
+        ]
+        document_ids = [
+            item["document_id"]
+            for item in packet.requirements.values()
+            if item.get("document_id")
+        ]
+        fee_document = await db.scalar(
+            select(SignatureRequest.document_id).where(
+                SignatureRequest.id == packet.signature_id,
+                SignatureRequest.tenant_id == tenant_id,
+            )
+        )
+        if fee_document:
+            document_ids.append(str(fee_document))
+    if paperwork_only:
+        path = request.url.path.rstrip("/")
+        allowed = path in {
+            "/api/portal/client/matter",
+            "/api/portal/client/session",
+            "/api/portal/client/logout",
+            "/api/portal/client/signatures",
+            "/api/portal/client/intake",
+            "/api/portal/client/intake/questionnaire",
+            "/api/portal/client/documents/upload",
+        }
+        allowed = allowed or any(
+            path == f"/api/portal/client/documents/{key}/download"
+            for key in document_ids
+        )
+        allowed = allowed or any(
+            path
+            in {
+                f"/api/portal/client/signatures/{key}/sign",
+                f"/api/portal/client/signatures/{key}/decline",
+            }
+            for key in signature_ids
+        )
+        allowed = allowed or any(
+            path == f"/api/portal/client/intake/requirements/{key}/submission"
+            for key in packet.requirements
+        )
+        if not allowed or packet.status == "cancelled":
+            raise HTTPException(
+                403,
+                "This link is limited to your initial paperwork until the fee agreement is signed",
+            )
     exp_claim = payload.get("exp")
     return ClientPortalContext(
+        paperwork_only=paperwork_only,
+        paperwork_signature_ids=signature_ids,
+        packet_document_ids=document_ids,
         tenant_id=str(tenant_id),
         matter_id=str(matter_id),
         contact_id=payload.get("contact_id"),
@@ -831,6 +915,13 @@ async def portal_matter(
     db: AsyncSession = Depends(get_db),
 ):
     ctx, matter = resolved
+    if getattr(ctx, "paperwork_only", False):
+        return PortalMatterView(
+            matter_id=str(matter.id),
+            matter_name=matter.matter_name,
+            paperwork_only=True,
+            pending_signature_count=len(ctx.paperwork_signature_ids),
+        )
 
     assignments = await db.execute(
         select(MatterAssignment.role, User.full_name, User.email)
@@ -1340,6 +1431,24 @@ async def _notify_firm_of_message(
 # ── Documents ───────────────────────────────────────────────────────────────
 
 
+def _readable_documents(ctx):
+    """Documents a portal recipient may read: shared with the matter's client,
+    plus the paperwork their own intake packet entitles them to."""
+    shared = MatterDocument.portal_visible.is_(True)
+    grants = _packet_document_uuids(ctx)
+    return or_(shared, MatterDocument.id.in_(grants)) if grants else shared
+
+
+def _packet_document_uuids(ctx):
+    grants = []
+    for value in getattr(ctx, "packet_document_ids", []) or []:
+        try:
+            grants.append(uuid.UUID(str(value)))
+        except (TypeError, ValueError):
+            continue
+    return grants
+
+
 @router.get("/documents", response_model=List[PortalDocumentResponse])
 async def portal_list_documents(
     resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
@@ -1351,7 +1460,7 @@ async def portal_list_documents(
         .where(
             MatterDocument.matter_id == ctx.matter_id,
             MatterDocument.tenant_id == ctx.tenant_id,
-            MatterDocument.portal_visible.is_(True),
+            _readable_documents(ctx),
         )
         .order_by(MatterDocument.created_at.desc())
     )
@@ -1646,7 +1755,7 @@ async def portal_download_document(
             MatterDocument.id == doc_id,
             MatterDocument.matter_id == ctx.matter_id,
             MatterDocument.tenant_id == ctx.tenant_id,
-            MatterDocument.portal_visible.is_(True),
+            _readable_documents(ctx),
         )
     )
     doc = result.scalar_one_or_none()

@@ -7,6 +7,7 @@ import { ConfirmProvider } from './dialog/ConfirmProvider'
 import { ToastProvider } from './toast/ToastProvider'
 
 const apiMocks = vi.hoisted(() => ({
+  default: { post: vi.fn() },
   getMatterPortalUploadLink: vi.fn().mockResolvedValue({ url: null }),
   setMatterPortalUploadLink: vi.fn(),
   createDocumentTag: vi.fn(),
@@ -126,6 +127,7 @@ function renderDocuments(onReviseDocument = vi.fn()) {
 
 describe('MatterDocumentsTab assistant revision entry point', () => {
   beforeEach(() => {
+    localStorage.clear()
     apiMocks.getMatterDocuments.mockResolvedValue({ items: documents, total: documents.length })
     apiMocks.getMatterCloudFiles.mockResolvedValue({ files: [] })
     apiMocks.getMatterCloudFolder.mockResolvedValue(null)
@@ -137,6 +139,25 @@ describe('MatterDocumentsTab assistant revision entry point', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
+  })
+
+  it('copies into a chosen folder and retains a failed request ID for retry', async () => {
+    apiMocks.default.post.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ data: {} })
+    renderDocuments()
+    await screen.findAllByText('Contract.docx')
+    fireEvent.click(screen.getByRole('button', { name: 'Folder', exact: true }))
+    const card = screen.getByText('Contract.docx').closest('article')
+    fireEvent.click(within(card).getByText('Copy to…'))
+    fireEvent.change(screen.getByLabelText('Destination folder'), { target: { value: 'folder-discovery' } })
+    fireEvent.click(screen.getByText('Copy here'))
+    await screen.findByRole('alert')
+    const first = apiMocks.default.post.mock.calls[0][1]
+    expect(first).toMatchObject({ document_id: 'docx-1', folder_id: 'folder-discovery' })
+    fireEvent.click(screen.getByText('Copy here'))
+    await waitFor(() => expect(screen.queryByLabelText('File operation')).not.toBeInTheDocument())
+    expect(apiMocks.default.post.mock.calls[1][1]).toEqual(first)
+    expect(apiMocks.moveMatterDocuments).not.toHaveBeenCalled()
+    expect(localStorage.getItem('document-view:matter-1')).toBe('folder')
   })
 
   it('recognizes DOCX by extension or MIME type but not PDF', () => {

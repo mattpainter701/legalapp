@@ -1214,6 +1214,11 @@ export const logoutClientPortal = () =>
 export const getClientPortalMatter = () =>
   clientPortalApi.get('/portal/client/matter').then((r) => r.data)
 
+// Step one of matter initiation: the standard questionnaire, requested uploads,
+// and the two documents every client receives.
+export const getIntakeStarterPack = (params) => api.get('/intake-starter-pack', { params }).then((r) => r.data)
+export const installIntakeStarterDocuments = () => api.post('/intake-starter-pack/documents').then((r) => r.data)
+
 export const getClientIntake = () => clientPortalApi.get('/portal/client/intake').then(r => r.data)
 export const submitClientIntake = (answers) => clientPortalApi.post('/portal/client/intake/questionnaire', { answers, confirm_complete: true }).then(r => r.data)
 

@@ -440,6 +440,7 @@ class EmailService:
         html_body: str,
         text_body: str = "",
         attachment: MailAttachment | None = None,
+        attachments: list[MailAttachment] | None = None,
     ) -> EmailDeliveryResult:
         """
         Send an email to one or more recipients.
@@ -470,21 +471,23 @@ class EmailService:
             if text_body:
                 msg.attach(MIMEText(text_body, "plain", "utf-8"))
             msg.attach(MIMEText(html_body, "html", "utf-8"))
-            if attachment is not None:
+            if attachment is not None or attachments:
                 alternative = msg
                 msg = MIMEMultipart("mixed")
                 for key in ("Subject", "From", "To"):
                     msg[key] = alternative[key]
                     del alternative[key]
                 msg.attach(alternative)
-                part = MIMEApplication(
-                    attachment.content,
-                    _subtype=attachment.content_type.split("/", 1)[1],
-                )
-                part.add_header(
-                    "Content-Disposition", "attachment", filename=attachment.filename
-                )
-                msg.attach(part)
+                for item in ([attachment] if attachment else []) + (attachments or []):
+                    part = MIMEApplication(
+                        item.content,
+                        _subtype=item.content_type.split("/", 1)[1],
+                    )
+                    part.set_type(item.content_type)
+                    part.add_header(
+                        "Content-Disposition", "attachment", filename=item.filename
+                    )
+                    msg.attach(part)
 
             await aiosmtplib.send(
                 msg,

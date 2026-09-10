@@ -24,6 +24,7 @@ import {
 
 import { getTemplateBindings } from '../../api'
 import DocxDocumentView from './DocxDocumentView'
+import DrawFieldLayer from './DrawFieldLayer'
 import WordDocumentPreview from './WordDocumentPreview'
 import { resolveWordPageSelection } from './wordPlaceholderMatches'
 import WordDeriveDraftAction from './WordDeriveDraftAction'
@@ -162,6 +163,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   const [wordingSelection, setWordingSelection] = useState(null)
   const [editingWording, setEditingWording] = useState(false)
   const [placingTool, setPlacingTool] = useState(null)
+  const [drawMode, setDrawMode] = useState(null)
   const [wordParagraphs, setWordParagraphs] = useState([])
   const [sourceModeSuggestion, setSourceModeSuggestion] = useState(
     template.variable_schema?.source_mode_suggestion || null,
@@ -294,7 +296,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
     )))
   }
 
-  const addField = (kind, position) => {
+  const addField = (kind, position, name) => {
     let field = createManualField(kind, { page, pageNumber, fields })
     if (position) {
       const initial = overlayToCanvasRect(field.pdf_overlay, page, viewport, viewport ? 1 : zoom)
@@ -303,6 +305,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
       })
       field = { ...field, rect: overlays[0].rect, pdf_overlay: overlays[0], pdf_overlays: overlays }
     }
+    if (name) field = { ...field, name, label: name }
     commitFields([...fields, field])
     setSelectedIdentity(field.pdf_source_key)
     setPlacingTool(null)
@@ -496,6 +499,8 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 onClick={() => setPlacingTool(current => current === tool.kind ? null : tool.kind)}
               />
             ))}
+            <ToolbarButton icon={Type} label="Draw field" onClick={() => { setPlacingTool(null); setDrawMode('field') }} />
+            <ToolbarButton icon={Eraser} label="Whiteout" onClick={() => { setPlacingTool(null); setDrawMode('whiteout') }} />
             <ToolbarButton icon={Eraser} label="Cover" onClick={addCoverRegion} />
             <span className="mx-1 hidden h-5 w-px bg-brand-line sm:block" aria-hidden="true" />
             <ToolbarButton icon={Undo2} label="Undo" onClick={undo} disabled={!undoStack.current.length} />
@@ -671,6 +676,11 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
               onViewport={setViewport}
               onError={onPageRenderError}
             />
+            {drawMode && <DrawFieldLayer key={`${drawMode}:${pageNumber}:${zoom}`} mode={drawMode} width={canvasWidth} height={canvasHeight} names={fields.map(field => field.name)} onCancel={() => setDrawMode(null)} onCreate={(geometry, name) => {
+              if (drawMode === 'whiteout') commitCoverRegions([...coverRegions, { ...createCoverRegion({ page, pageNumber }), rect: canvasToOverlayRect(geometry, page, pdfSource ? viewport : null, zoom), id: globalThis.crypto?.randomUUID?.() }])
+              else addField('text', geometry, name)
+              setDrawMode(null)
+            }} />}
             {coverRegions.map((region, index) => Number(region.page) === pageNumber ? (() => {
               const geometry = overlayToCanvasRect(region, page, pdfSource ? viewport : null, zoom)
               return <Rnd key={`cover:${index}`} bounds="parent" size={{ width: geometry.width, height: geometry.height }} position={{ x: geometry.x, y: geometry.y }} minWidth={MIN_FIELD_SIZE} minHeight={MIN_FIELD_SIZE} onDragStop={(_, data) => updateCoverRegion(index, { ...geometry, x: data.x, y: data.y })} onResizeStop={(_, __, ref, ___, position) => updateCoverRegion(index, { x: position.x, y: position.y, width: ref.offsetWidth, height: ref.offsetHeight })} className="rounded-sm border-2 border-slate-700 bg-white/90 cursor-move"><span className="pointer-events-none text-[10px] font-semibold text-slate-700">Cover</span><button type="button" aria-label="Remove cover region" onClick={(event) => { event.stopPropagation(); removeCoverRegion(index) }} className="absolute right-0 top-0 bg-slate-700 px-1 text-[10px] text-white">×</button></Rnd>

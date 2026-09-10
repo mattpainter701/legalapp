@@ -1,7 +1,9 @@
+import ClientSignatureDocument from '../components/ClientSignatureDocument'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import PortalDocumentTransfer from '../components/PortalDocumentTransfer'
 import ClientIntakeChecklist from '../components/ClientIntakeChecklist'
 import {
+  getClientIntake,
   getClientPortalSession,
   logoutClientPortal,
   getClientPortalMatter,
@@ -127,7 +129,14 @@ export default function ClientPortalMatterPage() {
             })
             .catch((err) => {
               if (requestSequence !== matterRequestSequence.current) return
-              if (!handleSessionExpiry(err)) setMediation(null)
+              // Only a genuinely expired session ends the visit. An initial
+              // paperwork link is denied this add-on by design, and treating
+              // that as a sign-out would strand the client before signing.
+              if (err?.response?.status === 401) {
+                setExpired(true)
+                return
+              }
+              setMediation(null)
             })
             .then(() => data)
         })
@@ -147,6 +156,13 @@ export default function ClientPortalMatterPage() {
   useEffect(() => {
     if (!mediation && tab === 'mediation') setTab('overview')
   }, [mediation, tab])
+
+  useEffect(() => {
+    if (!matter?.paperwork_only) return undefined
+    if (!['overview', 'signatures'].includes(tab)) setTab('overview')
+    const timer = setInterval(() => { getClientIntake().then(() => refreshMatter()).catch(() => {}) }, 15000)
+    return () => clearInterval(timer)
+  }, [matter?.paperwork_only, refreshMatter, tab])
 
   const signOut = async () => {
     setSigningOut(true)
@@ -208,7 +224,7 @@ export default function ClientPortalMatterPage() {
             <ShieldCheck size={26} strokeWidth={1.5} className="shrink-0" />
             <div className="min-w-0">
               <p className="text-xs uppercase tracking-wide text-white/60 font-sans">
-                LawHand — Client Portal
+                {matter.paperwork_only ? 'LawHand — Complete your paperwork' : 'LawHand — Client Portal'}
               </p>
               <h1 className="font-serif font-bold text-xl truncate">{matter.matter_name}</h1>
             </div>
@@ -233,7 +249,7 @@ export default function ClientPortalMatterPage() {
       <div className="max-w-5xl mx-auto px-4">
         <nav role="tablist" aria-label="Client portal sections"
           className="flex gap-1 border-b border-brand-line overflow-x-auto">
-          {[...TABS, ...(mediation ? [{ key: 'mediation', label: 'Mediation', icon: Handshake }] : [])].map(({ key, label, icon: Icon }) => (
+          {[...TABS.filter(item => !matter.paperwork_only || ['overview', 'signatures'].includes(item.key)), ...(mediation ? [{ key: 'mediation', label: 'Mediation', icon: Handshake }] : [])].map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               role="tab"
@@ -266,7 +282,7 @@ export default function ClientPortalMatterPage() {
           aria-labelledby={`portal-tab-${tab}`}
           className="py-6"
         >
-          {tab === 'overview' && <><ClientIntakeChecklist onSign={() => setTab('signatures')} /><OverviewTab {...tabProps} onNavigate={setTab} /></>}
+          {tab === 'overview' && <><ClientIntakeChecklist onSign={() => setTab('signatures')} />{!matter.paperwork_only && <OverviewTab {...tabProps} onNavigate={setTab} />}</>}
           {tab === 'messages' && <MessagesTab {...tabProps} />}
           {tab === 'documents' && <DocumentsTab {...tabProps} />}
           {tab === 'signatures' && <SignaturesTab {...tabProps} />}
@@ -931,6 +947,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
   const [declining, setDeclining] = useState(null)
   const [typedByRequest, setTypedByRequest] = useState({})
   const [acceptedByRequest, setAcceptedByRequest] = useState({})
+  const [reviewedByRequest, setReviewedByRequest] = useState({})
   const [declineReasonByRequest, setDeclineReasonByRequest] = useState({})
   const [err, setErr] = useState('')
   const [success, setSuccess] = useState('')
@@ -955,6 +972,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
     setSuccess('')
     const typed = (typedByRequest[req.id] || '').trim()
     if (!typed) { setErr('Type your full legal name exactly as you want it to appear on the signature certificate.'); return }
+    if (!reviewedByRequest[req.id]) { setErr('Review every page of the document before signing.'); return }
     if (!acceptedByRequest[req.id]) { setErr('Review and accept the electronic signature consent before signing.'); return }
     setSigning(req.id)
     try {
@@ -1066,6 +1084,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
 
             {canAct ? (
               <>
+                <ClientSignatureDocument request={req} reviewed={Boolean(reviewedByRequest[req.id])} onReviewed={value => setReviewedByRequest(previous => ({ ...previous, [req.id]: value }))} />
                 <label htmlFor={`signature-${req.id}`} className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Typed signature</label>
                 <input
                   id={`signature-${req.id}`}
@@ -1087,7 +1106,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
                 <div className="mt-4 flex flex-col sm:flex-row gap-2">
                   <button
                     onClick={() => sign(req)}
-                    disabled={signing === req.id || !typed.trim() || !accepted}
+                    disabled={signing === req.id || !typed.trim() || !accepted || !reviewedByRequest[req.id]}
                     className="w-full sm:w-auto px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {signing === req.id ? 'Capturing signature…' : 'Sign document'}

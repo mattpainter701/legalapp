@@ -2,6 +2,48 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.09.1",
+      "version": "2026.09.09.1",
+      "title": "Standard client paperwork for every new matter",
+      "published_at": "2026-09-09",
+      "summary": "Start each client with the same fee agreement, intake form, and questions matched to the matter.",
+      "highlights": [
+        {
+          "title": "Add the standard paperwork to your library",
+          "description": "Template Studio can add a standard fee agreement and client intake form. Both arrive as drafts for attorney review, and your own templates of the same name are left alone."
+        },
+        {
+          "title": "Ask the questions that fit the matter",
+          "description": "Load a questionnaire and requested uploads chosen for the matter type or practice area, then edit them before sending."
+        },
+        {
+          "title": "Collect client details once",
+          "description": "The intake form gathers identity, contact, conflict-check, and billing details in named fields, so later documents fill from what the client already provided."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.08.16",
+      "version": "2026.09.08.16",
+      "title": "Prepare client paperwork from the matter workspace",
+      "published_at": "2026-09-08",
+      "summary": "Choose forms, organize documents, and follow up when the fee agreement is signed.",
+      "highlights": [
+        {
+          "title": "Work from a simpler matter view",
+          "description": "Customize visible matter fields with the gear, use Folder or Detailed views, preview a document before sending it, and attach reviewed templates from the library."
+        },
+        {
+          "title": "Send and track selected paperwork",
+          "description": "Choose forms, review them before signing, and track signatures separately. Stored fee-signing evidence opens portal access and creates the 24-hour follow-up."
+        },
+        {
+          "title": "Prepare templates and email attachments",
+          "description": "Draw named fields and whiteout areas in Studio. Review files before emailing them, and copy documents into another folder without changing the source."
+        }
+      ]
+    },
+    {
       "id": "2026.09.08.15",
       "version": "2026.09.08.15",
       "title": "Save reviewed Word-to-PDF documents reliably",

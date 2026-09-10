@@ -6,6 +6,10 @@ tenant from the caller's session rather than trusting a path parameter.
 """
 
 import uuid
+import hashlib
+import logging
+
+from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
@@ -289,6 +293,150 @@ async def move_matter_documents(
             db, tenant_id=user.tenant_id, documents=documents
         ),
     )
+
+
+class DocumentCopyRequest(BaseModel):
+    document_id: uuid.UUID
+    folder_id: uuid.UUID | None = None
+    copy_id: uuid.UUID
+
+
+@router.post("/matters/{matter_id}/documents/copy", status_code=201)
+async def copy_matter_document(
+    matter_id: str,
+    body: DocumentCopyRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Copy bytes to a new private document; never change or delete the source.
+
+    The caller retains copy_id across retries. Names include that ID so a copy
+    cannot overwrite a same-named file in a destination cloud folder.
+    """
+    from app.database import async_session_maker
+    from app.routers.matter_documents import (
+        _storage_result_document_fields,
+        serialize_document,
+    )
+    from app.services.matter_document_organization import storage_routing_for_folder
+    from app.services.matter_document_revisions import (
+        assert_no_legacy_assistant_derivative_release,
+        DocumentRevisionServiceError,
+    )
+    from app.services.matter_file_store import MatterFileStore
+    from app.config import get_settings
+
+    user = await get_current_user(request, db)
+    tenant_id, user_id, matter_uuid = user.tenant_id, user.id, _matter_uuid(matter_id)
+    await set_tenant_context(db, str(tenant_id))
+    matter = await _get_matter_or_404(matter_id, tenant_id, db)
+    # Serialize copy retries on the matter row, away from storage OAuth commits.
+    await db.scalar(
+        select(Matter.id)
+        .where(Matter.id == matter_uuid, Matter.tenant_id == tenant_id)
+        .with_for_update()
+    )
+    folder = None
+    if body.folder_id:
+        try:
+            folder = await get_folder_or_404(
+                db, tenant_id=tenant_id, matter_id=matter_uuid, folder_id=body.folder_id
+            )
+        except DocumentOrganizationError as exc:
+            raise organization_http_error(exc) from exc
+    source = await db.scalar(
+        select(MatterDocument).where(
+            MatterDocument.id == body.document_id,
+            MatterDocument.tenant_id == tenant_id,
+            MatterDocument.matter_id == matter_uuid,
+        )
+    )
+    if source is None:
+        raise HTTPException(404, "Source document not found")
+    try:
+        await assert_no_legacy_assistant_derivative_release(
+            db, tenant_id=tenant_id, matter_id=matter_uuid, document_id=source.id
+        )
+    except DocumentRevisionServiceError as exc:
+        raise HTTPException(
+            409, "Use the document's release workflow to create a copy"
+        ) from exc
+    # Persist source identity in a human-readable description for retry validation.
+    provenance = f"Copy of document {source.id}"
+    existing = await db.scalar(
+        select(MatterDocument).where(
+            MatterDocument.id == body.copy_id, MatterDocument.tenant_id == tenant_id
+        )
+    )
+    if existing:
+        if (
+            existing.matter_id != matter_uuid
+            or existing.folder_id != body.folder_id
+            or existing.description != provenance
+        ):
+            raise HTTPException(
+                409, "This copy request ID was already used for another destination"
+            )
+        return await serialize_document(db, tenant_id=tenant_id, document=existing)
+    store = MatterFileStore()
+    category, segments = storage_routing_for_folder(folder)
+    filename = f"Copy-{body.copy_id.hex[:12]}-{source.filename}"[:500]
+    async with async_session_maker() as storage_db:
+        await set_tenant_context(storage_db, str(tenant_id))
+        content = await store.read_matter_file_bytes(
+            db=storage_db,
+            tenant_id=str(tenant_id),
+            document=source,
+            max_bytes=get_settings().MAX_FILE_SIZE_MB * 1024 * 1024,
+        )
+        stored = await store.store_matter_file_result(
+            db=storage_db,
+            tenant_id=str(tenant_id),
+            matter_slug=matter.slug,
+            category=category or source.document_category or "general",
+            filename=filename,
+            content=content,
+            content_type=source.content_type or "application/octet-stream",
+            matter_cloud_folder=matter.cloud_folder,
+            folder_path=segments,
+        )
+    if not stored.succeeded:
+        raise HTTPException(502, "The destination could not save this copy")
+    copied = MatterDocument(
+        id=body.copy_id,
+        tenant_id=tenant_id,
+        matter_id=matter_uuid,
+        uploaded_by_user_id=user_id,
+        folder_id=body.folder_id,
+        filename=filename,
+        content_type=source.content_type,
+        file_size=len(content),
+        document_category=source.document_category,
+        description=provenance,
+        portal_visible=False,
+        document_sha256=hashlib.sha256(content).hexdigest(),
+        positioned_fields=source.positioned_fields,
+        signing_roles=source.signing_roles,
+        signing_placement_required=source.signing_placement_required,
+        **_storage_result_document_fields(stored),
+    )
+    db.add(copied)
+    try:
+        await db.commit()
+    except Exception:
+        # A lost commit acknowledgement is ambiguous: deleting here could erase
+        # a committed copy. Retain its unique storage object for reconciliation.
+        logging.getLogger(__name__).exception(
+            "Copy persistence uncertain: tenant=%s copy=%s storage=%s",
+            tenant_id,
+            body.copy_id,
+            stored.storage_path,
+        )
+        raise HTTPException(
+            503, "Copy persistence is uncertain. Retry the same copy request."
+        )
+    await db.refresh(copied)
+    return await serialize_document(db, tenant_id=tenant_id, document=copied)
 
 
 # ── Tags ─────────────────────────────────────────────────────────────────────

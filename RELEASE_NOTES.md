@@ -5,6 +5,26 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.09.1 — Standard client paperwork for every new matter
+
+Released September 9, 2026.
+
+Start each client with the same fee agreement, intake form, and questions matched to the matter.
+
+- **Add the standard paperwork to your library.** Template Studio can add a standard fee agreement and client intake form. Both arrive as drafts for attorney review, and your own templates of the same name are left alone.
+- **Ask the questions that fit the matter.** Load a questionnaire and requested uploads chosen for the matter type or practice area, then edit them before sending.
+- **Collect client details once.** The intake form gathers identity, contact, conflict-check, and billing details in named fields, so later documents fill from what the client already provided.
+
+## 2026.09.08.16 — Prepare client paperwork from the matter workspace
+
+Released September 8, 2026.
+
+Choose forms, organize documents, and follow up when the fee agreement is signed.
+
+- **Work from a simpler matter view.** Customize visible matter fields with the gear, use Folder or Detailed views, preview a document before sending it, and attach reviewed templates from the library.
+- **Send and track selected paperwork.** Choose forms, review them before signing, and track signatures separately. Stored fee-signing evidence opens portal access and creates the 24-hour follow-up.
+- **Prepare templates and email attachments.** Draw named fields and whiteout areas in Studio. Review files before emailing them, and copy documents into another folder without changing the source.
+
 ## 2026.09.08.15 — Save reviewed Word-to-PDF documents reliably
 
 Released September 8, 2026.

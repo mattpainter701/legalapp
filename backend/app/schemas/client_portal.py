@@ -72,6 +72,7 @@ class PortalKeyDate(BaseModel):
 
 
 class PortalMatterView(BaseModel):
+    paperwork_only: bool = False
     matter_id: str
     matter_name: str
     status: str | None = None

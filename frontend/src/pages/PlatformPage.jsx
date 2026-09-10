@@ -1,3 +1,4 @@
+import TenantPanelSettings from '../components/TenantPanelSettings'
 import TemplateAIProfilePanel from '../components/TemplateAIProfilePanel'
 import React, { useState, useEffect, useCallback } from 'react'
 import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute, getLLMRoutingProfiles, createLLMRoutingProfile, updateLLMRoutingProfile, getBackgroundAssistantUsage, updateBackgroundAssistantQuota } from '../api'
@@ -3662,6 +3663,7 @@ export default function PlatformPage() {
                                       setSaving={setSavingProvider}
                                     />
                                   </div>
+                                  <TenantPanelSettings key={t.id} tenantId={t.id} hiddenPanels={tenantDetail.hidden_matter_panels} platformKey={platformKey} onSaved={hidden => setTenantDetail(previous => ({ ...previous, hidden_matter_panels: hidden }))} />
                                   {/* Plan / module bundle override */}
                                   <div className="mt-4 pt-4 border-t border-brand-line">
                                     <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Plan</h4>

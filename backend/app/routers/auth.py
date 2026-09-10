@@ -1,3 +1,4 @@
+from app.services.matter_panel_visibility import hidden_matter_panels
 import asyncio
 import hashlib
 import json as _json
@@ -1974,6 +1975,7 @@ async def get_me(
         capabilities=capabilities,
         navigation_paths=navigation_paths,
         navigation_preferences=navigation_preferences,
+        hidden_matter_panels=await hidden_matter_panels(db, user.tenant_id),
         default_route=default_route,
         plan=plan_id,
         upsell_target=upsell_target,
@@ -2113,6 +2115,7 @@ async def update_me(
         capabilities=capabilities,
         navigation_paths=navigation_paths,
         navigation_preferences=navigation_preferences,
+        hidden_matter_panels=await hidden_matter_panels(db, user.tenant_id),
         default_route=default_route,
         plan=plan_id,
         upsell_target=upsell_target,
