@@ -21,6 +21,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 NGINX_CONF = ROOT / "nginx" / "nginx.conf"
+NGINX_DEV_CONF = ROOT / "nginx" / "nginx.dev.conf"
 MAINTENANCE_PAGE = ROOT / "nginx" / "maintenance.html"
 DOCKERFILE_LOCAL = ROOT / "nginx" / "Dockerfile.local"
 HYPERVISOR_COMPOSE = ROOT / "docker-compose.hypervisor.yml"
@@ -41,22 +42,44 @@ def test_nginx_conf_uses_embedded_dns_resolver():
     # Bounds negative caching so a cold-boot NXDOMAIN recovers within ~10s.
 
 
+def test_nginx_proxy_target_variables_are_defined_at_http_scope():
+    # Every server block — including nginx.dev.conf, which the CI ingress
+    # rehearsal loads with `nginx -t` — must see these variables. Defining
+    # them once via map at http scope is what guarantees that; per-server
+    # `set` lines have already leaked one "unknown upstream variable" failure.
+    nginx = NGINX_CONF.read_text(encoding="utf-8")
+    dev = NGINX_DEV_CONF.read_text(encoding="utf-8")
+    for variable, target in (
+        ("$upstream_backend", "http://backend:8000"),
+        ("$upstream_frontend", "http://frontend:3000"),
+        ("$upstream_office_addin", "http://office-addin:3001"),
+    ):
+        assert re.search(
+            rf'map \$host {re.escape(variable)}\s+{{ default "{re.escape(target)}"; }}',
+            nginx,
+        )
+    for variable in ("$upstream_backend", "$upstream_frontend"):
+        assert f"map $host {variable}" in dev
+    assert "set $upstream" not in nginx + dev
+
+
 def test_nginx_conf_has_no_static_upstream_proxy_passes():
     nginx = NGINX_CONF.read_text(encoding="utf-8")
+    dev = NGINX_DEV_CONF.read_text(encoding="utf-8")
     snippets = "\n".join(
         snippet.read_text(encoding="utf-8")
         for snippet in sorted((ROOT / "nginx" / "snippets").glob("*.conf"))
     )
     for upstream in ("backend", "frontend", "office_addin"):
-        assert f"upstream {upstream} " not in nginx
-        assert f"proxy_pass http://{upstream};" not in nginx
-        assert f"proxy_pass http://{upstream}/" not in nginx + snippets
+        assert f"upstream {upstream} " not in nginx + dev
+        assert f"proxy_pass http://{upstream};" not in nginx + dev
+        assert f"proxy_pass http://{upstream}/" not in nginx + dev + snippets
     # Every former static target is now the runtime-resolved variable form.
-    assert "proxy_pass $upstream_backend;" in nginx + snippets
-    assert "proxy_pass $upstream_frontend;" in nginx
+    assert "proxy_pass $upstream_backend;" in nginx + dev + snippets
+    assert "proxy_pass $upstream_frontend;" in nginx + dev
     assert "proxy_pass $upstream_office_addin;" in snippets
     # No proxy_pass may smuggle in a URI part (rewritten-path semantics).
-    assert not _URI_PART_PROXY_PASS.search(nginx + snippets)
+    assert not _URI_PART_PROXY_PASS.search(nginx + dev + snippets)
 
 
 def test_nginx_conf_falls_back_to_the_maintenance_page():
