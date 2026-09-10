@@ -74,15 +74,29 @@ The consequence: nginx is structurally forced to wait behind the entire
 application health chain, and there is nothing left running to answer a
 request or explain the outage.
 
-### 2. The public ingress is gated behind LiteLLM, which the application does not require
+### 2. The public ingress is gated behind LiteLLM, against the application's own design
 
-`backend` declares `depends_on: litellm: condition: service_healthy`, and
-nginx in turn waits on `backend`. So the public site waits on the AI proxy.
+**Both `backend` and `scheduler`** declare
+`depends_on: litellm: condition: service_healthy`, and nginx in turn waits on
+`backend`. So the public site waits on the AI gateway.
 
-The application does not need it. `LITELLM_ENABLED` defaults to `False`
-(`backend/app/config.py:220`) and `backend/app/main.py:246` treats that as a
-supported mode, logging that AI features are disabled and continuing to serve.
-dev1 runs this way permanently.
+The application is already written on the opposite assumption. It treats a
+LiteLLM outage as a degraded state, not a fatal one:
+
+- `LITELLM_ENABLED` defaults to `False` (`backend/app/config.py:220`) and
+  `backend/app/main.py:249` treats that as a supported mode, logging that AI
+  features are disabled and continuing to serve. dev1 runs this way
+  permanently.
+- `app/services/ai_request_broker.py` bounds every call with a timeout and
+  catches `httpx.TimeoutException`, `TransportError` and `HTTPStatusError`.
+- `main.py:759-763` exposes three states — `disabled`, `ok` and **`degraded`**
+  ("gateway ping failed") — and the endpoint deliberately returns HTTP 200,
+  documented as being **"so load balancers do not flip on gateway hiccups"**.
+
+That last line states the intent outright: LiteLLM going away should not take
+the site with it. The Compose dependency contradicts it. Relaxing the gate is
+therefore not a loosening of safety — it makes the topology agree with what the
+code already does.
 
 The compose healthcheck comment is the sharpest statement of the risk
 (`docker-compose.hypervisor.yml`):
@@ -126,18 +140,73 @@ Scope `--force-recreate` to `release_services` rather than the whole project.
 
 ### B. Stop gating public ingress on LiteLLM *(small–medium, biggest time win)*
 
-Relax `backend`'s dependency on `litellm` from `service_healthy` to
-`service_started`, and let AI endpoints degrade until the proxy is live.
+Relax the `litellm` dependency from `service_healthy` to `service_started` on
+**both `backend` and `scheduler`**, and let AI features report themselves as
+degraded until the gateway is live.
 
 - **Effect:** removes 2m40s (measured) to 8m (documented worst case) from the
   critical path. Backend would instead be gated by core migrations.
 - **Estimated ingress outage after A+B: ~3m.**
-- **Open question:** what should AI endpoints return while LiteLLM is warming —
-  the existing `"disabled"` status from `main.py:757`, or a distinct
-  `"starting"` so the UI can say *back shortly* rather than *turned off*?
+- **Resolved:** an earlier draft asked whether AI endpoints need a new
+  `"starting"` status. They do not — `main.py:763` already defines
+  **`degraded`** for exactly this ("gateway ping failed"). The UI work is to
+  surface the state that already exists, not to invent one.
 - **Secondary:** `litellm-migrator` and `litellm-schema-migrator` run serially
   for 62s each. Can they run concurrently, or does the schema reconciliation
   genuinely depend on the Prisma deploy completing?
+
+### B2. Separate LiteLLM's release cadence *(medium — highest leverage per unit of work)*
+
+LiteLLM is simultaneously **the slowest component to start** (2m40s measured,
+plus two 62s migration jobs, documented worst case over seven minutes) and
+**the component that changes least often** — it moves when model configuration
+or the reviewed registry changes, not when matter-workspace code ships.
+
+Rebuilding and restarting it on every application release pays its full startup
+cost for no benefit on the great majority of deploys.
+
+It is already well separated structurally: its own service, its own PostgreSQL
+(`litellm-postgres`), its own migration jobs and its own healthcheck. What is
+coupled is lifecycle, not architecture. Giving it a deploy path of its own
+would take it off the critical path for most releases entirely, and composes
+with B rather than replacing it.
+
+- **Open question:** how do we prevent model-alias version skew between the
+  application and a separately-deployed gateway? A release that adds a new
+  route alias would need the gateway updated first.
+- **Open question:** the spend ledger (below) lives in LiteLLM's database.
+  What is the continuity requirement across its own deploys?
+
+#### What LiteLLM actually is, for scoping purposes
+
+It is worth being accurate, because "it is just the chat assistant" would
+under-scope this. LiteLLM is the AI **gateway** for roughly eleven surfaces —
+chat, RAG and the retrieval planner, embeddings, assistant document revision,
+Template Studio AI, the Office add-in, the email agent, call-intake
+preparation, Firm Memory, MCP, and the plugin executor.
+
+It also carries responsibilities that are not inference at all:
+
+- **model routing and aliasing** across the standard/premium/background tiers
+  (`app/services/llm_routing.py`);
+- the **spend ledger**, which `app/services/billing.py:62` calls *"the
+  canonical reconciliation source"*;
+- **quota enforcement** (`background_ai_quota.py`) and **gateway privacy**
+  (`gateway_privacy.py`).
+
+So it holds billing-relevant state, not only prompts. Two mitigating facts
+keep it off the critical path regardless:
+
+1. Billing reconciliation runs from the scheduler as a background job, not on
+   any request path.
+2. Embeddings already fall back to a direct provider (OpenAI, then OpenRouter)
+   when LiteLLM is disabled — see `app/services/embeddings.py`. LiteLLM is a
+   routing layer, not the only route to a model.
+
+No non-AI workflow depends on it. Matters, documents, the client portal,
+signing, tasks, intake and invoicing all function without it; the Jane Doe
+onboarding journey touches it at zero points.
+
 
 ### C. Keep nginx serving through the deploy *(medium — this is the one that answers the notification ask)*
 
@@ -197,6 +266,11 @@ revisions, genuine data work, or container startup overhead. Measure first.
 | After A + B | ~3m | Connection failure, no explanation |
 | After A + B + C | ~0 hard outage; ~3m degraded | Maintenance page |
 | After D | unchanged | Warned in advance, then maintenance page |
+| After B2 | ~3m becomes the exception, not the rule | Most releases never restart the gateway |
+
+B2 is orthogonal to the others: it does not shorten a release that genuinely
+changes LiteLLM, it removes the gateway from the critical path of every release
+that does not.
 
 ## Deliberately out of scope
 
@@ -222,7 +296,8 @@ blue/green or rolling updates arrive, and should be revisited then.
 
 1. Is ~3m of maintenance page (A + B + C) an acceptable resting point, or is
    workstream E in scope for this round?
-2. Workstream B: `"starting"` vs `"disabled"` for AI endpoints during warm-up.
+2. Workstream B2: is separating LiteLLM's release cadence in scope for this
+   round, and how do we handle model-alias skew and spend-ledger continuity?
 3. Workstream D: lead time, trigger, audience, and whether it blocks or only
    informs.
 4. Does the maintenance page need to reach portal clients, or staff only?
