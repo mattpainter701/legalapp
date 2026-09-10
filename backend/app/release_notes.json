@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.10.1",
+      "version": "2026.09.10.1",
+      "title": "Browse sample legal forms in Template Studio",
+      "published_at": "2026-09-10",
+      "summary": "Open Template Studio to see a shared library of fillable sample forms organized by state and type.",
+      "highlights": [
+        {
+          "title": "A shared library of sample forms",
+          "description": "Template Studio now shows ready-to-fill sample forms such as wills, powers of attorney, and business agreements, organized by state and type."
+        },
+        {
+          "title": "Fill a sample for any matter",
+          "description": "Preview and fill a sample form directly from the library without saving a copy."
+        },
+        {
+          "title": "Your firm's templates stay separate",
+          "description": "Sample forms are read-only shared content; your own templates and drafts are left untouched."
+        }
+      ]
+    },
+    {
       "id": "2026.09.09.1",
       "version": "2026.09.09.1",
       "title": "Standard client paperwork for every new matter",

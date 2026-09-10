@@ -1,3 +1,10 @@
+## 2026.09.10.1 — Global sample form library in Template Studio
+
+- Add a platform-owned `sample_templates` catalog (no `tenant_id`, no row-level security) seeded from a curated set of fillable AcroForm PDFs organized by category and jurisdiction tags.
+- Add read-only `GET /api/templates/library`, `GET /api/templates/library/{id}`, `GET /api/templates/library/{id}/source`, and `POST /api/templates/library/{id}/render-file` endpoints available to every authenticated tenant.
+- Add `scripts/build_sample_template_library.py` (deduplicate by SHA-256, normalize titles, tag jurisdictions, and reject PDFs with active content) and `backend/scripts/seed_sample_templates.py` (idempotent upsert by slug).
+- Keep tenant templates fully isolated: the catalog shares nothing per tenant and exposes no mutation endpoints.
+
 ## 2026.09.09.1 — Standard client paperwork for every new matter
 
 - Add a server-owned intake starter pack: a standard fee agreement, a client intake form, and matter-type questionnaires for family, criminal, injury, estate, employment, business, real estate, immigration, bankruptcy, litigation, mediation, and general matters.

@@ -84,6 +84,7 @@ from app.routers.matters_correspondence import (
 from app.routers.reports import router as reports_router
 from app.routers.calendar import router as calendar_router
 from app.routers.document_templates import router as document_templates_router
+from app.routers.sample_templates import router as sample_templates_router
 from app.routers.template_intake_preview import router as template_intake_preview_router
 from app.routers.matters import matter_context_cache_manager, router as matters_router
 from app.routers.estates import router as estates_router
@@ -509,6 +510,7 @@ app.include_router(esignature_router)
 app.include_router(esignature_portal_router)
 app.include_router(template_intake_preview_router)
 app.include_router(document_templates_router)
+app.include_router(sample_templates_router)
 
 app.include_router(user_aliases_router, prefix="/api")
 app.include_router(storage_migration_router)
