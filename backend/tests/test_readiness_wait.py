@@ -126,11 +126,26 @@ def test_deploy_requires_heartbeat_from_replacement_scheduler():
 
     stop_previous = deploy.index('"${compose[@]}" stop scheduler')
     capture_marker = deploy.index("SELECT extract(epoch FROM clock_timestamp())")
-    recreate = deploy.index('"${compose[@]}" up -d --force-recreate')
+    datastore_up = deploy.index('"${compose[@]}" up -d postgres redis litellm-postgres')
+    recreate = deploy.index('"${compose[@]}" up -d --force-recreate --no-deps')
     release_query = deploy.index("s.run_at >= to_timestamp(")
     http_waiter = deploy.index("python -m app.services.readiness_wait")
 
-    assert stop_previous < capture_marker < recreate < release_query < http_waiter
+    assert (
+        stop_previous
+        < capture_marker
+        < datastore_up
+        < recreate
+        < release_query
+        < http_waiter
+    )
+    # The datastore line must be a plain `up` (recreate only on real change),
+    # and the unscoped whole-project `up -d --force-recreate` must be gone so
+    # PostgreSQL/Redis are never bounced as deploy collateral.
+    datastore_line = deploy[datastore_up : deploy.index("\n", datastore_up)]
+    assert "--force-recreate" not in datastore_line
+    assert "up -d --force-recreate\n" not in deploy
+    assert "--force-recreate --no-deps" in deploy
     assert "replacement scheduler did not heartbeat for every active tenant" in deploy
     assert "s.status='completed'" in deploy
     assert deploy.index('previous_scheduler_id="$("${compose[@]}" ps -q scheduler') < (

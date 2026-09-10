@@ -56,13 +56,13 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|postcss|^8.5.26|devDependencies|frontend/package.json|
 |npm|tailwindcss|^3.4.17|devDependencies|frontend/package.json|
 |npm|vite|^6.0.3|devDependencies|frontend/package.json|
-|npm|vitest|^4.1.10|devDependencies|frontend/package.json|
+|npm|vitest|^4.1.11|devDependencies|frontend/package.json|
 |npm|@azure/msal-browser|^5.0.0|dependencies|office-addin/package.json|
 |npm|@types/office-js|^1.0.585|devDependencies|office-addin/package.json|
 |npm|rollup|npm:@rollup/wasm-node@4.62.3|devDependencies|office-addin/package.json|
 |npm|typescript|^5.8.3|devDependencies|office-addin/package.json|
 |npm|vite|^6.0.3|devDependencies|office-addin/package.json|
-|npm|vitest|^4.1.10|devDependencies|office-addin/package.json|
+|npm|vitest|^4.1.11|devDependencies|office-addin/package.json|
 |pypi|pyinstaller|>=6.6|optional:build|agent/pyproject.toml|
 |pypi|pywin32|>=306;sys_platform=='win32'|optional:build|agent/pyproject.toml|
 |pypi|pytest|>=8.0|optional:dev|agent/pyproject.toml|
@@ -168,7 +168,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|56|no|
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|72|no|
 |legalapp-backend:${APP_COMMIT:-dev}|docker-compose.yml|117|no|
-|legalapp-backend:${APP_COMMIT:-dev}|docker-compose.yml|166|no|
+|legalapp-backend:${APP_COMMIT:-dev}|docker-compose.yml|167|no|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.courtlistener-mcp.yml|3|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|27|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|44|yes|
@@ -179,7 +179,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|65|no|
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|81|no|
 |legalapp-backend:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|129|no|
-|legalapp-backend:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|220|no|
+|legalapp-backend:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|223|no|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.override.yml|24|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.override.yml|33|yes|
 

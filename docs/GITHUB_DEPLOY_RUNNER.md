@@ -41,8 +41,10 @@
    `main`. A successful run validates production and advances the release tag.
 
 Until the blue/green IONOS edge work lands, `stage` is a real public production
-restart: it rebuilds and force-recreates the public Compose stack. Schedule it
-as maintenance work; it is not a private candidate or an instant deployment.
+restart: it rebuilds and force-recreates the release services (the databases
+are no longer recreated when unchanged, and the stack no longer waits for the
+AI gateway before serving). Schedule it as maintenance work; it is not a
+private candidate or an instant deployment.
 
 After staging, run **Production acceptance** from `main` with the full SHA
 recorded by the stage run. The workflow requires that SHA to still be `main`

@@ -287,7 +287,17 @@ scheduler_release_not_before="$(
 }
 
 echo "==> Starting services; the one-shot migrator gates API and scheduler startup"
-"${compose[@]}" up -d --force-recreate
+# Datastores first, with a plain `up`: postgres/redis/litellm-postgres are
+# recreated only when their pinned image or config actually changed, never as
+# collateral of an application release.
+"${compose[@]}" up -d postgres redis litellm-postgres
+# Scope --force-recreate to the release set. --no-deps keeps the datastores
+# above out of the blast radius. The LiteLLM one-shot migrators are named
+# explicitly (they are not release services, but the gateway's depends_on
+# completion conditions must run in this same convergence); the core migrator
+# is already in release_services.
+"${compose[@]}" up -d --force-recreate --no-deps \
+  litellm-migrator litellm-schema-migrator "${release_services[@]}"
 scheduler_cutover_complete=true
 trap - EXIT
 

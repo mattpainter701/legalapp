@@ -111,13 +111,18 @@ Do not move DNS when any item below is true:
 After the infrastructure pull request is merged and its exact `main` push CI
 is green:
 
-> **Current-state warning (2026-08-30):** `stage` runs the public production
-> Compose deployment with `up -d --force-recreate`. It can interrupt customer
-> traffic while services rebuild and restart. It is therefore a maintenance
-> operation today, not a private candidate stage or zero-downtime deployment.
-> The isolated Skynet QA gate validates the exact SHA before this operation;
-> it does not remove the public restart until the IONOS blue/green edge design
-> is implemented.
+> **Current-state warning (2026-09-10):** `stage` still restarts the public
+> production Compose stack and can interrupt customer traffic while services
+> rebuild; it is a maintenance operation, not a private candidate stage or
+> zero-downtime deployment. Two earlier causes of the window are now fixed:
+> `--force-recreate` is scoped to the release services (PostgreSQL and Redis
+> are no longer bounced on every release), and the API and scheduler start
+> without waiting for the LiteLLM gateway, which the application already
+> treats as a degraded state rather than a fatal one. Public ingress is still
+> down for the core-migration-plus-frontend window and nginx still restarts
+> with the stack, so advance scheduling remains required. The isolated Skynet
+> QA gate validates the exact SHA before this operation; it does not remove
+> the public restart until the IONOS blue/green edge design is implemented.
 
 1. Run **Deploy IONOS candidate** with `operation=verify`.
 2. When the QA gate is enabled, first run **QA acceptance** for the current
