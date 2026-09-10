@@ -61,9 +61,7 @@ SOURCE_BACKED_FORMATS = frozenset({"docx", "pdf"})
 
 _EXTENSION_BY_FORMAT = {"docx": ".docx", "pdf": ".pdf"}
 _CONTENT_TYPE_BY_FORMAT = {
-    "docx": (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    ),
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
     "pdf": "application/pdf",
 }
 
@@ -212,7 +210,10 @@ async def _persist_template_source(
                 destination.write(content)
         except FileExistsError:
             existing = Path(path).read_bytes()
-            if hashlib.sha256(existing).hexdigest() != hashlib.sha256(content).hexdigest():
+            if (
+                hashlib.sha256(existing).hexdigest()
+                != hashlib.sha256(content).hexdigest()
+            ):
                 raise
         except Exception:
             if created:
@@ -610,9 +611,7 @@ async def _create_draft(
     frontend_url: str,
     client_request_id: uuid.UUID | None,
 ) -> dict[str, Any]:
-    fields = _template_fields(
-        args, body=body, schema=schema, inherit_from=inherit_from
-    )
+    fields = _template_fields(args, body=body, schema=schema, inherit_from=inherit_from)
     template_id = (
         _derived_template_id(
             tenant_id=context.tenant_id, client_request_id=client_request_id

@@ -217,9 +217,7 @@ def _response(
         "portal_visible": bool(document.portal_visible),
         "created": created,
         "idempotent_replay": not created,
-        "document_open_url": (
-            f"/api/matters/{matter_id}/documents/{document.id}/open"
-        ),
+        "document_open_url": (f"/api/matters/{matter_id}/documents/{document.id}/open"),
         "document_download_url": (
             f"/api/matters/{matter_id}/documents/{document.id}/download"
         ),
@@ -275,9 +273,7 @@ async def push_matter_file(
                 "idempotency_conflict",
                 "A different file already exists for this client_request_id",
             )
-        return _response(
-            existing, pushed, matter_id=args.matter_id, created=False
-        )
+        return _response(existing, pushed, matter_id=args.matter_id, created=False)
 
     tenant_settings = await context.db.scalar(
         select(TenantSettings).where(TenantSettings.tenant_id == context.tenant_id)
