@@ -118,9 +118,13 @@ is green:
 > `--force-recreate` is scoped to the release services (PostgreSQL and Redis
 > are no longer bounced on every release), and the API and scheduler start
 > without waiting for the LiteLLM gateway, which the application already
-> treats as a degraded state rather than a fatal one. Public ingress is still
-> down for the core-migration-plus-frontend window and nginx still restarts
-> with the stack, so advance scheduling remains required. The isolated Skynet
+> treats as a degraded state rather than a fatal one. Public ingress now also
+> survives the release: nginx resolves its backends at request time, is no
+> longer recreated with the stack, and serves a branded maintenance page while
+> the app tier restarts, so the hard ingress outage approaches zero and users
+> see "back soon" for the few minutes of the core-migration-plus-frontend
+> window instead of a connection failure. Advance scheduling is still
+> recommended until the advance-notice workstream lands. The isolated Skynet
 > QA gate validates the exact SHA before this operation; it does not remove
 > the public restart until the IONOS blue/green edge design is implemented.
 
