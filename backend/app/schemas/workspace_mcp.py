@@ -195,7 +195,13 @@ class ProposeMatterDocumentFileArgs(ChatActionModel):
 
 
 class ProposeDocumentTemplateArgs(ChatActionModel):
-    """Push an authored Markdown firm template into LawHand as a draft.
+    """Push an authored firm template into LawHand as a draft.
+
+    Three source formats are supported. A ``pdf`` carrying real AcroForm
+    fields is the preferred one: its field map is discovered from the form
+    itself, so the template arrives complete and needs no hand placement. A
+    ``docx`` is analysed the same way, anchoring each variable to the exact
+    source text it replaces. ``markdown`` takes a ``{{variable}}`` body inline.
 
     A pushed template is never active.  ``template_id`` revises a template that
     is still a draft; ``supersedes_template_id`` proposes a replacement draft
@@ -203,7 +209,16 @@ class ProposeDocumentTemplateArgs(ChatActionModel):
     """
 
     title: str = Field(min_length=1, max_length=300)
-    body: str = Field(min_length=1, max_length=MAX_TEMPLATE_BODY_CHARS)
+    format: Literal["markdown", "docx", "pdf"] = "markdown"
+    #: Required for markdown. For docx/pdf the body is derived from the file, and
+    #: an explicit body may only refine the reviewer-facing text.
+    body: str | None = Field(default=None, max_length=MAX_TEMPLATE_BODY_CHARS)
+    #: The template file itself, for the docx and pdf formats.
+    content_base64: str | None = Field(
+        default=None, max_length=MAX_DOCUMENT_BASE64_CHARS
+    )
+    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
+    filename: str | None = Field(default=None, min_length=1, max_length=255)
     category: str = Field(default="other", min_length=1, max_length=50)
     description: str | None = Field(default=None, max_length=2_000)
     module: str | None = Field(default=None, min_length=1, max_length=100)
@@ -226,11 +241,38 @@ class ProposeDocumentTemplateArgs(ChatActionModel):
 
     @field_validator("body")
     @classmethod
-    def validate_body(cls, value: str) -> str:
+    def validate_body(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         body = str(value).strip()
         if not body:
             raise ValueError("body must not be blank")
         return body
+
+    @field_validator("content_base64")
+    @classmethod
+    def strip_base64(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        compact = "".join(str(value).split())
+        if not compact:
+            raise ValueError("content_base64 must not be blank")
+        return compact
+
+    @field_validator("content_sha256")
+    @classmethod
+    def normalize_digest(cls, value: str | None) -> str | None:
+        return value.lower() if value else None
+
+    @field_validator("filename")
+    @classmethod
+    def validate_filename(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name = str(value).strip()
+        if not name or any(character in name for character in ("/", "\\", "\x00")):
+            raise ValueError("filename must not contain a path")
+        return name
 
     @model_validator(mode="after")
     def one_revision_target(self) -> "ProposeDocumentTemplateArgs":
@@ -239,4 +281,54 @@ class ProposeDocumentTemplateArgs(ChatActionModel):
                 "Pass template_id to revise a draft or supersedes_template_id to "
                 "replace a live template, not both"
             )
+        if self.format == "markdown":
+            if self.content_base64 is not None:
+                raise ValueError(
+                    "content_base64 belongs to the docx and pdf formats; a "
+                    "markdown template carries its body inline"
+                )
+            if not self.body:
+                raise ValueError("A markdown template requires a body")
+        elif self.content_base64 is None:
+            raise ValueError(f"A {self.format} template requires content_base64")
         return self
+
+
+class ProposeMatterFileArgs(ChatActionModel):
+    """Attach an artifact the assistant produced or forwarded to a matter.
+
+    This is the path for evidence and correspondence — a screenshot, a scanned
+    exhibit, a saved email, an export — rather than for Word work product a
+    reviewer edits, which goes through ``propose_matter_document_file``.
+    """
+
+    matter_id: UUID
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=MAX_DOCUMENT_BASE64_CHARS)
+    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
+    description: str | None = Field(default=None, max_length=400)
+    document_category: str | None = Field(default=None, min_length=1, max_length=100)
+    client_request_id: UUID | None = None
+
+    @field_validator("content_base64")
+    @classmethod
+    def strip_base64(cls, value: str) -> str:
+        compact = "".join(str(value).split())
+        if not compact:
+            raise ValueError("content_base64 must not be blank")
+        return compact
+
+    @field_validator("content_sha256")
+    @classmethod
+    def normalize_digest(cls, value: str | None) -> str | None:
+        return value.lower() if value else None
+
+    @field_validator("filename")
+    @classmethod
+    def validate_filename(cls, value: str) -> str:
+        name = str(value).strip()
+        if not name or any(character in name for character in ("/", "\\", "\x00")):
+            raise ValueError("filename must not contain a path")
+        if name.startswith(".") or "." not in name:
+            raise ValueError("filename must have a file extension")
+        return name

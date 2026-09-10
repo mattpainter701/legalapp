@@ -57,6 +57,7 @@ from app.schemas.workspace_mcp import (
     ProposeDocumentFromTemplateArgs,
     ProposeDocumentTemplateArgs,
     ProposeMatterDocumentFileArgs,
+    ProposeMatterFileArgs,
 )
 from app.schemas.task import OPEN_TASK_STATUSES
 from app.services.automation_capabilities import CapabilityContext, CapabilityError
@@ -81,6 +82,7 @@ from app.services.cloud_docx_snapshot import (
     inspect_cloud_docx_snapshot,
 )
 from app.services.document_template_push import push_workspace_template
+from app.services.matter_file_push import push_matter_file
 from app.services.document_template_workspace import render_workspace_template
 from app.services.rbac_service import get_user_capabilities
 
@@ -1284,10 +1286,19 @@ def _decoded_pushed_docx(args: ProposeMatterDocumentFileArgs) -> bytes:
 async def propose_document_template(
     context: ChatToolContext, args: ProposeDocumentTemplateArgs
 ) -> dict[str, Any]:
-    """Save an authored Markdown firm template as an inactive draft."""
+    """Save an authored firm template as an inactive draft."""
 
     async with context.db.begin_nested():
         return await push_workspace_template(context, args)
+
+
+async def propose_matter_file(
+    context: ChatToolContext, args: ProposeMatterFileArgs
+) -> dict[str, Any]:
+    """Attach a pushed artifact to the matter as a non-client-visible file."""
+
+    async with context.db.begin_nested():
+        return await push_matter_file(context, args)
 
 
 async def propose_client_email(

@@ -10,8 +10,10 @@ assert the happy path.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +23,7 @@ from app.schemas.workspace_mcp import (
     MAX_DOCUMENT_BYTES,
     ProposeDocumentTemplateArgs,
     ProposeMatterDocumentFileArgs,
+    ProposeMatterFileArgs,
 )
 from app.services import document_template_push as push
 from app.services.automation_capabilities import (
@@ -33,6 +36,7 @@ from app.services.automation_capabilities import (
 )
 from app.services.chat_tools import handlers
 from app.services.document_template_versions import body_sha256
+from app.services.matter_file_push import resolve_pushed_file
 
 
 class _DB:
@@ -68,6 +72,22 @@ class _DB:
 
 TENANT_ID = uuid.uuid4()
 USER_ID = uuid.uuid4()
+
+
+@pytest.fixture
+def upload_dir(tmp_path, monkeypatch):
+    """Point retained template sources at a per-test directory.
+
+    Settings are process-wide, so this has to be undone after each test rather
+    than assigned in place.
+    """
+
+    from app.services import document_template_push
+
+    monkeypatch.setattr(
+        document_template_push.settings, "UPLOAD_DIR", str(tmp_path), raising=False
+    )
+    return tmp_path
 
 
 def _context(db, *, idempotency_key=None):
@@ -304,14 +324,14 @@ async def test_superseding_a_live_template_creates_a_separate_draft():
 
 
 @pytest.mark.asyncio
-async def test_source_backed_templates_keep_their_intake_review():
+async def test_a_templates_format_cannot_be_changed_in_place():
     word_template = _template_row(format="docx", source_sha256="a" * 64)
     db = _DB([word_template])
     with pytest.raises(CapabilityError) as excinfo:
         await push.push_workspace_template(
             _context(db), _args(template_id=word_template.id)
         )
-    assert excinfo.value.code == "template_format_not_pushable"
+    assert excinfo.value.code == "template_format_immutable"
 
 
 @pytest.mark.asyncio
@@ -448,3 +468,268 @@ def test_a_pushed_filename_may_not_carry_a_path():
         _file_args(filename="../../etc/passwd.docx")
     with pytest.raises(ValidationError):
         _file_args(filename="agreement.pdf")
+
+
+# ── Source-backed templates: DOCX and fillable PDF ──────────────────────────
+
+
+def _fillable_pdf(fields=("client_name", "matter_number")):
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    page = canvas.Canvas(buffer, pagesize=letter)
+    page.drawString(72, 740, "Client Intake Form")
+    form = page.acroForm
+    for index, name in enumerate(fields):
+        form.textfield(
+            name=name, tooltip=name, x=72, y=700 - index * 30, width=200, height=20
+        )
+    page.save()
+    return buffer.getvalue()
+
+
+def _flat_pdf():
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    page = canvas.Canvas(buffer, pagesize=letter)
+    for index, line in enumerate(
+        [
+            "RETAINER AGREEMENT",
+            "This agreement is made between the firm and the client.",
+            "The client agrees to the attached fee schedule.",
+        ]
+    ):
+        page.drawString(72, 720 - index * 24, line)
+    page.save()
+    return buffer.getvalue()
+
+
+def _word_template_bytes():
+    document = Document()
+    document.add_heading("Engagement Letter", 0)
+    document.add_paragraph("Dear Jane Smith,")
+    document.add_paragraph("We are pleased to represent you in this matter.")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def _source_args(raw, *, fmt, filename, **overrides):
+    payload = {
+        "title": "Client Intake Form",
+        "format": fmt,
+        "category": "other",
+        "content_base64": base64.b64encode(raw).decode(),
+        "filename": filename,
+    }
+    payload.update(overrides)
+    return ProposeDocumentTemplateArgs(**payload)
+
+
+@pytest.mark.asyncio
+async def test_a_fillable_pdf_template_arrives_complete_and_inactive(
+    upload_dir,
+):
+    db = _DB()
+    result = await push.push_workspace_template(
+        _context(db), _source_args(_fillable_pdf(), fmt="pdf", filename="intake.pdf")
+    )
+
+    assert result["format"] == "pdf"
+    assert result["is_active"] is False
+    assert result["status"] == "draft"
+    # The field map came from the form itself, not from the caller.
+    assert result["fillable_field_count"] == 2
+    assert result["variables"] == ["client_name", "matter_number"]
+
+    template = db.added[0]
+    assert template.source_sha256 == result["source_sha256"]
+    # The retained source is what later renders, so it must be on disk and match.
+    stored = Path(template.source_storage_path)
+    assert stored.is_file()
+    assert hashlib.sha256(stored.read_bytes()).hexdigest() == template.source_sha256
+    fields = template.variable_schema["fields"]
+    assert {field["pdf_field_name"] for field in fields} == {
+        "client_name",
+        "matter_number",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_flat_pdf_is_sent_to_the_review_canvas_instead(upload_dir):
+    with pytest.raises(CapabilityError) as excinfo:
+        await push.push_workspace_template(
+            _context(_DB()),
+            _source_args(_flat_pdf(), fmt="pdf", filename="retainer.pdf"),
+        )
+    assert excinfo.value.code == "pdf_not_fillable"
+    # A refusal has to say where the work can actually be done.
+    assert "canvas" in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_word_template_keeps_its_source_and_discovered_anchors(
+    upload_dir,
+):
+    db = _DB()
+    result = await push.push_workspace_template(
+        _context(db),
+        _source_args(
+            _word_template_bytes(),
+            fmt="docx",
+            filename="engagement.docx",
+            title="Engagement Letter",
+            category="engagement_letter",
+        ),
+    )
+    assert result["format"] == "docx"
+    assert result["is_active"] is False
+    template = db.added[0]
+    assert Path(template.source_storage_path).is_file()
+    # Every discovered Word field names the exact source text it replaces.
+    for field in template.variable_schema["fields"]:
+        assert str(field.get("source_text") or "").strip()
+
+
+@pytest.mark.asyncio
+async def test_declared_format_cannot_disagree_with_the_uploaded_bytes(upload_dir):
+    with pytest.raises(CapabilityError) as excinfo:
+        await push.push_workspace_template(
+            _context(_DB()),
+            _source_args(_fillable_pdf(), fmt="docx", filename="intake.docx"),
+        )
+    assert excinfo.value.code in {
+        "template_format_mismatch",
+        "template_analysis_failed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_mismatched_template_digest_is_refused():
+    with pytest.raises(CapabilityError) as excinfo:
+        await push.push_workspace_template(
+            _context(_DB()),
+            _source_args(
+                _fillable_pdf(),
+                fmt="pdf",
+                filename="intake.pdf",
+                content_sha256="c" * 64,
+            ),
+        )
+    assert excinfo.value.code == "template_integrity_failed"
+
+
+def test_a_markdown_template_may_not_carry_a_file():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ProposeDocumentTemplateArgs(
+            title="t", body="b", content_base64=base64.b64encode(b"x").decode()
+        )
+    with pytest.raises(ValidationError):
+        ProposeDocumentTemplateArgs(title="t", format="pdf")
+
+
+# ── Matter file artifacts ───────────────────────────────────────────────────
+
+
+def _png_bytes():
+    import struct
+    import zlib
+
+    def chunk(tag, data):
+        payload = tag + data
+        return (
+            struct.pack(">I", len(data))
+            + payload
+            + struct.pack(">I", zlib.crc32(payload))
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\x00"))
+        + chunk(b"IEND", b"")
+    )
+
+
+_EML_BYTES = (
+    b"From: clerk@court.example\r\nTo: firm@example.com\r\n"
+    b"Subject: Filing confirmation\r\n\r\nYour filing was accepted.\r\n"
+)
+
+
+def _file_push_args(filename, raw, **overrides):
+    payload = {
+        "matter_id": uuid.uuid4(),
+        "filename": filename,
+        "content_base64": base64.b64encode(raw).decode(),
+    }
+    payload.update(overrides)
+    return ProposeMatterFileArgs(**payload)
+
+
+@pytest.mark.parametrize(
+    ("filename", "raw", "content_type"),
+    [
+        ("exhibit-a.png", _png_bytes(), "image/png"),
+        ("confirmation.eml", _EML_BYTES, "message/rfc822"),
+        ("timeline.csv", b"date,event\n2026-01-01,filed\n", "text/csv"),
+        ("notes.txt", b"call summary", "text/plain"),
+    ],
+)
+def test_supported_matter_artifacts_resolve_to_their_real_type(
+    filename, raw, content_type
+):
+    resolved = resolve_pushed_file(_file_push_args(filename, raw))
+    assert resolved.content_type == content_type
+    assert resolved.sha256 == hashlib.sha256(raw).hexdigest()
+    assert resolved.filename == filename
+
+
+@pytest.mark.parametrize(
+    ("label", "filename", "raw", "code"),
+    [
+        ("executable renamed", "photo.png", b"MZ\x90\x00 payload", "file_content_mismatch"),
+        ("archive", "bundle.zip", b"PK\x03\x04", "unsupported_file_type"),
+        (
+            "legacy macro container",
+            "report.docx",
+            bytes.fromhex("D0CF11E0A1B11AE1") + b"payload",
+            "file_content_mismatch",
+        ),
+    ],
+)
+def test_matter_artifacts_that_lie_about_their_bytes_are_refused(
+    label, filename, raw, code
+):
+    with pytest.raises(CapabilityError) as excinfo:
+        resolve_pushed_file(_file_push_args(filename, raw))
+    assert excinfo.value.code == code, label
+
+
+def test_a_matter_artifact_digest_is_verified():
+    with pytest.raises(CapabilityError) as excinfo:
+        resolve_pushed_file(
+            _file_push_args("exhibit-a.png", _png_bytes(), content_sha256="d" * 64)
+        )
+    assert excinfo.value.code == "file_integrity_failed"
+
+
+def test_a_matter_artifact_needs_a_real_extension():
+    from pydantic import ValidationError
+
+    for bad in ("noextension", ".hidden", "../escape.png"):
+        with pytest.raises(ValidationError):
+            _file_push_args(bad, _png_bytes())
+
+
+def test_matter_file_capability_is_workspace_only_review_work():
+    spec = resolve_capability_spec("propose_matter_file")
+    assert spec.audiences == ("workspace_mcp",)
+    assert spec.effect == CapabilityEffect.PROPOSE
+    assert spec.approval_policy == ApprovalPolicy.LAWHAND_REVIEW
+    assert spec.required_scopes == ("matters:read", "documents:propose")

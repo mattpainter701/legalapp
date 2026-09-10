@@ -125,6 +125,7 @@ _APP_CAPABILITIES_BY_TOOL: dict[str, frozenset[str]] = {
     "propose_document_from_template": frozenset({"manage_matters", "manage_documents"}),
     "propose_matter_document_file": frozenset({"manage_matters", "manage_documents"}),
     "propose_document_template": frozenset({"manage_documents"}),
+    "propose_matter_file": frozenset({"manage_matters", "manage_documents"}),
 }
 
 

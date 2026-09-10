@@ -39,6 +39,7 @@ def test_chat_catalog_stays_stable_and_workspace_adds_lifecycle_tools():
         "get_document_template_text",
         "propose_document_from_template",
         "propose_matter_document_file",
+        "propose_matter_file",
         "propose_document_template",
     }
     assert len({spec.name for spec in CAPABILITY_SPECS}) == len(CAPABILITY_SPECS)

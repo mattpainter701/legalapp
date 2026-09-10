@@ -52,7 +52,7 @@ result bounded:
 | Intake | `search_intakes`, `get_intake` | — |
 | Matters | `search_matters`, `find_matter`, `get_matter_context`, `list_matter_recipients` | `propose_client_email` |
 | Tasks | `search_tasks`, `get_task`, `list_matter_tasks` | `propose_task` |
-| Documents | `list_matter_documents`, `get_matter_document_text` | `propose_matter_document`, `propose_matter_document_file` |
+| Documents | `list_matter_documents`, `get_matter_document_text` | `propose_matter_document`, `propose_matter_document_file`, `propose_matter_file` |
 | Templates | `list_document_templates`, `get_document_template_text` | `propose_document_from_template`, `propose_document_template` |
 
 Firm Memory adds the read-only `search_firm_memory` tool to the Documents area.
@@ -94,12 +94,48 @@ approved only against the verified bytes. Pushed files are capped at 4 MiB
 default); macros, encryption, embedded objects, and unsafe packages are refused
 by code, not by convention.
 
-`propose_document_template` saves an authored Markdown firm template, with its
-`{{variable}}` field map, as an **inactive draft**: `is_active` is false and
-`status` is `draft`, which is exactly the state
-`list_document_templates` and `propose_document_from_template` refuse to
+`propose_matter_file` covers everything that is not Word work product: the
+evidence and correspondence that arrives alongside it — a PNG or JPEG
+screenshot or scanned exhibit, a PDF, an `.eml` or `.msg` saved email, a CSV,
+TXT, ICS, or media file. LawHand checks the uploaded bytes against the
+filename's extension, so an executable renamed `.png`, an archive, or a legacy
+macro-bearing Office container is refused rather than stored. The file lands in
+the matter's cloud folder as a document that is **not** portal-visible, with
+`document_status` `in_review` and its MCP provenance recorded, so a human
+decides what it is and whether the client ever sees it. It is not routed
+through artifact review, because it is not work product the firm is approving.
+
+### Pushing a firm template
+
+`propose_document_template` saves an authored firm template as an **inactive
+draft**: `is_active` is false and `status` is `draft`, which is exactly the
+state `list_document_templates` and `propose_document_from_template` refuse to
 render. A pushed template therefore cannot produce client work until a LawHand
 user with template permissions reviews and activates it in Template Studio.
+
+Three source formats are accepted, and in every one the field map is
+**discovered from the file**, never taken from the caller:
+
+- **`pdf` — the preferred form.** A PDF carrying real AcroForm fields arrives
+  complete: LawHand reads each widget's name, type, required flag, options, and
+  page rectangle straight out of the form, so the template is ready for review
+  with no hand placement at all. A flat or scanned PDF has no such fields and is
+  refused with `pdf_not_fillable` — placing an overlay on a page image is a
+  human judgement, and it belongs in the template intake review canvas. Prefer
+  building templates as fillable PDFs for exactly this reason.
+- **`docx`.** Analysis anchors every discovered variable to the exact source
+  text it replaces, which is the same contract the intake canvas enforces, and
+  retains the original file so later renders reproduce the firm's layout.
+- **`markdown`.** A `{{variable}}` body supplied inline, with an optional
+  `variable_schema` that may only name variables the body actually contains.
+
+For `docx` and `pdf`, send the file as base64 in `content_base64` with a
+matching `filename`; `content_sha256` is verified when supplied. The declared
+format must agree with the bytes — a PDF sent as `docx` is refused rather than
+stored under a contract it cannot honour. The retained source is written before
+the template row, hashed, and read back through that hash on every render. A
+template's format is fixed once it exists: `template_format_immutable` refuses
+an in-place conversion.
 
 - `template_id` revises a template that is still a draft, appending an
   immutable version row.
@@ -111,11 +147,6 @@ user with template permissions reviews and activates it in Template Studio.
 - `client_request_id` (or a stable `X-Idempotency-Key`) makes a retry return the
   same draft instead of creating a second one; reusing that key for different
   content fails with `idempotency_conflict`.
-
-Word and PDF templates keep their retained original source file and the
-human-anchored field map produced by LawHand's template intake canvas. They
-cannot be pushed or revised through MCP and fail closed with
-`template_format_not_pushable` rather than skipping that review boundary.
 
 `propose_document_from_template` accepts an active template ID and bounded
 variable map. For approved DOCX templates, LawHand verifies the retained source

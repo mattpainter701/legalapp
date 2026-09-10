@@ -155,9 +155,11 @@ A connected coding agent can therefore search clients, intakes, matters, and
 tasks; load client/party/team/event/note/communication context; read bounded
 uploaded-document and template text; and prepare a task, email, fresh DOCX, or
 template-rendered DOCX for LawHand review. With `documents:propose` it can also
-push a DOCX it authored itself, and with `templates:propose` save a Markdown
-firm template it authored as an inactive draft. It cannot silently approve,
-activate a template, send to a client, or file a document as final.
+push a DOCX it authored itself and attach matter artifacts such as images,
+saved emails, and PDFs; with `templates:propose` it can save a firm template it
+authored — a fillable PDF, a Word file, or Markdown — as an inactive draft. It
+cannot silently approve, activate a template, release a file to the client
+portal, send to a client, or file a document as final.
 
 ### SMS proposal contract
 
