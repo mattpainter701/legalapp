@@ -1,0 +1,33 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, expect, it, vi } from 'vitest'
+import EmailAttachments from './EmailAttachments'
+const mocks = vi.hoisted(() => ({ get: vi.fn(), documents: vi.fn() }))
+vi.mock('../api', () => ({ default: { get: mocks.get }, getMatterDocuments: mocks.documents, uploadMatterDocument: vi.fn(), getTemplate: vi.fn(), getTemplates: vi.fn() }))
+vi.mock('./templates/GeneratedPdfPreview', () => ({ default: ({ source }) => <p>PDF bytes: {source instanceof Blob ? source.size : 'invalid source'}</p> }))
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals() })
+it('renders the reviewed PDF bytes and attaches only after explicit review', async () => {
+  const revoke = vi.fn()
+  vi.stubGlobal('URL', { createObjectURL: () => 'blob:review', revokeObjectURL: revoke })
+  mocks.documents.mockResolvedValue({ items: [{ id: 'fee', filename: 'Fee.pdf' }] })
+  mocks.get.mockResolvedValue({ data: { document_id: 'fee', filename: 'Fee.pdf', content_type: 'application/pdf', content_base64: btoa('%PDF-reviewed'), sha256: 'a'.repeat(64) } })
+  const change = vi.fn()
+  const view = render(<EmailAttachments matterId="jane" items={[]} onChange={change} />)
+  fireEvent.click(screen.getByText('📎 Attach file'))
+  fireEvent.click(await screen.findByText('Preview Fee.pdf'))
+  await screen.findByText('PDF bytes: 13')
+  expect(change).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByText('Reviewed — attach this version'))
+  expect(change).toHaveBeenCalledWith([{ document_id: 'fee', filename: 'Fee.pdf', sha256: 'a'.repeat(64) }])
+  view.unmount()
+  expect(revoke).toHaveBeenCalledWith('blob:review')
+})
+it('reports a preview failure without approving an attachment', async () => {
+  mocks.documents.mockResolvedValue({ items: [{ id: 'fee', filename: 'Fee.pdf' }] })
+  mocks.get.mockRejectedValue({ response: { data: { detail: 'Review unavailable' } } })
+  const change = vi.fn()
+  render(<EmailAttachments matterId="jane" items={[]} onChange={change} />)
+  fireEvent.click(screen.getByText('📎 Attach file'))
+  fireEvent.click(await screen.findByText('Preview Fee.pdf'))
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Review unavailable'))
+  expect(change).not.toHaveBeenCalled()
+})

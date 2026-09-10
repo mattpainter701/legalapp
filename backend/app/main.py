@@ -72,6 +72,9 @@ from app.routers.matter_intake import (
     router as matter_intake_router,
     portal_router as client_intake_router,
 )
+from app.routers.intake_starter_pack import (
+    router as intake_starter_pack_router,
+)
 from app.routers.matter_document_folders import (
     router as matter_document_folders_router,
 )
@@ -494,6 +497,7 @@ app.include_router(matter_documents_router)
 app.include_router(matter_imports_router)
 app.include_router(matter_intake_router)
 app.include_router(client_intake_router)
+app.include_router(intake_starter_pack_router)
 app.include_router(matter_document_folders_router)
 app.include_router(matters_correspondence_router)
 app.include_router(reports_router)

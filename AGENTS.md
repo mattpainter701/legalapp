@@ -35,10 +35,12 @@ migrations, release notes, the CI workflow, or rebasing a feature branch.
 
 ## 3. Dependabot PRs
 
-Dependabot does not inherit the PR body template, so its PRs fail the merge-policy
-gate. Fix with `gh pr edit <n> --body-file` adding the three checkboxes
-(No documentation impact / No customer-facing release note / Security and privacy
-impact reviewed), then `gh pr update-branch <n>`.
+Dependabot PRs do not inherit the PR body template.  The merge-policy script
+(`verify_merge_policy.py`) and the CI workflow (`ci.yml`) now automatically
+exempt Dependabot PRs from the template attestation and SBOM staleness checks.
+A separate workflow (`.github/workflows/dependabot-auto-merge.yml`) approves
+and enables auto-merge for patches and minors once CI passes.  Major version
+bumps still require manual review.
 
 ## 4. Rebase hygiene on this repo
 

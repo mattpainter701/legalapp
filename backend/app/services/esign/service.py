@@ -11,8 +11,10 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import async_session_maker, set_tenant_context
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter, MatterEvent
 from app.models.signature import SignatureRequest, SignatureSigner
@@ -185,16 +187,24 @@ async def complete_request_if_done(
         artifact_sha256=request.completion_artifact_sha256,
         content_type=content_type,
     )
-    storage_result = await _file_store.store_matter_file_result(
-        db=db,
-        tenant_id=str(matter.tenant_id),
-        matter_slug=matter.slug,
-        category="signed",
-        filename=filename,
-        content=content,
-        content_type=content_type,
-        matter_cloud_folder=matter.cloud_folder,
-    )
+    # Token refresh can commit its session. Keep it separate from uncommitted
+    # signer evidence so failed storage cannot persist half a signing action.
+    async with async_session_maker() as storage_db:
+        await set_tenant_context(storage_db, str(matter.tenant_id))
+        storage_result = await _file_store.store_matter_file_result(
+            db=storage_db,
+            tenant_id=str(matter.tenant_id),
+            matter_slug=matter.slug,
+            category="signed",
+            filename=filename,
+            content=content,
+            content_type=content_type,
+            matter_cloud_folder=matter.cloud_folder,
+        )
+    if not storage_result.succeeded or not storage_result.storage_path:
+        raise HTTPException(
+            503, "Signing evidence could not be stored. Please retry signing."
+        )
     signed_doc = MatterDocument(
         id=uuid.uuid4(),
         tenant_id=matter.tenant_id,
@@ -231,7 +241,10 @@ async def complete_request_if_done(
                 f"{request.source_document_sha256}."
             ),
             note_type="system",
-            created_by=None,
+            # A portal signer is not a firm user, so the timeline attributes the
+            # completion to the staff member who requested the signature, and
+            # otherwise to the matter's responsible user. The column is NOT NULL.
+            created_by=request.created_by_user_id or matter.user_id,
         )
     )
 

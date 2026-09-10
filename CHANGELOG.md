@@ -1,3 +1,22 @@
+## 2026.09.09.1 — Standard client paperwork for every new matter
+
+- Add a server-owned intake starter pack: a standard fee agreement, a client intake form, and matter-type questionnaires for family, criminal, injury, estate, employment, business, real estate, immigration, bankruptcy, litigation, mediation, and general matters.
+- Resolve the questionnaire from either free-text label a firm typed — matter type first, then practice area — with specific aliases beating generic ones and an unrecognised matter still receiving questions.
+- Install the two documents as unapproved drafts, idempotently by title, so jurisdiction-regulated fee, trust, and contingency terms reach an attorney before a client; a firm's own template of the same name is never touched.
+- Declare every placeholder against the server binding catalogue, keeping fee amounts, scope, and exclusions manual so no fee term is inferred from a record.
+- Add a North Dakota hourly fee agreement modelled on a firm's own engagement terms — retainer in trust, replenishment, lien, third-party payment under N.D.R. Prof. Conduct 1.6, withdrawal, discharge and refund, and fee-action venue — stored with its jurisdiction and defaulting only terms a convention settles, never a rate or amount.
+- Render the pack as fillable AcroForm PDFs and a completed Word sample from the same markdown sources, with tests that fail when a printed form and its template stop agreeing on fields.
+- Add `GET /api/intake-starter-pack`, `GET /api/intake-starter-pack/practices`, and `POST /api/intake-starter-pack/documents`, with Template Studio and intake-setup controls that load or install on request rather than automatically.
+
+## 2026.09.08.16 — Matter workspace and selected intake paperwork
+
+- Add matter-local Template Studio attachment and destination-folder persistence, reviewed email attachment digests, and multi-attachment provider delivery.
+- Add personal field visibility, tenant presentation policy, primary matter navigation, Folder/Detailed layouts, and idempotent private document copies.
+- Add drawn field and whiteout rectangles to Studio, preserving its existing geometry and undo/save contracts.
+- Extend intake with an existing attorney-prepared agreement, independently tracked selected forms, requested client uploads, scoped pre-signing access, and a fee-signature portal-delivery/24-hour task milestone.
+- Keep current logical filing semantics for Move. No physical cloud move, database migration, deployment, or merge is included.
+- Require stored signing evidence before completion, show clients the source PDF, and atomically create the post-signing follow-up. Rehearse real HTTP and browser onboarding with a disposable database.
+
 ## 2026.09.08.15 - Stable reviewed Word-to-PDF saves
 
 - Normalize generated DOCX ZIP entry timestamps before conversion so independent preview/save fills have identical bytes and PDF identifiers.

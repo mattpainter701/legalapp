@@ -17,6 +17,7 @@ import {
   getContacts, getAdminUsers,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
+import MatterViewGear, { MatterViewContext, useFieldHidden, useMatterView } from '../components/MatterViewGear'
 import WorkflowRunsPanel from '../components/workflows/WorkflowRunsPanel'
 import MatterCorrespondenceTab from '../components/MatterCorrespondenceTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
@@ -112,6 +113,8 @@ function RiskBadge({ level }) {
   return <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide font-sans border ${cfg}`}>{level}</span>
 }
 function Field({ label, children }) {
+  const hidden = useFieldHidden(label)
+  if (hidden) return null
   return (
     <div className="py-3 border-b border-brand-line/50 last:border-0">
       <dt className="text-[11px] font-bold text-brand-muted font-sans uppercase tracking-widest mb-1">{label}</dt>
@@ -239,11 +242,13 @@ function MatterWorkspace() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
+  const view = useMatterView(user)
   const [matter, setMatter] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const requestedTab = searchParams.get('tab')
-  const activeTab = MATTER_SECTIONS.has(requestedTab) ? requestedTab : 'dashboard'
+  const hiddenPanels = user?.hidden_matter_panels || []
+  const activeTab = MATTER_SECTIONS.has(requestedTab) && !hiddenPanels.includes(requestedTab) ? requestedTab : 'dashboard'
   const setActiveTab = (tab) => setSearchParams(previous => {
     const next = new URLSearchParams(previous)
     if (tab === 'dashboard') next.delete('tab')
@@ -643,7 +648,7 @@ function MatterWorkspace() {
   const dm = editing ? editData : matter
 
   const tabs = [
-    { key: 'dashboard', label: 'Dashboard', icon: Icons.activity },
+    { key: 'dashboard', label: 'Overview', icon: Icons.activity },
     { key: 'activity', label: 'Activity', icon: Icons.clock },
     { key: 'team', label: 'Team', icon: Icons.users },
     { key: 'workflow', label: 'Workflow', icon: Icons.checkCircle },
@@ -653,7 +658,8 @@ function MatterWorkspace() {
     { key: 'billing', label: 'Billing', icon: Icons.dollar },
     { key: 'chat', label: 'Chat', icon: Icons.messageSquare },
     { key: 'settings', label: 'Settings', icon: Icons.settings },
-  ]
+  ].filter(tab => !hiddenPanels.includes(tab.key))
+  const primaryTabs = tabs.filter(tab => ['dashboard', 'documents', 'activity', 'portal', 'billing'].includes(tab.key))
 
   const assignedIds = new Set(assignments.map(a => a.user_id))
   const pluginLabel = (pluginName) => {
@@ -687,7 +693,7 @@ function MatterWorkspace() {
     : activityFeed.filter(e => e._kind === 'comm')
 
   return (
-    <div className="min-h-screen bg-brand-bg">
+    <MatterViewContext.Provider value={activeTab === 'dashboard' && !editing ? view.hidden : []}><div className="min-h-screen bg-brand-bg">
       {/* Topbar */}
       <div className="bg-brand-surface border-b border-brand-line px-4 md:px-8 py-4 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-2 md:gap-4 min-w-0 flex-1">
@@ -698,6 +704,8 @@ function MatterWorkspace() {
           <span className="font-serif font-bold text-base md:text-lg text-brand-ink tracking-tight truncate">{matter.matter_name}</span>
         </div>
         <div className="flex gap-2 md:gap-3 flex-shrink-0">
+          <MatterViewGear hidden={view.hidden} onChange={view.save} />
+          <button type="button" onClick={() => setActiveTab('settings')} className="rounded-lg border px-3 text-sm">Matter settings</button>
           {editing ? (
             <>
               <button onClick={() => { setEditing(false); setEditData(matter) }} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-2">
@@ -742,7 +750,7 @@ function MatterWorkspace() {
           </div>
 
           {/* Trust Balance card */}
-          <div className="hidden md:block bg-brand-surface border border-brand-line rounded-2xl p-5 text-right min-w-[180px] shadow-sm">
+          {['dashboard', 'billing'].includes(activeTab) && !hiddenPanels.includes('billing') && <div className="hidden md:block bg-brand-surface border border-brand-line rounded-2xl p-5 text-right min-w-[180px] shadow-sm">
             <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">Trust Balance</div>
             {trustAccounts.length > 0 ? (
               <>
@@ -759,10 +767,10 @@ function MatterWorkspace() {
             ) : (
               <div className="text-[13px] text-brand-muted font-sans">No trust account</div>
             )}
-          </div>
+          </div>}
 
           {/* Budget card */}
-          {budget && (
+          {['dashboard', 'billing'].includes(activeTab) && !hiddenPanels.includes('billing') && budget && (
             <div className="hidden md:block bg-brand-surface border border-brand-line rounded-2xl p-5 text-right min-w-[180px] shadow-sm">
               <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">Budget used</div>
               {budget.budget_amount ? (
@@ -808,7 +816,7 @@ function MatterWorkspace() {
           </div>}
           <label htmlFor="mobile-matter-section" className="block text-sm font-semibold mb-2">Matter section</label>
           <select id="mobile-matter-section" value={activeTab} onChange={event => setActiveTab(event.target.value)} className="w-full min-h-11 rounded-lg border border-brand-line bg-brand-surface px-3 text-base">
-            {tabs.map(tab => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
+            {[...primaryTabs, ...tabs.filter(tab => tab.key === 'settings'), ...(!['dashboard', 'documents', 'activity', 'portal', 'billing', 'settings'].includes(activeTab) ? tabs.filter(tab => tab.key === activeTab) : [])].map(tab => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
           </select>
           <div className="mt-3 grid grid-cols-2 gap-2">
             {[
@@ -825,7 +833,7 @@ function MatterWorkspace() {
         {noteConflict && <button type="button" className="min-h-11 mb-4 rounded-lg border border-brand-line px-4 text-sm" onClick={() => { noteRequest.current = null; setNoteConflict(false); setNoteNotice(null); setNewNote({ note_type: 'internal', title: '', content: '' }); setActiveTab('activity'); setShowAddNote(true) }}>Start a new blank note</button>}
         {/* Tabs */}
         <div className="hidden md:flex gap-1 mb-8 border-b border-brand-line overflow-x-auto scrollbar-none pb-px">
-          {tabs.map(({ key, label, icon }) => (
+          {primaryTabs.map(({ key, label, icon }) => (
             <button
               key={key}
               onClick={() => setActiveTab(key)}
@@ -837,6 +845,9 @@ function MatterWorkspace() {
           ))}
         </div>
 
+        {['settings', 'team', 'workflow'].includes(activeTab) && <nav aria-label="Matter settings sections" className="mb-4 flex flex-wrap gap-3">{tabs.filter(tab => ['settings', 'team', 'workflow'].includes(tab.key)).map(tab => <button type="button" key={tab.key} onClick={() => setActiveTab(tab.key)} className="rounded border px-3 py-2">{tab.label}</button>)}</nav>}
+        {['activity', 'correspondence'].includes(activeTab) && <nav aria-label="Matter activity sections" className="mb-4 flex gap-3">{tabs.filter(tab => ['activity', 'correspondence'].includes(tab.key)).map(tab => <button type="button" key={tab.key} onClick={() => setActiveTab(tab.key)} className="rounded border px-3 py-2">{tab.label}</button>)}</nav>}
+        {['dashboard', 'activity', 'chat'].includes(activeTab) && !hiddenPanels.includes('chat') && <button type="button" onClick={() => setActiveTab('chat')} className="mb-3 text-sm underline">Matter assistant</button>}
         {/* ── Dashboard Tab ─────────────────────────────────────────────────────── */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
@@ -873,7 +884,7 @@ function MatterWorkspace() {
                     ? differenceInDays(new Date(), parseISO(dashboard.last_activity_at)) > 14
                     : false,
                 },
-              ].map((s, i) => (
+              ].filter(stat => stat.alert || !view.hidden.includes('Summary statistics')).map((s, i) => (
                 <div key={i} className={`bg-brand-surface border rounded-2xl p-5 shadow-sm ${s.alert ? 'border-brand-rose/30' : 'border-brand-line'}`}>
                   <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">{s.label}</div>
                   <div className={`text-[28px] font-serif font-bold ${s.alert ? 'text-brand-rose' : 'text-brand-ink'}`}>{s.value}</div>
@@ -1074,7 +1085,7 @@ function MatterWorkspace() {
             </div>
 
             {/* Case Details (collapsible) */}
-            <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            {!view.hidden.includes('Case details') && <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
               <button
                 onClick={() => setShowDetailsPanel(v => !v)}
                 className="w-full flex items-center justify-between px-6 py-4 text-left"
@@ -1118,7 +1129,7 @@ function MatterWorkspace() {
                   </dl>
                 </div>
               )}
-            </div>
+            </div>}
           </div>
         )}
 
@@ -2123,7 +2134,7 @@ function MatterWorkspace() {
           onClose={() => setShowCompose(false)}
         />
       )}
-    </div>
+    </div></MatterViewContext.Provider>
   )
 }
 

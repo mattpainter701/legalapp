@@ -304,6 +304,7 @@ class TestAuthMe:
         monkeypatch.setattr(auth, "resolve_navigation", navigation)
         monkeypatch.setattr(auth, "resolve_plan_meta", plan_meta)
         monkeypatch.setattr(auth, "active_plugin_names", addons)
+        monkeypatch.setattr(auth, "hidden_matter_panels", addons)
         monkeypatch.setattr(auth, "get_user_capabilities", capabilities)
 
         response = await auth.update_me(
@@ -407,6 +408,7 @@ class TestAuthMe:
         monkeypatch.setattr(auth, "resolve_navigation", navigation)
         monkeypatch.setattr(auth, "resolve_plan_meta", plan_meta)
         monkeypatch.setattr(auth, "active_plugin_names", addons)
+        monkeypatch.setattr(auth, "hidden_matter_panels", addons)
         monkeypatch.setattr(auth, "get_user_capabilities", capabilities)
         monkeypatch.setattr(workspace_mcp_oauth, "append_workspace_mcp_audit", audit)
         monkeypatch.setattr(
