@@ -31,6 +31,16 @@ Qualification tasks can collect missing information and document the decision. D
 
 Use **Convert to Matter** only after the firm authorizes opening the file. Confirm the client identity, matter name, practice area, responsible attorney, and source intake. Conversion should preserve the intake history rather than retyping a disconnected summary.
 
+## Send the standard client paperwork
+
+Matter initiation opens with the same three pieces of paperwork for every client: the fee agreement, the case-specific questionnaire, and the client intake form.
+
+In **Template Studio**, *Add the standard client paperwork* puts a standard fee agreement and client intake form in the firm library. Both arrive as drafts. Fee, trust-account, and contingency terms are regulated differently in every jurisdiction, so an attorney reviews and approves them for the firm before either is sent, and the placeholders left for jurisdiction-specific language are filled in. A template of the same name that the firm already has is left untouched.
+
+When you open a matter or prepare its intake packet, *Use the standard questions for this matter type* loads a questionnaire and a list of requested client uploads chosen from the matter type or practice area — family, criminal, personal injury, estate, employment, business, real estate, immigration, bankruptcy, litigation, mediation, or general. It replaces whatever is in those boxes, so review and edit the questions before sending.
+
+Sending is unchanged: the packet still requires an attorney-reviewed fee agreement chosen from the matter's documents or uploaded as a PDF.
+
 ## Capture a call
 
 The Call Intake dashboard supports recent caller matching, call capture, partner routing, the partner log, call-record exports, and administrator-managed rotation rules. When Zoom Phone is configured, a live call feed may provide call metadata.

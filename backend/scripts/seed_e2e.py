@@ -142,6 +142,39 @@ async def seed() -> None:
         )
         await db.commit()
 
+    if os.getenv("E2E_ONBOARDING_ACCEPTANCE") == "true":
+        async with async_session_maker() as db:
+            await db.execute(
+                delete(Tenant).where(Tenant.domain == "onboarding-e2e.example.com")
+            )
+            await db.commit()
+            tenant = Tenant(
+                name="Onboarding acceptance",
+                domain="onboarding-e2e.example.com",
+                billing_tier="payg",
+                is_active=True,
+                onboarding_completed=True,
+            )
+            db.add(tenant)
+            await db.flush()
+            await set_tenant_context(db, str(tenant.id))
+            attorney = User(
+                tenant_id=tenant.id,
+                email="onboarding@playwright-e2e.example.com",
+                full_name="Acceptance Attorney",
+                role="admin",
+                password_hash=bcrypt.hashpw(
+                    password.encode(), bcrypt.gensalt(rounds=4)
+                ).decode(),
+                oauth_provider="e2e",
+                oauth_subject="e2e-onboarding",
+                is_active=True,
+                license_active=True,
+            )
+            db.add(attorney)
+            await db.flush()
+            await provision_tenant_rbac(db, tenant.id, attorney.id)
+            await db.commit()
     print(f"Seeded disposable first-customer tenant for {email}")
 
 

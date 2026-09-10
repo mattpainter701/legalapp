@@ -1,3 +1,4 @@
+import EmailAttachments from './EmailAttachments'
 import { useState } from 'react'
 import { emailMatterClient } from '../api'
 
@@ -12,6 +13,7 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
     body: '',
   })
   const [sending, setSending] = useState(false)
+  const [attachments, setAttachments] = useState([])
   const [error, setError] = useState(null)
   const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false)
 
@@ -27,6 +29,7 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
         to_email: form.to_email || undefined,
         subject: form.subject.trim(),
         body: form.body.trim(),
+        ...(attachments.length ? { attachments } : {}),
       })
       if (result?.sent !== true) {
         setError(
@@ -47,7 +50,7 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-brand-surface rounded-2xl shadow-2xl border border-brand-line w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="compose-email-title">
+      <div className="bg-brand-surface rounded-2xl shadow-2xl border border-brand-line w-full max-w-3xl max-h-[calc(100dvh-2rem)] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="compose-email-title">
         <div className="px-6 py-5 border-b border-brand-line flex items-center justify-between">
           <h2 id="compose-email-title" className="font-serif font-bold text-xl text-brand-ink">Email Client</h2>
           <button type="button" onClick={onClose} aria-label="Close email composer" className="text-brand-muted hover:text-brand-ink transition-colors min-h-11 min-w-11 flex items-center justify-center rounded">
@@ -94,6 +97,7 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
             />
           </div>
 
+          <EmailAttachments matterId={matterId} items={attachments} onChange={setAttachments} disabled={sending || deliveryUnconfirmed} />
           {error && <p className="text-brand-rose text-sm font-sans">{error}</p>}
 
           <div className="flex gap-3 justify-end pt-2">

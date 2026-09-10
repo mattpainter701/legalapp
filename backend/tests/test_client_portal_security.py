@@ -200,3 +200,81 @@ def test_portal_signer_matching_requires_same_contact_or_email():
     assert _portal_signer_matches_context(matching_contact, ctx)
     assert _portal_signer_matches_context(matching_email, ctx)
     assert not _portal_signer_matches_context(wrong_signer, ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,allowed",
+    [
+        ("matter", True),
+        ("signatures", True),
+        ("intake", True),
+        ("intake/questionnaire", True),
+        ("documents/upload", True),
+        ("documents", False),
+        ("messages", False),
+        ("billing", False),
+        ("signatures/foreign/sign", False),
+        ("documents/foreign/download", False),
+    ],
+)
+async def test_paperwork_link_restricts_general_portal_until_fee_signed(
+    monkeypatch, path, allowed
+):
+    from unittest.mock import AsyncMock
+    from app.models.matter_intake import MatterIntake
+    from app.models.tenant import Tenant
+    from app.models.signature import SignatureRequest
+
+    tid, mid, iid, cid, sid, did = [uuid.uuid4() for _ in range(6)]
+    invite = ClientPortalInvite(
+        id=iid,
+        tenant_id=tid,
+        matter_id=mid,
+        contact_id=cid,
+        email="jane@example.com",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        revoked=False,
+    )
+    packet = SimpleNamespace(
+        signature_id=sid,
+        config={"portal_after_signing": True},
+        requirements={
+            "fee_agreement": {"completed": False},
+            "document_extra": {"signature_id": str(sid), "document_id": str(did)},
+        },
+        status="awaiting_documents",
+    )
+
+    async def scalar(stmt):
+        model = stmt.column_descriptions[0]["entity"]
+        return {
+            Tenant: SimpleNamespace(is_active=True),
+            MatterIntake: packet,
+            SignatureRequest: did,
+        }[model]
+
+    db = SimpleNamespace(
+        scalar=scalar, execute=AsyncMock(return_value=_FakeResult(invite))
+    )
+    monkeypatch.setattr(client_portal, "bind_tenant_context", AsyncMock())
+    monkeypatch.setattr(client_portal, "_touch_last_seen", AsyncMock())
+    token = create_matter_portal_token(
+        tenant_id=str(tid),
+        matter_id=str(mid),
+        contact_id=str(cid),
+        email=invite.email,
+        invite_id=str(iid),
+    )
+    request = _FakeRequest(token)
+    request.url = SimpleNamespace(path="/api/portal/client/" + path)
+    if allowed:
+        ctx = await client_portal.get_client_portal_context(request, db)
+        assert ctx.paperwork_only and str(sid) in ctx.paperwork_signature_ids
+    else:
+        with pytest.raises(HTTPException) as denied:
+            await client_portal.get_client_portal_context(request, db)
+        assert denied.value.status_code == 403
+    packet.requirements["fee_agreement"]["completed"] = True
+    ctx = await client_portal.get_client_portal_context(request, db)
+    assert not ctx.paperwork_only

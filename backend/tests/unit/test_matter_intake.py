@@ -791,3 +791,79 @@ async def test_intake_completion_preserves_an_applied_firm_workflow_stage(ctx):
     assert c.matter.stage == "Discovery"
     assert c.packet.status == "documents_complete"
     assert uuid.uuid5(c.packet.id, "scheduling") in c.db.tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("artifact", ["valid", "missing", "invalid_id"])
+async def test_selected_signature_requires_persisted_completion_evidence(ctx, artifact):
+    c = ctx
+    c.packet.requirements["document_extra"] = {
+        "kind": "signature",
+        "signature_id": str(c.signature.id),
+        "source_sha256": c.signature.source_document_sha256,
+        "completed": False,
+    }
+    c.signature.status, c.signature.completed_at = "completed", TIME
+    c.signature.completion_artifact_sha256 = "b" * 64
+    c.signature.provider_envelope_id = (
+        str(c.doc.id) if artifact != "invalid_id" else "invalid"
+    )
+    if artifact == "missing":
+        c.db.rows[s.MatterDocument] = None
+    await s.reconcile(c.db, c.packet)
+    assert c.packet.requirements["document_extra"]["completed"] == (artifact == "valid")
+
+
+@pytest.mark.asyncio
+async def test_cancel_selected_signature_and_packet_message_labels(ctx):
+    c = ctx
+    c.packet.config["portal_after_signing"] = True
+    c.packet.config["selected_documents"] = [{"label": "General intake"}]
+    assert "General intake" in s.message(c.packet, "welcome", "link")[1]
+    assert "portal is ready" in s.message(c.packet, "signed", "link")[0]
+    extra = s.SignatureRequest(id=uuid.uuid4(), status="sent")
+    c.packet.requirements["document_extra"] = {
+        "kind": "signature",
+        "signature_id": str(extra.id),
+        "label": "General intake",
+        "completed": False,
+    }
+    assert "General intake" in s.message(c.packet, "reminder", "link")[1]
+    scalar = c.db.scalar
+
+    async def lookup(query):
+        if (
+            query.column_descriptions[0]["entity"] is s.SignatureRequest
+            and query.compile().params.get("id_1") == extra.id
+        ):
+            return extra
+        return await scalar(query)
+
+    c.db.scalar = lookup
+    await s.cancel_packet(c.db, c.packet, "Matter closed")
+    assert extra.status == "voided" and extra.void_reason == "Matter closed"
+
+
+@pytest.mark.asyncio
+async def test_start_route_accepts_existing_reviewed_agreement(ctx, monkeypatch):
+    from types import SimpleNamespace
+    from app.services import matter_mail_attachments
+
+    c = ctx
+    body = start_body(c, agreement_document_id=c.doc.id)
+    monkeypatch.setattr(r, "staff_matter", AsyncMock(return_value=c.matter))
+    start = AsyncMock(return_value=c.packet)
+    monkeypatch.setattr(s, "start_packet", start)
+    read = AsyncMock(
+        return_value=(SimpleNamespace(filename="fee.pdf"), b"%PDF-reviewed")
+    )
+    monkeypatch.setattr(matter_mail_attachments, "reviewed_document", read)
+    await r.start(c.matter.id, body.model_dump_json(), None, c.db, c.user)
+    assert start.call_args.args[-2:] == ("fee.pdf", b"%PDF-reviewed")
+    # Intake links the agreement behind a secure portal link, so it reads to the
+    # direct-upload ceiling rather than the smaller mail-attachment one.
+    assert read.call_args.args[-1] == s.MAX_AGREEMENT_BYTES
+    body.agreement_document_id = None
+    with pytest.raises(HTTPException) as error:
+        await r.start(c.matter.id, body.model_dump_json(), None, c.db, c.user)
+    assert error.value.status_code == 422

@@ -79,6 +79,7 @@ async def _send_microsoft(
     subject: str,
     html_body: str,
     attachment: MailAttachment | None = None,
+    attachments: list[MailAttachment] | None = None,
 ) -> ConnectedMailDelivery:
     response = await graph_request(
         "POST",
@@ -95,15 +96,17 @@ async def _send_microsoft(
                         "attachments": [
                             {
                                 "@odata.type": "#microsoft.graph.fileAttachment",
-                                "name": attachment.filename,
-                                "contentType": attachment.content_type,
-                                "contentBytes": base64.b64encode(
-                                    attachment.content
-                                ).decode("ascii"),
+                                "name": item.filename,
+                                "contentType": item.content_type,
+                                "contentBytes": base64.b64encode(item.content).decode(
+                                    "ascii"
+                                ),
                             }
+                            for item in ([attachment] if attachment else [])
+                            + (attachments or [])
                         ]
                     }
-                    if attachment
+                    if attachment or attachments
                     else {}
                 ),
                 "subject": subject,
@@ -136,19 +139,20 @@ def _gmail_message(
     html_body: str,
     text_body: str,
     attachment: MailAttachment | None = None,
+    attachments: list[MailAttachment] | None = None,
 ) -> str:
     message = EmailMessage()
     message["To"] = ", ".join(to)
     message["Subject"] = subject
     message.set_content(text_body or "This message contains an HTML version.")
     message.add_alternative(html_body, subtype="html")
-    if attachment is not None:
-        maintype, subtype = attachment.content_type.split("/", 1)
+    for item in ([attachment] if attachment else []) + (attachments or []):
+        maintype, subtype = item.content_type.split("/", 1)
         message.add_attachment(
-            attachment.content,
+            item.content,
             maintype=maintype,
             subtype=subtype,
-            filename=attachment.filename,
+            filename=item.filename,
         )
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
@@ -161,6 +165,7 @@ async def _send_google(
     html_body: str,
     text_body: str,
     attachment: MailAttachment | None = None,
+    attachments: list[MailAttachment] | None = None,
 ) -> ConnectedMailDelivery:
     response = await gmail_request(
         "POST",
@@ -174,6 +179,7 @@ async def _send_google(
                 html_body=html_body,
                 text_body=text_body,
                 **({"attachment": attachment} if attachment else {}),
+                **({"attachments": attachments} if attachments else {}),
             )
         },
     )
@@ -196,6 +202,7 @@ async def _provider_send(
     html_body: str,
     text_body: str,
     attachment: MailAttachment | None = None,
+    attachments: list[MailAttachment] | None = None,
 ) -> ConnectedMailDelivery:
     if provider == "microsoft":
         return await _send_microsoft(
@@ -204,6 +211,7 @@ async def _provider_send(
             subject=subject,
             html_body=html_body,
             **({"attachment": attachment} if attachment else {}),
+            **({"attachments": attachments} if attachments else {}),
         )
     return await _send_google(
         token,
@@ -212,6 +220,7 @@ async def _provider_send(
         html_body=html_body,
         text_body=text_body,
         **({"attachment": attachment} if attachment else {}),
+        **({"attachments": attachments} if attachments else {}),
     )
 
 
@@ -236,6 +245,7 @@ async def _attempt_provider(
     html_body: str,
     text_body: str,
     attachment: MailAttachment | None = None,
+    attachments: list[MailAttachment] | None = None,
 ) -> ConnectedMailDelivery:
     try:
         return await _provider_send(
@@ -246,6 +256,7 @@ async def _attempt_provider(
             html_body=html_body,
             text_body=text_body,
             **({"attachment": attachment} if attachment else {}),
+            **({"attachments": attachments} if attachments else {}),
         )
     except ProviderAuthError:
         logger.warning(
@@ -294,6 +305,7 @@ async def send_client_email(
     text_body: str,
     smtp_service: EmailService,
     attachment: MailAttachment | None = None,
+    attachments: list[MailAttachment] | None = None,
 ) -> ConnectedMailDelivery:
     """Send from the approver's mailbox, a firm mailbox, or legacy SMTP."""
     try:
@@ -357,6 +369,7 @@ async def send_client_email(
             html_body=html_body,
             text_body=text_body,
             **({"attachment": attachment} if attachment else {}),
+            **({"attachments": attachments} if attachments else {}),
         )
 
     tenant_rows = (
@@ -396,6 +409,7 @@ async def send_client_email(
             html_body=html_body,
             text_body=text_body,
             **({"attachment": attachment} if attachment else {}),
+            **({"attachments": attachments} if attachments else {}),
         )
 
     if reconnect:
@@ -413,6 +427,7 @@ async def send_client_email(
         html_body=html_body,
         text_body=text_body,
         **({"attachment": attachment} if attachment else {}),
+        **({"attachments": attachments} if attachments else {}),
     )
     return ConnectedMailDelivery(
         result,

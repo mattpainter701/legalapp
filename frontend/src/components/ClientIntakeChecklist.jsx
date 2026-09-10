@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getClientIntake, submitClientIntake } from '../api'
+import api, { getClientIntake, submitClientIntake, uploadClientPortalDocument, downloadClientPortalDocumentUrl } from '../api'
 
 export default function ClientIntakeChecklist({ onSign }) {
   const [packet, setPacket] = useState(null)
@@ -17,6 +17,13 @@ export default function ClientIntakeChecklist({ onSign }) {
     catch (e) { setError(typeof e.response?.data?.detail === 'string' ? e.response.data.detail : 'Your questionnaire was not saved. Please retry.') }
     finally { setBusy(false) }
   }
+  async function uploadRequirement(key, file) {
+    if (!file) return
+    setBusy(true); setError('')
+    try { const doc = await uploadClientPortalDocument(file, `Intake: ${key}`); const result = await api.post(`/portal/client/intake/requirements/${key}/submission`, { document_id: doc.id }); setPacket(result.data) }
+    catch { setError('Could not submit the document. Please retry.') }
+    finally { setBusy(false) }
+  }
   if (!packet && !error) return null
   return <section className="border rounded-xl bg-white p-4 my-4 space-y-3" aria-label="Your intake checklist">
     <div className="flex justify-between"><h2 className="text-lg font-bold">Your intake checklist</h2><button type="button" onClick={load}>Refresh checklist</button></div>
@@ -28,6 +35,7 @@ export default function ClientIntakeChecklist({ onSign }) {
         {packet.questions.map(q => <label className="block" key={q.key}>{q.label}{q.required ? ' *' : ''}<textarea className="block w-full border rounded p-2" required={q.required} maxLength={20000} value={answers[q.key] || ''} onChange={e => setAnswers({ ...answers, [q.key]: e.target.value })} /></label>)}
         <button disabled={busy} className="border rounded p-2" type="submit">{busy ? 'Saving…' : 'Submit completed questionnaire'}</button>
       </form>}
+      {Object.entries(packet.requirements).filter(([, item]) => item.kind).map(([key, item]) => <div key={key} className="rounded border p-3"><strong>{item.label}</strong><p>{item.completed ? 'Complete' : item.submitted_document_id ? 'Submitted — awaiting staff review' : 'Outstanding'}</p>{item.kind === 'signature' ? <button type="button" onClick={onSign}>Review and sign</button> : <>{item.document_id && <a href={downloadClientPortalDocumentUrl(item.document_id)} className="block underline">Download form</a>}{!item.completed && <label className="block">Upload completed document<input type="file" disabled={busy} onChange={event => uploadRequirement(key, event.target.files?.[0])} /></label>}</>}</div>)}
       {packet.completed_at && !packet.meeting && <p>Thank you. Your paperwork is complete. Your legal team will contact you to schedule your first meeting.</p>}
       {packet.meeting && <p>{packet.meeting.kind === 'in_person' ? 'In-person meeting' : 'Conference call'}: {new Date(packet.meeting.starts_at).toLocaleString()} — {packet.meeting.details}</p>}
       {packet.status === 'cancelled' && <p>This intake is closed. Contact your legal team if you need assistance.</p>}

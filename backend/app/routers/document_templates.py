@@ -4631,6 +4631,24 @@ async def render_template_endpoint(
         tenant_id=parsed_tenant_id,
         matter_id=payload.matter_id,
     )
+    destination_folder = None
+    if payload.folder_id:
+        if matter is None:
+            raise HTTPException(400, "Choose a matter for the destination folder")
+        from app.services.matter_document_organization import (
+            get_folder_or_404,
+            DocumentOrganizationError,
+        )
+
+        try:
+            destination_folder = await get_folder_or_404(
+                db,
+                tenant_id=parsed_tenant_id,
+                matter_id=matter.id,
+                folder_id=payload.folder_id,
+            )
+        except DocumentOrganizationError as exc:
+            raise HTTPException(exc.status_code, exc.message) from exc
     if payload.matter_id and not template.is_active:
         raise HTTPException(
             status_code=409,
@@ -4698,6 +4716,11 @@ async def render_template_endpoint(
             lock=False,
         )
         if existing_document:
+            if getattr(existing_document, "folder_id", None) != payload.folder_id:
+                raise HTTPException(
+                    409,
+                    "This preview was already saved to a different folder. Create a new preview or move the saved document.",
+                )
             return _existing_document_response(existing_document, matter_id=matter.id)
     output_filename = _safe_generated_filename(
         template.title,
@@ -4856,11 +4879,15 @@ async def render_template_endpoint(
         # start. It has no preview-evidence state to consume, so holding a row
         # lock across a cloud upload adds contention without making the output
         # safer. PDF saves revalidate their exact reviewed contract below.
+        from app.services.matter_document_organization import storage_routing_for_folder
+
+        folder_category, folder_path = storage_routing_for_folder(destination_folder)
         storage_result = await matter_file_store.store_matter_file_result(
             db=db,
             tenant_id=tenant_id,
             matter_slug=matter.slug,
-            category="generated",
+            category=folder_category or "generated",
+            folder_path=folder_path,
             filename=output_filename,
             content=output_bytes,
             content_type=content_type,
@@ -4969,6 +4996,11 @@ async def render_template_endpoint(
                     output_sha256=output_sha256,
                     document_id=doc_id,
                 )
+                if getattr(existing_document, "folder_id", None) != payload.folder_id:
+                    raise HTTPException(
+                        409,
+                        "This preview was already saved to a different folder. Create a new preview or move the saved document.",
+                    )
                 return _existing_document_response(
                     existing_document,
                     matter_id=parsed_matter_id,
@@ -4985,6 +5017,7 @@ async def render_template_endpoint(
             file_size=len(output_bytes),
             description=f"Generated from template: {template.title}",
             document_category="generated",
+            folder_id=payload.folder_id,
             **_storage_document_fields(storage_result),
         )
         doc.positioned_fields = positioned_fields
