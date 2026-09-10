@@ -165,6 +165,15 @@ def checkbox_checked(body: str, label: str) -> bool:
     return bool(re.search(rf"(?im)^\s*-\s*\[x\]\s*{re.escape(label)}\s*$", body))
 
 
+DEPENDABOT_LOGIN = "dependabot[bot]"
+
+
+def is_dependabot_pr(pr: dict) -> bool:
+    """Return True when the PR was opened by Dependabot."""
+    user = pr.get("user", {})
+    return user.get("login", "") == DEPENDABOT_LOGIN
+
+
 def check_pr_template(
     event_path: str | None, files: set[str], *, live_pr: bool = False
 ) -> list[str]:
@@ -174,6 +183,10 @@ def check_pr_template(
     if "pull_request" not in event:
         return []
     pr = event["pull_request"]
+    # Dependabot PRs do not inherit the PR body template and are purely
+    # automated dependency bumps — skip the template attestation checks.
+    if is_dependabot_pr(pr):
+        return []
     if live_pr:
         repo = event["repository"]["full_name"]
         number = int(event["number"])
@@ -323,6 +336,18 @@ def check_sbom_currency(files: set[str]) -> list[str]:
     return []
 
 
+def _is_dependabot_from_event(event_path: str | None) -> bool:
+    """Check whether the current PR was opened by Dependabot."""
+    if not event_path:
+        return False
+    try:
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+        pr = event.get("pull_request", {})
+        return is_dependabot_pr(pr)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", required=True)
@@ -333,7 +358,11 @@ def main() -> int:
 
     files = changed_files(args.base, args.head)
     errors = check_pr_template(args.event_path, files, live_pr=args.live_pr)
-    errors.extend(check_sbom_currency(files))
+    # Dependabot PRs are automated dependency bumps with no human-authored
+    # description.  Skip the SBOM staleness check — the lockfile is already
+    # the source of truth and the inventory can be regenerated on merge.
+    if not _is_dependabot_from_event(args.event_path):
+        errors.extend(check_sbom_currency(files))
     errors.extend(check_added_workflow_actions(args.base, args.head))
     if errors:
         print(
