@@ -51,7 +51,7 @@ export default function MatterIntakePanel({ matterId, documents = [] }) {
   if (loading) return <p role="status">Loading intake…</p>
   return <section className="space-y-4 p-4" aria-label="Matter intake">
     <div className="flex justify-between"><h3 className="font-semibold text-lg">Client intake</h3><button type="button" onClick={load}>Refresh intake</button></div>
-    {!packet && <><IntakeSetupFields value={setup} onChange={setSetup} onFile={setFile} documents={documents} clientEmail={clientEmail} /><button type="button" className={input} disabled={busy || (!file && !setup.agreement_document_id)} onClick={start}>Send client paperwork</button></>}
+    {!packet && <><IntakeSetupFields value={setup} onChange={setSetup} onFile={setFile} documents={documents} clientEmail={clientEmail} matterId={matterId} /><button type="button" className={input} disabled={busy || (!file && !setup.agreement_document_id)} onClick={start}>Send client paperwork</button></>}
     {packet && <>
       <p role="status">{packet.status.replaceAll('_', ' ')}</p>
       <ul>{Object.entries(packet.requirements).map(([key, state]) => <li key={key}>{state.label || (key === 'fee_agreement' ? 'Fee agreement' : 'Questionnaire')}: {state.completed ? `Complete — ${date(state.completed_at)}` : state.submitted_document_id ? 'Submitted — awaiting staff review' : 'Outstanding'}</li>)}</ul>
