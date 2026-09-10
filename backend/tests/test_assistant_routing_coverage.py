@@ -18,6 +18,7 @@ from app.services.ai_request_broker import (
     AIRequestDenied,
     AIRequestError,
     AIRequestUnknown,
+    AIRequestUnreachable,
     AIResponseInvalid,
     AITransport,
 )
@@ -248,6 +249,7 @@ async def test_broker_provider_failures_release_or_mark_unknown(monkeypatch):
 
     for exc, event in (
         (AIRequestError("no"), "release"),
+        (AIRequestUnreachable("offline"), "release"),
         (AIResponseInvalid("bad"), "unknown"),
         (AIRequestUnknown("maybe"), "unknown"),
         (RuntimeError("boom"), "unknown"),
@@ -367,7 +369,39 @@ async def test_chat_timeout_and_responses_transport_errors(monkeypatch):
             raise httpx.ConnectError("offline")
 
     broker = AIRequestBroker(http_client=Client())
-    with pytest.raises(AIRequestUnknown, match="failed"):
+    with pytest.raises(AIRequestUnreachable, match="never reached"):
+        await broker._execute_responses(
+            request=request(transport=AITransport.RESPONSES),
+            route=LLMRoute(
+                requested_route="premium", resolved_route="premium", gateway_alias="x"
+            ),
+            request_id="id",
+            timeout=1,
+            tier=RouteTier.PREMIUM,
+        )
+
+    class SlowClient:
+        async def post(self, *_args, **_kwargs):
+            raise httpx.ReadTimeout("timed out mid-flight")
+
+    broker = AIRequestBroker(http_client=SlowClient())
+    with pytest.raises(AIRequestUnknown, match="timed out"):
+        await broker._execute_responses(
+            request=request(transport=AITransport.RESPONSES),
+            route=LLMRoute(
+                requested_route="premium", resolved_route="premium", gateway_alias="x"
+            ),
+            request_id="id",
+            timeout=1,
+            tier=RouteTier.PREMIUM,
+        )
+
+    class FlakyClient:
+        async def post(self, *_args, **_kwargs):
+            raise httpx.ReadError("connection dropped mid-response")
+
+    broker = AIRequestBroker(http_client=FlakyClient())
+    with pytest.raises(AIRequestUnknown, match="possible provider acceptance"):
         await broker._execute_responses(
             request=request(transport=AITransport.RESPONSES),
             route=LLMRoute(

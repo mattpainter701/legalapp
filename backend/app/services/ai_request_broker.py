@@ -76,6 +76,17 @@ class AIRequestUnknown(AIRequestError):
     code = "ai_request_unknown"
 
 
+class AIRequestUnreachable(AIRequestError):
+    """The gateway was never reached, so the request provably never left.
+
+    Unlike AIRequestUnknown this is safe to present as retryable: no provider
+    may have accepted work, so execute() releases the quota reservation
+    through the ordinary AIRequestError path instead of parking it.
+    """
+
+    code = "ai_request_unreachable"
+
+
 class AIResponseInvalid(AIRequestError):
     code = "ai_response_invalid"
 
@@ -607,7 +618,16 @@ class AIRequestBroker:
                 timeout=timeout,
             )
             response.raise_for_status()
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except httpx.ConnectError as exc:
+            # Connection refused/DNS failure: the gateway never accepted a
+            # byte, so the request provably never reached any provider. This
+            # is the warm-up case during a deploy; release and allow retry.
+            raise AIRequestUnreachable("Assistant gateway was never reached") from exc
+        except httpx.TimeoutException as exc:
+            raise AIRequestUnknown(
+                "Assistant request timed out after possible provider acceptance"
+            ) from exc
+        except httpx.TransportError as exc:
             raise AIRequestUnknown(
                 "Assistant request failed after possible provider acceptance"
             ) from exc
