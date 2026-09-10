@@ -154,3 +154,33 @@ def test_deploy_requires_heartbeat_from_replacement_scheduler():
     assert "trap restore_previous_scheduler_on_cutover_failure EXIT" in deploy
     assert 'docker start "$previous_scheduler_id"' in deploy
     assert deploy.index("scheduler_cutover_complete=true") > recreate
+
+
+def test_deploy_keeps_nginx_out_of_the_force_recreate_set():
+    """Workstream C: nginx must survive releases.
+
+    The force-recreate line expands a filtered set that excludes nginx (the
+    rollback manifest and build loop still need release_services untouched),
+    and nginx then gets a plain `up -d` of its own — recreated only when its
+    image/config changed — after the force-recreate convergence, before the
+    release-heartbeat query.
+    """
+    deploy = (
+        Path(__file__).resolve().parents[2] / "scripts" / "deploy_prod.sh"
+    ).read_text(encoding="utf-8")
+
+    recreate = deploy.index('"${compose[@]}" up -d --force-recreate --no-deps')
+    release_query = deploy.index("s.run_at >= to_timestamp(")
+    # A plain `up -d nginx` line of its own, after the force-recreate command
+    # and still before the release-heartbeat query.
+    nginx_up = deploy.index('"${compose[@]}" up -d nginx')
+    nginx_up_line = deploy[nginx_up : deploy.index("\n", nginx_up)]
+    assert nginx_up_line == '"${compose[@]}" up -d nginx'
+    assert recreate < nginx_up < release_query
+    # The recreate set is filtered: nginx is skipped into a recreate-only
+    # array so "${release_services[@]}" no longer appears on the
+    # force-recreate line itself.
+    assert '"${recreate_services[@]}"' in deploy
+    recreate_line_end = deploy.index("\n", deploy.index("--force-recreate --no-deps"))
+    assert '"${release_services[@]}"' not in deploy[recreate:recreate_line_end]
+    assert '[[ "$service" == "nginx" ]] && continue' in deploy

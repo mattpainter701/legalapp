@@ -40,11 +40,15 @@
 6. Choose **Production acceptance**, enter the full staged SHA, and run it from
    `main`. A successful run validates production and advances the release tag.
 
-Until the blue/green IONOS edge work lands, `stage` is a real public production
-restart: it rebuilds and force-recreates the release services (the databases
-are no longer recreated when unchanged, and the stack no longer waits for the
-AI gateway before serving). Schedule it as maintenance work; it is not a
-private candidate or an instant deployment.
+Until the blue/green IONOS edge work lands, `stage` is still a real public
+production restart of the application tier: it rebuilds and force-recreates
+the release services (the databases are no longer recreated when unchanged,
+and the stack no longer waits for the AI gateway before serving). nginx is no
+longer recreated when unchanged — it resolves backends at request time and
+serves a branded maintenance page while the app tier restarts — so the hard
+ingress outage is gone, but users do see the maintenance page for a few
+minutes. Schedule it as maintenance work; it is not a private candidate or an
+instant deployment.
 
 After staging, run **Production acceptance** from `main` with the full SHA
 recorded by the stage run. The workflow requires that SHA to still be `main`

@@ -296,8 +296,21 @@ echo "==> Starting services; the one-shot migrator gates API and scheduler start
 # explicitly (they are not release services, but the gateway's depends_on
 # completion conditions must run in this same convergence); the core migrator
 # is already in release_services.
+# nginx must survive releases: keep it out of the force-recreate set. The
+# resolver in nginx.conf re-resolves restarted backends at request time, and
+# release_services still lists nginx for the rollback manifest and build loop
+# above, so filter it out here into a recreate-only set.
+recreate_services=()
+for service in "${release_services[@]}"; do
+  [[ "$service" == "nginx" ]] && continue
+  recreate_services+=("$service")
+done
 "${compose[@]}" up -d --force-recreate --no-deps \
-  litellm-migrator litellm-schema-migrator "${release_services[@]}"
+  litellm-migrator litellm-schema-migrator "${recreate_services[@]}"
+# Plain up: nginx is recreated only when its own image/config changed;
+# otherwise it keeps serving through the deploy and re-resolves the restarted
+# backends via the resolver.
+"${compose[@]}" up -d nginx
 scheduler_cutover_complete=true
 trap - EXIT
 

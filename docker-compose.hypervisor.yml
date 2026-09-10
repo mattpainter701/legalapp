@@ -378,13 +378,9 @@ services:
     build:
       context: ./nginx
       dockerfile: Dockerfile.local
-    depends_on:
-      frontend:
-        condition: service_healthy
-      office-addin:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
+    # No depends_on: with runtime DNS re-resolution, nginx must start without
+    # waiting for upstream health; a cold boot serves the maintenance page
+    # until the app tier is reachable.
     volumes:
       - ./nginx/ssl:/etc/nginx/ssl:ro
       - ./nginx/webroot:/var/www/certbot:ro
