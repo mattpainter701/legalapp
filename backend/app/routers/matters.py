@@ -2605,6 +2605,23 @@ async def email_matter_client(
     await db.commit()
     await set_tenant_context(db, str(tenant_id))
     await db.refresh(log)
+    # Keep the firm's own copy of what it sent. Only a message that actually
+    # left gets filed: a failed attempt is a log row, not correspondence.
+    if sent:
+        from app.services.correspondence_capture import file_outbound_email
+
+        await file_outbound_email(
+            db,
+            tenant_id=tenant_id,
+            matter=matter,
+            actor_user_id=actor_id,
+            to=[to_email],
+            subject=subject,
+            text_body=email_body,
+            attachments=attachments,
+            communication=log,
+        )
+        await set_tenant_context(db, str(tenant_id))
     await _invalidate_matter_context_cache(tenant_id, authorized_matter_id)
 
     if not sent:

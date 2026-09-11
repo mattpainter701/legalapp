@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { reportError } from '../utils/reportError'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
 import NewMatterModal from '../components/NewMatterModal'
@@ -146,7 +146,6 @@ const STATUS_OPTIONS = ['all', 'open', 'active', 'pending', 'closed']
 
 // ── "Needs Action" classification ─────────────────────────────────────────────
 function needsAction(m) {
-  if (m.risk_level === 'critical' || m.risk_level === 'high') return true
   if (m.status === 'threatened') return true
   if (m.overdue_deadline_label && m.overdue_deadline_label.toLowerCase().includes('overdue')) return true
   if (m.overdue_deadline_label && m.overdue_deadline_label.toLowerCase().includes('due today')) return true
@@ -182,9 +181,14 @@ export function MatterCard({ m, onToggleActive, togglingId, showAlert }) {
           >
             {m.matter_name}
           </Link>
-          {m.client_name && (
-            <div className="text-[12px] text-brand-muted font-sans mt-0.5 truncate">{m.client_name}</div>
-          )}
+          <div className="mt-0.5 flex flex-wrap items-center gap-2">
+            {m.matter_number && (
+              <span className="rounded bg-brand-bg-soft px-1.5 py-0.5 font-mono text-[11px] font-semibold text-brand-ink-2">{m.matter_number}</span>
+            )}
+            {m.client_name && (
+              <span className="truncate text-[12px] text-brand-muted font-sans">{m.client_name}</span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {showAlert && <Icon d={Icons.alert} size={15} className="text-brand-rose" />}
@@ -306,6 +310,9 @@ export function MatterPortfolioRow({ matter: m }) {
           <div className="mt-0.5 truncate font-sans text-[12px] text-brand-muted">{m.description}</div>
         )}
       </td>
+      <td className="whitespace-nowrap px-5 py-4 font-mono text-[12px] text-brand-ink-2">
+        {m.matter_number || <span className="font-sans text-brand-muted">—</span>}
+      </td>
       <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] text-brand-ink-2">
         {m.client_name || <span className="text-brand-muted">—</span>}
       </td>
@@ -340,12 +347,23 @@ export default function MatterPortfolioPage() {
   const [matters, setMatters] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [practiceFilter, setPracticeFilter] = useState('all')
-  const [search, setSearch] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const setParam = (key, value, fallback) => setSearchParams(previous => {
+    const next = new URLSearchParams(previous)
+    if (!value || value === fallback) next.delete(key)
+    else next.set(key, value)
+    return next
+  }, { replace: true })
+  const statusFilter = searchParams.get('status') || 'all'
+  const setStatusFilter = value => setParam('status', value, 'all')
+  const practiceFilter = searchParams.get('practice') || 'all'
+  const setPracticeFilter = value => setParam('practice', value, 'all')
+  const search = searchParams.get('q') || ''
+  const setSearch = value => setParam('q', value, '')
   const [showCreate, setShowCreate] = useState(false)
   const [togglingId, setTogglingId] = useState(null)
-  const [viewMode, setViewMode] = useState('board') // 'board' | 'list'
+  const viewMode = searchParams.get('view') === 'list' ? 'list' : 'board'
+  const setViewMode = value => setParam('view', value, 'board')
 
   const loadMyMatters = () => {
     setMyLoading(true)
@@ -400,6 +418,7 @@ export default function MatterPortfolioPage() {
       const q = search.toLowerCase()
       return (
         m.matter_name?.toLowerCase().includes(q) ||
+        m.matter_number?.toLowerCase().includes(q) ||
         m.client_name?.toLowerCase().includes(q) ||
         m.attorney_of_record_name?.toLowerCase().includes(q) ||
         m.practice_area?.toLowerCase().includes(q) ||
@@ -690,10 +709,10 @@ export default function MatterPortfolioPage() {
               <table className="min-w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-brand-bg-soft/50 border-b border-brand-line">
-                    {['Matter', 'Client', 'Attorney', 'Practice Area', 'Cloud Folder', 'Risk', 'Status', 'Opened', ''].map((h, i) => (
+                    {['Matter', 'Number', 'Client', 'Attorney', 'Practice Area', 'Cloud Folder', 'Risk', 'Status', 'Opened', ''].map((h, i) => (
                       <th
                         key={i}
-                        className={`px-5 py-4 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans whitespace-nowrap ${i === 0 ? 'pl-6' : ''} ${i === 8 ? 'pr-6' : ''}`}
+                        className={`px-5 py-4 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans whitespace-nowrap ${i === 0 ? 'pl-6' : ''} ${i === 9 ? 'pr-6' : ''}`}
                       >
                         {h}
                       </th>

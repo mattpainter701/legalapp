@@ -1,3 +1,11 @@
+## 2026.09.11.3 — Outbound correspondence, portfolio triage, creation deadlines
+
+- File a sent email as a document on the matter. `file_outbound_email` builds the `.eml` from exactly what was handed to the transport (compose sends via SMTP or a connected mailbox, so there is no provider message to fetch back), files it into Correspondence, and links it to the `CommunicationLog` row. Only a message that actually sent is filed, and a filing failure is logged rather than failing a request for mail that already left.
+- Show `matter_number` on the portfolio board card and as a list column, and match it in the search predicate. The number shipped in 2026.09.10.1 and had reached neither surface, so a number quoted on the phone could only be used by typing a URL.
+- Drop `risk_level` from the portfolio `needsAction` heuristic. Risk is a standing attribute, so a high-risk matter sat in Needs Action permanently regardless of whether anything was due; the column now means deadlines, threatened status, and staleness, and risk stays a badge.
+- Move the portfolio status filter, practice filter, search, and board/list toggle into the URL (`replace: true`), matching how the matter page already keeps its tab. Opening a matter and returning no longer discards the list you built.
+- Carry paperwork deadlines through matter creation: `IntakeSetupFields` gains due-date inputs for the fee agreement, questionnaire, and requested uploads, and `intakeOptions` emits `agreement_due_at`, `questionnaire_due_at`, and per-document `due_at`. An undated requirement sends `due_at: null` so the server sees one shape either way.
+
 ## 2026.09.11.2 — Matter closing and automatic document filing
 
 - Add `app/services/matter_closing.py` and `GET /matters/{id}/close-readiness`: unbilled billable time and expenses, held trust balance, open tasks, live signature requests, and incomplete client paperwork, split into blocking and acknowledgeable checks.
