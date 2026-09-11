@@ -138,7 +138,7 @@ async def get_calendar_events(
         events.append(
             CalendarEvent(
                 id=f"task-{task.id}",
-                title=task.task_type or task.title,
+                title=task.title or task.task_type,
                 date=task.due_date,
                 event_type="task_due",
                 matter_id=task.matter_id,

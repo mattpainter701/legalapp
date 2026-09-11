@@ -2,10 +2,11 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ComposeEmailModal from './ComposeEmailModal'
-import { emailMatterClient } from '../api'
+import { emailMatterClient, getMatterPaperwork } from '../api'
 
 vi.mock('../api', () => ({
   emailMatterClient: vi.fn(),
+  getMatterPaperwork: vi.fn().mockResolvedValue({ requirements: {} }),
 }))
 
 const props = {
@@ -75,5 +76,33 @@ describe('ComposeEmailModal delivery honesty', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
     expect(props.onSent).not.toHaveBeenCalled()
     expect(emailMatterClient).toHaveBeenCalledOnce()
+  })
+
+  it('prefills the client email supplied with the matter', () => {
+    render(<ComposeEmailModal {...props} />)
+    expect(screen.getByLabelText('To')).toHaveValue('client@example.com')
+  })
+
+  it('inserts only the outstanding requested records into the message', async () => {
+    getMatterPaperwork.mockResolvedValueOnce({
+      requirements: {
+        upload_1: { kind: 'upload', label: 'Marriage certificate', completed: false },
+        upload_2: { kind: 'upload', label: 'Pay stub', completed: true },
+        fee_agreement: { completed: false },
+      },
+    })
+    const user = userEvent.setup()
+    render(<ComposeEmailModal {...props} />)
+
+    const insert = await screen.findByRole('button', { name: 'Insert requested records (1)' })
+    await user.click(insert)
+
+    expect(screen.getByRole('textbox', { name: 'Message' }))
+      .toHaveValue('Please upload these records in your secure client portal: Marriage certificate.')
+  })
+
+  it('hides the records helper when the matter has no outstanding uploads', () => {
+    render(<ComposeEmailModal {...props} />)
+    expect(screen.queryByRole('button', { name: /Insert requested records/ })).not.toBeInTheDocument()
   })
 })

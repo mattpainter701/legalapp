@@ -22,6 +22,7 @@ vi.mock('../api', async (importOriginal) => {
 
 // The workspace reads the signed-in user; the resolver does not.
 vi.mock('../App', () => ({ useAuth: () => ({ user: { hidden_matter_panels: [] } }) }))
+vi.mock('../components/toast/useToast', () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }) }))
 
 import MatterDetailPage, { MatterNumberBadge } from './MatterDetailPage'
 

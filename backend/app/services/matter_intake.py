@@ -180,6 +180,19 @@ async def set_intake_stage(db, matter, stage):
         matter.stage = stage
 
 
+def followup_task_description(due, timezone_name):
+    """Readable follow-up text for a staff task.
+
+    The task row already renders the due date, so the description must not
+    leak the machine ``isoformat()`` (a raw timestamp is not user-facing).
+    """
+    local = due.astimezone(ZoneInfo(timezone_name))
+    return (
+        f"Intake action due {local.strftime('%b %d, %Y %I:%M %p')}. "
+        "Client meeting options: conference call or in-person."
+    )
+
+
 async def ensure_task(db, packet, kind, title, due):
     task_id = uuid.uuid5(packet.id, kind)
     task = await db.scalar(
@@ -211,7 +224,7 @@ async def ensure_task(db, packet, kind, title, due):
             matter_id=packet.matter_id,
             contact_id=packet.contact_id,
             title=title,
-            description=f"Intake action due {due.isoformat()}. Client meeting options: conference call or in-person.",
+            description=followup_task_description(due, packet.config["timezone"]),
             task_type="follow_up",
             status="pending",
             priority="high",
@@ -805,20 +818,50 @@ async def reconcile(db, packet):
             queue(packet, "reminder")
 
 
+def requested_upload_labels(packet, *, outstanding_only=False):
+    """Client-facing labels for the records the packet asks the client to upload."""
+    labels = []
+    for key, item in packet.requirements.items():
+        if not key.startswith("upload_"):
+            continue
+        if outstanding_only and item.get("completed"):
+            continue
+        labels.append(item.get("label") or key.replace("_", " "))
+    return labels
+
+
 def message(packet, kind, url):
     if kind == "signed":
+        uploads = requested_upload_labels(packet, outstanding_only=True)
+        if uploads:
+            body = (
+                "Your fee agreement signature was received. Complete remaining paperwork "
+                f"and upload requested records: {', '.join(uploads)}. Secure portal link: {url}"
+            )
+        else:
+            body = (
+                "Your fee agreement signature was received. Complete any remaining paperwork "
+                f"in your secure portal: {url}"
+            )
         return (
             "Your client portal is ready",
-            f"Your fee agreement signature was received. Complete remaining paperwork and upload requested records here: {url}",
+            body,
         )
     if kind == "welcome" and packet.config.get("portal_after_signing"):
         labels = [
             "Fee agreement",
             *[item["label"] for item in packet.config.get("selected_documents", [])],
         ]
+        uploads = requested_upload_labels(packet)
+        records = (
+            f" Please have these records ready to upload: {', '.join(uploads)}."
+            if uploads
+            else ""
+        )
         return (
             "Review your paperwork",
-            f"Please review and complete each document: {', '.join(labels)}. Secure paperwork link: {url}. Your general client portal link will follow after the fee agreement is signed.",
+            f"Please review and complete each document: {', '.join(labels)}."
+            f"{records} Secure paperwork link: {url}. Your general client portal link will follow after the fee agreement is signed.",
         )
     if kind == "welcome":
         return (

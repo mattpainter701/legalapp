@@ -1,3 +1,19 @@
+## 2026.09.11.6 — Matter page: signing alerts, composer prefill, first-class portal
+
+- Alert in place when the client signs. `CaseSetupCard` reports each polled packet via a new `onPacketChange` callback; the matter page shows a success toast on the signed transition and bumps a `refreshKey` so `SignatureRequestsPanel` reloads itself. Previously the only in-app signal was the card's 30s poll and the panel never refreshed after mount.
+- Carry `client_email` and `client_contact_type` on `MatterResponse` (`_matter_to_response`). The Email Client composer and the portal invite form read them, so the To field is prefilled; both previously read `matter.client?.email`, a field the payload never included.
+- Add an "Insert requested records" helper to `ComposeEmailModal`, fed by the intake packet's outstanding `upload_*` requirements, so the attorney can name what the client still owes without retyping it.
+- Move Client Portal from the Matter settings row into the matter's primary tabs (`PRIMARY_SECTIONS`); it is a daily destination, not a setting.
+- Link the client name on the matter to `/clients/{id}` when the contact is typed client/prospect (the CRM record) and to `/contacts/{id}` otherwise. CRM clients are a filtered view over the same contacts table, so the matter's client was already the CRM record; the link makes that visible.
+- Name the requested record on the client-side upload control ("Upload Marriage certificate") instead of the generic "Upload completed document".
+
+## 2026.09.11.5 — Onboarding copy and follow-up clarity
+
+- Name the requested client records in the paperwork emails. `requested_upload_labels()` feeds both the initial "Review your paperwork" message and the post-signing portal-ready message, so the client learns what to upload without opening the portal. Previously only `selected_documents` were listed.
+- Format the staff follow-up description with `followup_task_description()` in the packet timezone instead of `due.isoformat()`. The raw ISO value (microseconds and `+00:00` offset) was rendered verbatim in the task row.
+- Prefer `task.title` over `task.task_type` for `task_due` calendar events, so a deadline reads "Fee agreement signed — follow up with client" rather than "follow_up".
+- Add `docs/matter-onboarding-ux-audit-2026-09-11.md` and the `E2E_AUDIT`-gated `frontend/e2e/matter-ux-audit.capture.e2e.js` capture harness.
+
 ## 2026.09.11.4 — Consent-scoped SMS for the live case
 
 - Add `app/services/sms_categories.py`: `intake` and `case_updates` as named consent categories, each with its own disclosure version, plus `granted_categories`, `disclosure_version`, and `allows_case_updates`.

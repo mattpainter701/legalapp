@@ -351,3 +351,36 @@ async def test_zoom_only_scheduled_event_can_be_created(client, monkeypatch):
     assert data["calendar_provider"] is None
     assert data["meeting_provider"] == "zoom"
     assert data["join_url"] == "https://zoom.us/j/123"
+
+
+@pytest.mark.asyncio
+async def test_task_due_event_shows_the_task_title(
+    client, db_session, test_tenant, test_user
+):
+    from app.models.task import Task
+
+    due = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Fee agreement signed — follow up with client",
+        task_type="follow_up",
+        status="pending",
+        priority="high",
+        due_date=due,
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    resp = await client.get(
+        "/api/calendar/events",
+        params={"start": due.isoformat(), "end": due.isoformat()},
+    )
+
+    assert resp.status_code == 200
+    matching = [
+        event for event in resp.json()["events"] if event.get("task_id") == str(task.id)
+    ]
+    assert len(matching) == 1
+    assert matching[0]["event_type"] == "task_due"
+    assert matching[0]["title"] == "Fee agreement signed — follow up with client"
