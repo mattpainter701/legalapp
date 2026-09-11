@@ -2233,6 +2233,44 @@ export const renderTemplateFile = (id, data) =>
     throw error
   })
 
+export const getSampleTemplates = (params = {}) =>
+  api.get('/templates/library', { params }).then(r => r.data)
+
+export const getSampleTemplate = (id) =>
+  api.get(`/templates/library/${id}`).then(r => r.data)
+
+export const getSampleTemplateSource = (id) =>
+  api.get(`/templates/library/${id}/source`, { responseType: 'blob' }).then(r => r.data)
+
+export const renderSampleTemplateFile = (id, data) =>
+  api.post(`/templates/library/${id}/render-file`, data, { responseType: 'blob' }).then((r) => {
+    const disposition = r.headers?.['content-disposition'] || ''
+    const encodedMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+    const basicMatch = disposition.match(/filename="?([^";]+)"?/i)
+    const filename = encodedMatch
+      ? decodeURIComponent(encodedMatch[1])
+      : basicMatch?.[1] || `sample-${id}.pdf`
+    return {
+      blob: r.data,
+      filename,
+      contentType: r.headers?.['content-type'] || r.data?.type || 'application/pdf',
+    }
+  }).catch(async (error) => {
+    const blob = error?.response?.data
+    if (blob instanceof Blob) {
+      try {
+        const detail = await readBlobErrorDetail(blob)
+        if (detail) {
+          error.message = String(detail)
+          if (error.response) error.response.data = { detail: String(detail) }
+        }
+      } catch {
+        // Preserve the original transport error when the blob cannot be read.
+      }
+    }
+    throw error
+  })
+
 export const createBriefCheck = (matterId, { file, selectedDocumentId, opposingFile }) => {
   const form = new FormData()
   if (file) form.append('file', file)

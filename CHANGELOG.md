@@ -1,3 +1,10 @@
+## 2026.09.10.3 — Global sample form library in Template Studio
+
+- Add a platform-owned `sample_templates` catalog (no `tenant_id`, no row-level security) seeded from a curated set of fillable AcroForm PDFs organized by category and jurisdiction tags.
+- Add read-only `GET /api/templates/library`, `GET /api/templates/library/{id}`, `GET /api/templates/library/{id}/source`, and `POST /api/templates/library/{id}/render-file` endpoints available to every authenticated tenant.
+- Add `scripts/build_sample_template_library.py` (deduplicate by SHA-256, normalize titles, tag jurisdictions, and reject PDFs with active content) and `backend/scripts/seed_sample_templates.py` (idempotent upsert by slug).
+- Keep tenant templates fully isolated: the catalog shares nothing per tenant and exposes no mutation endpoints.
+
 ## 2026.09.10.2 — In-deploy maintenance heads-up banner
 
 - Add `GET /api/release-window`, a public endpoint (like `/api/version`) that reads `release-window.json` from the read-only host-status mount beside the host disk status and returns only `active`/`window_id`/`message`; the strict reader fails closed on a missing, malformed, symlinked, or stale marker and caps the message length, so no host or build detail reaches the browser.
