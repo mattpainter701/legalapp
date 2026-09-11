@@ -1638,10 +1638,12 @@ class LegalScheduler:
                 sync_svc = CloudSyncService()
                 tenants_synced = 0
                 total_records = 0
+                provider_failures = 0
 
                 for tenant_id in tenant_ids:
                     try:
                         counts = await sync_svc.sync_all(session, str(tenant_id))
+                        failures = counts.pop("failures", [])
                         tenants_synced += 1
                         for provider, provider_counts in counts.items():
                             provider_total = sum(provider_counts.values())
@@ -1653,6 +1655,28 @@ class LegalScheduler:
                                 job_type="cloud-sync",
                                 status="completed",
                                 items_ok=provider_total,
+                            )
+                            await _commit_and_restore_scheduler_context(session)
+                        # A provider that failed is recorded as failed, not as
+                        # a completed sync that happened to find nothing.
+                        for failure in failures:
+                            provider_failures += 1
+                            failure_summary = f"{failure['provider']} sync failed ({failure['error']})"
+                            await capture_integration_error(
+                                session,
+                                tenant_id=tenant_id,
+                                provider=failure["group"],
+                                job_type="cloud-sync",
+                                message=failure_summary,
+                            )
+                            await record_integration_sync_run(
+                                session,
+                                tenant_id=tenant_id,
+                                provider=failure["group"],
+                                job_type="cloud-sync",
+                                status="failed",
+                                items_failed=1,
+                                error_summary=failure_summary,
                             )
                             await _commit_and_restore_scheduler_context(session)
                     except Exception as tenant_err:
@@ -1686,7 +1710,8 @@ class LegalScheduler:
 
                 summary = (
                     f"Synced {tenants_synced}/{len(tenant_ids)} tenant(s); "
-                    f"{total_records} record(s) upserted."
+                    f"{total_records} record(s) upserted; "
+                    f"{provider_failures} provider failure(s)."
                 )
                 await _log_complete(session, log, summary)
                 logger.info("[cloud-sync] Complete. %s", summary)

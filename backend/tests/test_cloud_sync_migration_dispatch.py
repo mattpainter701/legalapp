@@ -25,7 +25,8 @@ async def test_migrated_sync_only_inventories_bound_target_root(monkeypatch, pro
     tenant_id = str(uuid4())
     result = await service.sync_all(db, tenant_id)
     assert result[group] == {'files': 7, 'emails': 3}
-    assert sum(sum(values.values()) for values in result.values()) == 10
+    assert sum(sum(result[name].values()) for name in ('google', 'microsoft')) == 10
+    assert result['failures'] == []
     reindex.assert_awaited_once_with(db, tenant_id, force=True)
     (service.sync_gmail_metadata if group == 'microsoft' else service.sync_outlook_mail).assert_not_awaited()
 

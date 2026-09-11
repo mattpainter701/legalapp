@@ -483,7 +483,9 @@ async def cloud_search_sync(
     duration_seconds = round(__import__("time").time() - t0, 2)
 
     total = 0
-    for provider_counts in counts.values():
+    for group, provider_counts in counts.items():
+        if group == "failures":
+            continue
         for v in provider_counts.values():
             total += v or 0
 
