@@ -6,7 +6,8 @@ import PaperworkDrawer from './PaperworkDrawer'
 import { dueDateToIso, paperworkOptions } from './paperwork'
 import api, {
   getAdminUsers, getMatterDocuments, getMatterPaperwork, matterPaperworkAction,
-  getSampleTemplates, getTemplates, renderSampleTemplateFile, uploadMatterDocument,
+  getSampleTemplates, getSampleTemplateSource, getTemplateSource, getTemplates,
+  triggerBlobDownload, uploadMatterDocument,
 } from '../../api'
 
 vi.mock('../../api', () => ({
@@ -14,7 +15,8 @@ vi.mock('../../api', () => ({
   getMatterPaperwork: vi.fn(), matterPaperworkAction: vi.fn(), getMatterDocuments: vi.fn(),
   getAdminUsers: vi.fn(), getContacts: vi.fn(), getIntakeStarterPack: vi.fn(),
   getTemplates: vi.fn(), getSampleTemplates: vi.fn(),
-  renderTemplateFile: vi.fn(), renderSampleTemplateFile: vi.fn(), uploadMatterDocument: vi.fn(),
+  getTemplateSource: vi.fn(), getSampleTemplateSource: vi.fn(), triggerBlobDownload: vi.fn(),
+  uploadMatterDocument: vi.fn(),
 }))
 
 afterEach(cleanup)
@@ -121,39 +123,68 @@ it('sends the chosen documents and their deadlines from the drawer', async () =>
   expect(onSent).toHaveBeenCalledOnce()
 })
 
-it('fills a library form, attaches it, and sends it as the fee agreement', async () => {
+it('downloads a blank sample form from the paperwork library', async () => {
   const user = userEvent.setup()
   getSampleTemplates.mockResolvedValue({
-    items: [{
-      id: 'sample-lease', title: 'ND Residential Lease', category: 'leases', format: 'pdf',
-      variable_schema: { fields: [{ name: 'tenant_name', label: 'Tenant name', field_type: 'text' }] },
-    }],
+    items: [{ id: 'sample-lease', title: 'ND Residential Lease', category: 'leases', format: 'pdf' }],
   })
-  renderSampleTemplateFile.mockResolvedValue({
-    blob: new Blob(['%PDF-1.4'], { type: 'application/pdf' }),
-    filename: 'ND Residential Lease.pdf',
+  const blob = new Blob(['%PDF-1.4'], { type: 'application/pdf' })
+  getSampleTemplateSource.mockResolvedValue(blob)
+
+  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
+
+  await user.click(screen.getByRole('button', { name: /Download a firm template or sample/ }))
+  await user.click(await screen.findByRole('tab', { name: 'Sample forms' }))
+  await user.click(await screen.findByRole('button', { name: 'Download' }))
+
+  await waitFor(() => expect(getSampleTemplateSource).toHaveBeenCalledWith('sample-lease'))
+  expect(triggerBlobDownload).toHaveBeenCalledWith(blob, 'ND Residential Lease.pdf')
+})
+
+it('downloads a blank firm template from the paperwork library', async () => {
+  const user = userEvent.setup()
+  const id = '22222222-2222-4222-8222-222222222222'
+  getTemplates.mockResolvedValue({
+    items: [{ id, title: 'Engagement Letter', format: 'pdf', source_filename: 'letter.pdf' }],
   })
-  uploadMatterDocument.mockResolvedValue({
-    id: 'filled-doc', filename: 'ND Residential Lease.pdf', content_type: 'application/pdf',
+  const file = new File(['%PDF-1.4'], 'letter.pdf', { type: 'application/pdf' })
+  getTemplateSource.mockResolvedValue(file)
+
+  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
+
+  await user.click(screen.getByRole('button', { name: /Download a firm template or sample/ }))
+  await user.click(await screen.findByRole('button', { name: 'Download' }))
+
+  await waitFor(() => expect(getTemplateSource).toHaveBeenCalledWith(id, 'letter.pdf'))
+  expect(triggerBlobDownload).toHaveBeenCalledWith(file, 'letter.pdf')
+})
+
+it('opens a firm template in Template Studio from the paperwork library', async () => {
+  const user = userEvent.setup()
+  const id = '11111111-1111-4111-8111-111111111111'
+  getTemplates.mockResolvedValue({
+    items: [{ id, title: 'Engagement Letter', format: 'pdf', source_filename: 'letter.pdf' }],
   })
 
   render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
 
-  await user.click(screen.getByRole('button', { name: /Fill a firm template or sample/ }))
-  await user.click(await screen.findByRole('tab', { name: 'Sample forms' }))
-  await user.click(await screen.findByRole('button', { name: /ND Residential Lease/ }))
-  await user.type(screen.getByLabelText(/Tenant name/), 'Ada Lovelace')
-  await user.click(screen.getByRole('button', { name: /Fill and attach/ }))
+  await user.click(screen.getByRole('button', { name: /Download a firm template or sample/ }))
+  const link = await screen.findByRole('link', { name: /Open in Studio/ })
+  expect(link).toHaveAttribute('href', `/templates/${id}/studio`)
+})
+
+it('attaches a locally filled form uploaded through Choose a file', async () => {
+  const user = userEvent.setup()
+  uploadMatterDocument.mockResolvedValue({
+    id: 'filled-doc', filename: 'Filled form.pdf', content_type: 'application/pdf',
+  })
+
+  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
+
+  await user.upload(screen.getByLabelText('Choose a file'), new File(['%PDF-1.4'], 'Filled form.pdf', { type: 'application/pdf' }))
 
   await waitFor(() => expect(uploadMatterDocument).toHaveBeenCalledOnce())
-  expect(renderSampleTemplateFile).toHaveBeenCalledWith('sample-lease', { variables: { tenant_name: 'Ada Lovelace' } })
-
-  // The filled PDF became the fee agreement, so the packet is sendable.
-  await user.click(screen.getByRole('button', { name: '3. Send' }))
-  await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
-  const [, body] = api.post.mock.calls.at(-1)
-  const options = JSON.parse(body.get('options'))
-  expect(options.agreement_document_id).toBe('filled-doc')
+  expect(await screen.findByRole('checkbox', { name: /Filled form\.pdf/ })).toBeChecked()
 })
 
 it('will not send paperwork without a reviewed fee agreement', async () => {

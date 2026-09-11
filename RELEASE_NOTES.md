@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.9 — Download a form, or finish it in Studio
+
+Released September 11, 2026.
+
+Start this case now downloads a blank firm template or shared sample to fill and attach, or opens it in Template Studio, and an additional form can be uploaded directly.
+
+- **Download a blank form.** The paperwork drawer hands you the original firm template or shared starter form, so you can fill it in your own editor and attach the finished file.
+- **Or finish it in Template Studio.** Open any firm template in Template Studio from the same list to produce a one-off document, instead of an in-app form that could not render complex forms.
+- **Attach a completed form directly.** Additional forms now take a Choose a file upload, so a filled form can be attached without first saving it to the matter's documents.
+
 ## 2026.09.11.8 — Start with a 30-day trial
 
 Released September 11, 2026.

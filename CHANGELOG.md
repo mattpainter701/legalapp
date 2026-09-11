@@ -5,6 +5,13 @@
 - Add an operator SMS tab in `frontend/src/pages/PlatformPage.jsx` to save the sender and send a test message.
 - No migration: configuration uses the existing `platform_settings` table. The separate, firm-owned tenant SMS path (`/api/sms/config`) is unchanged.
 
+## 2026.09.11.9 — Download-or-Studio for paperwork forms
+
+- Replace the in-app fill form in the paperwork drawer with a download-or-Studio chooser. `FormLibraryDialog` now lists firm templates and shared samples with a Download action (`/templates/{id}/source` and `/templates/library/{id}/source`) and, for firm templates, an Open in Studio link to `/templates/{id}/studio`. The previous renderer exposed each sample's raw `variable_schema` (detected text placeholders, duplicate and blank field names) as an unusable form — the Nevada Living Will showed "undefined" and dozens of stray fields.
+- `PaperworkDrawer` no longer renders or uploads a form from the dialog. Firm templates and samples are downloaded and filled in the firm's own editor, then attached through the existing reviewed-file input, matching the "Choose a file" path that already worked.
+- Add a "Choose a file" upload to the drawer's Additional forms card. `uploadFormFile` posts to `POST /matters/{id}/documents/upload` and attaches the returned document as an additional signing form, so a locally filled form no longer has to be saved to the matter's documents first.
+- The Template Studio sample library (`SampleLibraryCard`, `SampleFillDialog`) and its per-sample fill-and-download are unchanged; only the paperwork-drawer path changed.
+
 ## 2026.09.11.8 — 30-day self-serve trials
 
 - Add `app/services/trials.py` and `SIGNUP_TRIAL_DAYS=30`: plan signup now provisions a bounded trial window. `Tenant.expires_at` is the enforced boundary (fail-closed in `require_active_tenant`) and `TenantSettings.custom_config` carries `trial`, `trial_started_at`, and `trial_ends_at` for operator display. Signup previously wrote a 14-day `trial_ends_at` that nothing read, so a self-serve tenant never expired.
