@@ -276,7 +276,15 @@ if [[ -n "${RESTIC_REPOSITORY:-}" ]]; then
   [[ -r "$ENV_FILE" ]] || { echo "production environment/key escrow is not readable" >&2; exit 3; }
   ESCROW_FILE="$BACKUP_DIR/legalapp_env_$TIMESTAMP.escrow"
   install -m 600 "$ENV_FILE" "$ESCROW_FILE"
-  restic snapshots >/dev/null
+  # Every repository command takes a restic lock, and `check` takes the
+  # exclusive one, which blocks even read-only `snapshots`. The hourly
+  # legalapp-backup.timer runs `check` for minutes at a time: on 2026-09-11 a
+  # deploy's first `restic snapshots` landed inside that window and aborted
+  # with "waiting up to 0s for the lock". Retry every lock for a bounded window
+  # so a collision delays, never fails, a proven backup. RESTIC_RETRY_LOCK takes
+  # restic duration syntax (e.g. 10m) and bounds each wait.
+  restic_lock_wait="${RESTIC_RETRY_LOCK:-10m}"
+  restic snapshots --retry-lock "$restic_lock_wait" >/dev/null
   backup_paths=(
     "$BACKUP_FILE" "$CHECKSUM_FILE" "$COUNTS_FILE"
     "$LITELLM_BACKUP_FILE" "$LITELLM_CHECKSUM_FILE" "$LITELLM_COUNTS_FILE"
@@ -285,16 +293,13 @@ if [[ -n "${RESTIC_REPOSITORY:-}" ]]; then
   )
   [[ -d "$CERTS_DIR" ]] && backup_paths+=("$CERTS_DIR")
   # The escrow copy exists only for the duration of this encrypted snapshot.
-  # Retry the exclusive repository lock for a bounded window: the hourly
-  # legalapp-backup.timer legitimately holds it (and vice versa), and a lock
-  # collision must delay, never fail, a proven backup. RESTIC_RETRY_LOCK takes
-  # restic duration syntax (e.g. 10m) and bounds the wait.
-  restic backup --retry-lock "${RESTIC_RETRY_LOCK:-10m}" \
+  restic backup --retry-lock "$restic_lock_wait" \
     --tag legalapp-production --tag "$TIMESTAMP" "${backup_paths[@]}"
-  restic check --read-data-subset="${RESTIC_CHECK_SUBSET:-1/100}"
+  restic check --retry-lock "$restic_lock_wait" \
+    --read-data-subset="${RESTIC_CHECK_SUBSET:-1/100}"
   snapshot_evidence="$(mktemp "$BACKUP_DIR/.restic-snapshots.XXXXXX")"
   trap 'rm -f -- "${snapshot_evidence:-}"; cleanup' EXIT
-  restic snapshots --json --tag "$TIMESTAMP" > "$snapshot_evidence"
+  restic snapshots --retry-lock "$restic_lock_wait" --json --tag "$TIMESTAMP" > "$snapshot_evidence"
   evidence_dir="${OFFSITE_BACKUP_EVIDENCE_DIR:-$BACKUP_DIR/offsite-evidence}"
   if [[ "$evidence_dir" != /* ]]; then evidence_dir="$ROOT_DIR/$evidence_dir"; fi
   evidence_file="$evidence_dir/legalapp-offsite-$TIMESTAMP.json"

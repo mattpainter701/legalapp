@@ -6,10 +6,13 @@ LiteLLM gateway, and when an hourly scheduled backup collided with a deploy:
 1. The deploy's health-wait loop covered backend/scheduler/nginx but never the
    LiteLLM healthcheck, so the verification gates failed a recreated gateway
    still in ``health=starting``.
-2. ``legalapp-backup.timer`` (hourly, ``RandomizedDelaySec=10m``) can hold
-   restic's exclusive repository lock when a deploy's proven-backup step runs;
-   restic failed fast (``waiting up to 0s``) and aborted the deploy before any
-   mutation.
+2. ``legalapp-backup.timer`` (hourly, ``RandomizedDelaySec=10m``) runs
+   ``restic check``, which holds the *exclusive* repository lock for minutes.
+   A deploy's proven-backup step started inside that window; its first repo
+   command -- a read-only ``restic snapshots`` -- failed fast (``waiting up to
+   0s``) and aborted the deploy before any mutation. The first fix retried
+   only ``restic backup``, which takes a shared lock and was never the command
+   that collided.
 
 These pins keep the bounded waits in place.
 """
@@ -54,17 +57,24 @@ def test_deploy_waits_for_recreated_gateway_health_before_gates():
     assert deploy.count("exit 6") >= 3
 
 
-def test_backup_retries_the_exclusive_restic_lock():
+def test_backup_retries_every_restic_repository_lock():
     backup = _script("backup_db.sh")
 
-    # Only restic backup takes the exclusive repository lock; a collision with
-    # the hourly timer must delay for a bounded window, never fail the backup.
-    assert 'restic backup --retry-lock "${RESTIC_RETRY_LOCK:-10m}"' in backup
-    assert backup.count("--retry-lock") == 1
-    # Read-only commands must not inherit the wait.
-    snapshots_line = next(
-        line
+    # Every repository command takes a lock, and the timer's ``check`` holds
+    # the exclusive one -- which blocks read-only ``snapshots`` too. Each
+    # command must wait for a bounded window rather than fail the backup.
+    definition = backup.index('restic_lock_wait="${RESTIC_RETRY_LOCK:-10m}"')
+    commands = [
+        line.strip()
         for line in backup.splitlines()
-        if line.strip().startswith("restic snapshots")
-    )
-    assert "retry-lock" not in snapshots_line
+        if line.strip().startswith("restic ")
+    ]
+    assert [line.split()[1] for line in commands] == [
+        "snapshots",
+        "backup",
+        "check",
+        "snapshots",
+    ]
+    for line in commands:
+        assert '--retry-lock "$restic_lock_wait"' in line, line
+    assert definition < backup.index(commands[0])
