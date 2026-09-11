@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.6 — Live in the matter, miss nothing
+
+Released September 11, 2026.
+
+The matter page now tells you when a client signs, the email composer fills in the client's address and can name the outstanding records, and Client Portal is a main tab.
+
+- **Know the moment a client signs.** When the fee agreement is signed, an on-screen notification appears on the matter and the signature list refreshes itself — no reload needed.
+- **The email composer does the typing.** Emailing the client from a matter now fills in the client's email address, and one click inserts the list of records the client still needs to upload.
+- **Client Portal is a main tab.** The client portal sits in the matter's primary tabs instead of hiding behind Matter settings, and the client name on a matter links straight to the client record.
+
 ## 2026.09.11.5 — Say which records you still need
 
 Released September 11, 2026.

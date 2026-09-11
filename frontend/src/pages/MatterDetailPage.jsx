@@ -28,6 +28,7 @@ import MatterPartiesTab from '../components/MatterPartiesTab'
 import MatterSmbSharesTab from '../components/MatterSmbSharesTab'
 import AddTaskModal from '../components/AddTaskModal'
 import ComposeEmailModal from '../components/ComposeEmailModal'
+import { useToast } from '../components/toast/useToast'
 import UserSearchInput from '../components/UserSearchInput'
 import ContactPicker from '../components/ContactPicker'
 import MatterExpensesPanel from '../components/MatterExpensesPanel'
@@ -235,8 +236,8 @@ function DueDateLabel({ dueDate }) {
 
 const KEY_DATE_TYPES = new Set(['hearing', 'filing', 'deposition', 'deadline'])
 const MATTER_SECTIONS = new Set(['dashboard', 'activity', 'team', 'workflow', 'documents', 'correspondence', 'portal', 'billing', 'chat', 'settings'])
-const PRIMARY_SECTIONS = ['dashboard', 'documents', 'activity', 'billing']
-const SECONDARY_SECTIONS = ['portal', 'team', 'workflow', 'correspondence', 'chat', 'settings']
+const PRIMARY_SECTIONS = ['dashboard', 'documents', 'activity', 'portal', 'billing']
+const SECONDARY_SECTIONS = ['team', 'workflow', 'correspondence', 'chat', 'settings']
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function MatterDetailPage() {
@@ -395,6 +396,28 @@ function MatterWorkspace() {
   const [showDetailsPanel, setShowDetailsPanel] = useState(false)
   const [showAddTask, setShowAddTask] = useState(false)
   const [showCompose, setShowCompose] = useState(false)
+
+  // The paperwork card polls the intake packet; when the fee agreement flips
+  // to signed, alert in place (no reload) and refresh the signature panel.
+  const toast = useToast()
+  const signedRef = useRef(null)
+  const [signatureRefreshKey, setSignatureRefreshKey] = useState(0)
+  const handlePacketChange = useCallback((packet) => {
+    const signed = Boolean(packet?.signing_followup_due_at)
+    if (signedRef.current === null) {
+      // First observation only records the baseline; a packet signed before
+      // this page loaded is not news.
+      signedRef.current = signed
+      return
+    }
+    if (signed && !signedRef.current) {
+      toast.success('Fee agreement signed', {
+        message: 'The client portal is ready. Follow up with the client within 24 hours.',
+      })
+      setSignatureRefreshKey(key => key + 1)
+    }
+    signedRef.current = signed
+  }, [toast])
 
   // Activity tab (merges timeline + communications)
   const [timeline, setTimeline] = useState([])
@@ -770,9 +793,9 @@ function MatterWorkspace() {
     { key: 'chat', label: 'Chat', icon: Icons.messageSquare },
     { key: 'settings', label: 'Settings', icon: Icons.settings },
   ].filter(tab => !hiddenPanels.includes(tab.key))
-  // The native view is the case: what it needs, its files, what happened, what
-  // it costs. Team, Workflow, Portal, Correspondence, and Chat are real work
-  // but not daily work, so they group under Matter settings instead of
+  // The native view is the case: what it needs, its files, its portal, what
+  // happened, what it costs. Team, Workflow, Correspondence, and Chat are real
+  // work but not daily work, so they group under Matter settings instead of
   // crowding the page every case is run from.
   const primaryTabs = tabs.filter(tab => PRIMARY_SECTIONS.includes(tab.key))
   const secondaryTabs = tabs.filter(tab => SECONDARY_SECTIONS.includes(tab.key))
@@ -1007,9 +1030,9 @@ function MatterWorkspace() {
         {/* ── Dashboard Tab ─────────────────────────────────────────────────────── */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            <CaseSetupCard matterId={id} matter={matter} />
+            <CaseSetupCard matterId={id} matter={matter} onPacketChange={handlePacketChange} />
             <ClientConversation matterId={id} onUnreadChange={setClientUnread} />
-            <SignatureRequestsPanel matterId={id} />
+            <SignatureRequestsPanel matterId={id} refreshKey={signatureRefreshKey} />
             {/* Stats bar */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
@@ -2144,7 +2167,19 @@ function MatterWorkspace() {
             <>
               <dl>
                 <Field label="Client">
-                  {matter.client_name ? (
+                  {matter.client_name && matter.client_contact_id ? (
+                    // The matter's client contact *is* the CRM record when it
+                    // is typed client/prospect; link there, and to the contact
+                    // record otherwise, so the two directories stay connected.
+                    <Link
+                      to={['client', 'prospect'].includes(matter.client_contact_type)
+                        ? `/clients/${matter.client_contact_id}`
+                        : `/contacts/${matter.client_contact_id}`}
+                      className="font-semibold text-brand-ink underline decoration-brand-line underline-offset-2 hover:text-brand-accent"
+                    >
+                      {matter.client_name}
+                    </Link>
+                  ) : matter.client_name ? (
                     <span className="font-semibold text-brand-ink">{matter.client_name}</span>
                   ) : (
                     <span className="text-brand-muted italic">Not assigned — click Edit to add</span>
@@ -2282,7 +2317,7 @@ function MatterWorkspace() {
           matterId={id}
           matterName={matter.matter_name}
           caseNumber={matter.case_number}
-          clientEmail={matter.client?.email || null}
+          clientEmail={matter.client_email || null}
           onSent={(result) => {
             setShowCompose(false)
             if (activeTab === 'activity') {
@@ -2321,7 +2356,7 @@ function formatPortalTimestamp(value) {
 
 function ClientPortalTab({ matterId, matter }) {
   const [invites, setInvites] = useState([])
-  const [email, setEmail] = useState(matter?.client?.email || '')
+  const [email, setEmail] = useState(matter?.client_email || '')
   const [creating, setCreating] = useState(false)
   const [revokeExisting, setRevokeExisting] = useState(false)
   const [lastUrl, setLastUrl] = useState('')
@@ -2535,7 +2570,7 @@ function signerStatusLabel(signer) {
 
 const EMPTY_SIGNING_FIELDS = []
 
-export function SignatureRequestsPanel({ matterId }) {
+export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
   const [requests, setRequests] = useState([])
   const [docs, setDocs] = useState([])
   const [docId, setDocId] = useState('')
@@ -2563,7 +2598,9 @@ export function SignatureRequestsPanel({ matterId }) {
       .then((data) => setDocs(Array.isArray(data) ? data : data.items || []))
       .catch(() => {})
   }, [matterId])
-  useEffect(() => { load() }, [load])
+  // `refreshKey` lets the page re-arm the panel when the intake packet reports
+  // a new signature without a reload.
+  useEffect(() => { load() }, [load, refreshKey])
 
   const selectedDocument = docs.find(document => String(document.id) === String(docId))
   const initialFields = selectedDocument?.positioned_fields || EMPTY_SIGNING_FIELDS

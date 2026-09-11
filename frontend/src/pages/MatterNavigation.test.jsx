@@ -9,6 +9,7 @@ vi.mock('../api', async () => {
   return Object.fromEntries(Object.entries(actual).map(([key, value]) => [key, typeof value === 'function' ? vi.fn().mockResolvedValue([]) : value]))
 })
 vi.mock('../App', () => ({ useAuth: () => ({ user: { id: 'user', role: 'admin' } }) }))
+vi.mock('../components/toast/useToast', () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }) }))
 vi.mock('../components/MatterDocumentsTab', () => ({ default: () => <p>Document workspace</p> }))
 vi.mock('../components/MatterPartiesTab', () => ({ default: () => <p>Parties panel</p> }))
 
@@ -47,6 +48,15 @@ it('keeps team and matter parties together under People', async () => {
   renderMatter('/matters/A?tab=team')
   expect(await screen.findByText('Parties panel')).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'Team Assignments' })).toBeInTheDocument()
+})
+
+it('offers Client Portal in the primary tab row, not behind Matter settings', async () => {
+  renderMatter()
+  // On the dashboard the secondary "Matter settings" row is not rendered, so
+  // a Client Portal button can only come from the primary row.
+  const portal = await screen.findByRole('button', { name: 'Client Portal' })
+  fireEvent.click(portal)
+  expect(screen.getByLabelText('Location')).toHaveTextContent('?tab=portal')
 })
 
 it('keeps the Documents workspace free of the Parties panel', async () => {

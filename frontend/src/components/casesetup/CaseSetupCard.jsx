@@ -27,7 +27,7 @@ function Shell({ children }) {
   return <section aria-label="Client paperwork" className="rounded-2xl border border-brand-line bg-brand-surface p-5 shadow-sm">{children}</section>
 }
 
-export default function CaseSetupCard({ matterId, matter }) {
+export default function CaseSetupCard({ matterId, matter, onPacketChange }) {
   const [documents, setDocuments] = useState([])
   const [users, setUsers] = useState([])
   const [clientEmail, setClientEmail] = useState('')
@@ -48,15 +48,21 @@ export default function CaseSetupCard({ matterId, matter }) {
       // not a recognizable packet as "nothing sent yet" rather than rendering
       // a half-empty strip.
       const value = await getMatterPaperwork(matterId)
-      setPacket(value && typeof value.status === 'string' ? value : null)
+      const next = value && typeof value.status === 'string' ? value : null
+      setPacket(next)
+      // The page watches for the signed transition to alert and refresh the
+      // signature panel; the card owns the poll, so it reports every state.
+      onPacketChange?.(next)
       setError('')
     } catch (caught) {
-      if (caught.response?.status === 404) setPacket(null)
-      else setError(errorText(caught))
+      if (caught.response?.status === 404) {
+        setPacket(null)
+        onPacketChange?.(null)
+      } else setError(errorText(caught))
     } finally {
       setLoading(false)
     }
-  }, [matterId])
+  }, [matterId, onPacketChange])
 
   useEffect(() => {
     setPacket(null)

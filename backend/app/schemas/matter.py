@@ -176,6 +176,8 @@ class MatterResponse(BaseModel):
     # Client
     client_contact_id: str | None
     client_name: str | None
+    client_email: str | None = None
+    client_contact_type: str | None = None
 
     # Attorney of record
     attorney_of_record_id: str | None

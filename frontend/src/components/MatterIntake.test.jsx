@@ -30,6 +30,18 @@ beforeEach(() => {
   getAdminUsers.mockResolvedValue([])
   getPlugins.mockResolvedValue([])
 })
+it('names the requested record on the client upload control', async () => {
+  getClientIntake.mockResolvedValue({
+    ...packet(),
+    requirements: {
+      fee_agreement: { completed: true },
+      questionnaire: { completed: true },
+      upload_1: { kind: 'upload', label: 'Marriage certificate', completed: false },
+    },
+  })
+  render(<ClientIntakeChecklist />)
+  expect(await screen.findByLabelText('Upload Marriage certificate')).toBeInTheDocument()
+})
 it('keeps signature outstanding after questionnaire completion', async () => {
   const user = userEvent.setup(); const onSign = vi.fn()
   submitClientIntake.mockResolvedValue({ ...packet(), requirements: { fee_agreement: { completed: false }, questionnaire: { completed: true } } })

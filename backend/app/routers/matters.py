@@ -405,8 +405,12 @@ def _matter_to_response(
 ) -> MatterResponse:
     """Convert a Matter ORM instance to a MatterResponse."""
     client_name = None
+    client_email = None
+    client_contact_type = None
     if matter.client:
         client_name = getattr(matter.client, "display_name", None)
+        client_email = getattr(matter.client, "email", None)
+        client_contact_type = getattr(matter.client, "contact_type", None)
 
     attorney_name = None
     if matter.attorney_of_record:
@@ -469,6 +473,8 @@ def _matter_to_response(
             str(matter.client_contact_id) if matter.client_contact_id else None
         ),
         client_name=client_name,
+        client_email=client_email,
+        client_contact_type=client_contact_type,
         attorney_of_record_id=(
             str(matter.attorney_of_record_id) if matter.attorney_of_record_id else None
         ),

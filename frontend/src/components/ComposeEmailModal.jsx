@@ -1,6 +1,6 @@
 import EmailAttachments from './EmailAttachments'
-import { useState } from 'react'
-import { emailMatterClient } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { emailMatterClient, getMatterPaperwork } from '../api'
 
 const inputCls = 'w-full border border-brand-line rounded-lg px-3 py-2.5 text-base md:text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface transition-all'
 const labelCls = 'block text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1.5'
@@ -16,8 +16,37 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
   const [attachments, setAttachments] = useState([])
   const [error, setError] = useState(null)
   const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false)
+  const [outstandingRecords, setOutstandingRecords] = useState([])
+  const bodyRef = useRef(null)
+
+  // The intake packet knows which requested records are still outstanding, so
+  // the composer can name them instead of making the attorney retype the list.
+  useEffect(() => {
+    let active = true
+    getMatterPaperwork(matterId)
+      .then(packet => {
+        if (!active || !packet?.requirements) return
+        setOutstandingRecords(
+          Object.entries(packet.requirements)
+            .filter(([key, item]) => key.startsWith('upload_') && !item.completed)
+            .map(([key, item]) => item.label || key.replace(/_/g, ' '))
+        )
+      })
+      .catch(() => {}) // No packet (or no access) just means no insert helper.
+    return () => { active = false }
+  }, [matterId])
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  const insertRecordsRequest = () => {
+    const sentence = `Please upload these records in your secure client portal: ${outstandingRecords.join(', ')}.`
+    const area = bodyRef.current
+    const at = area && typeof area.selectionStart === 'number' ? area.selectionStart : form.body.length
+    const before = form.body.slice(0, at)
+    const after = form.body.slice(at)
+    const prefix = before && !before.endsWith('\n') && !before.endsWith(' ') ? ' ' : ''
+    set('body', `${before}${prefix}${sentence}${after ? `\n${after}` : ''}`)
+  }
 
   const handleSend = async (e) => {
     e.preventDefault()
@@ -84,9 +113,21 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
             />
           </div>
           <div>
-            <label htmlFor="compose-email-body" className={labelCls}>Message</label>
+            <div className="flex items-center justify-between gap-3">
+              <label htmlFor="compose-email-body" className={labelCls}>Message</label>
+              {outstandingRecords.length > 0 && (
+                <button
+                  type="button"
+                  onClick={insertRecordsRequest}
+                  className="text-[12px] font-semibold text-brand-accent underline"
+                >
+                  Insert requested records ({outstandingRecords.length})
+                </button>
+              )}
+            </div>
             <textarea
               id="compose-email-body"
+              ref={bodyRef}
               autoFocus
               value={form.body}
               onChange={e => set('body', e.target.value)}

@@ -133,3 +133,18 @@ it('keeps case-update texts out of an intake-only consent', () => {
   expect(paperworkOptions(base, 'UTC').sms_case_updates_verified).toBe(false)
   expect(paperworkOptions({ ...base, smsCaseUpdatesVerified: true }, 'UTC').sms_case_updates_verified).toBe(true)
 })
+
+it('reports every polled packet so the page can alert on a new signature', async () => {
+  const onPacketChange = vi.fn()
+  render(<CaseSetupCard matterId="matter" onPacketChange={onPacketChange} />)
+  await screen.findByRole('heading', { name: 'Client paperwork' })
+  expect(onPacketChange).toHaveBeenCalledWith(expect.objectContaining({ status: 'awaiting_documents' }))
+})
+
+it('reports the absence of a packet as null', async () => {
+  const onPacketChange = vi.fn()
+  getMatterPaperwork.mockRejectedValue({ response: { status: 404 } })
+  render(<CaseSetupCard matterId="matter" onPacketChange={onPacketChange} />)
+  await screen.findByRole('button', { name: 'Send client paperwork' })
+  expect(onPacketChange).toHaveBeenCalledWith(null)
+})

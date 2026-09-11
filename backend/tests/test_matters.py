@@ -92,7 +92,10 @@ async def test_matter_field_options_returns_unique_firm_used_values(client):
 
     assert response.status_code == 200, response.text
     data = response.json()
-    assert len([value for value in data["matter_types"] if value.lower() == "family law"]) == 1
+    assert (
+        len([value for value in data["matter_types"] if value.lower() == "family law"])
+        == 1
+    )
     assert data["roles"] == ["Petitioner", "Respondent"]
     assert data["jurisdictions"] == ["Minnesota", "North Dakota"]
     assert data["counterparties"] == ["Acme Holdings", "Beta LLC"]
@@ -165,3 +168,40 @@ async def test_client_portal_invite_reports_failed_delivery_but_preserves_link(
     invite = await db_session.get(ClientPortalInvite, uuid.UUID(payload["id"]))
     assert invite is not None
     assert invite.revoked is False
+
+
+@pytest.mark.asyncio
+async def test_matter_response_carries_client_email_and_contact_type(
+    client, db_session, test_tenant
+):
+    from app.models.contact import Contact
+
+    contact = Contact(
+        tenant_id=test_tenant.id,
+        first_name="Jane",
+        last_name="Doe",
+        email="jane.doe@example.com",
+        contact_type="client",
+    )
+    db_session.add(contact)
+    await db_session.commit()
+
+    created = await client.post(
+        "/api/matters",
+        json={
+            "matter_name": "Client Linkage Matter",
+            "practice_area": "family",
+            "client_contact_id": str(contact.id),
+        },
+    )
+    assert created.status_code == 201, created.text
+    matter_id = created.json()["id"]
+
+    resp = await client.get(f"/api/matters/{matter_id}")
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["client_contact_id"] == str(contact.id)
+    assert payload["client_name"] == "Jane Doe"
+    assert payload["client_email"] == "jane.doe@example.com"
+    assert payload["client_contact_type"] == "client"
