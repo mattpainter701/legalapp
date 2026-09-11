@@ -26,6 +26,7 @@ MD_OUT = ROOT / "docs" / "SBOM_TRACKING_INVENTORY.md"
 
 MANIFEST_PATHS = [
     "backend/requirements.txt",
+    "backend/requirements-dev.txt",
     "mcp-server/requirements.txt",
     "scripts/requirements.txt",
     "scripts/tabs3_export/requirements.txt",
@@ -100,6 +101,11 @@ def rel(path: Path) -> str:
     return path.relative_to(ROOT).as_posix()
 
 
+def is_requirements(path: str) -> bool:
+    """Match requirements.txt and requirements-dev.txt style manifests."""
+    return re.search(r"requirements(-[A-Za-z0-9_-]+)?\.txt$", path) is not None
+
+
 def parse_requirement_line(line: str) -> tuple[str, str] | None:
     stripped = line.strip()
     if not stripped or stripped.startswith("#") or stripped.startswith("-"):
@@ -163,7 +169,7 @@ def gather_pyproject(path: str) -> list[Dependency]:
 def gather_dependencies() -> list[Dependency]:
     deps: list[Dependency] = []
     for path in MANIFEST_PATHS:
-        if path.endswith("requirements.txt"):
+        if is_requirements(path):
             deps.extend(gather_python_requirements(path))
         elif path.endswith("package.json"):
             deps.extend(gather_package_json(path))
@@ -245,7 +251,7 @@ def gather_ai_routes() -> list[AiRoute]:
 
 
 def manifest_type(manifest: str) -> str:
-    if manifest.endswith("requirements.txt"):
+    if is_requirements(manifest):
         return "python requirements"
     if manifest.endswith("package.json"):
         return "npm package"
@@ -266,7 +272,7 @@ def lockfiles_for_manifest(manifest: str) -> list[str]:
             "pnpm-lock.yaml",
             "bun.lockb",
         )
-    elif manifest.endswith("requirements.txt"):
+    elif is_requirements(manifest):
         names = (
             "requirements.lock",
             "requirements.txt.lock",

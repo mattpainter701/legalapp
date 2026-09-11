@@ -39,22 +39,3 @@ services:
   litellm-postgres:
     ports:
       - "5435:5432"
-
-  vectordb:
-    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
-    environment:
-      POSTGRES_USER: vectordb
-      POSTGRES_PASSWORD: vectordb
-      POSTGRES_DB: vectordb
-    ports:
-      - "5433:5432"
-    volumes:
-      - vectordb_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vectordb -d vectordb"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-volumes:
-  vectordb_data:

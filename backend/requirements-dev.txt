@@ -1,0 +1,8 @@
+# Test and lint dependencies for the backend. Not installed in production
+# images; CI jobs and local dev installs pair this file with
+# `pip install -r backend/requirements.txt -r backend/requirements-dev.txt`.
+-r requirements.txt
+ruff==0.8.4
+pytest==9.0.3
+pytest-asyncio==1.4.0
+pytest-env==1.1.5
