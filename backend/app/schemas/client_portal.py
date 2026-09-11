@@ -27,7 +27,38 @@ class ClientPortalActivateRequest(ClientPortalAcceptRequest):
 class ClientPortalLoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=128)
+    # A returning client authenticates without knowing an internal UUID. When
+    # omitted the server resolves the account's portal matters: one logs
+    # straight in, several return a picker, none is a 403.
+    matter_id: str | None = None
+
+
+class PortalMatterChoice(BaseModel):
+    """One matter a password-backed client account can open."""
+
     matter_id: str
+    matter_name: str
+    matter_number: str | None = None
+
+
+class PortalFirmBranding(BaseModel):
+    """Firm identity the client recognizes, used to brand the portal."""
+
+    firm_name: str | None = None
+    firm_logo_url: str | None = None
+    firm_address: str | None = None
+    firm_phone: str | None = None
+    firm_email: str | None = None
+    firm_website: str | None = None
+    currency: str = "USD"
+
+
+class PortalInviteInfo(BaseModel):
+    """Firm identity for an invitation, resolved without consuming the token."""
+
+    matter_name: str
+    expires_at: datetime | None = None
+    firm: PortalFirmBranding | None = None
 
 
 class ClientPortalAcceptResponse(BaseModel):
@@ -50,6 +81,7 @@ class PortalSessionResponse(BaseModel):
     email: str | None = None
     expires_at: datetime
     invite_expires_at: datetime
+    firm: PortalFirmBranding | None = None
 
 
 # ── Matter overview (client side) ───────────────────────────────────────────
@@ -97,6 +129,9 @@ class PortalMatterView(BaseModel):
     open_invoice_count: int = 0
     outstanding_balance: Decimal = Decimal("0")
     last_activity_at: datetime | None = None
+    # The firm's own identity, so the portal reads as "my lawyer's area"
+    # rather than unbranded vendor software.
+    firm: PortalFirmBranding | None = None
 
 
 class PortalMediationCase(BaseModel):
@@ -197,6 +232,9 @@ class PortalMessageResponse(BaseModel):
     occurred_at: datetime
     # True for firm messages the client had not yet read when the list was built.
     unread: bool = False
+    # The person at the firm who wrote it; clients have a relationship with a
+    # person, not "Legal team".
+    sender_name: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -214,6 +252,18 @@ class PortalMarkReadResponse(BaseModel):
 
 
 # ── Documents ───────────────────────────────────────────────────────────────
+
+
+class PortalUploadPolicy(BaseModel):
+    """What the portal will accept, published so the client UI can state it.
+
+    The server enforces both limits; without this the client only discovers a
+    rejected file after a long upload finishes and fails.
+    """
+
+    max_upload_bytes: int
+    max_files_per_batch: int
+    allowed_extensions: list[str] = []
 
 
 class PortalDocumentResponse(BaseModel):

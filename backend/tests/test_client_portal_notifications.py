@@ -7,6 +7,7 @@ HTML email body, so the escaping here is the only thing between a stray
 
 import time
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -44,6 +45,52 @@ async def test_client_invite_email_escapes_the_matter_name():
     assert "Ferris &amp; Co" in html
     # The URL keeps its query separator escaped rather than splitting the attribute.
     assert "token=abc&amp;x=1" in html
+
+
+@pytest.mark.asyncio
+async def test_client_invite_email_names_the_firm_attorney_and_expiry():
+    expiry = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    with patch(
+        "app.services.email.email_service.send_email",
+        new_callable=AsyncMock,
+        return_value=EmailDeliveryResult.SENT,
+    ) as mock:
+        await send_client_portal_invite(
+            to_email="client@example.com",
+            matter_name="Rivera v. Northline",
+            invite_url="https://app.example.com/portal/client/accept?token=abc",
+            firm_name="Northline & Associates",
+            firm_phone="+1-312-555-0100",
+            firm_email="help@northline.example",
+            attorney_name="Dana Whitfield",
+            expires_at=expiry,
+        )
+    html, text = _sent_bodies(mock)
+    # The client recognizes the firm and the person they have been dealing with.
+    assert "Northline &amp; Associates" in html
+    assert "Dana Whitfield" in html
+    assert "October 01, 2026" in html
+    assert "+1-312-555-0100" in html
+    # A firm name is free text and must be escaped like the matter name.
+    assert "Northline & Associates" in text
+
+
+@pytest.mark.asyncio
+async def test_client_invite_firm_name_is_escaped():
+    with patch(
+        "app.services.email.email_service.send_email",
+        new_callable=AsyncMock,
+        return_value=EmailDeliveryResult.SENT,
+    ) as mock:
+        await send_client_portal_invite(
+            to_email="client@example.com",
+            matter_name="Matter",
+            invite_url="https://app.example.com/portal/client/accept?token=abc",
+            firm_name='<script>alert("firm")</script>',
+        )
+    html, _text = _sent_bodies(mock)
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
 
 
 @pytest.mark.asyncio

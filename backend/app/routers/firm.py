@@ -24,6 +24,7 @@ BRANDING_FIELDS = (
     "firm_phone",
     "firm_email",
     "firm_website",
+    "firm_currency",
     "firm_pdf_footer",
 )
 
@@ -49,6 +50,13 @@ async def get_firm_branding(db: AsyncSession, tenant: Tenant) -> dict:
         branding["firm_name"] = tenant.name
     if not branding["firm_address"]:
         branding["firm_address"] = tenant.address
+    # Money appears on portal screens and invoice PDFs; keep an explicit code so
+    # the renderer never falls back to a locale guess. Existing tenants default
+    # to USD, which is what the old hardcode assumed.
+    if not branding["firm_currency"]:
+        branding["firm_currency"] = "USD"
+    else:
+        branding["firm_currency"] = branding["firm_currency"].strip().upper()
 
     return branding
 

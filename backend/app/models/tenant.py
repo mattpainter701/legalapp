@@ -242,6 +242,10 @@ class TenantSettings(Base):
     firm_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     firm_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     firm_website: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # ISO 4217 code used when the portal renders invoices and balances. Nullable
+    # and resolved to USD in ``get_firm_branding`` so existing tenants are
+    # unchanged; non-US firms can set their own.
+    firm_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     firm_pdf_footer: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(

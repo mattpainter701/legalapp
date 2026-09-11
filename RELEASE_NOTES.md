@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.9 — A front door to your client portal
+
+Released September 11, 2026.
+
+Clients can now set a password and sign back in to the portal at any time, the portal carries the firm's own name and contact details, and the signature, upload, phone, and screen-reader rough edges are fixed.
+
+- **Sign in without hunting for the email.** A client portal sign-in page now exists. Setting a password from the invitation keeps the portal reachable even after the original link expires.
+- **The portal looks like your firm, not like software.** Your firm's name, logo, phone, email and website now appear on the portal and in the invitation email, with a "Need help?" footer close at hand.
+- **Smoother, safer portal details.** Declining a signature now asks for confirmation, mediation uploads work, phone layouts no longer hide key tabs, and outcomes reach screen readers.
+
 ## 2026.09.11.8 — Start with a 30-day trial
 
 Released September 11, 2026.

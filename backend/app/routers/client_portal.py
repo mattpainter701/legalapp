@@ -92,11 +92,14 @@ from app.schemas.client_portal import (
     FirmInviteResponse,
     PortalAttorney,
     PortalDocumentResponse,
+    PortalFirmBranding,
     PortalInvoiceList,
     PortalInvoiceResponse,
     PortalInvoicePaymentResponse,
+    PortalInviteInfo,
     PortalKeyDate,
     PortalMarkReadResponse,
+    PortalMatterChoice,
     PortalMatterView,
     PortalMediationAsset,
     PortalMediationCase,
@@ -107,6 +110,7 @@ from app.schemas.client_portal import (
     PortalMessageList,
     PortalMessageResponse,
     PortalSessionResponse,
+    PortalUploadPolicy,
 )
 from app.services import mediation_service as mediation_service
 from app.services.plugin_entitlements import (
@@ -394,7 +398,14 @@ async def get_client_portal_context(
     now = datetime.now(timezone.utc)
     invite_expires_at = _aware(invite.expires_at)
     if invite_expires_at is not None and invite_expires_at < now:
-        raise HTTPException(status_code=401, detail="Portal session has expired")
+        # The emailed magic link dies with the invitation, but a password-backed
+        # account is durable: it survives the link's 14-day TTL so a returning
+        # client can sign back in months into a matter. Revocation
+        # (``invite.revoked``) is still the control, and the session JWT carries
+        # its own shorter exp, so this does not widen what an anonymous link can
+        # reach.
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Portal session has expired")
 
     await _touch_last_seen(db, invite, now)
 
@@ -559,7 +570,59 @@ async def portal_matter_dep(
     return ctx, await _load_matter(db, ctx)
 
 
+async def _portal_firm_branding(
+    db: AsyncSession, tenant_id: str
+) -> PortalFirmBranding | None:
+    """The firm's own identity, for branding the portal it invited the client to."""
+    tenant = await db.get(Tenant, uuid.UUID(str(tenant_id)))
+    if tenant is None:
+        return None
+    branding = await get_firm_branding(db, tenant)
+    return PortalFirmBranding(
+        firm_name=branding.get("firm_name"),
+        firm_logo_url=branding.get("firm_logo_url"),
+        firm_address=branding.get("firm_address"),
+        firm_phone=branding.get("firm_phone"),
+        firm_email=branding.get("firm_email"),
+        firm_website=branding.get("firm_website"),
+        currency=branding.get("firm_currency") or "USD",
+    )
+
+
+def _portal_upload_policy() -> PortalUploadPolicy:
+    """Publish the same limits the upload endpoint enforces."""
+    return PortalUploadPolicy(
+        max_upload_bytes=settings.MAX_FILE_SIZE_MB * 1024 * 1024,
+        max_files_per_batch=10_000,
+        allowed_extensions=sorted(ALLOWED_UPLOAD_EXTENSIONS),
+    )
+
+
 # ── Invite acceptance ───────────────────────────────────────────────────────
+
+
+@router.get("/invite-info", response_model=PortalInviteInfo)
+async def portal_invite_info(token: str, db: AsyncSession = Depends(get_db)):
+    """Identify the firm for an invitation without consuming it.
+
+    The accept page shows the firm's name, logo and contact while the token is
+    verified, and keeps showing them when it fails. A dead or expired link then
+    tells the client who to call instead of leaving them on a vendor-branded
+    dead end. Only a holder of the high-entropy token sees anything.
+    """
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    invite = await resolve_active_portal_invite(db, ClientPortalInvite, token_hash)
+    if invite is None or invite.revoked:
+        raise HTTPException(
+            status_code=PORTAL_INVITE_UNAVAILABLE_STATUS,
+            detail=PORTAL_INVITE_UNAVAILABLE_DETAIL,
+        )
+    matter = await db.get(Matter, invite.matter_id)
+    return PortalInviteInfo(
+        matter_name=matter.matter_name if matter else "your matter",
+        expires_at=_aware(invite.expires_at),
+        firm=await _portal_firm_branding(db, str(invite.tenant_id)),
+    )
 
 
 @router.post("/accept", response_model=ClientPortalAcceptResponse)
@@ -695,7 +758,12 @@ async def login_portal_account(  # pragma: no cover - exercised by browser/E2E i
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    """Authenticate a client account into one explicitly selected matter."""
+    """Authenticate a durable client account into one of its portal matters.
+
+    ``matter_id`` is optional. A returning client should not have to know an
+    internal UUID: one accessible matter signs straight in, several return a
+    409 listing them so the client picks, none is a 403.
+    """
     email = body.email.lower().strip()
     # Email is the only tenant-independent login locator; keep this lookup
     # within the auth-only, transaction-local users-table bypass, then bind the
@@ -708,52 +776,78 @@ async def login_portal_account(  # pragma: no cover - exercised by browser/E2E i
     )
     if user is None or not _portal_password_matches(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    try:
-        matter_id = uuid.UUID(body.matter_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid matter id") from exc
     await bind_tenant_context(db, str(user.tenant_id))
-    contact = await db.scalar(
-        select(Contact).where(
-            Contact.tenant_id == user.tenant_id, Contact.client_user_id == user.id
-        )
-    )
-    invite = (
-        await db.scalar(
-            select(ClientPortalInvite).where(
-                ClientPortalInvite.tenant_id == user.tenant_id,
-                ClientPortalInvite.matter_id == matter_id,
-                ClientPortalInvite.contact_id == (contact.id if contact else None),
-                ClientPortalInvite.revoked.is_(False),
+    contact_ids = list(
+        (
+            await db.scalars(
+                select(Contact.id).where(
+                    Contact.tenant_id == user.tenant_id,
+                    Contact.client_user_id == user.id,
+                )
             )
-        )
-        if contact
-        else None
+        ).all()
     )
-    matter = (
-        await db.scalar(
-            select(Matter).where(
-                Matter.id == matter_id,
-                Matter.tenant_id == user.tenant_id,
-                Matter.client_contact_id == (contact.id if contact else None),
-                Matter.portal_enabled.is_(True),
+    if not contact_ids:
+        raise HTTPException(
+            status_code=403, detail="You do not have portal access to any matter"
+        )
+
+    matter_filter = [
+        Matter.tenant_id == user.tenant_id,
+        Matter.client_contact_id.in_(contact_ids),
+        Matter.portal_enabled.is_(True),
+    ]
+    if body.matter_id:
+        try:
+            matter_filter.append(Matter.id == uuid.UUID(body.matter_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid matter id") from exc
+    matters = list(
+        (
+            await db.scalars(
+                select(Matter).where(*matter_filter).order_by(Matter.created_at.desc())
             )
-        )
-        if contact
-        else None
+        ).all()
     )
-    if (
-        matter is None
-        or invite is None
-        or _aware(invite.expires_at) < datetime.now(timezone.utc)
-    ):
+    if not matters:
+        raise HTTPException(
+            status_code=403, detail="You do not have portal access to that matter"
+        )
+    if len(matters) > 1 and not body.matter_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "multiple_matters",
+                "matters": [
+                    PortalMatterChoice(
+                        matter_id=str(m.id),
+                        matter_name=m.matter_name,
+                        matter_number=m.matter_number,
+                    ).model_dump()
+                    for m in matters
+                ],
+            },
+        )
+    matter = matters[0]
+    # The invite is the durable revocation handle, not the access grant: an
+    # activated account keeps working after the emailed link's own TTL, and the
+    # session JWT still carries its shorter expiry. Only revocation ends it.
+    invite = await db.scalar(
+        select(ClientPortalInvite).where(
+            ClientPortalInvite.tenant_id == user.tenant_id,
+            ClientPortalInvite.matter_id == matter.id,
+            ClientPortalInvite.contact_id == matter.client_contact_id,
+            ClientPortalInvite.revoked.is_(False),
+        )
+    )
+    if invite is None:
         raise HTTPException(
             status_code=403, detail="You do not have portal access to that matter"
         )
     token = create_matter_portal_token(
         tenant_id=str(user.tenant_id),
         matter_id=str(matter.id),
-        contact_id=str(contact.id),
+        contact_id=str(matter.client_contact_id) if matter.client_contact_id else None,
         email=user.email,
         invite_id=str(invite.id),
         user_id=str(user.id),
@@ -770,6 +864,7 @@ async def login_portal_account(  # pragma: no cover - exercised by browser/E2E i
 @router.get("/session", response_model=PortalSessionResponse)
 async def portal_session(
     resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
+    db: AsyncSession = Depends(get_db),
 ):
     """Identity and remaining lifetime of the current portal session."""
     ctx, matter = resolved
@@ -780,6 +875,7 @@ async def portal_session(
         expires_at=ctx.expires_at
         or datetime.now(timezone.utc) + timedelta(minutes=PORTAL_TOKEN_EXPIRE_MINUTES),
         invite_expires_at=ctx.invite_expires_at or datetime.now(timezone.utc),
+        firm=await _portal_firm_branding(db, ctx.tenant_id),
     )
 
 
@@ -920,12 +1016,14 @@ async def portal_matter(
     db: AsyncSession = Depends(get_db),
 ):
     ctx, matter = resolved
+    firm = await _portal_firm_branding(db, ctx.tenant_id)
     if getattr(ctx, "paperwork_only", False):
         return PortalMatterView(
             matter_id=str(matter.id),
             matter_name=matter.matter_name,
             paperwork_only=True,
             pending_signature_count=len(ctx.paperwork_signature_ids),
+            firm=firm,
         )
 
     assignments = await db.execute(
@@ -987,6 +1085,7 @@ async def portal_matter(
         open_invoice_count=sum(1 for inv in open_invoices if inv.balance_due > 0),
         outstanding_balance=outstanding,
         last_activity_at=_aware(last_activity_at),
+        firm=firm,
     )
 
 
@@ -1316,6 +1415,16 @@ async def portal_list_messages(
     rows = list(result.scalars().all())
     rows.reverse()
     seen_at = ctx.messages_seen_at
+    sender_ids = {m.created_by_user_id for m in rows if m.created_by_user_id}
+    sender_names: dict[uuid.UUID, str] = {}
+    if sender_ids:
+        sender_rows = await db.execute(
+            select(User.id, User.full_name, User.email).where(
+                User.id.in_(sender_ids), User.tenant_id == ctx.tenant_id
+            )
+        )
+        for uid, full_name, sender_email in sender_rows.all():
+            sender_names[uid] = full_name or sender_email or "Your legal team"
     messages = [
         PortalMessageResponse(
             id=str(m.id),
@@ -1326,6 +1435,10 @@ async def portal_list_messages(
             unread=(
                 m.direction == "outbound"
                 and (seen_at is None or _aware(m.occurred_at) > seen_at)
+            ),
+            sender_name=(
+                None if m.direction == "inbound"
+                else sender_names.get(m.created_by_user_id)
             ),
         )
         for m in rows
@@ -1453,6 +1566,14 @@ def _packet_document_uuids(ctx):
         except (TypeError, ValueError):
             continue
     return grants
+
+
+@router.get("/documents/upload-policy", response_model=PortalUploadPolicy)
+async def portal_upload_policy(
+    _resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
+):
+    """Advertise the accepted upload rules before the client picks a file."""
+    return _portal_upload_policy()
 
 
 @router.get("/documents", response_model=List[PortalDocumentResponse])
@@ -2167,12 +2288,31 @@ async def create_portal_invite(
     invite_url = (
         f"{settings.FRONTEND_URL.rstrip('/')}/portal/client/accept?token={raw_token}"
     )
+    tenant = await db.get(Tenant, user.tenant_id)
+    branding = await get_firm_branding(db, tenant) if tenant else {}
+    attorney_name = await db.scalar(
+        select(User.full_name)
+        .join(MatterAssignment, MatterAssignment.user_id == User.id)
+        .where(
+            MatterAssignment.matter_id == matter.id,
+            MatterAssignment.tenant_id == user.tenant_id,
+            User.is_active.is_(True),
+            User.full_name.isnot(None),
+        )
+        .order_by(MatterAssignment.assigned_at.asc())
+        .limit(1)
+    )
     delivery_result = EmailDeliveryResult.FAILED
     try:
         delivery_result = await send_client_portal_invite(
             to_email=email,
             matter_name=matter.matter_name,
             invite_url=invite_url,
+            firm_name=branding.get("firm_name"),
+            firm_phone=branding.get("firm_phone"),
+            firm_email=branding.get("firm_email"),
+            attorney_name=attorney_name,
+            expires_at=_aware(invite.expires_at),
         )
     except Exception:  # pragma: no cover - email best-effort
         delivery_result = EmailDeliveryResult.FAILED

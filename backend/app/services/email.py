@@ -820,20 +820,64 @@ async def send_portal_invite(
 
 
 async def send_client_portal_invite(
-    to_email: str, matter_name: str, invite_url: str
+    to_email: str,
+    matter_name: str,
+    invite_url: str,
+    *,
+    firm_name: str | None = None,
+    firm_phone: str | None = None,
+    firm_email: str | None = None,
+    attorney_name: str | None = None,
+    expires_at: datetime | None = None,
 ) -> EmailDeliveryResult:
-    """Email a client-portal invite link to a firm client for a matter."""
+    """Email a client-portal invite link to a firm client for a matter.
+
+    A client can only be expected to click a link to privileged legal material
+    when the message identifies the firm and the person they have been dealing
+    with. The firm's own name leads; the platform brand is only the sender.
+    """
     now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
     safe_matter_name = escape(matter_name)
     safe_invite_url = escape(invite_url, quote=True)
+    display_firm = (firm_name or "").strip()
+    safe_firm_name = escape(display_firm) if display_firm else "Your legal team"
+    header_title = escape(display_firm) if display_firm else "Client Portal"
+    contact_line = ""
+    contact_bits = []
+    if firm_phone:
+        contact_bits.append(f"call {escape(firm_phone)}")
+    if firm_email:
+        contact_bits.append(f"email {escape(firm_email)}")
+    if contact_bits:
+        contact_line = (
+            "<p>If you weren't expecting this invitation, "
+            + " or ".join(contact_bits)
+            + f" to reach {safe_firm_name}.</p>"
+        )
+    attorney_line = (
+        f"<p>{escape(attorney_name)} is your point of contact on this matter.</p>"
+        if attorney_name
+        else ""
+    )
+    if expires_at is not None:
+        expiry_line = (
+            "This invitation link is confidential and expires on "
+            f"{escape(expires_at.strftime('%B %d, %Y'))}. Do not forward it."
+        )
+    else:
+        expiry_line = (
+            "This invitation link is confidential and will expire. Do not forward it."
+        )
+    safe_expiry = expiry_line
     content = f"""
     <div class="header">
-      <h1>LawHand — Client Portal</h1>
+      <h1>{header_title}</h1>
       <p>You've been invited to your secure matter workspace</p>
     </div>
     <div class="body">
-      <p>Your legal team has invited you to the secure client portal for
+      <p>{safe_firm_name} has invited you to the secure client portal for
          <strong>{safe_matter_name}</strong>.</p>
+      {attorney_line}
       <p>Use the link below to view matter status and key dates, exchange secure
          messages with your legal team, review and upload documents, and view
          and pay invoices.</p>
@@ -845,18 +889,23 @@ async def send_client_portal_invite(
       </p>
       <p style="font-size:12px;color:#888;">If the button doesn't work, copy
          and paste this link into your browser:<br/>{safe_invite_url}</p>
-      <p style="font-size:12px;color:#888;">This invitation link is confidential
-         and will expire. Do not forward it.</p>
+      <p style="font-size:12px;color:#888;">{safe_expiry}</p>
+      {contact_line}
     </div>
     """
     html_body = _BASE_HTML.format(content=content, timestamp=now_str)
+    subject_firm = f"{display_firm}: " if display_firm else ""
     text_body = (
-        f"You've been invited to the LawHand client portal for "
-        f"'{matter_name}'.\n\nAccess it here: {invite_url}\n"
+        f"{display_firm or 'Your legal team'} has invited you to the secure "
+        f"client portal for '{matter_name}'.\n\nAccess it here: {invite_url}\n"
     )
+    if attorney_name:
+        text_body += f"\nYour point of contact is {attorney_name}.\n"
+    if expires_at is not None:
+        text_body += f"\nThis link expires on {expires_at.strftime('%B %d, %Y')}.\n"
     return await email_service.send_email(
         to=[to_email],
-        subject=f"LawHand — Client Portal Invitation: {matter_name}",
+        subject=f"{subject_firm}Client Portal Invitation: {matter_name}",
         html_body=html_body,
         text_body=text_body,
     )

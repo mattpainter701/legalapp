@@ -322,9 +322,17 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         "/api/portal/client/login",
     ): "authenticated by client credentials plus explicit matter scope",
     (
+        frozenset({"GET"}),
+        "/api/portal/client/invite-info",
+    ): "authenticated by the invite token hash; returns only firm branding for that token",
+    (
         frozenset({"POST"}),
         "/api/portal/mediation/accept",
     ): "authenticated by the invite token hash",
+    (
+        frozenset({"POST"}),
+        "/api/portal/mediation/logout",
+    ): "clears the mediation cookie; tolerates a missing or expired token by design",
     # Client-portal data routes — authenticated by get_client_portal_context,
     # a separate JWT scheme (client_portal claim) not covered by the
     # canonical-name literal fallback since it's imported by exact name here.
@@ -339,6 +347,10 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
     (frozenset({"GET"}), "/api/portal/client/messages"): "get_client_portal_context",
     (frozenset({"POST"}), "/api/portal/client/messages"): "get_client_portal_context",
     (frozenset({"GET"}), "/api/portal/client/documents"): "get_client_portal_context",
+    (
+        frozenset({"GET"}),
+        "/api/portal/client/documents/upload-policy",
+    ): "get_client_portal_context",
     (
         frozenset({"POST"}),
         "/api/portal/client/documents/upload",

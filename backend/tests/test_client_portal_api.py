@@ -22,10 +22,13 @@ from app.models.billing import Invoice, Payment
 from app.models.client_portal import ClientPortalInvite
 from app.models.conflict_check import PortalInvoiceDownload
 from app.models.communication_log import CommunicationLog
+from app.models.contact import Contact
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
-from app.routers.client_portal import CLIENT_PORTAL_COOKIE_NAME
+from app.models.tenant import TenantSettings
+from app.models.user import User
+from app.routers.client_portal import CLIENT_PORTAL_COOKIE_NAME, _portal_password_hash
 from app.services.portal_token import create_matter_portal_token
 
 PORTAL = "/api/portal/client"
@@ -985,3 +988,279 @@ async def test_overview_ignores_signatures_this_client_already_signed(
         await client.get(f"{PORTAL}/matter", headers=_portal_headers(portal_cookie))
     ).json()
     assert body["pending_signature_count"] == 0
+
+
+# ── Firm branding, upload policy, and durable sign-in ───────────────────────
+
+
+async def _add_client_account(
+    db_session,
+    tenant,
+    *,
+    email="client@example.com",
+    full_name="Jane Client",
+    password="correct-horse-battery",
+):
+    """A password-backed client login plus the contact it belongs to."""
+    user = User(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        email=email,
+        full_name=full_name,
+        role="client",
+        is_active=True,
+        password_hash=_portal_password_hash(password),
+    )
+    db_session.add(user)
+    await db_session.flush()
+    contact = Contact(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        first_name="Jane",
+        last_name="Client",
+        email=email,
+        client_user_id=user.id,
+    )
+    db_session.add(contact)
+    await db_session.commit()
+    return user, contact
+
+
+async def _seed_client_matter(
+    db_session,
+    tenant,
+    owner_user,
+    contact,
+    *,
+    name="Smith v. Jones",
+    invite_expires_at=None,
+):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        user_id=owner_user.id,
+        slug=f"login-matter-{uuid.uuid4().hex[:8]}",
+        matter_name=name,
+        matter_type="litigation",
+        status="open",
+        portal_enabled=True,
+        client_contact_id=contact.id,
+    )
+    db_session.add(matter)
+    await db_session.flush()
+    invite = ClientPortalInvite(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        matter_id=matter.id,
+        contact_id=contact.id,
+        token_hash=hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
+        email=contact.email,
+        expires_at=invite_expires_at
+        or (datetime.now(timezone.utc) + timedelta(days=14)),
+    )
+    db_session.add(invite)
+    await db_session.commit()
+    return matter, invite
+
+
+@pytest.mark.asyncio
+async def test_session_reports_firm_branding_and_default_currency(
+    client, db_session, test_tenant, portal_matter, portal_cookie
+):
+    db_session.add(
+        TenantSettings(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            firm_name="Northline & Associates",
+            firm_phone="+1-312-555-0100",
+            firm_email="help@northline.example",
+            firm_logo_url="https://cdn.example/logo.png",
+        )
+    )
+    await db_session.commit()
+    body = (
+        await client.get(f"{PORTAL}/session", headers=_portal_headers(portal_cookie))
+    ).json()
+    assert body["firm"]["firm_name"] == "Northline & Associates"
+    assert body["firm"]["firm_phone"] == "+1-312-555-0100"
+    assert body["firm"]["firm_email"] == "help@northline.example"
+    assert body["firm"]["firm_logo_url"] == "https://cdn.example/logo.png"
+    # No firm override means the historical USD assumption is preserved.
+    assert body["firm"]["currency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_matter_view_carries_firm_branding_and_currency(
+    client, db_session, test_tenant, portal_matter, portal_cookie
+):
+    db_session.add(
+        TenantSettings(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            firm_name="Northline & Associates",
+            firm_currency="gbp",
+        )
+    )
+    await db_session.commit()
+    body = (
+        await client.get(f"{PORTAL}/matter", headers=_portal_headers(portal_cookie))
+    ).json()
+    assert body["firm"]["firm_name"] == "Northline & Associates"
+    assert body["firm"]["currency"] == "GBP"
+
+
+@pytest.mark.asyncio
+async def test_upload_policy_publishes_the_enforced_limits(client, portal_cookie):
+    from app.config import get_settings
+
+    resp = await client.get(
+        f"{PORTAL}/documents/upload-policy", headers=_portal_headers(portal_cookie)
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["max_upload_bytes"] == get_settings().MAX_FILE_SIZE_MB * 1024 * 1024
+    assert body["max_files_per_batch"] == 10000
+    assert "pdf" in body["allowed_extensions"]
+    assert "exe" not in body["allowed_extensions"]
+
+
+@pytest.mark.asyncio
+async def test_login_without_matter_id_resolves_a_single_matter(
+    client, db_session, test_tenant, test_user
+):
+    _user, contact = await _add_client_account(db_session, test_tenant)
+    matter, _invite = await _seed_client_matter(
+        db_session, test_tenant, test_user, contact
+    )
+    resp = await client.post(
+        f"{PORTAL}/login",
+        json={"email": contact.email, "password": "correct-horse-battery"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["matter_id"] == str(matter.id)
+    # The cookie the login set is enough to open the matter.
+    session = await client.get(f"{PORTAL}/session")
+    assert session.status_code == 200, session.text
+    assert session.json()["matter_id"] == str(matter.id)
+
+
+@pytest.mark.asyncio
+async def test_login_without_matter_id_asks_for_a_choice_when_ambiguous(
+    client, db_session, test_tenant, test_user
+):
+    _user, contact = await _add_client_account(db_session, test_tenant)
+    first, _ = await _seed_client_matter(
+        db_session, test_tenant, test_user, contact, name="Alpha v. Beta"
+    )
+    second, _ = await _seed_client_matter(
+        db_session, test_tenant, test_user, contact, name="Gamma v. Delta"
+    )
+    resp = await client.post(
+        f"{PORTAL}/login",
+        json={"email": contact.email, "password": "correct-horse-battery"},
+    )
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "multiple_matters"
+    assert {row["matter_id"] for row in detail["matters"]} == {
+        str(first.id),
+        str(second.id),
+    }
+
+
+@pytest.mark.asyncio
+async def test_durable_login_survives_the_invitation_link_expiring(
+    client, db_session, test_tenant, test_user
+):
+    _user, contact = await _add_client_account(db_session, test_tenant)
+    expired = datetime.now(timezone.utc) - timedelta(days=1)
+    matter, _invite = await _seed_client_matter(
+        db_session, test_tenant, test_user, contact, invite_expires_at=expired
+    )
+    resp = await client.post(
+        f"{PORTAL}/login",
+        json={"email": contact.email, "password": "correct-horse-battery"},
+    )
+    assert resp.status_code == 200, resp.text
+    session = await client.get(f"{PORTAL}/session")
+    assert session.status_code == 200, session.text
+    assert session.json()["matter_id"] == str(matter.id)
+
+
+@pytest.mark.asyncio
+async def test_login_rejects_a_bad_password(client, db_session, test_tenant, test_user):
+    _user, contact = await _add_client_account(db_session, test_tenant)
+    await _seed_client_matter(db_session, test_tenant, test_user, contact)
+    resp = await client.post(
+        f"{PORTAL}/login",
+        json={"email": contact.email, "password": "not-the-password"},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_firm_messages_carry_the_senders_name(
+    client, db_session, test_tenant, test_user, portal_matter, portal_cookie
+):
+    db_session.add(
+        CommunicationLog(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            matter_id=portal_matter.id,
+            direction="outbound",
+            channel="portal",
+            status="sent",
+            subject="Update",
+            body="We filed the motion.",
+            created_by_user_id=test_user.id,
+        )
+    )
+    await db_session.commit()
+    body = (
+        await client.get(f"{PORTAL}/messages", headers=_portal_headers(portal_cookie))
+    ).json()
+    assert body["messages"][-1]["sender_name"] == test_user.full_name
+
+
+@pytest.mark.asyncio
+async def test_invite_info_reports_the_firm_without_consuming_the_link(
+    client, db_session, test_tenant, portal_matter, portal_invite
+):
+    db_session.add(
+        TenantSettings(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            firm_name="Northline & Associates",
+            firm_phone="+1-312-555-0100",
+        )
+    )
+    await db_session.commit()
+    resp = await client.get(
+        f"{PORTAL}/invite-info",
+        params={"token": portal_invite.raw_token},
+        headers={"Authorization": ""},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["matter_name"] == portal_matter.matter_name
+    assert body["firm"]["firm_name"] == "Northline & Associates"
+    assert body["firm"]["firm_phone"] == "+1-312-555-0100"
+    # Reading the info must not burn the one-time link.
+    accepted = await client.post(
+        f"{PORTAL}/accept",
+        json={"token": portal_invite.raw_token},
+        headers={"Authorization": ""},
+    )
+    assert accepted.status_code == 200, accepted.text
+
+
+@pytest.mark.asyncio
+async def test_invite_info_hides_revoked_invitations(client, db_session, portal_invite):
+    portal_invite.revoked = True
+    await db_session.commit()
+    resp = await client.get(
+        f"{PORTAL}/invite-info",
+        params={"token": portal_invite.raw_token},
+        headers={"Authorization": ""},
+    )
+    assert resp.status_code == 404
