@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["172_case_continuance"]
+    assert heads == ["173_rls_tenant_guc_nullif"]
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():
@@ -749,3 +749,41 @@ def test_workflow_automation_tables_are_purged_but_never_cloned():
         "matter_workflow_templates"
     )
 
+
+def test_tenant_guc_nullif_migration_rewrites_only_known_unsafe_policies():
+    """Migration 173 must fail closed on an empty tenant setting, never widen access.
+
+    A commit clears the transaction-local tenant setting, which then reads as ''.
+    ``''::uuid`` raises, so these policies turned a lost context into an error.
+    The NULLIF form matches no rows instead.
+    """
+    import importlib.util
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    path = backend_dir / "migrations" / "versions" / "173_rls_tenant_guc_nullif.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert 'revision = "173_rls_tenant_guc_nullif"' in source
+    assert 'down_revision = "172_case_continuance"' in source
+    # Altered in place: commands, roles and permissive mode are never recreated.
+    assert "ALTER POLICY" in source
+    assert "DROP POLICY" not in source
+    assert "CREATE POLICY" not in source
+    assert "NULLIF(current_setting('{setting}', true), '')::uuid" in source
+    # Anything that is not exactly the known unsafe form is refused, not rewritten.
+    assert "has an unexpected expression" in source
+
+    spec = importlib.util.spec_from_file_location("migration_173", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    policies = module.POLICIES
+    assert len(policies) == 39
+    assert len({(table, policy) for table, policy, _, _ in policies}) == 39
+    assert {setting for _, _, setting, _ in policies} == {
+        "app.current_tenant_id",
+        "app.tenant_id",
+    }
+    assert sum(1 for *_, has_check in policies if has_check) == 16
+    # Policies that were born safe must never be touched by the downgrade.
+    assert "tenant_isolation_storage_migrations" not in source
+    assert "contacts_tenant_isolation" not in source

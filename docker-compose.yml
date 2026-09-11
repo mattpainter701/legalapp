@@ -156,7 +156,7 @@ services:
       - studio_render_cas:/var/lib/lawhand/studio-render-cas
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
       timeout: 10s
       retries: 3
