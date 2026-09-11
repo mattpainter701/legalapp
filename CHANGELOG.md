@@ -1,3 +1,38 @@
+## 2026.09.11.4 — Consent-scoped SMS for the live case
+
+- Add `app/services/sms_categories.py`: `intake` and `case_updates` as named consent categories, each with its own disclosure version, plus `granted_categories`, `disclosure_version`, and `allows_case_updates`.
+- Record `case_updates` only when the firm confirms the client agreed to it (`sms_case_updates_verified` on `IntakeStart`, a second checkbox in both the paperwork drawer and the matter-creation form). Intake-only consent keeps `allowed_categories: ["intake"]` and the existing `intake-notifications-v1` disclosure.
+- Text signers about a document waiting for signature via `notify_actionable_signers_sms`, sent under `case_updates` alongside the email that already goes. Signature notifications were email-only even for a client who asked to be texted.
+- No migration and no backfill: `send_sms` already gates on `category in consent.allowed_categories`, so every existing consent refuses `case_updates` on its own. Widening an old consent requires the client to agree again. An SMS failure is recorded on the signer's audit and never fails the send it accompanies.
+
+## 2026.09.11.3 — Outbound correspondence, portfolio triage, creation deadlines
+
+- File a sent email as a document on the matter. `file_outbound_email` builds the `.eml` from exactly what was handed to the transport (compose sends via SMTP or a connected mailbox, so there is no provider message to fetch back), files it into Correspondence, and links it to the `CommunicationLog` row. Only a message that actually sent is filed, and a filing failure is logged rather than failing a request for mail that already left.
+- Show `matter_number` on the portfolio board card and as a list column, and match it in the search predicate. The number shipped in 2026.09.10.1 and had reached neither surface, so a number quoted on the phone could only be used by typing a URL.
+- Drop `risk_level` from the portfolio `needsAction` heuristic. Risk is a standing attribute, so a high-risk matter sat in Needs Action permanently regardless of whether anything was due; the column now means deadlines, threatened status, and staleness, and risk stays a badge.
+- Move the portfolio status filter, practice filter, search, and board/list toggle into the URL (`replace: true`), matching how the matter page already keeps its tab. Opening a matter and returning no longer discards the list you built.
+- Carry paperwork deadlines through matter creation: `IntakeSetupFields` gains due-date inputs for the fee agreement, questionnaire, and requested uploads, and `intakeOptions` emits `agreement_due_at`, `questionnaire_due_at`, and per-document `due_at`. An undated requirement sends `due_at: null` so the server sees one shape either way.
+
+## 2026.09.11.2 — Matter closing and automatic document filing
+
+- Add `app/services/matter_closing.py` and `GET /matters/{id}/close-readiness`: unbilled billable time and expenses, held trust balance, open tasks, live signature requests, and incomplete client paperwork, split into blocking and acknowledgeable checks.
+- Guard `DELETE /matters/{id}` (the soft close) with those checks. Unbilled work and a non-zero trust balance return 409 `matter_close_blocked`; warnings return 409 `matter_close_needs_acknowledgement` until `acknowledge_warnings` is passed. The close records a `matter_closed` timeline event with an optional note and runs intake reconcile so a closed matter stops chasing its client.
+- Add `POST /matters/{id}/reopen`, recording `matter_reopened`. Closing is reversible; it was previously unreachable from any screen at all — `closeMatterV2` existed in the API client with no callers.
+- Add a `CloseMatterDialog` on the matter page listing what each check found, with the acknowledgement and closing note, plus Close/Reopen controls in the matter topbar.
+- Extend system folders beyond Client Uploads to Correspondence, Signed, Intake, and Generated Documents, and add `autofile_folder_id`, which maps a document's existing `document_category` onto the folder a firm would have filed it in. A category the product does not own stays unfiled, and a folder failure never costs the document — it lands unfiled instead.
+- File by category at the four sites that create documents automatically: inbound email, signature completion artifacts, captured correspondence, and intake questionnaires. Only client-portal uploads were previously filed anywhere; everything else landed in the explorer root.
+- Extract inbound email attachments as their own documents beside the stored `.eml`, filed into the same folder, capped at 20 attachments and 25 MiB each, with sender-supplied filenames stripped of path separators and control characters. A storage failure on one attachment is logged and skipped rather than losing the email.
+
+## 2026.09.11.1 — Case lifecycle on the matter page
+
+- Add per-requirement due dates to the intake packet: `due_at` on `IntakeDocumentSelection`, `IntakeUploadRequirement`, and the new `agreement_due_at` / `questionnaire_due_at`, each rejected when naive so a deadline is never read as UTC. The value is persisted onto its requirement and returned to staff and client alike, alongside the packet's `timezone`.
+- Raise one assigned follow-up per dated requirement in `reconcile`, keyed `due:{requirement}` through the existing `ensure_task` uuid5 identity, so a reconcile pass never duplicates it; the task closes when the requirement completes and on packet cancellation.
+- Fix two completion paths that rebuilt a requirement from scratch — fee-agreement signature completion and portal questionnaire submission — discarding fields set at send time. Both now preserve the requirement, so a dated item's follow-up can be closed rather than left open forever.
+- Add `components/casesetup/`: a `CaseSetupCard` spine on the matter Overview that prompts for paperwork on a new matter and otherwise renders the live requirement strip (state, deadline with overdue tone, delivery failures with the existing verified retry, staff verification, meeting booking), plus a three-step `PaperworkDrawer` replacing the raw intake fieldset.
+- Move `SignatureRequestsPanel` from the Client Portal tab to Overview, beside the paperwork it belongs to, and guard its list response so a non-array body cannot take the page down.
+- Reduce the matter page to four primary sections — Overview, Documents, Activity, Billing — with Client Portal, Team, Workflow, Correspondence, Chat, and Settings behind one Matter settings sub-nav, replacing two partial sub-navs and an orphaned "Matter assistant" link. Correspondence and Chat previously had no home in the desktop tab bar.
+- Remove Sync Cloud from Quick Actions, which the cloud panel already offers. The phone action grid stays: its buttons are the only ones on the page that guarantee a 44px touch target, which Quick Actions' tighter buttons do not.
+
 ## 2026.09.10.3 — Global sample form library in Template Studio
 
 - Add a platform-owned `sample_templates` catalog (no `tenant_id`, no row-level security) seeded from a curated set of fillable AcroForm PDFs organized by category and jurisdiction tags.

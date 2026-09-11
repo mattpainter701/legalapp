@@ -23,6 +23,7 @@ from app.services.esign.certificate import (
     immutable_certificate_filename,
 )
 from app.services.matter_file_store import MatterFileStore
+from app.services.matter_document_organization import autofile_folder_id
 
 _file_store = MatterFileStore()
 
@@ -225,6 +226,12 @@ async def complete_request_if_done(
             "source document, not a signed or modified source document"
         ),
         document_category="signed",
+        folder_id=await autofile_folder_id(
+            db,
+            tenant_id=matter.tenant_id,
+            matter_id=matter.id,
+            document_category="signed",
+        ),
         portal_visible=True,
     )
     db.add(signed_doc)

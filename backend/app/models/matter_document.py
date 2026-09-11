@@ -168,6 +168,11 @@ class MatterDocument(Base):
     storage_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
     document_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Firm controls which case files are visible in the client portal.
+    # When the client was first shown this document, so sharing announces
+    # itself exactly once however many times the bit is toggled.
+    portal_shared_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     portal_visible: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )

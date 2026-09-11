@@ -23,6 +23,8 @@ import logging
 import re
 import uuid as uuid_mod
 from datetime import datetime, timezone
+from email.message import EmailMessage
+from email.utils import format_datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +40,7 @@ from app.models.plugin import Matter
 from app.models.user_alias import UserAliasAddress
 from app.services.email_agent import _extract_email_addresses
 from app.services.matter_file_store import MatterFileStore
+from app.services.matter_document_organization import autofile_folder_id
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -342,6 +345,12 @@ async def capture_email_for_matter(
         storage_error=storage_result.error,
         description=f"Email: {(email.get('subject') or '(no subject)')[:400]}",
         document_category="correspondence",
+        folder_id=await autofile_folder_id(
+            db,
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            document_category="correspondence",
+        ),
     )
     db.add(doc)
     await db.flush()  # populate doc.id for the FK below
@@ -480,3 +489,124 @@ async def scan_and_capture(
                 skipped += 1
 
     return {"scanned": scanned, "captured": captured, "skipped": skipped}
+
+
+async def file_outbound_email(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid_mod.UUID,
+    matter_id: uuid_mod.UUID,
+    matter_slug: str,
+    cloud_folder=None,
+    actor_user_id: uuid_mod.UUID | None,
+    to: list[str],
+    subject: str,
+    text_body: str,
+    attachments: list | None = None,
+    communication: CommunicationLog | None = None,
+):
+    """File a message the firm just sent as a document on the matter.
+
+    Inbound mail has been filed for a long time; what the firm *sent* was only
+    ever a CommunicationLog row, so the matter held no copy of its own
+    outbound correspondence. Compose sends through SMTP or a connected
+    mailbox, so there is no provider message to fetch back -- the .eml is
+    built from exactly what was handed to the transport.
+
+    Best effort by design: the email has already gone out, and failing the
+    request after the fact would tell the user a delivered message was not
+    sent. A failure is logged and the CommunicationLog row still stands.
+
+    Takes the matter's id, slug and cloud folder as values rather than the ORM
+    row: sending can refresh a provider token, which commits and expires every
+    attribute on that row, so reading it afterwards is reading something the
+    caller no longer holds.
+    """
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["To"] = ", ".join(to)
+    message["Date"] = format_datetime(datetime.now(timezone.utc))
+    message.set_content(text_body or "")
+    for attachment in attachments or []:
+        main, _, sub = (
+            attachment.content_type or "application/octet-stream"
+        ).partition("/")
+        try:
+            message.add_attachment(
+                attachment.content,
+                maintype=main or "application",
+                subtype=sub or "octet-stream",
+                filename=attachment.filename,
+            )
+        except Exception:
+            logger.exception(
+                "Attachment %s could not be included in the filed copy for matter %s",
+                attachment.filename,
+                matter_id,
+            )
+
+    stamp = datetime.now(timezone.utc)
+    filename = f"{stamp:%Y-%m-%d}_sent_{_slugify(subject) or 'no-subject'}_{str(uuid_mod.uuid4())[:8]}.eml"
+    try:
+        eml_bytes = message.as_bytes()
+        from app.models.tenant import TenantSettings
+
+        tenant_settings = await db.scalar(
+            select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
+        )
+        storage_result = await matter_file_store.store_matter_file_result(
+            db=db,
+            tenant_id=str(tenant_id),
+            matter_slug=matter_slug,
+            category="correspondence",
+            filename=filename,
+            content=eml_bytes,
+            content_type="message/rfc822",
+            matter_cloud_folder=cloud_folder,
+            preferred_provider=(
+                tenant_settings.primary_cloud_provider if tenant_settings else None
+            ),
+        )
+        document = MatterDocument(
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            uploaded_by_user_id=actor_user_id,
+            filename=filename,
+            content_type="message/rfc822",
+            file_size=len(eml_bytes),
+            storage_path=storage_result.storage_path,
+            storage_provider=storage_result.provider,
+            storage_backend=storage_result.backend,
+            provider_object_id=storage_result.provider_item_id,
+            provider_drive_id=storage_result.drive_id,
+            provider_parent_id=storage_result.parent_id,
+            storage_error=storage_result.error,
+            description=f"Sent email: {subject[:380]}",
+            document_category="correspondence",
+            folder_id=await autofile_folder_id(
+                db,
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                document_category="correspondence",
+            ),
+        )
+        db.add(document)
+        await db.flush()
+        if communication is not None and communication.document_id is None:
+            communication.document_id = document.id
+        await db.commit()
+        return document
+    except Exception:
+        logger.exception(
+            "Sent email could not be filed as a document on matter %s", matter_id
+        )
+        # The contract here is to never disturb a send that already happened,
+        # so even the cleanup cannot be allowed to raise into the caller.
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception(
+                "Rolling back a failed outbound filing also failed on matter %s",
+                matter_id,
+            )
+        return None

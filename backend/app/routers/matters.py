@@ -23,6 +23,7 @@ from app.models.matter_assignment import MatterAssignment
 from app.models.matter_note import MatterNote
 from app.models.plugin import Matter, MatterEvent
 from app.models.retainer import Retainer, RetainerTransaction
+from app.services.matter_closing import close_readiness
 from app.models.task import Task
 from app.models.user import User
 from app.models.tenant import Tenant
@@ -1333,13 +1334,120 @@ async def close_matter(
     matter_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    acknowledge_warnings: bool = False,
+    reason: str | None = None,
 ):
-    """Soft-close a matter (sets is_closed=True, status='closed')."""
+    """Soft-close a matter, refusing to strand the client's money.
+
+    Unbilled work and a held trust balance block the close outright: both are
+    money that belongs to somebody else, and a closed matter is where it goes
+    to be forgotten. Warnings -- open tasks, live signatures, unfinished
+    paperwork -- are shown first and pass with ``acknowledge_warnings``, so a
+    deliberate close is one decision rather than an argument.
+    """
     user = await get_current_user(request, db)
     matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
+    if matter.is_closed:
+        return None
+
+    readiness = await close_readiness(db, user.tenant_id, matter)
+    if not readiness["can_close"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "matter_close_blocked",
+                "message": "Resolve the outstanding items before closing this matter.",
+                "checks": [
+                    c for c in readiness["checks"] if c["blocking"] and not c["clear"]
+                ],
+            },
+        )
+    if readiness["warning_count"] and not acknowledge_warnings:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "matter_close_needs_acknowledgement",
+                "message": "Confirm you want to close with these items outstanding.",
+                "checks": [
+                    c
+                    for c in readiness["checks"]
+                    if not c["blocking"] and not c["clear"]
+                ],
+            },
+        )
 
     matter.is_closed = True
     matter.status = "closed"
+    db.add(
+        MatterEvent(
+            tenant_id=user.tenant_id,
+            matter_id=matter.id,
+            event_type="matter_closed",
+            title="Matter closed",
+            content=(
+                reason.strip()[:2000] if reason and reason.strip() else "Matter closed."
+            ),
+            note_type="system",
+            created_by=user.id,
+        )
+    )
+    await db.commit()
+    # Intake owns the packet's own follow-ups and portal invitation; its
+    # reconcile pass cancels them for a closed matter rather than leaving a
+    # client chasing paperwork on a case that is over.
+    try:
+        from app.services import matter_intake
+
+        packet = await matter_intake.get_packet(
+            db, user.tenant_id, matter.id, lock=True
+        )
+        if packet is not None:
+            await matter_intake.reconcile(db, packet)
+            await db.commit()
+    except Exception:
+        logger.exception(
+            "Intake follow-ups could not be cancelled for closed matter %s", matter.id
+        )
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
+    return None
+
+
+@router.get("/{matter_id}/close-readiness")
+async def matter_close_readiness(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """What this matter still owes before it can be closed."""
+    user = await get_current_user(request, db)
+    matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
+    return await close_readiness(db, user.tenant_id, matter)
+
+
+@router.post("/{matter_id}/reopen", status_code=204)
+async def reopen_matter(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reopen a closed matter. Closing is reversible; it is not deletion."""
+    user = await get_current_user(request, db)
+    matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
+    if not matter.is_closed:
+        return None
+    matter.is_closed = False
+    matter.status = "active"
+    db.add(
+        MatterEvent(
+            tenant_id=user.tenant_id,
+            matter_id=matter.id,
+            event_type="matter_reopened",
+            title="Matter reopened",
+            content="Matter reopened.",
+            note_type="system",
+            created_by=user.id,
+        )
+    )
     await db.commit()
     await _invalidate_matter_context_cache(user.tenant_id, matter.id)
     return None
@@ -2459,7 +2567,10 @@ async def email_matter_client(
     # Token refresh may commit and expire ORM objects. Snapshot the authorized
     # identifiers before selecting the actor's or firm's connected mailbox.
     tenant_id, actor_id = user.tenant_id, user.id
+    # Sending can refresh a provider token, which commits and expires every
+    # attribute on this row. Everything needed afterwards is read now.
     authorized_matter_id, contact_id = matter.id, matter.client_contact_id
+    matter_slug, matter_cloud_folder = matter.slug, matter.cloud_folder
     from app.services.matter_mail_attachments import collect_reviewed_attachments
 
     attachments = await collect_reviewed_attachments(
@@ -2497,6 +2608,24 @@ async def email_matter_client(
     await db.commit()
     await set_tenant_context(db, str(tenant_id))
     await db.refresh(log)
+    # Keep the firm's own copy of what it sent. Only a message that actually
+    # left gets filed: a failed attempt is a log row, not correspondence.
+    if sent:
+        from app.services.correspondence_capture import file_outbound_email
+
+        await file_outbound_email(
+            db,
+            tenant_id=tenant_id,
+            matter_id=authorized_matter_id,
+            matter_slug=matter_slug,
+            cloud_folder=matter_cloud_folder,
+            actor_user_id=actor_id,
+            to=[to_email],
+            subject=subject,
+            text_body=email_body,
+            attachments=attachments,
+            communication=log,
+        )
     await _invalidate_matter_context_cache(tenant_id, authorized_matter_id)
 
     if not sent:

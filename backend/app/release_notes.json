@@ -2,6 +2,94 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.11.4",
+      "version": "2026.09.11.4",
+      "title": "Texts about the case, only where the client agreed",
+      "published_at": "2026-09-11",
+      "summary": "Clients who agreed to be texted about their case now get a text when a document needs signing, separately from onboarding texts.",
+      "highlights": [
+        {
+          "title": "A separate permission for case texts",
+          "description": "Agreeing to onboarding texts is recorded apart from agreeing to texts for the rest of the case, so each is asked for and held on its own."
+        },
+        {
+          "title": "A text when something needs signing",
+          "description": "Where that permission is held, a client is texted as well as emailed when a document is sent for signature. Existing opt-outs still apply."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.11.3",
+      "version": "2026.09.11.3",
+      "title": "Your sent email is filed with the matter",
+      "published_at": "2026-09-11",
+      "summary": "Email you send is kept with the case, matter numbers appear where you read your matters, and the list you build stays put.",
+      "highlights": [
+        {
+          "title": "A copy of what you sent",
+          "description": "An email sent to a client is filed with the matter as a document, alongside the ones that arrive. Only a message that actually sent is kept."
+        },
+        {
+          "title": "Matter numbers where you look",
+          "description": "A matter number now shows on the board card and in the list, and searching for one finds the matter. Quote it on the phone and type it into search."
+        },
+        {
+          "title": "Your filters stay put",
+          "description": "Filters, search, and the board or list choice are kept in the page address, so opening a matter and coming back no longer clears them."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.11.2",
+      "version": "2026.09.11.2",
+      "title": "Close a case, and stop losing email attachments",
+      "published_at": "2026-09-11",
+      "summary": "Matters can now be closed from the matter page, with a check of what is still outstanding, and documents file themselves into the right folder.",
+      "highlights": [
+        {
+          "title": "Close a matter properly",
+          "description": "A Close matter button shows what is still outstanding first. Unbilled work and money held in trust stop the close; open tasks and paperwork are shown to acknowledge."
+        },
+        {
+          "title": "Reopen if you close too soon",
+          "description": "Closing is reversible. A closed matter can be reopened from the same place, and both are recorded on the matter's timeline."
+        },
+        {
+          "title": "Email attachments become real documents",
+          "description": "A file attached to an email now arrives as its own document in the matter, next to the message, instead of only inside the stored email."
+        },
+        {
+          "title": "Documents file themselves",
+          "description": "Correspondence, signed agreements, intake paperwork and generated drafts land in named folders instead of piling up at the top of the matter."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.11.1",
+      "version": "2026.09.11.1",
+      "title": "Run a case from one page",
+      "published_at": "2026-09-11",
+      "summary": "The matter page now opens on the paperwork a new case needs, tracks every signature in one place, and gives each document its own due date.",
+      "highlights": [
+        {
+          "title": "Start a case in one step",
+          "description": "A new matter opens with one prompt to send client paperwork: choose the fee agreement, forms, and questionnaire, then send by email or text."
+        },
+        {
+          "title": "Watch every document until it is signed",
+          "description": "One strip shows each document, what is outstanding, what the client returned, and any message that did not arrive."
+        },
+        {
+          "title": "Give any document a due date",
+          "description": "Set a deadline on any document. Each raises an assigned follow-up, due at 5pm in the client's timezone, and closes when the paperwork arrives."
+        },
+        {
+          "title": "A calmer matter page",
+          "description": "Overview, Documents, Activity, and Billing are the page you work from. Team, Workflow, and the portal group under Matter settings."
+        }
+      ]
+    },
+    {
       "id": "2026.09.10.3",
       "version": "2026.09.10.3",
       "title": "Browse sample legal forms in Template Studio",

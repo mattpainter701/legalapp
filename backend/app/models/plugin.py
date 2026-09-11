@@ -262,6 +262,13 @@ class Matter(Base):
         Boolean, default=False, server_default="false"
     )
 
+    # When the firm last read this matter's portal thread (migration 171).
+    # Shared across the team: a client message one clerk has handled should
+    # not keep nagging everybody else.
+    portal_messages_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Optional FK to the firm's client Contact record (added in migration 018)
     client_contact_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

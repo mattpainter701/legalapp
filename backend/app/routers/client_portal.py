@@ -125,11 +125,16 @@ from app.services.matter_document_organization import (
     SYSTEM_FOLDER_CLIENT_UPLOADS,
     ensure_system_folder,
 )
+
 from app.services.email import (
     EmailDeliveryResult,
     email_delivery_http_error,
     send_client_portal_invite,
     send_client_portal_message_alert,
+)
+from app.services.portal_client_alerts import (
+    new_message_headline,
+    notify_client_portal_update,
 )
 from app.services.provider_http import (
     ProviderAuthError,
@@ -2231,3 +2236,165 @@ async def revoke_portal_invite(
     invite.revoked = True
     await db.commit()
     return Response(status_code=204)
+
+
+# ── Firm side of the portal conversation ───────────────────────────────────
+#
+# The client half of this thread shipped first: a client could write in, the
+# assigned team got an alert email, and the alert said the portal was the
+# system of record. It was not, because nothing could write the firm's half.
+# These three endpoints close that loop -- read the thread, reply into it, and
+# mark it seen -- so a matter's client conversation lives on the matter.
+
+
+async def _portal_thread(db, matter, tenant_id, *, limit, offset):
+    base = (
+        CommunicationLog.matter_id == matter.id,
+        CommunicationLog.tenant_id == tenant_id,
+        CommunicationLog.channel == "portal",
+    )
+    total = int(
+        await db.scalar(select(func.count(CommunicationLog.id)).where(*base)) or 0
+    )
+    result = await db.execute(
+        select(CommunicationLog)
+        .where(*base)
+        .order_by(CommunicationLog.occurred_at.desc(), CommunicationLog.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = list(result.scalars().all())
+    rows.reverse()
+    seen_at = _aware(matter.portal_messages_seen_at)
+    return rows, total, seen_at
+
+
+async def _firm_unread_count(db, matter, tenant_id) -> int:
+    """Client messages that arrived after the firm last read this thread."""
+    conditions = [
+        CommunicationLog.matter_id == matter.id,
+        CommunicationLog.tenant_id == tenant_id,
+        CommunicationLog.channel == "portal",
+        CommunicationLog.direction == "inbound",
+    ]
+    seen_at = _aware(matter.portal_messages_seen_at)
+    if seen_at is not None:
+        conditions.append(CommunicationLog.occurred_at > seen_at)
+    return int(
+        await db.scalar(select(func.count(CommunicationLog.id)).where(*conditions)) or 0
+    )
+
+
+@firm_router.get("/{matter_id}/portal/messages", response_model=PortalMessageList)
+async def firm_list_portal_messages(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(MESSAGE_PAGE_DEFAULT, ge=1, le=MESSAGE_PAGE_MAX),
+    offset: int = Query(0, ge=0),
+):
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    matter = await _get_matter_for_firm(db, matter_id, user.tenant_id)
+    rows, total, seen_at = await _portal_thread(
+        db, matter, user.tenant_id, limit=limit, offset=offset
+    )
+    return PortalMessageList(
+        messages=[
+            PortalMessageResponse(
+                id=str(row.id),
+                direction=row.direction,
+                subject=row.subject,
+                body=row.body,
+                occurred_at=row.occurred_at,
+                # Mirrored from the client view: unread means "written by the
+                # other side and not yet seen by this one".
+                unread=(
+                    row.direction == "inbound"
+                    and (seen_at is None or _aware(row.occurred_at) > seen_at)
+                ),
+            )
+            for row in rows
+        ],
+        unread_count=await _firm_unread_count(db, matter, user.tenant_id),
+        total=total,
+        has_more=offset + len(rows) < total,
+    )
+
+
+@firm_router.post(
+    "/{matter_id}/portal/messages",
+    response_model=PortalMessageResponse,
+    status_code=201,
+)
+async def firm_create_portal_message(
+    matter_id: str,
+    body: PortalMessageCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    matter = await _get_matter_for_firm(db, matter_id, user.tenant_id)
+    if not await can_access_matter(
+        db,
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        is_admin=user.role == "admin",
+        matter_id=matter.id,
+    ):
+        raise HTTPException(status_code=403, detail="No access to this matter")
+    if not matter.portal_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="Invite the client to the portal before sending a message.",
+        )
+    msg = CommunicationLog(
+        id=uuid.uuid4(),
+        tenant_id=user.tenant_id,
+        matter_id=matter.id,
+        contact_id=matter.client_contact_id,
+        direction="outbound",  # from the firm to the client
+        channel="portal",
+        status="sent",
+        subject=body.subject or "Message from your legal team",
+        body=body.body,
+        created_by_user_id=user.id,
+    )
+    db.add(msg)
+    # Writing the firm's half is the durable act. A client who never gets the
+    # heads-up email still sees the message next time they sign in, so the
+    # alert must not be able to roll the message back.
+    await db.commit()
+    await db.refresh(msg)
+    await notify_client_portal_update(
+        db,
+        tenant_id=user.tenant_id,
+        actor_user_id=user.id,
+        matter=matter,
+        subject=f"New message about {matter.matter_name or 'your matter'}",
+        headline=new_message_headline(matter),
+    )
+    return PortalMessageResponse(
+        id=str(msg.id),
+        direction=msg.direction,
+        subject=msg.subject,
+        body=msg.body,
+        occurred_at=msg.occurred_at,
+    )
+
+
+@firm_router.post(
+    "/{matter_id}/portal/messages/read", response_model=PortalMarkReadResponse
+)
+async def firm_mark_portal_messages_read(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    matter = await _get_matter_for_firm(db, matter_id, user.tenant_id)
+    matter.portal_messages_seen_at = datetime.now(timezone.utc)
+    await db.commit()
+    return PortalMarkReadResponse(messages_seen_at=matter.portal_messages_seen_at)

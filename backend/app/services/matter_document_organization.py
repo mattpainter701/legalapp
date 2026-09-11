@@ -8,6 +8,7 @@ firm UI, the client portal, and any future importer all enforce the same shape.
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from collections import defaultdict
@@ -29,11 +30,60 @@ from app.models.matter_document_tag import (
     MatterDocumentTagLink,
 )
 
+logger = logging.getLogger(__name__)
+
 # System folders the product owns. Their names are protected from rename and
 # delete so integrations (the client portal, most importantly) keep a stable
 # destination for the files they file automatically.
 SYSTEM_FOLDER_CLIENT_UPLOADS = "client_uploads"
-SYSTEM_FOLDER_NAMES = {SYSTEM_FOLDER_CLIENT_UPLOADS: "Client Uploads"}
+SYSTEM_FOLDER_CORRESPONDENCE = "correspondence"
+SYSTEM_FOLDER_SIGNED = "signed"
+SYSTEM_FOLDER_INTAKE = "intake"
+SYSTEM_FOLDER_GENERATED = "generated"
+SYSTEM_FOLDER_NAMES = {
+    SYSTEM_FOLDER_CLIENT_UPLOADS: "Client Uploads",
+    SYSTEM_FOLDER_CORRESPONDENCE: "Correspondence",
+    SYSTEM_FOLDER_SIGNED: "Signed",
+    SYSTEM_FOLDER_INTAKE: "Intake",
+    SYSTEM_FOLDER_GENERATED: "Generated Documents",
+}
+
+# Every document already carries a category. Only client uploads were ever
+# filed by it, so everything else -- email, signed agreements, generated
+# drafts -- piled into the explorer root together. This maps the categories
+# the product sets itself onto the folder a firm would have filed them in.
+# A category absent here stays unfiled: the firm decides where it belongs.
+CATEGORY_SYSTEM_FOLDERS = {
+    "correspondence": SYSTEM_FOLDER_CORRESPONDENCE,
+    "client_uploads": SYSTEM_FOLDER_CLIENT_UPLOADS,
+    "signed": SYSTEM_FOLDER_SIGNED,
+    "intake": SYSTEM_FOLDER_INTAKE,
+    "generated": SYSTEM_FOLDER_GENERATED,
+    "generated_draft": SYSTEM_FOLDER_GENERATED,
+}
+
+
+async def autofile_folder_id(db, *, tenant_id, matter_id, document_category):
+    """The system folder a document of this category belongs in, if any.
+
+    Returns None for a category the product does not file itself, and never
+    raises: a document that cannot be filed is still a document, and losing
+    the upload to a folder error would be the worse outcome.
+    """
+    system_key = CATEGORY_SYSTEM_FOLDERS.get((document_category or "").strip().lower())
+    if not system_key:
+        return None
+    try:
+        folder = await ensure_system_folder(
+            db, tenant_id=tenant_id, matter_id=matter_id, system_key=system_key
+        )
+        return folder.id
+    except Exception:
+        logger.exception(
+            "Could not resolve the %s folder for matter %s", system_key, matter_id
+        )
+        return None
+
 
 # Control characters and the provider-hostile set; slashes are already barred by
 # a table check constraint but are repeated here for a friendly error message.
@@ -300,7 +350,7 @@ async def _repath_subtree(
     )
     depth_delta = folder.depth - old_depth
     for node in result.scalars().all():
-        node.path = f"{folder.path}/{node.path[len(prefix):]}"
+        node.path = f"{folder.path}/{node.path[len(prefix) :]}"
         node.depth = node.depth + depth_delta
         if node.depth > MAX_FOLDER_DEPTH:
             raise DocumentOrganizationError(

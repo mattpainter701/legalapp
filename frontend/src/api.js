@@ -1287,6 +1287,23 @@ export const listMatterPortalInvites = (matterId) =>
 export const revokeMatterPortalInvite = (matterId, inviteId) =>
   api.delete(`/matters/${matterId}/portal/invites/${inviteId}`).then((r) => r.data)
 
+// ── Portal conversation (firm side) ────────────────────────────────────────
+export const getMatterPortalMessages = (matterId, params = {}) =>
+  api.get(`/matters/${matterId}/portal/messages`, { params }).then((r) => r.data)
+
+export const sendMatterPortalMessage = (matterId, data) =>
+  api.post(`/matters/${matterId}/portal/messages`, data).then((r) => r.data)
+
+export const markMatterPortalMessagesRead = (matterId) =>
+  api.post(`/matters/${matterId}/portal/messages/read`).then((r) => r.data)
+
+// ── Client paperwork packet (matter intake) ────────────────────────────────
+export const getMatterPaperwork = (matterId) =>
+  api.get(`/matters/${matterId}/intake`).then((r) => r.data)
+
+export const matterPaperworkAction = (matterId, action, body) =>
+  api.post(`/matters/${matterId}/intake/${action}`, body).then((r) => r.data)
+
 // ── E-signature (firm side) ─────────────────────────────────────────────────
 export const createSignatureRequest = (matterId, data) =>
   api.post(`/matters/${matterId}/signatures`, data).then((r) => r.data)
@@ -2354,8 +2371,19 @@ export const getMatterByNumber = (matterNumber) =>
   api.get(`/matters/by-number/${encodeURIComponent(matterNumber)}`).then(r => r.data)
 export const updateMatterV2 = (id, data) =>
   api.patch(`/matters/${id}`, data).then(r => r.data)
-export const closeMatterV2 = (id) =>
-  api.delete(`/matters/${id}`)
+// A soft close behind DELETE: the matter stays, is_closed flips. The server
+// refuses while unbilled work or a trust balance is outstanding, and asks for
+// acknowledgement of the non-blocking warnings.
+export const closeMatterV2 = (id, { acknowledgeWarnings = false, reason = '' } = {}) =>
+  api.delete(`/matters/${id}`, {
+    params: { acknowledge_warnings: acknowledgeWarnings, ...(reason ? { reason } : {}) },
+  })
+
+export const getMatterCloseReadiness = (id) =>
+  api.get(`/matters/${id}/close-readiness`).then((r) => r.data)
+
+export const reopenMatter = (id) =>
+  api.post(`/matters/${id}/reopen`).then((r) => r.data)
 export const getMyMatters = () =>
   api.get('/matters/my').then(r => r.data)
 export const getMatterStats = () =>
