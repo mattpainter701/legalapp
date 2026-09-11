@@ -12,6 +12,7 @@ from app.services.ai_request_broker import (
     AIRequestBroker,
     AIRequestDenied,
     AIRequestUnknown,
+    AIRequestUnreachable,
     AITransport,
 )
 from app.services.llm_routing import LLMRoute, RouteTier
@@ -243,3 +244,112 @@ async def test_responses_5xx_is_ambiguous_not_released():
             )
     finally:
         await client.aclose()
+
+
+class _RecordingQuota:
+    """Quota ledger fake: records release/unknown instead of touching a DB."""
+
+    def __init__(self):
+        self.events = []
+
+    async def reserve(self, **kwargs):
+        return BackgroundReservation(
+            id=uuid.uuid4(),
+            tenant_id=kwargs["tenant_id"],
+            request_id=kwargs["request_id"],
+            pool="test",
+        )
+
+    async def settle(self, *_args, **_kwargs):
+        self.events.append(("settle", {}))
+
+    async def mark_unknown(self, reservation, **kwargs):
+        self.events.append(("unknown", kwargs))
+
+    async def release(self, reservation, **kwargs):
+        self.events.append(("release", kwargs))
+
+
+class _BackgroundDB:
+    async def scalar(self, _query):
+        return SimpleNamespace(custom_config={"background_assistant_enabled": True})
+
+
+async def _background_route(*_args, **_kwargs):
+    return LLMRoute(
+        requested_route="background",
+        resolved_route="background",
+        gateway_alias="clarity-background-r2",
+    )
+
+
+def _enable_background_surfaces(monkeypatch):
+    monkeypatch.setattr(broker_module.settings, "VIRTUAL_ASSISTANT_ENABLED", True)
+    monkeypatch.setattr(broker_module.settings, "BACKGROUND_ASSISTANT_ENABLED", True)
+    monkeypatch.setattr(
+        broker_module.settings, "BACKGROUND_PROSPECT_CONFIDENTIAL_ENABLED", True
+    )
+    monkeypatch.setattr(
+        broker_module.settings, "LITELLM_BACKGROUND_TRANSPORT", "responses"
+    )
+    monkeypatch.setattr(broker_module.settings, "LITELLM_BASE_URL", "http://gateway")
+    monkeypatch.setattr(broker_module, "resolve_llm_route", _background_route)
+    monkeypatch.setattr(
+        broker_module,
+        "get_active_background_pricing_models",
+        lambda *_args, **_kwargs: _async_value(["opencode-go/gpt-5.6-luna"]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_never_reached_releases_reservation_and_is_retryable(
+    monkeypatch,
+):
+    # A connection refusal (deploy warm-up) means no provider ever accepted
+    # work: the reservation must be released, not parked as unknown.
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    _enable_background_surfaces(monkeypatch)
+    quota = _RecordingQuota()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(AIRequestUnreachable, match="never reached"):
+            await AIRequestBroker(http_client=client, quota_ledger=quota).execute(
+                _BackgroundDB(),
+                _request(
+                    surface="background_prospect_follow_up",
+                    route_tier=RouteTier.BACKGROUND,
+                ),
+            )
+    finally:
+        await client.aclose()
+
+    assert [event for event, _ in quota.events] == ["release"]
+    assert quota.events[0][1]["error_code"] == "ai_request_unreachable"
+
+
+@pytest.mark.asyncio
+async def test_gateway_timeout_parks_reservation_as_unknown(monkeypatch):
+    # A timeout after connect is genuinely ambiguous: the reservation must be
+    # parked as unknown with automatic retries blocked.
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out mid-flight")
+
+    _enable_background_surfaces(monkeypatch)
+    quota = _RecordingQuota()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(AIRequestUnknown, match="timed out"):
+            await AIRequestBroker(http_client=client, quota_ledger=quota).execute(
+                _BackgroundDB(),
+                _request(
+                    surface="background_prospect_follow_up",
+                    route_tier=RouteTier.BACKGROUND,
+                ),
+            )
+    finally:
+        await client.aclose()
+
+    assert [event for event, _ in quota.events] == ["unknown"]
+    assert quota.events[0][1]["error_code"] == "ai_request_unknown"

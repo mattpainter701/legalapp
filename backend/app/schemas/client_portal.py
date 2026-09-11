@@ -74,6 +74,10 @@ class PortalKeyDate(BaseModel):
 class PortalMatterView(BaseModel):
     paperwork_only: bool = False
     matter_id: str
+    # The number the firm quotes to this client. Shown so a client can cite it
+    # when they call or write; the portal URL stays session-scoped, so this is
+    # never an address anyone can navigate to.
+    matter_number: str | None = None
     matter_name: str
     status: str | None = None
     stage: str | None = None

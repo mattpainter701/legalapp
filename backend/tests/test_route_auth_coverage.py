@@ -393,6 +393,10 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"GET"}),
         "/api/version",
     ): "public build identity for the pre-auth UI; returns no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/release-window",
+    ): "advisory maintenance-window notice; no tenant data or host detail",
 }
 
 # Routes that only exist in the route table when DEV_MODE=true (docs/openapi

@@ -7,6 +7,7 @@ import SeoHead from './components/SeoHead'
 import GoogleAnalytics from './analytics/GoogleAnalytics.jsx'
 import VersionBadge from './components/VersionBadge'
 import ReleaseAnnouncement from './components/ReleaseAnnouncement'
+import ReleaseWindowBanner from './components/ReleaseWindowBanner'
 import AppErrorBoundary from './components/AppErrorBoundary'
 import { getMe } from './api'
 import { canAccessAddonList, canAccessModuleList } from './moduleAccess'
@@ -258,6 +259,7 @@ export default function App() {
         <ConfirmProvider>
         <VersionBadge />
         <ReleaseAnnouncement />
+        <ReleaseWindowBanner />
         <Suspense fallback={<div role="status" className="flex min-h-screen items-center justify-center bg-brand-bg text-brand-ink">Loading workspace…</div>}>
         <Routes>
         <Route path="/" element={<RootRedirect />} />

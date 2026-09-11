@@ -123,6 +123,9 @@ _APP_CAPABILITIES_BY_TOOL: dict[str, frozenset[str]] = {
     "propose_client_sms": frozenset({"manage_matters"}),
     "propose_matter_document": frozenset({"manage_matters", "manage_documents"}),
     "propose_document_from_template": frozenset({"manage_matters", "manage_documents"}),
+    "propose_matter_document_file": frozenset({"manage_matters", "manage_documents"}),
+    "propose_document_template": frozenset({"manage_documents"}),
+    "propose_matter_file": frozenset({"manage_matters", "manage_documents"}),
 }
 
 
@@ -782,7 +785,10 @@ class WorkspaceMCPProtocolEndpoint:
             bounded_receive = await buffer_bounded_request(
                 scope,
                 receive,
-                maximum_bytes=settings.MCP_PROTOCOL_MAX_REQUEST_BYTES,
+                # Workspace clients push authored DOCX and template bodies, so
+                # this transport is capped separately from the read-shaped
+                # research gateway.
+                maximum_bytes=settings.WORKSPACE_MCP_MAX_REQUEST_BYTES,
             )
         except MCPRequestBodyTooLarge:
             await JSONResponse(

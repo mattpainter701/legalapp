@@ -54,9 +54,11 @@ async def test_workspace_protocol_rejects_oversized_body_after_auth(monkeypatch)
         "WORKSPACE_MCP_ENABLED",
         True,
     )
+    # The workspace transport carries pushed DOCX and template bodies, so it
+    # is bounded by its own setting rather than the research gateway's.
     monkeypatch.setattr(
         workspace_mcp_protocol.settings,
-        "MCP_PROTOCOL_MAX_REQUEST_BYTES",
+        "WORKSPACE_MCP_MAX_REQUEST_BYTES",
         32,
     )
 

@@ -42,6 +42,7 @@ from app.services.matter_import_manifest import (
     parse_eml,
     safe_path,
 )
+from app.services.matter_number import assign_matter_number
 
 router = APIRouter(prefix="/api/matter-imports", tags=["matter-imports"])
 PROVIDER = "matter_folder_v1"
@@ -282,6 +283,8 @@ async def approve(
                     datetime.now(timezone.utc) + timedelta(days=365 * 7)
                 ).date(),
             )
+            # Human-readable matter number, assigned once at creation.
+            await assign_matter_number(db, matter)
             db.add(matter)
             await db.flush()
             db.add(

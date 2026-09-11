@@ -142,6 +142,9 @@ class MatterResponse(BaseModel):
 
     id: str
     slug: str
+    # Human-readable identifier ("SMIT0001"). Server-assigned at creation and
+    # read-only thereafter -- it appears in no create or update schema.
+    matter_number: str | None = None
     matter_name: str
     description: str | None
     matter_type: str | None
@@ -222,6 +225,7 @@ class MatterSummary(BaseModel):
 
     id: str
     slug: str
+    matter_number: str | None = None
     matter_name: str
     description: str | None
     matter_type: str | None

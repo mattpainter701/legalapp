@@ -42,7 +42,7 @@ generated configuration use the full transport URLs:
 The production acceptance check validates the complete published Workspace
 scope set: `communications:propose`, `contacts:read`, `documents:propose`,
 `documents:read`, `intakes:read`, `matters:read`, `offline_access`, `tasks:propose`,
-`tasks:read`, and `templates:read`. When a Workspace MCP feature adds or
+`tasks:read`, `templates:propose`, and `templates:read`. When a Workspace MCP feature adds or
 removes a scope, update the protected-resource metadata, this checklist, and
 the production check in the same release. A scope drift is an operator signal,
 not an OAuth failure by itself.

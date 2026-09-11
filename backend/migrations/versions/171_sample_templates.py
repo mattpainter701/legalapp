@@ -1,12 +1,12 @@
-"""170 — Create the platform-owned sample_templates catalog.
+"""171 — Create the platform-owned sample_templates catalog.
 
 The sample library is shared, read-only content: it has no ``tenant_id`` and is
 deliberately *not* row-level-security scoped, matching ``platform_settings``.
 Every authenticated tenant may read it; writes are performed only by the
 operator seeding script (``scripts/seed_sample_templates.py``).
 
-Revision ID: 170_sample_templates
-Revises: 169_automation_services
+Revision ID: 171_sample_templates
+Revises: 170_matter_number
 """
 
 from alembic import op
@@ -14,8 +14,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "170_sample_templates"
-down_revision = "169_automation_services"
+revision = "171_sample_templates"
+down_revision = "170_matter_number"
 branch_labels = None
 depends_on = None
 

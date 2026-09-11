@@ -123,9 +123,15 @@ def test_schema_requires_mapping_and_unique_manifest():
 @pytest.fixture
 def ctx(monkeypatch):
     user = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4(), role="user")
+    tenant = SimpleNamespace(id=user.tenant_id, matter_prefix="SMIT")
     db = SimpleNamespace(
         scalar=AsyncMock(),
-        execute=AsyncMock(),
+        execute=AsyncMock(
+            return_value=SimpleNamespace(
+                scalar_one_or_none=lambda: tenant,
+                scalar_one=lambda: 1,
+            )
+        ),
         flush=AsyncMock(),
         commit=AsyncMock(),
         rollback=AsyncMock(),

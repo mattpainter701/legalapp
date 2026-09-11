@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.09.10.1",
-      "version": "2026.09.10.1",
+      "id": "2026.09.10.3",
+      "version": "2026.09.10.3",
       "title": "Browse sample legal forms in Template Studio",
       "published_at": "2026-09-10",
       "summary": "Open Template Studio to see a shared library of fillable sample forms organized by state and type.",
@@ -19,6 +19,44 @@
         {
           "title": "Your firm's templates stay separate",
           "description": "Sample forms are read-only shared content; your own templates and drafts are left untouched."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.10.2",
+      "version": "2026.09.10.2",
+      "title": "A friendly heads-up while we polish things",
+      "published_at": "2026-09-10",
+      "summary": "When a new version of LawHand is on its way, everyone signed in — clients included — now sees a short, kindly worded notice before anything changes.",
+      "highlights": [
+        {
+          "title": "A gentle warning before an update",
+          "description": "During the few minutes a release takes, a slim banner explains that LawHand is being polished and saved work is safe. It never blocks you and vanishes when the update finishes."
+        },
+        {
+          "title": "Clients see it too",
+          "description": "Portal users get the same heads-up as firm staff, so a brief maintenance message never comes as a surprise."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.10.1",
+      "version": "2026.09.10.1",
+      "title": "Every matter now has a number you can say out loud",
+      "published_at": "2026-09-10",
+      "summary": "Matters carry a short, readable number like SMIT0001 that you can share, bookmark, and quote to a client.",
+      "highlights": [
+        {
+          "title": "A readable number on every matter",
+          "description": "Each matter gets a number built from your firm's name and a running count, shown at the top of the matter with one click to copy it."
+        },
+        {
+          "title": "Open a matter by its number",
+          "description": "A link like /matters/SMIT0001 opens the matter, so a number written in an email or read over the phone leads straight to the right place."
+        },
+        {
+          "title": "Clients can quote their matter number",
+          "description": "The portal shows the same number, giving clients a reference to use when they call or write. A number is unique to your firm and never changes."
         }
       ]
     },

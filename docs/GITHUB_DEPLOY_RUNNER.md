@@ -40,9 +40,19 @@
 6. Choose **Production acceptance**, enter the full staged SHA, and run it from
    `main`. A successful run validates production and advances the release tag.
 
-Until the blue/green IONOS edge work lands, `stage` is a real public production
-restart: it rebuilds and force-recreates the public Compose stack. Schedule it
-as maintenance work; it is not a private candidate or an instant deployment.
+Until the blue/green IONOS edge work lands, `stage` is still a real public
+production restart of the application tier: it rebuilds and force-recreates
+the release services (the databases are no longer recreated when unchanged,
+and the stack no longer waits for the AI gateway before serving). nginx is no
+longer recreated when unchanged — it resolves backends at request time and
+serves a branded maintenance page while the app tier restarts — so the hard
+ingress outage is gone, but users do see the maintenance page for a few
+minutes. The AI gateway (LiteLLM) is rebuilt and recreated only when its own
+content hash changes (`legalapp-litellm:src-<hash>`), so most stages no longer
+restart it; gateway rollback state is recorded in
+`~/.local/state/clarity-legal/releases/litellm-gateway.tsv`. Schedule it as
+maintenance work; it is not a private candidate or an
+instant deployment.
 
 After staging, run **Production acceptance** from `main` with the full SHA
 recorded by the stage run. The workflow requires that SHA to still be `main`
@@ -191,6 +201,17 @@ workflow. Re-register the runner from GitHub **Settings > Actions > Runners** if
 its credentials are revoked. Do not give the runner account Docker membership,
 read access to `/srv/lawhand/app` or `/etc/lawhand/core.env`, or general sudo
 rights.
+
+## In-deploy user notice
+
+Once preflight passes, `deploy_prod.sh` writes `release-window.json` into the
+host-status directory (the read-only mount the backend already uses for disk
+status). While that file exists, every signed-in user — portal clients
+included — sees a slim, kindly worded banner via `GET /api/release-window`
+explaining that a release is in flight. An EXIT trap removes the file on every
+exit path (success or failure), the backend reader auto-expires a stranded
+marker after two hours, and a failed marker write only warns — it never blocks
+the deploy.
 
 ## Recovery
 

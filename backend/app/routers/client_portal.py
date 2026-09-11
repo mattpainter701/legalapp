@@ -966,6 +966,7 @@ async def portal_matter(
 
     return PortalMatterView(
         matter_id=str(matter.id),
+        matter_number=matter.matter_number,
         matter_name=matter.matter_name,
         status=matter.status,
         stage=matter.stage,

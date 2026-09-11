@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.10.1 — Browse sample legal forms in Template Studio
+## 2026.09.10.3 — Browse sample legal forms in Template Studio
 
 Released September 10, 2026.
 
@@ -14,6 +14,25 @@ Open Template Studio to see a shared library of fillable sample forms organized 
 - **A shared library of sample forms.** Template Studio now shows ready-to-fill sample forms such as wills, powers of attorney, and business agreements, organized by state and type.
 - **Fill a sample for any matter.** Preview and fill a sample form directly from the library without saving a copy.
 - **Your firm's templates stay separate.** Sample forms are read-only shared content; your own templates and drafts are left untouched.
+
+## 2026.09.10.2 — A friendly heads-up while we polish things
+
+Released September 10, 2026.
+
+When a new version of LawHand is on its way, everyone signed in — clients included — now sees a short, kindly worded notice before anything changes.
+
+- **A gentle warning before an update.** During the few minutes a release takes, a slim banner explains that LawHand is being polished and saved work is safe. It never blocks you and vanishes when the update finishes.
+- **Clients see it too.** Portal users get the same heads-up as firm staff, so a brief maintenance message never comes as a surprise.
+
+## 2026.09.10.1 — Every matter now has a number you can say out loud
+
+Released September 10, 2026.
+
+Matters carry a short, readable number like SMIT0001 that you can share, bookmark, and quote to a client.
+
+- **A readable number on every matter.** Each matter gets a number built from your firm's name and a running count, shown at the top of the matter with one click to copy it.
+- **Open a matter by its number.** A link like /matters/SMIT0001 opens the matter, so a number written in an email or read over the phone leads straight to the right place.
+- **Clients can quote their matter number.** The portal shows the same number, giving clients a reference to use when they call or write. A number is unique to your firm and never changes.
 
 ## 2026.09.09.1 — Standard client paperwork for every new matter
 

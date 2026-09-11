@@ -89,9 +89,11 @@ assert_location_policy "$DEV_CONFIG" "^~ /api/integrations/teams/voice/webhook/"
 
 # The shared API proxy snippet is the source of backend routing, forwarded
 # client/protocol headers, and bounded upstream timeouts for every location.
+# The backend target is a variable (runtime DNS re-resolution in production),
+# so the snippet pins the variable form rather than a static upstream name.
 API_PROXY="$ROOT_DIR/nginx/snippets/api_proxy.conf"
 for directive in \
-  'proxy_pass http://backend;' \
+  'proxy_pass $upstream_backend;' \
   'proxy_set_header Host' \
   'proxy_set_header X-Real-IP' \
   'proxy_set_header X-Forwarded-For' \

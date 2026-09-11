@@ -122,8 +122,9 @@ services:
         condition: service_healthy
       migrator:
         condition: service_completed_successfully
+      # Degraded-mode dependency, not a startup gate; see the hypervisor file.
       litellm:
-        condition: service_healthy
+        condition: service_started
     env_file: ${APP_ENV_FILE:-.env}
     environment:
       DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}

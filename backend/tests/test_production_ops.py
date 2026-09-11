@@ -770,8 +770,14 @@ def test_dedicated_mcp_hosts_are_isolated_and_streamed() -> None:
     ):
         assert selector in transports
 
-    assert transports.count("client_max_body_size 256k;") == 4
-    assert transports.count("client_body_timeout 15s;") == 4
+    # The three read-shaped research transports stay at the small cap. The
+    # workspace transport carries pushed DOCX/PDF templates and matter files,
+    # so it is bounded separately and must stay aligned with
+    # WORKSPACE_MCP_MAX_REQUEST_BYTES, which the application enforces too.
+    assert transports.count("client_max_body_size 256k;") == 3
+    assert transports.count("client_max_body_size 8m;") == 1
+    assert transports.count("client_body_timeout 15s;") == 3
+    assert transports.count("client_body_timeout 30s;") == 1
     assert transports.count("limit_conn mcp_connections 10;") == 4
     assert transports.count("limit_req zone=mcp_research burst=20 nodelay;") == 3
     assert transports.count("limit_req zone=mcp_workspace burst=20 nodelay;") == 1

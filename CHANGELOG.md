@@ -1,9 +1,24 @@
-## 2026.09.10.1 — Global sample form library in Template Studio
+## 2026.09.10.3 — Global sample form library in Template Studio
 
 - Add a platform-owned `sample_templates` catalog (no `tenant_id`, no row-level security) seeded from a curated set of fillable AcroForm PDFs organized by category and jurisdiction tags.
 - Add read-only `GET /api/templates/library`, `GET /api/templates/library/{id}`, `GET /api/templates/library/{id}/source`, and `POST /api/templates/library/{id}/render-file` endpoints available to every authenticated tenant.
 - Add `scripts/build_sample_template_library.py` (deduplicate by SHA-256, normalize titles, tag jurisdictions, and reject PDFs with active content) and `backend/scripts/seed_sample_templates.py` (idempotent upsert by slug).
 - Keep tenant templates fully isolated: the catalog shares nothing per tenant and exposes no mutation endpoints.
+
+## 2026.09.10.2 — In-deploy maintenance heads-up banner
+
+- Add `GET /api/release-window`, a public endpoint (like `/api/version`) that reads `release-window.json` from the read-only host-status mount beside the host disk status and returns only `active`/`window_id`/`message`; the strict reader fails closed on a missing, malformed, symlinked, or stale marker and caps the message length, so no host or build detail reaches the browser.
+- `deploy_prod.sh` writes the marker after preflight and before the databases come up (maximizing lead time), removes it via an EXIT trap on every exit path — folded into the scheduler cutover trap mid-script and re-armed for the post-cutover gates — and treats a failed write as warn-and-continue so an advisory can never block a deploy.
+- Add `ReleaseWindowBanner`, a slim dismissible top banner polled every 30 seconds, shown to every signed-in user including portal clients (unlike `ReleaseAnnouncement`), dismissed per user per window id.
+
+## 2026.09.10.1 — Human-readable matter numbers
+
+- Add `matters.matter_number` / `matter_number_seq` and `tenants.matter_prefix` / `matter_sequence_counter` (migration 170), backfilling every existing tenant with a prefix derived from its company or tenant name and numbering its matters in `created_at` order.
+- Allocate numbers in `app/services/matter_number.py` via `UPDATE tenants ... RETURNING`, whose row lock serializes concurrent creations for one tenant; every matter-creation path (matters, mediation, intake, plugins, matter imports, external imports) stamps a number.
+- Enforce the two properties a quotable identifier needs: `uq_matters_tenant_matter_number` for uniqueness, and a `BEFORE UPDATE` trigger that rejects any change to an assigned number. No create or update schema carries the field, so it cannot be set through the API.
+- Add `GET /api/matters/by-number/{matter_number}`, tenant-scoped, accepting the forms people type (lowercase, hyphenated, padded); include `matter_number` in matter detail, list, my-matters, and client-portal responses.
+- Resolve `/matters/SMIT0001` in the frontend to the matter's UUID URL before the workspace mounts, and show the number with a copy control in the matter header and the client portal header.
+- Return 404 rather than a Postgres cast error for a non-UUID matter id.
 
 ## 2026.09.09.1 — Standard client paperwork for every new matter
 

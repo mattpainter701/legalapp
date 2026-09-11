@@ -44,6 +44,7 @@ from app.schemas.external_import import (
     ExternalImportTablesResponse,
     ExternalRawRowPreview,
 )
+from app.services.matter_number import assign_matter_number
 
 router = APIRouter(prefix="/api/imports", tags=["external-imports"])
 
@@ -838,6 +839,8 @@ async def promote_import_run(
                         conflicts_status="not-run",
                         client_contact_id=client_id,
                     )
+                    # Human-readable matter number, assigned once at creation.
+                    await assign_matter_number(db, matter)
                     db.add(matter)
                     await db.flush()
                     created["matters"] += 1

@@ -132,8 +132,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # AI is a degraded-mode dependency, not a startup gate: the API serves
+      # without the gateway and reports the state via /health/llm. Gating on
+      # service_healthy puts the whole public site behind LiteLLM's cold start.
       litellm:
-        condition: service_healthy
+        condition: service_started
       migrator:
         condition: service_completed_successfully
     env_file: ${APP_ENV_FILE:-.env}
@@ -271,8 +274,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Same degraded-mode rationale as the API process: the scheduler must
+      # heartbeat tenants even while the AI gateway is starting.
       litellm:
-        condition: service_healthy
+        condition: service_started
       migrator:
         condition: service_completed_successfully
     env_file: ${APP_ENV_FILE:-.env}
@@ -373,13 +378,9 @@ services:
     build:
       context: ./nginx
       dockerfile: Dockerfile.local
-    depends_on:
-      frontend:
-        condition: service_healthy
-      office-addin:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
+    # No depends_on: with runtime DNS re-resolution, nginx must start without
+    # waiting for upstream health; a cold boot serves the maintenance page
+    # until the app tier is reachable.
     volumes:
       - ./nginx/ssl:/etc/nginx/ssl:ro
       - ./nginx/webroot:/var/www/certbot:ro

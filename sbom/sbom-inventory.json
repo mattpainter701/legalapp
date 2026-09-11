@@ -95,7 +95,7 @@
     },
     {
       "image": "legalapp-backend:${APP_COMMIT:-dev}",
-      "line": 166,
+      "line": 167,
       "pinned_by_digest": false,
       "source": "docker-compose.yml"
     },
@@ -161,7 +161,7 @@
     },
     {
       "image": "legalapp-backend:${APP_COMMIT:-dev}",
-      "line": 220,
+      "line": 223,
       "pinned_by_digest": false,
       "source": "docker-compose.hypervisor.yml"
     },
@@ -459,7 +459,7 @@
       "name": "vitest",
       "scope": "devDependencies",
       "source": "frontend/package.json",
-      "specifier": "^4.1.10"
+      "specifier": "^4.1.11"
     },
     {
       "ecosystem": "npm",
@@ -501,7 +501,7 @@
       "name": "vitest",
       "scope": "devDependencies",
       "source": "office-addin/package.json",
-      "specifier": "^4.1.10"
+      "specifier": "^4.1.11"
     },
     {
       "ecosystem": "pypi",

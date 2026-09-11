@@ -394,6 +394,10 @@ class Settings(BaseSettings):
         default=67108864, ge=1024, le=1073741824
     )
     WORKSPACE_MCP_TENANT_REQUESTS_PER_MINUTE: int = 1200
+    # Workspace clients push authored DOCX files and template bodies, which are
+    # far larger than the read-shaped calls the research gateway serves. This
+    # caps that transport on its own rather than raising the shared limit.
+    WORKSPACE_MCP_MAX_REQUEST_BYTES: int = 8388608
     WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED: bool = False
 
     # Per-add-on entitlement enforcement for /api/plugins skills.
@@ -1133,6 +1137,10 @@ def validate_mcp_security_settings(settings: Settings) -> None:
     if not 16384 <= settings.MCP_PROTOCOL_MAX_REQUEST_BYTES <= 1048576:
         raise ValueError(
             "MCP_PROTOCOL_MAX_REQUEST_BYTES must be between 16384 and 1048576"
+        )
+    if not 16384 <= settings.WORKSPACE_MCP_MAX_REQUEST_BYTES <= 16777216:
+        raise ValueError(
+            "WORKSPACE_MCP_MAX_REQUEST_BYTES must be between 16384 and 16777216"
         )
     if (
         not 1

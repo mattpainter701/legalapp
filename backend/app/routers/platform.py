@@ -1649,6 +1649,7 @@ async def platform_workspace_mcp_diagnostics(
             "tasks:propose": {"manage_matters"},
             "communications:propose": {"manage_matters"},
             "documents:propose": {"manage_documents"},
+            "templates:propose": {"manage_documents"},
         }
         for tenant_id in tenant_ids:
             async with _platform_tenant_scope(db, tenant_id):
