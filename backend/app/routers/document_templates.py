@@ -46,6 +46,9 @@ from app.models.plugin import Matter, MatterEvent
 from app.models.tenant import TenantSettings
 from app.schemas.document_template import (
     DocumentTemplateBindingCatalogue,
+    DocumentTemplateCard,
+    DocumentTemplateCardCatalogue,
+    DocumentTemplateCardField,
     DocumentTemplateFieldLibrary,
     DocumentTemplateFieldUsage,
     DocumentTemplateLibraryField,
@@ -137,13 +140,13 @@ from app.services.template_semantics import (
 from app.services.template_bindings import (
     MANUAL_BINDING,
     alias_for_binding,
-    binding_label,
     catalogue as binding_catalogue,
     collections as binding_collections,
     declared_bindings,
     is_item_binding,
-    is_valid_binding,
 )
+from app.services import template_cards
+from app.services.template_cards import CardKind
 from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
 from app.services.esign.placement import generated_signing_metadata
@@ -1341,7 +1344,7 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
             binding = str(binding).strip()
             if not binding:
                 field.pop("binding", None)
-            elif not is_valid_binding(binding):
+            elif not template_cards.is_valid_path(binding):
                 raise HTTPException(
                     status_code=422,
                     detail=f"Unknown data binding for {name!r}: {binding}",
@@ -1922,6 +1925,58 @@ def _collect_caption_party_candidates(
                 provenance=singular_provenance,
             )
 
+        _add_role_instance_candidates(candidates, role, role_parties)
+
+
+def _add_role_instance_candidates(
+    candidates: dict[str, DocumentTemplateVariableSuggestion],
+    role: str,
+    role_parties: Sequence[MatterParty],
+) -> None:
+    """Emit an alias per addressable instance of a role card.
+
+    A caption with two defendants could previously only name the first one; the
+    second existed on the matter and was unreachable from a template.  Instance
+    order is the order ``_load_matter_parties`` already establishes — primary
+    first, then ``created_at``, then id — so the same template fills the same
+    way on two different days.
+
+    Instance 1 is deliberately skipped: it already resolves through the
+    singular alias, and emitting a second key for the same record would let two
+    spellings of one field drift apart.
+    """
+
+    card = template_cards.card(role)
+    if card is None or card.kind is not CardKind.ROLE:
+        return
+    for index, party in enumerate(role_parties[: card.max_instances], start=1):
+        if index == 1:
+            continue
+        contact = party.contact
+        if contact is None:
+            continue
+        provenance = {
+            "party_role": role,
+            "selection": f"instance_{index}",
+            "contact_id": str(contact.id),
+        }
+        for entry, value, source_field in (
+            (card.field("full_name"), contact.display_name, "contact.display_name"),
+            (card.field("email"), contact.email, "contact.email"),
+            (card.field("phone"), contact.phone, "contact.phone"),
+        ):
+            if entry is None:
+                continue
+            _add_candidate(
+                candidates,
+                template_cards.indexed_alias(role, index, entry),
+                value,
+                source_type="matter_party",
+                source_field=source_field,
+                record_id=party.id,
+                provenance=provenance,
+            )
+
 
 def _represented_caption_role(value: Any) -> str | None:
     tokens = set(_normalize_variable_name(str(value or "")).split("_"))
@@ -2254,17 +2309,17 @@ def _bound_suggestion(
             provenance={
                 "status": "repeat_item",
                 "binding": binding,
-                "binding_label": binding_label(binding),
+                "binding_label": template_cards.label_for_path(binding),
             },
             review_required=False,
         )
-    alias = alias_for_binding(binding)
+    alias = template_cards.alias_for_path(binding)
     candidate = candidates.get(alias) if alias else None
     if candidate is not None:
         provenance = {
             **candidate.provenance,
             "binding": binding,
-            "binding_label": binding_label(binding),
+            "binding_label": template_cards.label_for_path(binding),
         }
         return candidate.model_copy(
             update={"variable": variable, "provenance": provenance}
@@ -2276,7 +2331,8 @@ def _bound_suggestion(
             # is more useful than omitting the key.
             "status": "binding_unresolved",
             "binding": binding,
-            "binding_label": binding_label(binding) or "Unknown data source",
+            "binding_label": template_cards.label_for_path(binding)
+            or "Unknown data source",
         },
         review_required=True,
     )
@@ -2382,6 +2438,67 @@ async def build_variable_suggestions(
         )
 
     return str(matter.id) if matter else None, suggestions
+
+
+@router.get("/cards", response_model=DocumentTemplateCardCatalogue)
+async def list_template_cards(
+    matter_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_capability("manage_documents")),
+):
+    """Return the card catalogue, with instance counts when a matter is named.
+
+    A card is one addressable subject in a document, and a field belongs to a
+    card.  Naming a matter resolves how many instances each role card actually
+    has on it, so the editor can offer "Defendant 2" only where a second
+    defendant exists rather than inviting a binding that will never fill.
+
+    Instance counts are advisory.  They describe the matter the author happens
+    to be looking at, never the template: a template bound to ``defendant.2``
+    stays valid on a matter with one defendant and reports
+    ``binding_unresolved`` at fill time, which is the honest outcome.
+    """
+
+    await set_tenant_context(db, str(current_user.tenant_id))
+    instance_counts: dict[str, int] = {}
+    if matter_id:
+        matter = await _load_matter_context(
+            db=db, tenant_id=current_user.tenant_id, matter_id=matter_id
+        )
+        parties = await _load_matter_parties(
+            db=db, tenant_id=current_user.tenant_id, matter=matter
+        )
+        for entry in template_cards.role_cards():
+            instance_counts[entry.key] = min(
+                sum(1 for party in parties if party.role == entry.party_role),
+                entry.max_instances,
+            )
+
+    return DocumentTemplateCardCatalogue(
+        cards=[
+            DocumentTemplateCard(
+                key=entry.key,
+                label=entry.label,
+                kind=entry.kind.value,
+                group=entry.group,
+                max_instances=entry.max_instances,
+                instance_count=instance_counts.get(entry.key) if matter_id else None,
+                fields=[
+                    DocumentTemplateCardField(
+                        key=item.key,
+                        label=item.label,
+                        path=f"{entry.key}.{item.key}",
+                        value_kind=item.value_kind,
+                        suggested_name=item.alias or None,
+                        supports_all_instances=bool(item.all_alias),
+                    )
+                    for item in entry.fields
+                ],
+            )
+            for entry in template_cards.cards()
+        ],
+        operators=sorted(LOGIC_OPERATORS),
+    )
 
 
 @router.get("/bindings", response_model=DocumentTemplateBindingCatalogue)

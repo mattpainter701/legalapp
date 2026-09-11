@@ -2319,6 +2319,14 @@ export const copyTemplate = (id, data) =>
 export const getTemplateBindings = () =>
   api.get('/templates/bindings').then(r => r.data)
 
+// Cards: the owner of a template field. Passing a matter resolves how many
+// instances each role card has on it, so the editor offers "Defendant 2" only
+// where a second defendant exists. Served alongside getTemplateBindings, not
+// instead of it — a template published before cards still resolves through the
+// exact paths it was reviewed with.
+export const getTemplateCards = (matterId) =>
+  api.get('/templates/cards', { params: matterId ? { matter_id: matterId } : {} }).then(r => r.data)
+
 export const getTemplateFieldLibrary = () =>
   api.get('/templates/field-library').then(r => r.data)
 
