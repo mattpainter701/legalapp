@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from app.services.cloud_sync import CloudSyncService
@@ -196,3 +197,51 @@ async def test_scheduled_cloud_sync_records_each_provider_failure(monkeypatch):
         captured.await_args.kwargs["message"] == "OneDrive sync failed (RuntimeError)"
     )
     assert "1 provider failure(s)" in completed.await_args.args[2]
+
+
+class _UnreachableProviderClient:
+    """Stands in for httpx.AsyncClient when the provider cannot be reached."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def get(self, *_args, **_kwargs):
+        raise httpx.ConnectError("provider unreachable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda s, db: s.sync_google_drive(db, TENANT), id="google-drive"),
+        pytest.param(lambda s, db: s.sync_gmail_metadata(db, TENANT), id="gmail"),
+        pytest.param(lambda s, db: s.sync_sharepoint(db, TENANT), id="sharepoint"),
+        pytest.param(lambda s, db: s.sync_outlook_mail(db, TENANT), id="outlook"),
+        pytest.param(
+            lambda s, db: s._sync_google_drive_folder(
+                db, TENANT, "provider-token", "folder-1", seen=set(), remaining=10
+            ),
+            id="google-drive-folder",
+        ),
+    ],
+)
+async def test_every_provider_sync_propagates_its_error_after_rollback(
+    monkeypatch, call
+):
+    """No provider may turn an error into a zero-item success any more."""
+    service = CloudSyncService()
+    db = SimpleNamespace(rollback=AsyncMock(), commit=AsyncMock())
+    monkeypatch.setattr(service, "_get_token", AsyncMock(return_value="provider-token"))
+    monkeypatch.setattr(
+        "app.services.cloud_sync.httpx.AsyncClient",
+        lambda *_a, **_k: _UnreachableProviderClient(),
+    )
+
+    with pytest.raises(httpx.ConnectError):
+        await call(service, db)
+
+    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
