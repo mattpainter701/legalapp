@@ -17,6 +17,7 @@ import {
 
 vi.mock('../api', () => ({
   getClientPortalUploadLink: vi.fn().mockResolvedValue({ url: null }),
+  getClientPortalUploadPolicy: vi.fn().mockResolvedValue({ max_upload_bytes: 52428800, max_files_per_batch: 10000, allowed_extensions: ['pdf', 'png'] }),
   getClientIntake: vi.fn().mockRejectedValue({ response: { status: 404 } }),
   submitClientIntake: vi.fn(),
   getClientPortalSession: vi.fn(),
@@ -34,6 +35,10 @@ vi.mock('../api', () => ({
   listClientPortalSignatures: vi.fn(),
   signClientPortalSignature: vi.fn(),
   declineClientPortalSignature: vi.fn(),
+}))
+
+vi.mock('../components/dialog/ConfirmProvider', () => ({
+  useConfirm: () => () => Promise.resolve(true),
 }))
 
 const matterView = {
@@ -63,6 +68,7 @@ const sessionExpired = () => Object.assign(new Error('expired'), { response: { s
 
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.clear()
   getClientPortalSession.mockResolvedValue({
     matter_id: 'matter-1',
     matter_name: matterView.matter_name,
@@ -136,14 +142,14 @@ describe('ClientPortalMatterPage', () => {
     render(<ClientPortalMatterPage />)
 
     expect(await screen.findByText('Unread messages')).toBeInTheDocument()
-    expect(screen.queryByText("You've been signed out")).not.toBeInTheDocument()
+    expect(screen.queryByText('Your secure session ended')).not.toBeInTheDocument()
   })
 
   it('does not hide an expired session as an unavailable mediation add-on', async () => {
     getClientPortalMediation.mockRejectedValue(sessionExpired())
     render(<ClientPortalMatterPage />)
 
-    expect(await screen.findByText("You've been signed out")).toBeInTheDocument()
+    expect(await screen.findByText('Your secure session ended')).toBeInTheDocument()
   })
 
   it('lands on a summary of what is waiting on the client', async () => {
@@ -285,7 +291,7 @@ describe('ClientPortalMatterPage', () => {
     getClientPortalMatter.mockRejectedValue(sessionExpired())
     render(<ClientPortalMatterPage />)
 
-    expect(await screen.findByText("You've been signed out")).toBeInTheDocument()
+    expect(await screen.findByText('Your secure session ended')).toBeInTheDocument()
     expect(screen.getByText(/invitation email/)).toBeInTheDocument()
   })
 
@@ -295,7 +301,7 @@ describe('ClientPortalMatterPage', () => {
     render(<ClientPortalMatterPage />)
 
     await user.click(await screen.findByRole('tab', { name: /Invoices/ }))
-    expect(await screen.findByText("You've been signed out")).toBeInTheDocument()
+    expect(await screen.findByText('Your secure session ended')).toBeInTheDocument()
   })
 
   it('signs the client out and ends the session', async () => {
@@ -304,7 +310,7 @@ describe('ClientPortalMatterPage', () => {
 
     await user.click(await screen.findByRole('button', { name: /Sign out/ }))
     await waitFor(() => expect(logoutClientPortal).toHaveBeenCalledTimes(1))
-    expect(await screen.findByText("You've been signed out")).toBeInTheDocument()
+    expect(await screen.findByText("You've signed out")).toBeInTheDocument()
   })
 
   it('still signs the client out when the logout call fails', async () => {
@@ -313,7 +319,7 @@ describe('ClientPortalMatterPage', () => {
     render(<ClientPortalMatterPage />)
 
     await user.click(await screen.findByRole('button', { name: /Sign out/ }))
-    expect(await screen.findByText("You've been signed out")).toBeInTheDocument()
+    expect(await screen.findByText("You've signed out")).toBeInTheDocument()
   })
 
   it('offers a retry when the matter fails to load for a non-auth reason', async () => {

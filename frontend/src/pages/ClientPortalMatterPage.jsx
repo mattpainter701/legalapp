@@ -2,6 +2,7 @@ import ClientSignatureDocument from '../components/ClientSignatureDocument'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import PortalDocumentTransfer from '../components/PortalDocumentTransfer'
 import ClientIntakeChecklist from '../components/ClientIntakeChecklist'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
 import {
   getClientIntake,
   getClientPortalSession,
@@ -24,6 +25,7 @@ import {
   ShieldCheck, MessageSquare, FileText, Receipt, Send,
   Download, AlertTriangle, Scale, PenLine, CheckCircle2, LockKeyhole,
   LogOut, CalendarClock, CreditCard, RefreshCw, Clock, Handshake,
+  Phone, Mail, Globe,
 } from 'lucide-react'
 
 const TABS = [
@@ -38,6 +40,7 @@ const TABS = [
 // useful if a reply from the firm shows up without a manual reload.
 const MESSAGE_POLL_MS = 30_000
 const MAX_MESSAGE_LENGTH = 10_000
+const MESSAGE_DRAFT_KEY = 'client-portal-message-draft'
 
 function fmtBytes(n) {
   if (!n) return ''
@@ -46,13 +49,18 @@ function fmtBytes(n) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-function fmtMoney(value) {
+function fmtMoney(value, currency = 'USD') {
   const n = Number(value || 0)
-  return n.toLocaleString(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 2,
-  })
+  try {
+    return n.toLocaleString(undefined, {
+      style: 'currency',
+      currency: currency || 'USD',
+      maximumFractionDigits: 2,
+    })
+  } catch {
+    // An unrecognized firm currency must never blank out an amount.
+    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
 }
 
 function fmtDate(value) {
@@ -92,12 +100,14 @@ function errorMessage(err, fallback) {
 }
 
 export default function ClientPortalMatterPage() {
+  const confirmAction = useConfirm()
   const [matter, setMatter] = useState(null)
   const [mediation, setMediation] = useState(null)
   const [session, setSession] = useState(null)
   const [tab, setTab] = useState('overview')
   const [loadError, setLoadError] = useState('')
   const [expired, setExpired] = useState(false)
+  const [signedOut, setSignedOut] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const matterRequestSequence = useRef(0)
 
@@ -165,6 +175,13 @@ export default function ClientPortalMatterPage() {
   }, [matter?.paperwork_only, refreshMatter, tab])
 
   const signOut = async () => {
+    const confirmed = await confirmAction({
+      title: 'Sign out of your portal?',
+      message: 'You will need your password, or a new link from your legal team, to get back in. Any message you have not sent yet will be lost.',
+      confirmLabel: 'Sign out',
+      destructive: true,
+    })
+    if (!confirmed) return
     setSigningOut(true)
     try {
       await logoutClientPortal()
@@ -173,6 +190,7 @@ export default function ClientPortalMatterPage() {
       // client acts on either way.
     } finally {
       setSigningOut(false)
+      setSignedOut(true)
       setExpired(true)
     }
   }
@@ -182,8 +200,11 @@ export default function ClientPortalMatterPage() {
       <PortalNotice
         icon={LockKeyhole}
         tone="accent"
-        title="You've been signed out"
-        body="Open the link from your invitation email again to return to your matter. If the link has expired, your legal team can send a new one."
+        title={signedOut ? "You've signed out" : 'Your secure session ended'}
+        body={signedOut
+          ? 'Your portal is closed on this device. Sign back in any time with your password.'
+          : 'For your security we sign you out after a period of inactivity. Sign back in to continue, or use the link from your invitation email.'}
+        action={{ label: 'Sign in to the portal', href: '/portal/client/login' }}
       />
     )
   }
@@ -215,16 +236,20 @@ export default function ClientPortalMatterPage() {
   }
 
   const tabProps = { matter, onSessionError: handleSessionExpiry, onChanged: refreshMatter }
+  const firm = matter.firm || session?.firm || null
+  const firmName = firm?.firm_name
 
   return (
     <div className="min-h-screen bg-brand-bg">
       <header className="bg-brand-ink text-white">
         <div className="max-w-5xl mx-auto px-4 py-5 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
-            <ShieldCheck size={26} strokeWidth={1.5} className="shrink-0" />
+            {firm?.firm_logo_url
+              ? <img src={firm.firm_logo_url} alt={firmName || 'Law firm'} className="h-9 max-w-[7rem] object-contain shrink-0" />
+              : <ShieldCheck size={26} strokeWidth={1.5} className="shrink-0" />}
             <div className="min-w-0">
               <p className="text-xs uppercase tracking-wide text-white/60 font-sans">
-                {matter.paperwork_only ? 'LawHand — Complete your paperwork' : 'LawHand — Client Portal'}
+                {matter.paperwork_only ? 'Complete your paperwork' : (firmName || 'Client Portal')}
               </p>
               <h1 className="font-serif font-bold text-xl truncate">{matter.matter_name}</h1>
               {matter.matter_number && (
@@ -255,8 +280,9 @@ export default function ClientPortalMatterPage() {
       </header>
 
       <div className="max-w-5xl mx-auto px-4">
+        <SessionExpiryBanner expiresAt={session?.expires_at} />
         <nav role="tablist" aria-label="Client portal sections"
-          className="flex gap-1 border-b border-brand-line overflow-x-auto">
+          className="flex flex-wrap gap-1 border-b border-brand-line sm:flex-nowrap sm:overflow-x-auto">
           {[...TABS.filter(item => !matter.paperwork_only || ['overview', 'signatures'].includes(item.key)), ...(mediation ? [{ key: 'mediation', label: 'Mediation', icon: Handshake }] : [])].map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -297,6 +323,7 @@ export default function ClientPortalMatterPage() {
           {tab === 'invoices' && <InvoicesTab {...tabProps} />}
           {tab === 'mediation' && mediation && <ClientPortalMediationTab mediation={mediation} />}
         </div>
+        <PortalHelpFooter firm={firm} />
       </div>
     </div>
   )
@@ -311,15 +338,83 @@ function PortalNotice({ icon: Icon, tone, title, body, action }) {
         <h1 className="font-serif font-bold text-xl text-brand-ink mb-2">{title}</h1>
         <p className="text-brand-ink-2 font-sans text-sm leading-relaxed">{body}</p>
         {action && (
-          <button
-            onClick={action.onClick}
-            className="mt-6 px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all"
-          >
-            {action.label}
-          </button>
+          action.href ? (
+            <a
+              href={action.href}
+              className="mt-6 inline-block px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all"
+            >
+              {action.label}
+            </a>
+          ) : (
+            <button
+              onClick={action.onClick}
+              className="mt-6 px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all"
+            >
+              {action.label}
+            </button>
+          )
         )}
       </div>
     </div>
+  )
+}
+
+function SessionExpiryBanner({ expiresAt }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    // Nothing here is worth a per-second clock; a minute's resolution is
+    // enough to warn before a long message or upload is interrupted.
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+  if (!expiresAt) return null
+  const expiry = new Date(expiresAt).getTime()
+  if (Number.isNaN(expiry)) return null
+  const minutesLeft = Math.floor((expiry - now) / 60_000)
+  if (minutesLeft > 30) return null
+  return (
+    <div role="status" className="mt-3 flex items-start gap-2 bg-brand-amber/10 border border-brand-amber/30 rounded-xl px-4 py-3 text-sm text-brand-ink font-sans">
+      <Clock size={16} className="text-brand-amber mt-0.5 shrink-0" />
+      <span>
+        {minutesLeft <= 0
+          ? 'Your secure session has ended. Sign in again to keep going.'
+          : `Your secure session ends in ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'}. Save anything you are working on.`}
+      </span>
+    </div>
+  )
+}
+
+function PortalHelpFooter({ firm }) {
+  if (!firm) return null
+  const hasContact = firm.firm_phone || firm.firm_email || firm.firm_website || firm.firm_address
+  if (!hasContact) return null
+  return (
+    <footer className="border-t border-brand-line py-6 mt-2 text-sm font-sans" aria-label="Firm contact">
+      <p className="text-xs uppercase tracking-wide text-brand-ink-2 mb-3">Need help?</p>
+      <div className="flex flex-wrap gap-x-6 gap-y-2 text-brand-ink-2">
+        {firm.firm_phone && (
+          <a href={`tel:${firm.firm_phone}`} className="inline-flex items-center gap-2 hover:text-brand-ink">
+            <Phone size={15} /> {firm.firm_phone}
+          </a>
+        )}
+        {firm.firm_email && (
+          <a href={`mailto:${firm.firm_email}`} className="inline-flex items-center gap-2 hover:text-brand-ink">
+            <Mail size={15} /> {firm.firm_email}
+          </a>
+        )}
+        {firm.firm_website && (
+          <a href={firm.firm_website} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 hover:text-brand-ink">
+            <Globe size={15} /> {firm.firm_website}
+          </a>
+        )}
+      </div>
+      {firm.firm_address && (
+        <p className="text-xs text-brand-ink-2 mt-3 whitespace-pre-line">{firm.firm_address}</p>
+      )}
+      <p className="text-xs text-brand-ink-2 mt-4">
+        Messages sent here are part of your matter record. For anything urgent, please call the firm.
+      </p>
+    </footer>
   )
 }
 
@@ -340,7 +435,7 @@ function CardHeading({ children }) {
 function ErrorBanner({ message, onRetry }) {
   if (!message) return null
   return (
-    <div className="flex items-start gap-2 bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-4 py-3">
+    <div role="alert" className="flex items-start gap-2 bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-4 py-3">
       <AlertTriangle size={16} className="text-brand-rose mt-0.5 shrink-0" />
       <p className="text-sm text-brand-ink flex-1">{message}</p>
       {onRetry && (
@@ -547,7 +642,7 @@ function OverviewTab({ matter, onNavigate }) {
     {
       key: 'invoices',
       label: 'Balance due',
-      value: fmtMoney(matter.outstanding_balance),
+      value: fmtMoney(matter.outstanding_balance, matter.firm?.currency),
       icon: CreditCard,
       highlight: Number(matter.outstanding_balance || 0) > 0,
     },
@@ -666,13 +761,25 @@ function Field({ label, value }) {
 
 export function MessagesTab({ onSessionError, onChanged }) {
   const [messages, setMessages] = useState([])
-  const [body, setBody] = useState('')
+  const [body, setBody] = useState(() => {
+    // A long message should survive a session expiry or accidental reload.
+    try { return localStorage.getItem(MESSAGE_DRAFT_KEY) || '' } catch { return '' }
+  })
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const scrollRef = useRef(null)
   const markedRef = useRef(false)
   const loadInFlightRef = useRef(null)
+
+  useEffect(() => {
+    try {
+      if (body) localStorage.setItem(MESSAGE_DRAFT_KEY, body)
+      else localStorage.removeItem(MESSAGE_DRAFT_KEY)
+    } catch {
+      // Private-mode or full storage must never block writing a message.
+    }
+  }, [body])
 
   const load = useCallback(
     async ({ quiet = false, force = false } = {}) => {
@@ -763,9 +870,10 @@ export function MessagesTab({ onSessionError, onChanged }) {
   }
 
   const onKeyDown = (e) => {
-    // Enter sends; Shift+Enter is a newline, the convention every messaging
-    // surface the client already uses follows.
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent?.isComposing) {
+    // Enter starts a new line; Ctrl/Cmd+Enter sends. A client who presses
+    // Enter to begin a paragraph should not have just sent half a thought to
+    // their lawyer with no undo.
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.nativeEvent?.isComposing) {
       e.preventDefault()
       send(e)
     }
@@ -798,7 +906,7 @@ export function MessagesTab({ onSessionError, onChanged }) {
                     }`}
                   >
                     <p className="text-xs text-brand-ink-2 mb-1 flex items-center gap-1.5">
-                      {fromClient ? 'You' : 'Legal team'} · {fmtDateTime(m.occurred_at)}
+                      {fromClient ? 'You' : (m.sender_name || 'Your legal team')} · {fmtDateTime(m.occurred_at)}
                       {m.unread && (
                         <span className="text-[10px] uppercase tracking-wide font-semibold text-brand-accent">
                           New
@@ -837,7 +945,7 @@ export function MessagesTab({ onSessionError, onChanged }) {
           </button>
         </div>
         <p className="text-xs text-brand-ink-2">
-          Press Enter to send, Shift+Enter for a new line.
+          Press Enter for a new line; Ctrl+Enter (⌘+Enter on Mac) to send.
           {remaining < 500 && <span className="ml-2">{remaining} characters left</span>}
         </p>
       </form>
@@ -883,7 +991,16 @@ function DocumentsTab({ matter, onSessionError, onChanged }) {
         <PortalDocumentTransfer matterName={matter?.matter_name} onSessionError={onSessionError} onUploaded={async () => { await load(); onChanged() }} />
       </Card>
 
-      <button type="button" className="border rounded-lg px-4 py-2" disabled={loading} onClick={load}>Refresh document list</button>
+      <div className="flex justify-end">
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 text-xs font-sans font-medium text-brand-ink-2 hover:text-brand-ink border border-brand-line rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50"
+          disabled={loading}
+          onClick={load}
+        >
+          <RefreshCw size={13} /> Refresh list
+        </button>
+      </div>
       {loading ? (
         <Card><Spinner label="Loading documents…" /></Card>
       ) : docs.length === 0 ? (
@@ -950,6 +1067,7 @@ function portalSignatureStatus(req) {
 }
 
 function SignaturesTab({ onSessionError, onChanged }) {
+  const confirmAction = useConfirm()
   const [requests, setRequests] = useState([])
   const [signing, setSigning] = useState(null) // request id being signed
   const [declining, setDeclining] = useState(null)
@@ -1005,6 +1123,15 @@ function SignaturesTab({ onSessionError, onChanged }) {
     setErr('')
     setSuccess('')
     const reason = (declineReasonByRequest[req.id] || '').trim()
+    // Declining is recorded against the signature request and cannot be undone
+    // from the portal. Confirm before the click becomes a refusal.
+    const confirmed = await confirmAction({
+      title: 'Decline to sign?',
+      message: 'Your legal team will be told you will not sign this document. If you only need more time, cancel and leave it for now.',
+      confirmLabel: 'Decline to sign',
+      destructive: true,
+    })
+    if (!confirmed) return
     setDeclining(req.id)
     try {
       await declineClientPortalSignature(req.id, { reason })
@@ -1033,8 +1160,8 @@ function SignaturesTab({ onSessionError, onChanged }) {
             <p className="text-sm text-brand-ink-2 mt-1">No signature acknowledgments are awaiting your action. Evidence certificates will appear in Documents when available.</p>
           </div>
         </div>
-        {success && <p className="text-sm text-brand-green mt-3">{success}</p>}
-        {err && <p className="text-sm text-brand-rose mt-3">{err}</p>}
+        {success && <p role="status" aria-live="polite" className="text-sm text-brand-green mt-3">{success}</p>}
+        {err && <p role="alert" className="text-sm text-brand-rose mt-3">{err}</p>}
       </Card>
     )
   }
@@ -1051,7 +1178,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
         </div>
       </Card>
       <ErrorBanner message={err} />
-      {success && <p className="text-sm text-brand-green">{success}</p>}
+      {success && <p role="status" aria-live="polite" className="text-sm text-brand-green">{success}</p>}
       {requests.map((req) => {
         const typed = typedByRequest[req.id] || ''
         const accepted = Boolean(acceptedByRequest[req.id])
@@ -1111,30 +1238,33 @@ function SignaturesTab({ onSessionError, onChanged }) {
                   />
                   <span>I consent to use an electronic signature for this acknowledgment. I understand my typed name and audit evidence will be attached to an evidence certificate linked by hash to the source document, and the source document itself is not modified.</span>
                 </label>
-                <div className="mt-4 flex flex-col sm:flex-row gap-2">
-                  <button
-                    onClick={() => sign(req)}
-                    disabled={signing === req.id || !typed.trim() || !accepted || !reviewedByRequest[req.id]}
-                    className="w-full sm:w-auto px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {signing === req.id ? 'Capturing signature…' : 'Sign document'}
-                  </button>
+                <button
+                  onClick={() => sign(req)}
+                  disabled={signing === req.id || !typed.trim() || !accepted || !reviewedByRequest[req.id]}
+                  className="mt-4 w-full sm:w-auto px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {signing === req.id ? 'Capturing signature…' : 'Sign document'}
+                </button>
+                <div className="mt-4 border-t border-brand-line pt-4">
+                  <label htmlFor={`decline-reason-${req.id}`} className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">
+                    Not signing? Tell your legal team why (optional)
+                  </label>
+                  <input
+                    id={`decline-reason-${req.id}`}
+                    value={declineReason}
+                    onChange={(e) => setDeclineReasonByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
+                    placeholder="Add a reason before declining"
+                    className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+                  />
                   <button
                     onClick={() => decline(req)}
                     disabled={declining === req.id}
-                    className="w-full sm:w-auto px-5 py-2.5 border border-brand-rose text-brand-rose text-sm font-sans font-semibold rounded-lg hover:bg-brand-rose/5 transition-all disabled:opacity-50"
+                    className="mt-2 w-full sm:w-auto px-5 py-2.5 border border-brand-rose text-brand-rose text-sm font-sans font-semibold rounded-lg hover:bg-brand-rose/5 transition-all disabled:opacity-50"
                   >
-                    {declining === req.id ? 'Declining…' : 'Decline'}
+                    {declining === req.id ? 'Declining…' : 'Decline to sign'}
                   </button>
+                  <p className="text-xs text-brand-ink-2 mt-2">You will be asked to confirm. A decline is recorded and cannot be undone here.</p>
                 </div>
-                <label htmlFor={`decline-reason-${req.id}`} className="sr-only">Decline reason</label>
-                <input
-                  id={`decline-reason-${req.id}`}
-                  value={declineReason}
-                  onChange={(e) => setDeclineReasonByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
-                  placeholder="Decline reason"
-                  className="mt-3 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-                />
               </>
             ) : (
               <p className="text-sm text-brand-ink-2">This signature request is no longer open for signing.</p>
@@ -1148,7 +1278,8 @@ function SignaturesTab({ onSessionError, onChanged }) {
 
 // ── Invoices ────────────────────────────────────────────────────────────────
 
-function InvoicesTab({ onSessionError }) {
+function InvoicesTab({ matter, onSessionError }) {
+  const currency = matter?.firm?.currency
   const [paying, setPaying] = useState(null)
   const [payError, setPayError] = useState('')
   const loader = useCallback(() => listClientPortalInvoices(), [])
@@ -1181,11 +1312,11 @@ function InvoicesTab({ onSessionError }) {
     <div className="space-y-4">
       {payError && <ErrorBanner message={payError} onRetry={() => setPayError('')} />}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <SummaryTile label="Billed to date" value={fmtMoney(data?.total_billed)} />
-        <SummaryTile label="Paid" value={fmtMoney(data?.total_paid)} />
+        <SummaryTile label="Billed to date" value={fmtMoney(data?.total_billed, currency)} />
+        <SummaryTile label="Paid" value={fmtMoney(data?.total_paid, currency)} />
         <SummaryTile
           label={overdue > 0 ? 'Balance due (overdue)' : 'Balance due'}
-          value={fmtMoney(outstanding)}
+          value={fmtMoney(outstanding, currency)}
           tone={overdue > 0 ? 'rose' : outstanding > 0 ? 'amber' : 'green'}
         />
       </div>
@@ -1216,10 +1347,10 @@ function InvoicesTab({ onSessionError }) {
                 </div>
                 <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0">
                   <div className="text-right">
-                    <p className="text-brand-ink font-medium">{fmtMoney(inv.balance_due)}</p>
+                    <p className="text-brand-ink font-medium">{fmtMoney(inv.balance_due, currency)}</p>
                     {Number(inv.amount_paid) > 0 && Number(inv.balance_due) > 0 && (
                       <p className="text-xs text-brand-ink-2">
-                        {fmtMoney(inv.amount_paid)} of {fmtMoney(inv.total)} paid
+                        {fmtMoney(inv.amount_paid, currency)} of {fmtMoney(inv.total, currency)} paid
                       </p>
                     )}
                     {Number(inv.balance_due) === 0 && (
