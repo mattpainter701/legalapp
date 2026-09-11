@@ -15,12 +15,23 @@ import { cardStyle } from './cardColor'
 
 const ALL_INSTANCES = '*'
 
-/** The path a click emits: `card.field`, or `card.instance.field`. */
-export const fieldPath = (cardKey, instance, fieldKey) => (
-  instance === null || instance === undefined || instance === 1
-    ? `${cardKey}.${fieldKey}`
-    : `${cardKey}.${instance}.${fieldKey}`
-)
+/**
+ * The path a click emits: `card.field`, or `card.instance.field`.
+ *
+ * A field may carry its own `path` — tenant custom fields are grouped into
+ * cards for display but keep their real `custom.<entity>.<id>` identity, which
+ * is not derivable from the card key. An explicit path therefore wins wherever
+ * one exists, and only an addressed instance overrides it, since a role
+ * instance is not something the server could have spelled in advance.
+ */
+export const fieldPath = (cardKey, instance, field) => {
+  const key = typeof field === 'string' ? field : field?.key
+  if (instance !== null && instance !== undefined && instance !== 1) {
+    return `${cardKey}.${instance}.${key}`
+  }
+  if (typeof field === 'object' && field?.path) return field.path
+  return `${cardKey}.${key}`
+}
 
 /**
  * Which instances of a role card are offerable.
@@ -93,7 +104,7 @@ function CardGroup({ card, selectedPath, onSelectField }) {
           <InstancePicker card={card} value={instance} onChange={setInstance} />
           <ul className="mt-2 space-y-1">
             {fields.map((field) => {
-              const path = fieldPath(card.key, instance, field.key)
+              const path = fieldPath(card.key, instance, field)
               const selected = path === selectedPath
               return (
                 <li key={field.key}>

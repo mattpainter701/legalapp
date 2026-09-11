@@ -51,3 +51,31 @@ export const cardStyle = (key) => {
     '--card-wash': `hsl(${hue} 70% 95%)`,
   }
 }
+
+/**
+ * Which card a stored binding belongs to, or '' when none does.
+ *
+ * A stored binding may be either spelling — the card path a field was authored
+ * with today, or the pre-card path a template published earlier carries. The
+ * server sends `legacy_paths` on every card field precisely so this lookup can
+ * cover both without the client keeping a second copy of the legacy table.
+ *
+ * An instance path (`defendant.2.full_name`) resolves to its card too: the
+ * second defendant is the same subject as the first, and colouring them
+ * differently would say otherwise.
+ */
+export const cardKeyForBinding = (binding, cards = []) => {
+  if (!binding || binding === 'manual') return ''
+  for (const card of cards) {
+    for (const field of card.fields || []) {
+      if (field.path === binding) return card.key
+      if ((field.legacy_paths || []).includes(binding)) return card.key
+    }
+  }
+  // `card.instance.field` — strip the instance and try the base spelling.
+  const parts = String(binding).split('.')
+  if (parts.length === 3 && /^([1-9][0-9]?|\*)$/.test(parts[1])) {
+    return cardKeyForBinding(`${parts[0]}.${parts[2]}`, cards)
+  }
+  return ''
+}

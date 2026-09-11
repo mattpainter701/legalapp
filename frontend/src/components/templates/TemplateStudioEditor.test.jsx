@@ -66,6 +66,21 @@ vi.mock('../../api', () => ({
     collections: [],
     operators: ['present', 'absent'],
   }),
+  getTemplateCards: () => Promise.resolve({
+    cards: [
+      {
+        key: 'client', label: 'Client', kind: 'person', group: 'Client',
+        max_instances: 1, instance_count: null,
+        fields: [{ key: 'full_name', label: 'Client name', path: 'client.full_name', value_kind: 'text', suggested_name: 'client_name', supports_all_instances: false }],
+      },
+      {
+        key: 'defendant', label: 'Defendant', kind: 'role', group: 'Parties',
+        max_instances: 20, instance_count: null,
+        fields: [{ key: 'full_name', label: 'Full name', path: 'defendant.full_name', value_kind: 'text', suggested_name: 'defendant_name', supports_all_instances: true }],
+      },
+    ],
+    operators: ['present', 'absent'],
+  }),
 }))
 
 const pdfSource = () => new File(['%PDF-1.4'], 'engagement.pdf', { type: 'application/pdf' })
@@ -391,11 +406,19 @@ describe('TemplateStudioEditor', () => {
         onSave={vi.fn()}
       />,
     )
-    const binding = await screen.findByLabelText(/fills from/i)
+    // Wait for the property panel, then drive the picker synchronously: a
+    // role-and-name query over this whole tree is slow enough to outrun the
+    // default findBy timeout.
+    await screen.findByLabelText(/^label$/i)
+
     // Falls back to name matching until the customer says otherwise.
-    expect(binding).toHaveValue('')
-    fireEvent.change(binding, { target: { value: 'client.name' } })
-    expect(binding).toHaveValue('client.name')
+    fireEvent.click(screen.getByText('Matched by field name'))
+
+    // The subject is the primary thing on screen: choose the card, then the
+    // field on it, rather than hunting one flat list of every binding.
+    fireEvent.click(screen.getByRole('button', { name: 'Client' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Client name' }))
+    expect(screen.getByText('Client — Client name')).toBeInTheDocument()
     expect(screen.getByText(/Uses the selected data source/i)).toBeInTheDocument()
 
     const condition = screen.getByLabelText(/only include when/i)

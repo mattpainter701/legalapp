@@ -34,6 +34,19 @@ describe('fieldPath', () => {
     expect(fieldPath('defendant', 2, 'full_name')).toBe('defendant.2.full_name')
     expect(fieldPath('defendant', '*', 'full_name')).toBe('defendant.*.full_name')
   })
+
+  it('honours a field that carries its own identity', () => {
+    // A tenant custom field is grouped into a card for display but keeps its
+    // real path, which is not derivable from the card key.
+    const custom = { key: 'abc', label: 'Marriage date', path: 'custom.matter.abc' }
+    expect(fieldPath('custom_matter', null, custom)).toBe('custom.matter.abc')
+  })
+
+  it('lets an addressed instance override a carried path', () => {
+    // Only the server could not have spelled the instance in advance.
+    const field = { key: 'full_name', path: 'defendant.full_name' }
+    expect(fieldPath('defendant', 3, field)).toBe('defendant.3.full_name')
+  })
 })
 
 describe('instanceChoices', () => {

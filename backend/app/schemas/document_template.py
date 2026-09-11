@@ -323,6 +323,10 @@ class DocumentTemplateCardField(BaseModel):
     suggested_name: Optional[str] = None
     #: Whether this field has an "every instance, joined" form.
     supports_all_instances: bool = False
+    #: The pre-card paths that resolve to this field. Sent so a client can map
+    #: a stored binding — which may be either spelling — back to its card
+    #: without keeping a second copy of the legacy table and letting it drift.
+    legacy_paths: list[str] = Field(default_factory=list)
 
 
 class DocumentTemplateCard(BaseModel):

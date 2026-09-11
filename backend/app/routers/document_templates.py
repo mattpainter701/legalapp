@@ -2491,6 +2491,11 @@ async def list_template_cards(
                         value_kind=item.value_kind,
                         suggested_name=item.alias or None,
                         supports_all_instances=bool(item.all_alias),
+                        legacy_paths=[
+                            path
+                            for path in (item.legacy_path, item.legacy_all_path)
+                            if path
+                        ],
                     )
                     for item in entry.fields
                 ],
