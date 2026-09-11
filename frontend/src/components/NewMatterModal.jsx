@@ -1,7 +1,5 @@
 import { useState, useEffect } from 'react'
 import MatterImportWizard from './MatterImportWizard'
-import IntakeSetupFields, { defaultIntakeSetup, intakeOptions } from './IntakeSetupFields'
-import { startMatterIntake } from './MatterIntakePanel'
 import { createMatterV2, getContacts, getAdminUsers, getPlugins, createContact } from '../api'
 
 const PRACTICE_AREAS = [
@@ -35,10 +33,6 @@ function ChevronIcon({ size = 16 }) {
 
 export default function NewMatterModal({ open, onClose, onCreated, onImportComplete }) {
   const [importMode, setImportMode] = useState(false)
-  const [intakeEnabled, setIntakeEnabled] = useState(false)
-  const [intakeSetup, setIntakeSetup] = useState(defaultIntakeSetup)
-  const [agreement, setAgreement] = useState(null)
-  const [savedMatter, setSavedMatter] = useState(null)
   const [form, setForm] = useState({
     matter_name: '',
     description: '',
@@ -98,9 +92,6 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
 
   const handleCreateContact = async () => {
     if (!newContact.first_name.trim() && !newContact.email.trim()) return
-    if (intakeEnabled && (!newContact.first_name.trim() || !newContact.last_name.trim())) {
-      setContactError('Enter the client’s first and last name.'); return
-    }
     setCreatingContact(true)
     setContactError(null)
     try {
@@ -130,13 +121,9 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
     }))
   }
 
-  const handleSubmit = async (e, sendIntake = true) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     if (!form.matter_name.trim()) return
-    const startIntake = intakeEnabled && sendIntake
-    if (startIntake && (!agreement || !form.client_contact_id || !intakeSetup.channels.length)) {
-      setError('Select a client, reviewed agreement PDF, and at least one notification channel.'); return
-    }
     setSaving(true)
     setError(null)
     try {
@@ -148,7 +135,7 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
         client_contact_id: form.client_contact_id || undefined,
         attorney_of_record_id: form.attorney_of_record_id || undefined,
         partner_attorney_id: form.partner_attorney_id || undefined,
-        assigned_user_ids: [...new Set([...form.assigned_user_ids, ...(startIntake && intakeSetup.owner_id ? [intakeSetup.owner_id] : [])])],
+        assigned_user_ids: [...new Set(form.assigned_user_ids)],
         status: form.status,
         case_number: form.case_number.trim() || undefined,
         jurisdiction: form.jurisdiction.trim() || undefined,
@@ -156,17 +143,8 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
         counterparty: form.counterparty.trim() || undefined,
         primary_plugin: form.primary_plugin || undefined,
       }
-      const created = savedMatter || await createMatterV2(payload)
-      setSavedMatter(created)
-      if (startIntake) {
-        const client = contacts.find(c => c.id === form.client_contact_id)
-        await startMatterIntake(created.id, intakeOptions(intakeSetup, client?.email), agreement)
-      }
+      const created = await createMatterV2(payload)
       onCreated?.(created)
-      setSavedMatter(null)
-      setIntakeEnabled(false)
-      setIntakeSetup(defaultIntakeSetup)
-      setAgreement(null)
       setForm({
         matter_name: '', description: '', practice_area: '', matter_type: '',
         client_contact_id: '', attorney_of_record_id: '', partner_attorney_id: '',
@@ -467,9 +445,6 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
             </div>
           </details>
 
-          <label className="block font-semibold"><input type="checkbox" checked={intakeEnabled} disabled={Boolean(savedMatter)} onChange={e => setIntakeEnabled(e.target.checked)} /> Start client intake with this matter</label>
-          {intakeEnabled && <IntakeSetupFields value={intakeSetup} onChange={setIntakeSetup} onFile={setAgreement} clientEmail={contacts.find(c => c.id === form.client_contact_id)?.email || ''} users={users} matterType={form.matter_type} practiceArea={form.practice_area} />}
-          {savedMatter && <p>The matter is saved. Retry sending this intake packet, or <a className="underline" href={`/matters/${savedMatter.id}`}>open the created matter</a>.</p>}
           {error && (
             <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-brand-rose text-sm font-sans">
               {error}
@@ -479,7 +454,6 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
 
         {/* Footer */}
         <div style={importMode ? { display: 'none' } : undefined} className="px-6 py-4 border-t border-brand-line bg-brand-bg-soft/30 flex items-center justify-end gap-3">
-          {intakeEnabled && <button type="button" disabled={saving} onClick={e => handleSubmit(e, false)}>Save without sending</button>}
           <button
             type="button"
             onClick={onClose}
@@ -492,7 +466,7 @@ export default function NewMatterModal({ open, onClose, onCreated, onImportCompl
             disabled={saving || !form.matter_name.trim()}
             className="px-6 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 disabled:opacity-50 transition-all shadow-sm hover:-translate-y-[1px] active:translate-y-0"
           >
-            {saving ? 'Saving…' : savedMatter ? 'Retry intake packet' : intakeEnabled ? 'Create Matter & Start Intake' : 'Open Matter'}
+            {saving ? 'Saving…' : 'Open Matter'}
           </button>
         </div>
       </div>
