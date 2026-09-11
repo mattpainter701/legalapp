@@ -495,7 +495,9 @@ async def file_outbound_email(
     db: AsyncSession,
     *,
     tenant_id: uuid_mod.UUID,
-    matter: Matter,
+    matter_id: uuid_mod.UUID,
+    matter_slug: str,
+    cloud_folder=None,
     actor_user_id: uuid_mod.UUID | None,
     to: list[str],
     subject: str,
@@ -514,6 +516,11 @@ async def file_outbound_email(
     Best effort by design: the email has already gone out, and failing the
     request after the fact would tell the user a delivered message was not
     sent. A failure is logged and the CommunicationLog row still stands.
+
+    Takes the matter's id, slug and cloud folder as values rather than the ORM
+    row: sending can refresh a provider token, which commits and expires every
+    attribute on that row, so reading it afterwards is reading something the
+    caller no longer holds.
     """
     message = EmailMessage()
     message["Subject"] = subject
@@ -535,7 +542,7 @@ async def file_outbound_email(
             logger.exception(
                 "Attachment %s could not be included in the filed copy for matter %s",
                 attachment.filename,
-                matter.id,
+                matter_id,
             )
 
     stamp = datetime.now(timezone.utc)
@@ -550,19 +557,19 @@ async def file_outbound_email(
         storage_result = await matter_file_store.store_matter_file_result(
             db=db,
             tenant_id=str(tenant_id),
-            matter_slug=matter.slug,
+            matter_slug=matter_slug,
             category="correspondence",
             filename=filename,
             content=eml_bytes,
             content_type="message/rfc822",
-            matter_cloud_folder=matter.cloud_folder,
+            matter_cloud_folder=cloud_folder,
             preferred_provider=(
                 tenant_settings.primary_cloud_provider if tenant_settings else None
             ),
         )
         document = MatterDocument(
             tenant_id=tenant_id,
-            matter_id=matter.id,
+            matter_id=matter_id,
             uploaded_by_user_id=actor_user_id,
             filename=filename,
             content_type="message/rfc822",
@@ -579,7 +586,7 @@ async def file_outbound_email(
             folder_id=await autofile_folder_id(
                 db,
                 tenant_id=tenant_id,
-                matter_id=matter.id,
+                matter_id=matter_id,
                 document_category="correspondence",
             ),
         )
@@ -591,7 +598,15 @@ async def file_outbound_email(
         return document
     except Exception:
         logger.exception(
-            "Sent email could not be filed as a document on matter %s", matter.id
+            "Sent email could not be filed as a document on matter %s", matter_id
         )
-        await db.rollback()
+        # The contract here is to never disturb a send that already happened,
+        # so even the cleanup cannot be allowed to raise into the caller.
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception(
+                "Rolling back a failed outbound filing also failed on matter %s",
+                matter_id,
+            )
         return None

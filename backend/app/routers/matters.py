@@ -2567,7 +2567,10 @@ async def email_matter_client(
     # Token refresh may commit and expire ORM objects. Snapshot the authorized
     # identifiers before selecting the actor's or firm's connected mailbox.
     tenant_id, actor_id = user.tenant_id, user.id
+    # Sending can refresh a provider token, which commits and expires every
+    # attribute on this row. Everything needed afterwards is read now.
     authorized_matter_id, contact_id = matter.id, matter.client_contact_id
+    matter_slug, matter_cloud_folder = matter.slug, matter.cloud_folder
     from app.services.matter_mail_attachments import collect_reviewed_attachments
 
     attachments = await collect_reviewed_attachments(
@@ -2613,7 +2616,9 @@ async def email_matter_client(
         await file_outbound_email(
             db,
             tenant_id=tenant_id,
-            matter=matter,
+            matter_id=authorized_matter_id,
+            matter_slug=matter_slug,
+            cloud_folder=matter_cloud_folder,
             actor_user_id=actor_id,
             to=[to_email],
             subject=subject,
@@ -2621,7 +2626,6 @@ async def email_matter_client(
             attachments=attachments,
             communication=log,
         )
-        await set_tenant_context(db, str(tenant_id))
     await _invalidate_matter_context_cache(tenant_id, authorized_matter_id)
 
     if not sent:
