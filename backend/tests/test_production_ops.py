@@ -1847,6 +1847,37 @@ def test_cube_m_overlay_bounds_runtime_without_weakening_private_ingress() -> No
     assert startup_total_mib <= 12 * 1024
 
 
+def test_cube_m_pins_database_pool_within_the_postgres_connection_budget() -> None:
+    """The IONOS host never set DATABASE_POOL_*, so every process ran the code
+    default of 5 + 5 and the scheduler starved its pool (2026-09-11). The Cube M
+    overlay pins the reviewed pool, which must still fit max_connections.
+    """
+    cube = yaml.safe_load((ROOT / "docker-compose.cube-m.yml").read_text())
+    base = yaml.safe_load((ROOT / "docker-compose.hypervisor.yml").read_text())
+    services = cube["services"]
+
+    per_process = {}
+    for service in ("backend", "scheduler"):
+        environment = services[service]["environment"]
+        pool = int(environment["DATABASE_POOL_SIZE"])
+        overflow = int(environment["DATABASE_MAX_OVERFLOW"])
+        assert (pool, overflow) == (8, 8), service
+        per_process[service] = pool + overflow
+
+    backend_workers = int(
+        services["backend"]["command"].rsplit("--workers", 1)[1].split()[0]
+    )
+    # The base topology leaves PostgreSQL at its default of 100 connections.
+    assert "max_connections" not in str(base["services"]["postgres"].get("command", ""))
+    max_connections = 100
+
+    pooled = backend_workers * per_process["backend"] + per_process["scheduler"]
+    # Migrator at the code default (5 + 5), one unpooled connection per
+    # concurrently guarded scheduler job, backups and operator sessions.
+    reserved = 10 + 25
+    assert pooled + reserved <= max_connections
+
+
 def test_ionos_stage_gate_is_private_exact_and_fail_closed() -> None:
     stage = (ROOT / "scripts" / "ionos_stage_check.sh").read_text(encoding="utf-8")
     assert "https://${origin_server_name}" in stage

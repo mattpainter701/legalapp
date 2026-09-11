@@ -67,6 +67,15 @@ services:
     # Keep this fixed for the reviewed 16-GB profile. A carried-over Skynet
     # BACKEND_WORKERS value must not silently defeat the Cube M memory model.
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      # The host env file has never set these, so every process ran the code
+      # default of 5 + 5 connections and the scheduler starved its pool on
+      # 2026-09-11. Pin the reviewed production pool. Budget: 2 backend workers
+      # x 16 + scheduler 16 = 48 pooled connections against PostgreSQL's
+      # default max_connections of 100, leaving room for the migrator, the
+      # scheduler's unpooled advisory locks, backups and operator sessions.
+      DATABASE_POOL_SIZE: "8"
+      DATABASE_MAX_OVERFLOW: "8"
     deploy:
       resources:
         limits:
@@ -74,6 +83,10 @@ services:
           cpus: "0.80"
 
   scheduler:
+    environment:
+      # Same reviewed pool as the backend; see the budget note above.
+      DATABASE_POOL_SIZE: "8"
+      DATABASE_MAX_OVERFLOW: "8"
     deploy:
       resources:
         limits:
