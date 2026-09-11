@@ -16,7 +16,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 
-from app.models.plugin import Task, User
+from app.models.task import Task
+from app.models.user import User
 from app.services.matter_access import can_access_matter
 from app.services.task_workflow import append_task_event, transition_task
 

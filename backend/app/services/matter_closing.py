@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 
 from app.models.billing import Expense, TimeEntry
 from app.models.matter_intake import MatterIntake
-from app.models.plugin import Task
+from app.models.task import Task
 from app.models.signature import SignatureRequest
 from app.models.trust_accounting import TrustAccount
 from app.schemas.task import OPEN_TASK_STATUSES
