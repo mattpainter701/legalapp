@@ -27,6 +27,8 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import func, or_, select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 from app.database import async_session_maker, set_tenant_context
@@ -52,6 +54,14 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 FEDERAL_REGISTER_RSS = "https://www.federalregister.gov/api/v1/articles.rss"
+
+# APScheduler anchors every interval job to the moment the scheduler starts, so
+# jobs sharing a period also share a firing second for the life of the process.
+# After one restart the hourly and fifteen-minute jobs all fired together each
+# hour and exhausted the connection pool. Jobs on a period of fifteen minutes or
+# longer tolerate a short random delay; one-minute and seconds-cadence jobs
+# (heartbeat, durable queue pollers) keep their exact cadence.
+INTERVAL_JOB_JITTER_SECONDS = 120
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent metadata registry
@@ -300,6 +310,19 @@ def _lock_key(name: str) -> int:
     return int(h[:15], 16)
 
 
+# A job's advisory lock is held for the job's whole run. Taking it from the
+# application pool made every guarded job hold two of the scheduler's pooled
+# connections -- one idle behind the lock, one doing the work. When the hourly
+# and fifteen-minute jobs fired together, the lock holders alone starved the
+# pool, and even the one-minute scheduler heartbeat hit ``QueuePool limit ...
+# connection timed out`` (76 times in 11 hours in production on 2026-09-11).
+# An unpooled connection keeps the lock out of that budget entirely.
+_advisory_lock_session_maker = async_sessionmaker(
+    create_async_engine(settings.DATABASE_URL, poolclass=NullPool),
+    expire_on_commit=False,
+)
+
+
 @asynccontextmanager
 async def job_lock(name: str):
     """Yield ``True`` iff this process acquired the cluster-wide lock for ``name``.
@@ -308,10 +331,11 @@ async def job_lock(name: str):
     runner (e.g. an accidental extra scheduler process under ``uvicorn
     --workers``) skips the run instead of double-firing. The lock is released on
     exit only if we acquired it. ``pg_try_advisory_lock`` is non-blocking: it
-    returns immediately with false rather than waiting.
+    returns immediately with false rather than waiting. The session comes from
+    an unpooled engine so a held lock never occupies an application connection.
     """
     key = _lock_key(name)
-    async with async_session_maker() as session:
+    async with _advisory_lock_session_maker() as session:
         got = (
             await session.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key})
         ).scalar()
@@ -571,6 +595,7 @@ class LegalScheduler:
             "interval",
             hours=1,
             id="zoom-phone-reconciliation",
+            jitter=INTERVAL_JOB_JITTER_SECONDS,
             name="Zoom Phone Reconciliation Enqueuer",
             replace_existing=True,
             max_instances=1,
@@ -589,6 +614,7 @@ class LegalScheduler:
             "interval",
             hours=1,
             id="teams-voice-reconciliation",
+            jitter=INTERVAL_JOB_JITTER_SECONDS,
             name="Teams Voice Reconciliation Enqueuer",
             replace_existing=True,
             max_instances=1,
@@ -608,6 +634,7 @@ class LegalScheduler:
             "interval",
             hours=6,
             id="teams-voice-subscription-renewal",
+            jitter=INTERVAL_JOB_JITTER_SECONDS,
             name="Teams Voice Subscription Renewal",
             replace_existing=True,
             max_instances=1,
@@ -670,6 +697,7 @@ class LegalScheduler:
             "interval",
             hours=1,
             id="task-reminder",
+            jitter=INTERVAL_JOB_JITTER_SECONDS,
             name="Task Reminder",
             replace_existing=True,
         )
@@ -679,6 +707,7 @@ class LegalScheduler:
             "interval",
             hours=1,
             id="esign-reminder",
+            jitter=INTERVAL_JOB_JITTER_SECONDS,
             name="E-Sign Reminder",
             replace_existing=True,
         )
@@ -690,6 +719,7 @@ class LegalScheduler:
             "interval",
             hours=1,
             id="demo-session-purge",
+            jitter=INTERVAL_JOB_JITTER_SECONDS,
             name="Expired Demo Session Purge",
             replace_existing=True,
         )
@@ -707,6 +737,7 @@ class LegalScheduler:
             "interval",
             minutes=15,
             id="background-ai-reconcile",
+            jitter=INTERVAL_JOB_JITTER_SECONDS,
             name="Background AI Reservation Reconciliation",
             replace_existing=True,
         )
@@ -738,6 +769,7 @@ class LegalScheduler:
                 "interval",
                 minutes=settings.CLOUD_METADATA_SYNC_INTERVAL_MIN,
                 id="cloud-sync",
+                jitter=INTERVAL_JOB_JITTER_SECONDS,
                 name="Cloud Metadata Sync",
                 replace_existing=True,
             )
@@ -752,6 +784,7 @@ class LegalScheduler:
                 "interval",
                 minutes=settings.CORRESPONDENCE_CAPTURE_INTERVAL_MIN,
                 id="correspondence-capture",
+                jitter=INTERVAL_JOB_JITTER_SECONDS,
                 name="Correspondence Capture",
                 replace_existing=True,
             )
@@ -808,6 +841,7 @@ class LegalScheduler:
             "interval",
             minutes=15,
             id="workflow-due-events",
+            jitter=INTERVAL_JOB_JITTER_SECONDS,
             name="Workflow Deadline and Invoice Events",
             replace_existing=True,
             max_instances=1,
