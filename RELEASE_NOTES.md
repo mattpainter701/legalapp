@@ -46,6 +46,16 @@ The matter page now opens on the paperwork a new case needs, tracks every signat
 - **Give any document a due date.** Set a deadline on any document. Each raises an assigned follow-up, due at 5pm in the client's timezone, and closes when the paperwork arrives.
 - **A calmer matter page.** Overview, Documents, Activity, and Billing are the page you work from. Team, Workflow, and the portal group under Matter settings.
 
+## 2026.09.10.3 — Browse sample legal forms in Template Studio
+
+Released September 10, 2026.
+
+Open Template Studio to see a shared library of fillable sample forms organized by state and type.
+
+- **A shared library of sample forms.** Template Studio now shows ready-to-fill sample forms such as wills, powers of attorney, and business agreements, organized by state and type.
+- **Fill a sample for any matter.** Preview and fill a sample form directly from the library without saving a copy.
+- **Your firm's templates stay separate.** Sample forms are read-only shared content; your own templates and drafts are left untouched.
+
 ## 2026.09.10.2 — A friendly heads-up while we polish things
 
 Released September 10, 2026.

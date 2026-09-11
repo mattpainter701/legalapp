@@ -14,15 +14,15 @@ open the rest of the case:
 * ``matter_documents.portal_shared_at`` -- when a document was first made
   visible to the client, so sharing can tell the client once and never twice.
 
-Revision ID: 171_case_continuance
+Revision ID: 172_case_continuance
 Revises: 170_matter_number
 """
 
 from alembic import op
 
 
-revision = "171_case_continuance"
-down_revision = "170_matter_number"
+revision = "172_case_continuance"
+down_revision = "171_sample_templates"
 branch_labels = None
 depends_on = None
 

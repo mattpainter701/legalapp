@@ -31,7 +31,14 @@
 - Add `components/casesetup/`: a `CaseSetupCard` spine on the matter Overview that prompts for paperwork on a new matter and otherwise renders the live requirement strip (state, deadline with overdue tone, delivery failures with the existing verified retry, staff verification, meeting booking), plus a three-step `PaperworkDrawer` replacing the raw intake fieldset.
 - Move `SignatureRequestsPanel` from the Client Portal tab to Overview, beside the paperwork it belongs to, and guard its list response so a non-array body cannot take the page down.
 - Reduce the matter page to four primary sections — Overview, Documents, Activity, Billing — with Client Portal, Team, Workflow, Correspondence, Chat, and Settings behind one Matter settings sub-nav, replacing two partial sub-navs and an orphaned "Matter assistant" link. Correspondence and Chat previously had no home in the desktop tab bar.
-- Drop the mobile action grid that duplicated the Quick Actions card in a second vocabulary, and remove Sync Cloud from Quick Actions, which the cloud panel already offers.
+- Remove Sync Cloud from Quick Actions, which the cloud panel already offers. The phone action grid stays: its buttons are the only ones on the page that guarantee a 44px touch target, which Quick Actions' tighter buttons do not.
+
+## 2026.09.10.3 — Global sample form library in Template Studio
+
+- Add a platform-owned `sample_templates` catalog (no `tenant_id`, no row-level security) seeded from a curated set of fillable AcroForm PDFs organized by category and jurisdiction tags.
+- Add read-only `GET /api/templates/library`, `GET /api/templates/library/{id}`, `GET /api/templates/library/{id}/source`, and `POST /api/templates/library/{id}/render-file` endpoints available to every authenticated tenant.
+- Add `scripts/build_sample_template_library.py` (deduplicate by SHA-256, normalize titles, tag jurisdictions, and reject PDFs with active content) and `backend/scripts/seed_sample_templates.py` (idempotent upsert by slug).
+- Keep tenant templates fully isolated: the catalog shares nothing per tenant and exposes no mutation endpoints.
 
 ## 2026.09.10.2 — In-deploy maintenance heads-up banner
 

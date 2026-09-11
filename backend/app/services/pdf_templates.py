@@ -348,14 +348,14 @@ def _widgets(reader: PdfReader) -> list[PdfWidget]:
             if annotation.get("/Subtype") != "/Widget":
                 continue
             name = _qualified_field_name(annotation)
-            rect = annotation.get("/Rect")
-            field_type = _field_property(annotation, "/FT")
+            rect = _resolve(annotation.get("/Rect"))
+            field_type = _resolve(_field_property(annotation, "/FT"))
             if not name or not rect or len(rect) != 4 or not field_type:
                 continue
             appearance = _resolve(annotation.get("/MK") or {})
             border = _resolve(annotation.get("/BS") or {})
             border_array = _resolve(annotation.get("/Border") or [])
-            border_width = border.get("/W")
+            border_width = _resolve(border.get("/W"))
             if border_width is None and len(border_array) >= 3:
                 border_width = border_array[2]
             border_style = str(border.get("/S") or "/S")
@@ -375,13 +375,13 @@ def _widgets(reader: PdfReader) -> list[PdfWidget]:
                     pdf_field_name=name,
                     field_type=str(field_type),
                     rect=tuple(float(value) for value in rect),
-                    flags=int(_field_property(annotation, "/Ff") or 0),
+                    flags=int(_resolve(_field_property(annotation, "/Ff")) or 0),
                     on_state=_widget_on_state(annotation),
                     background_color=_color_components(appearance.get("/BG")),
                     border_color=_color_components(appearance.get("/BC")),
                     border_width=max(0.0, float(border_width or 0)),
                     border_style=border_style,
-                    alignment=int(_field_property(annotation, "/Q") or 0),
+                    alignment=int(_resolve(_field_property(annotation, "/Q")) or 0),
                     text_color=text_color,
                     preferred_font_size=preferred_font_size,
                 )

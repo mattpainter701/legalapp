@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["171_case_continuance"]
+    assert heads == ["172_case_continuance"]
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():
