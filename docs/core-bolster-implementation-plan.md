@@ -334,7 +334,7 @@ Epic 3 (trust) is parallel. Recommend starting **Epic 1 and Epic 3 concurrently*
 ### Cross-cutting requirements (apply to every epic)
 - **RLS** on all new tables (tenant isolation is enforced at the DB layer).
 - **Audit** new mutations into the existing event/usage logging.
-- **Tier gating** via `TenantSettings.features` (see `standard_premium.md`) — these
+- **Tier gating** via `TenantSettings.features` (see `_archive/standard_premium.md`) — these
   ship in the standard tier; rate limits apply to public endpoints.
 - Alembic migration + `models/__init__.py` registration + Pydantic v2 schemas.
 </content>

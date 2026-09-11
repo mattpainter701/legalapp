@@ -79,3 +79,6 @@ htmlcov/
 
 # Generated live retrieval fixtures and local validation evidence
 /output/rag-validation/
+
+# Local archive of removed/questionable files (see review 2026-09)
+_archive/
