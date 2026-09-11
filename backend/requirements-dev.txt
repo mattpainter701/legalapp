@@ -2,6 +2,10 @@
 # images; CI jobs and local dev installs pair this file with
 # `pip install -r backend/requirements.txt -r backend/requirements-dev.txt`.
 -r requirements.txt
+# Sync Postgres driver for the CI rehearsal / ops tooling in repo-root
+# scripts/ (rehearse_*.py, verify_tenant_schema.py). The application itself is
+# asyncpg-only; this is not installed in production images.
+psycopg2-binary==2.9.10
 ruff==0.8.4
 pytest==9.0.3
 pytest-asyncio==1.4.0

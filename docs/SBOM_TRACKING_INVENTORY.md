@@ -13,7 +13,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |Manifest|Type|Lockfile present|Lockfiles|Tracked dependency count|
 |-|-|-|-|-|
 |backend/requirements.txt|python requirements|no|none|36|
-|backend/requirements-dev.txt|python requirements|no|none|4|
+|backend/requirements-dev.txt|python requirements|no|none|5|
 |mcp-server/requirements.txt|python requirements|no|none|7|
 |scripts/requirements.txt|python requirements|no|none|7|
 |scripts/tabs3_export/requirements.txt|python requirements|no|none|2|
@@ -78,6 +78,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|smbprotocol|>=1.16.1|runtime|agent/pyproject.toml|
 |pypi|tomli_w|>=1.0|runtime|agent/pyproject.toml|
 |pypi|truststore|>=0.10.1|runtime|agent/pyproject.toml|
+|pypi|psycopg2-binary|==2.9.10|runtime/dev|backend/requirements-dev.txt|
 |pypi|pytest|==9.0.3|runtime/dev|backend/requirements-dev.txt|
 |pypi|pytest-asyncio|==1.4.0|runtime/dev|backend/requirements-dev.txt|
 |pypi|pytest-env|==1.1.5|runtime/dev|backend/requirements-dev.txt|

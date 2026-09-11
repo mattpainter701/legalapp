@@ -584,6 +584,13 @@
     },
     {
       "ecosystem": "pypi",
+      "name": "psycopg2-binary",
+      "scope": "runtime/dev",
+      "source": "backend/requirements-dev.txt",
+      "specifier": "==2.9.10"
+    },
+    {
+      "ecosystem": "pypi",
       "name": "pytest",
       "scope": "runtime/dev",
       "source": "backend/requirements-dev.txt",
