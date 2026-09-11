@@ -1,3 +1,13 @@
+## 2026.09.11.1 — Case lifecycle on the matter page
+
+- Add per-requirement due dates to the intake packet: `due_at` on `IntakeDocumentSelection`, `IntakeUploadRequirement`, and the new `agreement_due_at` / `questionnaire_due_at`, each rejected when naive so a deadline is never read as UTC. The value is persisted onto its requirement and returned to staff and client alike, alongside the packet's `timezone`.
+- Raise one assigned follow-up per dated requirement in `reconcile`, keyed `due:{requirement}` through the existing `ensure_task` uuid5 identity, so a reconcile pass never duplicates it; the task closes when the requirement completes and on packet cancellation.
+- Fix two completion paths that rebuilt a requirement from scratch — fee-agreement signature completion and portal questionnaire submission — discarding fields set at send time. Both now preserve the requirement, so a dated item's follow-up can be closed rather than left open forever.
+- Add `components/casesetup/`: a `CaseSetupCard` spine on the matter Overview that prompts for paperwork on a new matter and otherwise renders the live requirement strip (state, deadline with overdue tone, delivery failures with the existing verified retry, staff verification, meeting booking), plus a three-step `PaperworkDrawer` replacing the raw intake fieldset.
+- Move `SignatureRequestsPanel` from the Client Portal tab to Overview, beside the paperwork it belongs to, and guard its list response so a non-array body cannot take the page down.
+- Reduce the matter page to four primary sections — Overview, Documents, Activity, Billing — with Client Portal, Team, Workflow, Correspondence, Chat, and Settings behind one Matter settings sub-nav, replacing two partial sub-navs and an orphaned "Matter assistant" link. Correspondence and Chat previously had no home in the desktop tab bar.
+- Drop the mobile action grid that duplicated the Quick Actions card in a second vocabulary, and remove Sync Cloud from Quick Actions, which the cloud panel already offers.
+
 ## 2026.09.10.2 — In-deploy maintenance heads-up banner
 
 - Add `GET /api/release-window`, a public endpoint (like `/api/version`) that reads `release-window.json` from the read-only host-status mount beside the host disk status and returns only `active`/`window_id`/`message`; the strict reader fails closed on a missing, malformed, symlinked, or stale marker and caps the message length, so no host or build detail reaches the browser.

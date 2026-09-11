@@ -402,6 +402,8 @@ async def submit(
         packet.requirements = {
             **packet.requirements,
             "questionnaire": {
+                # Preserve the requirement's due date so its follow-up closes.
+                **packet.requirements["questionnaire"],
                 "completed": True,
                 "completed_at": service.now().isoformat(),
                 "evidence": "portal_submission",

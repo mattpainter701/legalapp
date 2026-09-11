@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import MatterTransferSettings from './MatterTransferSettings'
 import MatterImportWizard from './MatterImportWizard'
-import MatterIntakePanel from './MatterIntakePanel'
 import MatterDocumentPreview from './documents/MatterDocumentPreview'
 import MatterTemplatePicker from './templates/MatterTemplatePicker'
 import { format, parseISO } from 'date-fns'
 import api, {
   uploadMatterDocument,
-  getMatterDocuments,
   updateMatterDocument,
   deleteMatterDocument,
   getMatterDocumentDownloadUrl,
@@ -270,14 +268,6 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
     refreshTags,
     refreshDocuments,
   } = explorer
-  const [intakeOpen, setIntakeOpen] = useState(false)
-  const [intakeDocuments, setIntakeDocuments] = useState([])
-  useEffect(() => {
-    if (!intakeOpen) return undefined
-    let cancelled = false
-    getMatterDocuments(matterId).then(data => { if (!cancelled) setIntakeDocuments(data.items || []) }).catch(() => { if (!cancelled) toast.error('Could not load paperwork documents') })
-    return () => { cancelled = true }
-  }, [intakeOpen, matterId, toast])
   const [templateOpen, setTemplateOpen] = useState(false)
   const [documentView, setDocumentView] = useState(() => { try { return localStorage.getItem(`document-view:${matterId}`) === 'folder' ? 'folder' : 'detailed' } catch { return 'detailed' } })
   useEffect(() => { try { localStorage.setItem(`document-view:${matterId}`, documentView) } catch { /* Optional preference. */ } }, [matterId, documentView])
@@ -649,7 +639,6 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
       )}
 
       <div className="flex flex-wrap items-start gap-3">
-        <button type="button" className="rounded-lg border border-brand-line px-3 py-2 text-sm" aria-expanded={intakeOpen} onClick={() => setIntakeOpen(value => !value)}>Client paperwork</button>
         <button type="button" className="rounded-lg border border-brand-line px-3 py-2 text-sm" disabled={explorer.listing} onClick={async () => {
           try { await Promise.all([refreshDocuments(), refreshFolders()]) } catch { toast.error('Could not refresh documents', { message: 'Please retry.' }) }
         }}>Refresh document list</button>
@@ -701,7 +690,6 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onRe
           </div>
         </details>
       </div>
-      {intakeOpen && <MatterIntakePanel matterId={matterId} documents={intakeDocuments} />}
       {/* Upload form */}
       {showUpload && (
         <div className="bg-brand-bg border border-brand-line rounded-xl p-6 space-y-4">

@@ -1287,6 +1287,13 @@ export const listMatterPortalInvites = (matterId) =>
 export const revokeMatterPortalInvite = (matterId, inviteId) =>
   api.delete(`/matters/${matterId}/portal/invites/${inviteId}`).then((r) => r.data)
 
+// ── Client paperwork packet (matter intake) ────────────────────────────────
+export const getMatterPaperwork = (matterId) =>
+  api.get(`/matters/${matterId}/intake`).then((r) => r.data)
+
+export const matterPaperworkAction = (matterId, action, body) =>
+  api.post(`/matters/${matterId}/intake/${action}`, body).then((r) => r.data)
+
 // ── E-signature (firm side) ─────────────────────────────────────────────────
 export const createSignatureRequest = (matterId, data) =>
   api.post(`/matters/${matterId}/signatures`, data).then((r) => r.data)

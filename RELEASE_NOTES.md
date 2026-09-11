@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.1 — Run a case from one page
+
+Released September 11, 2026.
+
+The matter page now opens on the paperwork a new case needs, tracks every signature in one place, and gives each document its own due date.
+
+- **Start a case in one step.** A new matter opens with one prompt to send client paperwork: choose the fee agreement, forms, and questionnaire, then send by email or text.
+- **Watch every document until it is signed.** One strip shows each document, what is outstanding, what the client returned, and any message that did not arrive.
+- **Give any document a due date.** Set a deadline on any document. Each raises an assigned follow-up, due at 5pm in the client's timezone, and closes when the paperwork arrives.
+- **A calmer matter page.** Overview, Documents, Activity, and Billing are the page you work from. Team, Workflow, and the portal group under Matter settings.
+
 ## 2026.09.10.2 — A friendly heads-up while we polish things
 
 Released September 10, 2026.

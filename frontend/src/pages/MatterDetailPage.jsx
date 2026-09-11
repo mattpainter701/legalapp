@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import CaseSetupCard from '../components/casesetup/CaseSetupCard'
 import { useAuth } from '../App'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
@@ -232,6 +233,8 @@ function DueDateLabel({ dueDate }) {
 
 const KEY_DATE_TYPES = new Set(['hearing', 'filing', 'deposition', 'deadline'])
 const MATTER_SECTIONS = new Set(['dashboard', 'activity', 'team', 'workflow', 'documents', 'correspondence', 'portal', 'billing', 'chat', 'settings'])
+const PRIMARY_SECTIONS = ['dashboard', 'documents', 'activity', 'billing']
+const SECONDARY_SECTIONS = ['portal', 'team', 'workflow', 'correspondence', 'chat', 'settings']
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function MatterDetailPage() {
@@ -761,7 +764,12 @@ function MatterWorkspace() {
     { key: 'chat', label: 'Chat', icon: Icons.messageSquare },
     { key: 'settings', label: 'Settings', icon: Icons.settings },
   ].filter(tab => !hiddenPanels.includes(tab.key))
-  const primaryTabs = tabs.filter(tab => ['dashboard', 'documents', 'activity', 'portal', 'billing'].includes(tab.key))
+  // The native view is the case: what it needs, its files, what happened, what
+  // it costs. Team, Workflow, Portal, Correspondence, and Chat are real work
+  // but not daily work, so they group under Matter settings instead of
+  // crowding the page every case is run from.
+  const primaryTabs = tabs.filter(tab => PRIMARY_SECTIONS.includes(tab.key))
+  const secondaryTabs = tabs.filter(tab => SECONDARY_SECTIONS.includes(tab.key))
 
   const assignedIds = new Set(assignments.map(a => a.user_id))
   const pluginLabel = (pluginName) => {
@@ -924,18 +932,8 @@ function MatterWorkspace() {
           </div>}
           <label htmlFor="mobile-matter-section" className="block text-sm font-semibold mb-2">Matter section</label>
           <select id="mobile-matter-section" value={activeTab} onChange={event => setActiveTab(event.target.value)} className="w-full min-h-11 rounded-lg border border-brand-line bg-brand-surface px-3 text-base">
-            {[...primaryTabs, ...tabs.filter(tab => tab.key === 'settings'), ...(!['dashboard', 'documents', 'activity', 'portal', 'billing', 'settings'].includes(activeTab) ? tabs.filter(tab => tab.key === activeTab) : [])].map(tab => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
+            {[...primaryTabs, ...secondaryTabs].map(tab => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
           </select>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            {[
-              ['Quick note', () => { setActiveTab('activity'); setShowAddNote(true) }],
-              ['Read documents', () => setActiveTab('documents')],
-              ['Manage tasks', () => navigate(`/tasks?matter_id=${id}`)],
-              ['Review work', () => setActiveTab('workflow')],
-              ['Contact client', () => setShowCompose(true)],
-              ['Recent activity', () => setActiveTab('activity')],
-            ].map(([label, action]) => <button key={label} type="button" onClick={action} className="min-h-11 rounded-lg border border-brand-line px-2 py-2 text-sm font-semibold text-brand-ink">{label}</button>)}
-          </div>
         </nav>
         {noteNotice && <p role={noteNotice.success ? 'status' : 'alert'} className={`mb-4 rounded-xl border p-4 text-sm ${noteNotice.success ? 'border-brand-green text-brand-ink' : 'border-brand-rose text-brand-rose'}`}>{noteNotice.text}</p>}
         {noteConflict && <button type="button" className="min-h-11 mb-4 rounded-lg border border-brand-line px-4 text-sm" onClick={() => { noteRequest.current = null; setNoteConflict(false); setNoteNotice(null); setNewNote({ note_type: 'internal', title: '', content: '' }); setActiveTab('activity'); setShowAddNote(true) }}>Start a new blank note</button>}
@@ -953,12 +951,27 @@ function MatterWorkspace() {
           ))}
         </div>
 
-        {['settings', 'team', 'workflow'].includes(activeTab) && <nav aria-label="Matter settings sections" className="mb-4 flex flex-wrap gap-3">{tabs.filter(tab => ['settings', 'team', 'workflow'].includes(tab.key)).map(tab => <button type="button" key={tab.key} onClick={() => setActiveTab(tab.key)} className="rounded border px-3 py-2">{tab.label}</button>)}</nav>}
-        {['activity', 'correspondence'].includes(activeTab) && <nav aria-label="Matter activity sections" className="mb-4 flex gap-3">{tabs.filter(tab => ['activity', 'correspondence'].includes(tab.key)).map(tab => <button type="button" key={tab.key} onClick={() => setActiveTab(tab.key)} className="rounded border px-3 py-2">{tab.label}</button>)}</nav>}
-        {['dashboard', 'activity', 'chat'].includes(activeTab) && !hiddenPanels.includes('chat') && <button type="button" onClick={() => setActiveTab('chat')} className="mb-3 text-sm underline">Matter assistant</button>}
+        {SECONDARY_SECTIONS.includes(activeTab) && (
+          <nav aria-label="Matter settings sections" className="mb-6 flex flex-wrap gap-2">
+            {secondaryTabs.map(tab => (
+              <button
+                type="button"
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                aria-current={activeTab === tab.key ? 'page' : undefined}
+                className={`flex min-h-11 items-center gap-1.5 rounded-lg border px-3 text-[13px] font-semibold transition-colors ${activeTab === tab.key ? 'border-brand-ink bg-brand-ink text-white' : 'border-brand-line text-brand-ink-2 hover:border-brand-line-2 hover:text-brand-ink'}`}
+              >
+                <Icon d={tab.icon} size={13} />
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        )}
         {/* ── Dashboard Tab ─────────────────────────────────────────────────────── */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
+            <CaseSetupCard matterId={id} matter={matter} />
+            <SignatureRequestsPanel matterId={id} />
             {/* Stats bar */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
@@ -1010,8 +1023,7 @@ function MatterWorkspace() {
                   { label: 'Email Client', icon: Icons.mail, action: () => setShowCompose(true) },
                   { label: 'Add Task', icon: Icons.plus, action: () => setShowAddTask(true) },
                   { label: 'Start Chat', icon: Icons.messageSquare, action: handleStartChat },
-                  { label: cloudSyncing ? 'Syncing Cloud' : 'Sync Cloud', icon: Icons.refresh, action: handleMatterCloudSync },
-                  { label: 'Add Note', icon: Icons.edit, action: () => { setActiveTab('activity'); setTimeout(() => setShowAddNote(true), 50) } },
+                  { label: 'Add Note', icon: Icons.edit, action: () => { setActiveTab('activity'); setShowAddNote(true) } },
                 ].map((a, i) => (
                   <button
                     key={i}
@@ -2444,7 +2456,6 @@ function ClientPortalTab({ matterId, matter }) {
       </div>
     </div>
 
-    <SignatureRequestsPanel matterId={matterId} />
     </div>
   )
 }
@@ -2502,7 +2513,11 @@ export function SignatureRequestsPanel({ matterId }) {
   const [notice, setNotice] = useState('')
 
   const load = useCallback(() => {
-    listSignatureRequests(matterId).then(setRequests).catch(() => {})
+    // The endpoint answers with a list, but a paged or empty body must not
+    // take the Overview down with it.
+    listSignatureRequests(matterId)
+      .then(data => setRequests(Array.isArray(data) ? data : data?.items || []))
+      .catch(() => {})
     getMatterDocuments(matterId)
       .then((data) => setDocs(Array.isArray(data) ? data : data.items || []))
       .catch(() => {})

@@ -70,6 +70,8 @@ def public_packet(packet, *, client=False):
         "meeting": packet.meeting,
         "signature_id": str(packet.signature_id),
         "signing_followup_due_at": packet.config.get("signing_followup_due_at"),
+        # Deadlines are stated in the client's own timezone on both sides.
+        "timezone": packet.config["timezone"],
     }
     if not client:
         data.update(delivery=packet.delivery, owner_id=str(packet.owner_id))
@@ -89,6 +91,7 @@ def public_packet(packet, *, client=False):
                     "signature_id",
                     "required",
                     "submitted_document_id",
+                    "due_at",
                 )
             }
             for name, requirement in packet.requirements.items()
@@ -127,6 +130,16 @@ async def store_file(tenant_id, matter, filename, content, content_type):
             content_type=content_type,
             matter_cloud_folder=matter.cloud_folder,
         )
+
+
+def due_iso(value):
+    return value.astimezone(timezone.utc).isoformat() if value else None
+
+
+def requirement_label(key, requirement):
+    if requirement.get("label"):
+        return requirement["label"]
+    return "Fee agreement" if key == "fee_agreement" else key.replace("_", " ")
 
 
 def queue(packet, kind):
@@ -463,11 +476,15 @@ async def start_packet(db, user, matter, body, filename, content):
             "source_sha256": signature.source_document_sha256,
         },
         requirements={
-            "fee_agreement": {"completed": False},
+            "fee_agreement": {
+                "completed": False,
+                "due_at": due_iso(body.agreement_due_at),
+            },
             "questionnaire": {
                 "completed": not body.include_questionnaire,
                 "required": body.include_questionnaire,
                 "completed_at": None,
+                "due_at": due_iso(body.questionnaire_due_at),
             },
         },
         answers={},
@@ -479,6 +496,7 @@ async def start_packet(db, user, matter, body, filename, content):
             "kind": "upload",
             "label": upload.label,
             "required": upload.required,
+            "due_at": due_iso(upload.due_at),
         }
     for selection in body.selected_documents:
         from app.services.matter_mail_attachments import reviewed_attachment
@@ -546,6 +564,7 @@ async def start_packet(db, user, matter, body, filename, content):
             "document_id": str(selection.document_id),
             "signature_id": signature_id,
             "source_sha256": digest,
+            "due_at": due_iso(selection.due_at),
         }
     queue(packet, "welcome")
     db.add(packet)
@@ -563,7 +582,12 @@ async def start_packet(db, user, matter, body, filename, content):
 
 async def cancel_packet(db, packet, reason):
     packet.status = "cancelled"
-    for kind in ("documents", "scheduling", "delivery", "signed"):
+    dated = [
+        f"due:{key}"
+        for key, requirement in packet.requirements.items()
+        if requirement.get("due_at")
+    ]
+    for kind in ("documents", "scheduling", "delivery", "signed", *dated):
         await close_task(db, packet, kind, reason)
     signature = await db.scalar(
         select(SignatureRequest).where(
@@ -648,6 +672,9 @@ async def reconcile(db, packet):
             packet.requirements = {
                 **packet.requirements,
                 "fee_agreement": {
+                    # Keep the requirement's own fields, its due date among
+                    # them, so its follow-up task can be closed on completion.
+                    **packet.requirements["fee_agreement"],
                     "completed": True,
                     "completed_at": signature.completed_at.isoformat(),
                     "evidence": "signature_acknowledgment_certificate",
@@ -711,6 +738,25 @@ async def reconcile(db, packet):
             "Fee agreement signed",
             "Portal delivery queued. Follow up with the client within 24 hours.",
         )
+    # Each dated requirement carries its own assigned follow-up. The task is
+    # keyed by requirement, so a reconcile pass never duplicates it, and the
+    # task closes as soon as the client's paperwork lands.
+    for key, requirement in list(packet.requirements.items()):
+        due_at = requirement.get("due_at")
+        if not due_at:
+            continue
+        label = requirement_label(key, requirement)
+        if requirement.get("completed"):
+            await close_task(db, packet, f"due:{key}", f"{label} received")
+        else:
+            await ensure_task(
+                db,
+                packet,
+                f"due:{key}",
+                f"{label} due from client",
+                datetime.fromisoformat(due_at),
+            )
+
     required_keys = [
         key
         for key, requirement in packet.requirements.items()
