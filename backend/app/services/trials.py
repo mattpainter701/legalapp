@@ -113,9 +113,7 @@ async def notify_operator_trial_started(
             [recipient], subject, html_body, text_body
         )
     except Exception:  # pragma: no cover - defensive; send_email already guards
-        logger.exception(
-            "Trial-start notification raised (tenant_id=%s)", tenant_id
-        )
+        logger.exception("Trial-start notification raised (tenant_id=%s)", tenant_id)
         return
     if delivery is not EmailDeliveryResult.SENT:
         logger.warning(
