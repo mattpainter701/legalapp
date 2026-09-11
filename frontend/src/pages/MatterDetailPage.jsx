@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import CaseSetupCard from '../components/casesetup/CaseSetupCard'
 import ClientConversation from '../components/casesetup/ClientConversation'
+import CloseMatterDialog from '../components/casesetup/CloseMatterDialog'
 import { useAuth } from '../App'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
@@ -16,7 +17,7 @@ import {
   getMatterDocuments, createSignatureRequest, listSignatureRequests,
   sendSignatureRequest, resendSignatureRequest, voidSignatureRequest, getMatterDocumentDownloadUrl, getMatterDocumentSigningSource,
   syncMatterCloudFolder, listTrustAccounts,
-  getContacts, getAdminUsers, getMatterByNumber,
+  getContacts, getAdminUsers, getMatterByNumber, reopenMatter,
 } from '../api'
 import { looksLikeMatterNumber, normalizeMatterNumber } from '../utils/matterNumber'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
@@ -366,6 +367,7 @@ function MatterWorkspace() {
   // Surfaced on the tab bar so an unanswered client message is visible from
   // anywhere on the matter, not only once you scroll the Overview.
   const [clientUnread, setClientUnread] = useState(0)
+  const [closeOpen, setCloseOpen] = useState(false)
   const [noteNotice, setNoteNotice] = useState(null)
   const [noteConflict, setNoteConflict] = useState(false)
 
@@ -821,6 +823,19 @@ function MatterWorkspace() {
         <div className="flex gap-2 md:gap-3 flex-shrink-0">
           <MatterViewGear hidden={view.hidden} onChange={view.save} />
           <button type="button" onClick={() => setActiveTab('settings')} className="rounded-lg border px-3 text-sm">Matter settings</button>
+          {matter.is_closed ? (
+            <button
+              type="button"
+              onClick={async () => { try { await reopenMatter(id); loadMatter() } catch { setSaveError('The matter could not be reopened.') } }}
+              className="rounded-lg border border-brand-line px-3 text-sm font-medium text-brand-ink hover:bg-brand-bg-soft"
+            >
+              Reopen matter
+            </button>
+          ) : (
+            <button type="button" onClick={() => setCloseOpen(true)} className="rounded-lg border border-brand-line px-3 text-sm font-medium text-brand-ink hover:bg-brand-bg-soft">
+              Close matter
+            </button>
+          )}
           {editing ? (
             <>
               <button onClick={() => { setEditing(false); setEditData(matter) }} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-2">
@@ -2247,6 +2262,14 @@ function MatterWorkspace() {
         />
       )}
 
+      {closeOpen && (
+        <CloseMatterDialog
+          matterId={id}
+          matterName={matter.matter_name}
+          onClose={() => setCloseOpen(false)}
+          onClosed={loadMatter}
+        />
+      )}
       {showCompose && (
         <ComposeEmailModal
           matterId={id}

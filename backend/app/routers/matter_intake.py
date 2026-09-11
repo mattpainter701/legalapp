@@ -22,6 +22,7 @@ from app.schemas.matter_intake import (
 from app.services import matter_intake as service
 from app.services.access_control import require_capability
 from app.services.matter_access import can_access_matter
+from app.services.matter_document_organization import autofile_folder_id
 
 router = APIRouter(prefix="/api/matters", tags=["matter-intake"])
 portal_router = APIRouter(prefix="/api/portal/client/intake", tags=["client-intake"])
@@ -388,6 +389,12 @@ async def submit(
             content_type="text/plain",
             file_size=len(content),
             document_category="intake",
+            folder_id=await autofile_folder_id(
+                db,
+                tenant_id=packet.tenant_id,
+                matter_id=packet.matter_id,
+                document_category="intake",
+            ),
             portal_visible=True,
             storage_path=stored.storage_path,
             storage_provider=stored.provider,

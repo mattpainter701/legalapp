@@ -1,3 +1,13 @@
+## 2026.09.11.2 — Matter closing and automatic document filing
+
+- Add `app/services/matter_closing.py` and `GET /matters/{id}/close-readiness`: unbilled billable time and expenses, held trust balance, open tasks, live signature requests, and incomplete client paperwork, split into blocking and acknowledgeable checks.
+- Guard `DELETE /matters/{id}` (the soft close) with those checks. Unbilled work and a non-zero trust balance return 409 `matter_close_blocked`; warnings return 409 `matter_close_needs_acknowledgement` until `acknowledge_warnings` is passed. The close records a `matter_closed` timeline event with an optional note and runs intake reconcile so a closed matter stops chasing its client.
+- Add `POST /matters/{id}/reopen`, recording `matter_reopened`. Closing is reversible; it was previously unreachable from any screen at all — `closeMatterV2` existed in the API client with no callers.
+- Add a `CloseMatterDialog` on the matter page listing what each check found, with the acknowledgement and closing note, plus Close/Reopen controls in the matter topbar.
+- Extend system folders beyond Client Uploads to Correspondence, Signed, Intake, and Generated Documents, and add `autofile_folder_id`, which maps a document's existing `document_category` onto the folder a firm would have filed it in. A category the product does not own stays unfiled, and a folder failure never costs the document — it lands unfiled instead.
+- File by category at the four sites that create documents automatically: inbound email, signature completion artifacts, captured correspondence, and intake questionnaires. Only client-portal uploads were previously filed anywhere; everything else landed in the explorer root.
+- Extract inbound email attachments as their own documents beside the stored `.eml`, filed into the same folder, capped at 20 attachments and 25 MiB each, with sender-supplied filenames stripped of path separators and control characters. A storage failure on one attachment is logged and skipped rather than losing the email.
+
 ## 2026.09.11.1 — Case lifecycle on the matter page
 
 - Add per-requirement due dates to the intake packet: `due_at` on `IntakeDocumentSelection`, `IntakeUploadRequirement`, and the new `agreement_due_at` / `questionnaire_due_at`, each rejected when naive so a deadline is never read as UTC. The value is persisted onto its requirement and returned to staff and client alike, alongside the packet's `timezone`.

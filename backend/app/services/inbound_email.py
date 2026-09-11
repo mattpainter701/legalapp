@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
+from email.header import decode_header, make_header
 from email.utils import getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -32,6 +33,7 @@ from app.models.task import Task
 from app.models.tenant import TenantSettings
 from app.services.email_task_tags import add_tagged_email_task, parse_email_task_tag
 from app.services.matter_file_store import MatterFileStore, StorageResult
+from app.services.matter_document_organization import autofile_folder_id
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -258,6 +260,55 @@ def inbound_filename(item: InboundEmail) -> str:
     return f"{item.occurred_at:%Y-%m-%d}_{safe_subject}_{str(item.id)[:8]}.eml"
 
 
+# An email's attachments used to exist only inside the stored .eml. A client
+# returning a signed authorization produced a message/rfc822 blob the firm had
+# to download and open in a mail client to get at the PDF. Each attachment is
+# now filed as its own document beside the message it came from.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+MAX_ATTACHMENTS_PER_EMAIL = 20
+
+
+def _attachment_filename(part, index):
+    raw = part.get_filename() or f"attachment-{index}"
+    try:
+        raw = str(make_header(decode_header(raw)))
+    except Exception:
+        pass
+    # Strip any path the sender put in the name; a filename is a leaf here.
+    raw = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    cleaned = (
+        re.sub(r'[\x00-\x1f/\\:*?"<>|]+', "_", raw).strip() or f"attachment-{index}"
+    )
+    return cleaned[:200]
+
+
+def email_attachments(message: Message):
+    """Every real attachment part, as (filename, content_type, bytes)."""
+    found = []
+    parts = message.walk() if message.is_multipart() else [message]
+    for index, part in enumerate(parts, start=1):
+        if part.is_multipart():
+            continue
+        if part.get_content_disposition() != "attachment":
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+        except Exception:
+            continue
+        if not payload or len(payload) > MAX_ATTACHMENT_BYTES:
+            continue
+        found.append(
+            (
+                _attachment_filename(part, index),
+                part.get_content_type() or "application/octet-stream",
+                payload,
+            )
+        )
+        if len(found) >= MAX_ATTACHMENTS_PER_EMAIL:
+            break
+    return found
+
+
 async def file_inbound_email(
     db: AsyncSession,
     *,
@@ -303,6 +354,12 @@ async def file_inbound_email(
             storage_error=storage_result.error,
             description=f"Inbound email: {item.subject[:400]}",
             document_category="correspondence",
+            folder_id=await autofile_folder_id(
+                db,
+                tenant_id=item.tenant_id,
+                matter_id=matter.id,
+                document_category="correspondence",
+            ),
         )
         db.add(document)
         await db.flush()
@@ -323,6 +380,56 @@ async def file_inbound_email(
             participants=item.participants,
         )
         db.add(communication)
+        await db.flush()
+
+        # Attachments are filed beside the message. A storage failure on one
+        # attachment must not cost the firm the email itself, so each is
+        # attempted independently and a failure is logged, never raised.
+        parsed = BytesParser(policy=policy.default).parsebytes(raw_message)
+        for filename, content_type, payload in email_attachments(parsed):
+            try:
+                attachment_storage = await matter_file_store.store_matter_file_result(
+                    db=db,
+                    tenant_id=str(item.tenant_id),
+                    matter_slug=matter.slug,
+                    category="correspondence",
+                    filename=filename,
+                    content=payload,
+                    content_type=content_type,
+                    matter_cloud_folder=matter.cloud_folder,
+                    preferred_provider=(
+                        tenant_settings.primary_cloud_provider
+                        if tenant_settings
+                        else None
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Attachment %s of inbound email %s could not be stored",
+                    filename,
+                    item.id,
+                )
+                continue
+            db.add(
+                MatterDocument(
+                    tenant_id=item.tenant_id,
+                    matter_id=matter.id,
+                    uploaded_by_user_id=reviewed_by_user_id,
+                    filename=filename,
+                    content_type=content_type,
+                    file_size=len(payload),
+                    storage_path=attachment_storage.storage_path,
+                    storage_provider=attachment_storage.provider,
+                    storage_backend=attachment_storage.backend,
+                    provider_object_id=attachment_storage.provider_item_id,
+                    provider_drive_id=attachment_storage.drive_id,
+                    provider_parent_id=attachment_storage.parent_id,
+                    storage_error=attachment_storage.error,
+                    description=f"Attachment to: {item.subject[:380]}",
+                    document_category="correspondence",
+                    folder_id=document.folder_id,
+                )
+            )
         await db.flush()
         suggestion = parse_email_task_tag(
             item.subject,

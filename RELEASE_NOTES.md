@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.2 — Close a case, and stop losing email attachments
+
+Released September 11, 2026.
+
+Matters can now be closed from the matter page, with a check of what is still outstanding, and documents file themselves into the right folder.
+
+- **Close a matter properly.** A Close matter button shows what is still outstanding first. Unbilled work and money held in trust stop the close; open tasks and paperwork are shown to acknowledge.
+- **Reopen if you close too soon.** Closing is reversible. A closed matter can be reopened from the same place, and both are recorded on the matter's timeline.
+- **Email attachments become real documents.** A file attached to an email now arrives as its own document in the matter, next to the message, instead of only inside the stored email.
+- **Documents file themselves.** Correspondence, signed agreements, intake paperwork and generated drafts land in named folders instead of piling up at the top of the matter.
+
 ## 2026.09.11.1 — Run a case from one page
 
 Released September 11, 2026.

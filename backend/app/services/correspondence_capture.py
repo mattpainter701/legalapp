@@ -38,6 +38,7 @@ from app.models.plugin import Matter
 from app.models.user_alias import UserAliasAddress
 from app.services.email_agent import _extract_email_addresses
 from app.services.matter_file_store import MatterFileStore
+from app.services.matter_document_organization import autofile_folder_id
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -342,6 +343,12 @@ async def capture_email_for_matter(
         storage_error=storage_result.error,
         description=f"Email: {(email.get('subject') or '(no subject)')[:400]}",
         document_category="correspondence",
+        folder_id=await autofile_folder_id(
+            db,
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            document_category="correspondence",
+        ),
     )
     db.add(doc)
     await db.flush()  # populate doc.id for the FK below
