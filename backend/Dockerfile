@@ -1,4 +1,5 @@
-FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3 AS base
+# ── Builder: compile/install wheels, then discard the toolchain ──────────────
+FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3 AS builder
 
 WORKDIR /app
 
@@ -8,21 +9,31 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
-    libgl1 \
-    libglib2.0-0 \
-    fonts-nanum \
-    fonts-liberation \
-    libreoffice-writer \
     wget \
     && rm -rf /var/lib/apt/lists/*
-
-FROM base AS builder
 
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --upgrade pip==26.1.2 && \
     pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-FROM base AS final
+# ── Final: runtime libraries only, no build toolchain ────────────────────────
+FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3 AS final
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# libgl1/libglib2.0-0 back the OpenCV stack (rapidocr OCR); fonts and
+# libreoffice-writer are required by app/services/docx_to_pdf.py, which shells
+# out to LibreOffice for Word-to-PDF conversion.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    fonts-nanum \
+    fonts-liberation \
+    libreoffice-writer \
+    && rm -rf /var/lib/apt/lists/*
 
 # Dependencies installed to /usr/local are world-readable, so the non-root
 # user below can still import them.

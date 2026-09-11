@@ -113,12 +113,6 @@
     },
     {
       "image": "pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb",
-      "line": 44,
-      "pinned_by_digest": true,
-      "source": "docker-compose.local.yml"
-    },
-    {
-      "image": "pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb",
       "line": 3,
       "pinned_by_digest": true,
       "source": "docker-compose.hypervisor.yml"
@@ -170,35 +164,22 @@
       "line": 24,
       "pinned_by_digest": true,
       "source": "docker-compose.override.yml"
-    },
-    {
-      "image": "pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb",
-      "line": 33,
-      "pinned_by_digest": true,
-      "source": "docker-compose.override.yml"
     }
   ],
   "container_bases": [
     {
       "image": "python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3",
-      "line": 1,
+      "line": 2,
       "pinned_by_digest": true,
       "source": "backend/Dockerfile",
       "stage_reference": false
     },
     {
-      "image": "base",
-      "line": 19,
-      "pinned_by_digest": false,
+      "image": "python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3",
+      "line": 20,
+      "pinned_by_digest": true,
       "source": "backend/Dockerfile",
-      "stage_reference": true
-    },
-    {
-      "image": "base",
-      "line": 25,
-      "pinned_by_digest": false,
-      "source": "backend/Dockerfile",
-      "stage_reference": true
+      "stage_reference": false
     },
     {
       "image": "node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
@@ -589,13 +570,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "tomli",
-      "scope": "runtime",
-      "source": "agent/pyproject.toml",
-      "specifier": ">=2.0;python_version<'3.11'"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "tomli_w",
       "scope": "runtime",
       "source": "agent/pyproject.toml",
@@ -607,6 +581,41 @@
       "scope": "runtime",
       "source": "agent/pyproject.toml",
       "specifier": ">=0.10.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "psycopg2-binary",
+      "scope": "runtime/dev",
+      "source": "backend/requirements-dev.txt",
+      "specifier": "==2.9.10"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pytest",
+      "scope": "runtime/dev",
+      "source": "backend/requirements-dev.txt",
+      "specifier": "==9.0.3"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pytest-asyncio",
+      "scope": "runtime/dev",
+      "source": "backend/requirements-dev.txt",
+      "specifier": "==1.4.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pytest-env",
+      "scope": "runtime/dev",
+      "source": "backend/requirements-dev.txt",
+      "specifier": "==1.1.5"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "ruff",
+      "scope": "runtime/dev",
+      "source": "backend/requirements-dev.txt",
+      "specifier": "==0.8.4"
     },
     {
       "ecosystem": "pypi",
@@ -645,13 +654,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "authlib",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==1.6.12"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "bcrypt",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
@@ -677,20 +679,6 @@
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==0.139.0"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "google-api-python-client",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==2.160.0"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "google-auth-oauthlib",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==1.2.1"
     },
     {
       "ecosystem": "pypi",
@@ -743,7 +731,7 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "opencv-python",
+      "name": "opencv-python-headless",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==5.0.0.93"
@@ -761,13 +749,6 @@
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==12.3.0"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "psycopg2-binary",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==2.9.10"
     },
     {
       "ecosystem": "pypi",
@@ -796,27 +777,6 @@
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==5.12.1"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "pytest",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==9.0.3"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "pytest-asyncio",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==1.4.0"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "pytest-env",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==1.1.5"
     },
     {
       "ecosystem": "pypi",
@@ -876,13 +836,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "ruff",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==0.8.4"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "sqlalchemy",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
@@ -932,13 +885,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "pgvector",
-      "scope": "runtime/dev",
-      "source": "mcp-server/requirements.txt",
-      "specifier": "==0.3.6"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "psycopg2-binary",
       "scope": "runtime/dev",
       "source": "mcp-server/requirements.txt",
@@ -957,13 +903,6 @@
       "scope": "runtime/dev",
       "source": "mcp-server/requirements.txt",
       "specifier": "==6.16.1"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "python-dotenv",
-      "scope": "runtime/dev",
-      "source": "mcp-server/requirements.txt",
-      "specifier": "==1.2.2"
     },
     {
       "ecosystem": "pypi",
@@ -1070,6 +1009,12 @@
       "lockfile_present": false,
       "lockfiles": [],
       "path": "backend/requirements.txt",
+      "type": "python requirements"
+    },
+    {
+      "lockfile_present": false,
+      "lockfiles": [],
+      "path": "backend/requirements-dev.txt",
       "type": "python requirements"
     },
     {

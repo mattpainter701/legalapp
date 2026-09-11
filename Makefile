@@ -1,5 +1,5 @@
 .PHONY: setup dev dev-build dev-down prod-up prod-down prod-build migrate \
-        logs shell sync-public-db deploy-prod backup-db restore-db \
+        logs shell sync-public-db deploy-prod backup-db \
         embed-bulk jetson-embed sbom-inventory lint test clean
 
 PY ?= py
@@ -82,9 +82,6 @@ deploy-prod:
 backup-db:
 	bash scripts/backup_db.sh
 
-restore-db:
-	bash scripts/restore_db.sh
-
 # ── CourtListener ingestion ───────────────────────────────────────────────────
 embed-bulk:
 	docker compose exec backend python /scripts/ingest_courtlistener.py \
@@ -101,11 +98,13 @@ sbom-inventory:
 	$(PY) scripts/generate_sbom_inventory.py
 
 # ── Code quality ─────────────────────────────────────────────────────────────
+# ruff/pytest live in requirements-dev.txt, which the production image does not
+# install — sync them into the running dev container before invoking.
 lint:
-	docker compose exec backend ruff check app/
+	docker compose exec backend sh -c "pip install -q -r requirements-dev.txt && ruff check app/"
 
 test:
-	docker compose exec backend pytest tests/ -v
+	docker compose exec backend sh -c "pip install -q -r requirements-dev.txt && pytest tests/ -v"
 
 clean:
 	docker compose down -v

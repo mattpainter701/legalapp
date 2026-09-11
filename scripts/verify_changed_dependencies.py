@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON_REQUIREMENTS = re.compile(r"(?:^|/)requirements\.txt$")
+PYTHON_REQUIREMENTS = re.compile(r"(?:^|/)requirements(-dev)?\.txt$")
 NPM_MANIFESTS = (
     "frontend/package.json",
     "office-addin/package.json",

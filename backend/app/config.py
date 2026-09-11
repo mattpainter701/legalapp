@@ -308,9 +308,6 @@ class Settings(BaseSettings):
     PLATFORM_RATE_LIMIT_PER_MINUTE: int = 120
     PLATFORM_BOOTSTRAP_LIMIT_PER_5_MINUTES: int = 5
 
-    # Optional separate vectorDB for public CourtListener chunks (BGE embeddings)
-    # If empty, public_chunks table lives in main DATABASE_URL
-    VECTORDB_URL: str = ""
     MCP_SERVER_URL: str = ""
     # Public/sellable MCP is fail-closed until every product, protocol and
     # operational release gate has passed. Internal research is independent.

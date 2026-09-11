@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SBOM_INPUTS = {
     "backend/requirements.txt",
+    "backend/requirements-dev.txt",
     "mcp-server/requirements.txt",
     "scripts/requirements.txt",
     "scripts/tabs3_export/requirements.txt",
