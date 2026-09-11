@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { FileText, X } from 'lucide-react'
 import { getIntakeStarterPack } from '../../api'
 import { startMatterIntake } from '../MatterIntakePanel'
@@ -43,6 +43,14 @@ export default function PaperworkDrawer({
   const [packNote, setPackNote] = useState('')
 
   const set = (key, value) => setDraft(previous => ({ ...previous, [key]: value }))
+
+  // The card opens this drawer immediately and resolves the client's address
+  // afterwards, so seed the field when it arrives -- but never overwrite an
+  // address the firm has already typed.
+  useEffect(() => {
+    if (!clientEmail) return
+    setDraft(previous => (previous.email ? previous : { ...previous, email: clientEmail }))
+  }, [clientEmail])
   const pdfs = useMemo(() => documents.filter(isPdf), [documents])
   const selectable = useMemo(
     () => documents.filter(document => document.id !== draft.agreementDocumentId),

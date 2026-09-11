@@ -953,6 +953,19 @@ function MatterWorkspace() {
           <select id="mobile-matter-section" value={activeTab} onChange={event => setActiveTab(event.target.value)} className="w-full min-h-11 rounded-lg border border-brand-line bg-brand-surface px-3 text-base">
             {[...primaryTabs, ...secondaryTabs].map(tab => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
           </select>
+          {/* Not a duplicate of Quick Actions: these guarantee a 44px touch
+              target on a phone, which the desktop card's tighter buttons do
+              not, and they are the affordances the mobile journey drives. */}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {[
+              ['Quick note', () => { setActiveTab('activity'); setShowAddNote(true) }],
+              ['Read documents', () => setActiveTab('documents')],
+              ['Manage tasks', () => navigate(`/tasks?matter_id=${id}`)],
+              ['Review work', () => setActiveTab('workflow')],
+              ['Contact client', () => setShowCompose(true)],
+              ['Recent activity', () => setActiveTab('activity')],
+            ].map(([label, action]) => <button key={label} type="button" onClick={action} className="min-h-11 rounded-lg border border-brand-line px-2 py-2 text-sm font-semibold text-brand-ink">{label}</button>)}
+          </div>
         </nav>
         {noteNotice && <p role={noteNotice.success ? 'status' : 'alert'} className={`mb-4 rounded-xl border p-4 text-sm ${noteNotice.success ? 'border-brand-green text-brand-ink' : 'border-brand-rose text-brand-rose'}`}>{noteNotice.text}</p>}
         {noteConflict && <button type="button" className="min-h-11 mb-4 rounded-lg border border-brand-line px-4 text-sm" onClick={() => { noteRequest.current = null; setNoteConflict(false); setNoteNotice(null); setNewNote({ note_type: 'internal', title: '', content: '' }); setActiveTab('activity'); setShowAddNote(true) }}>Start a new blank note</button>}

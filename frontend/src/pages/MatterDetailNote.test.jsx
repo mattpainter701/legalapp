@@ -27,7 +27,7 @@ it.each(['resolve', 'reject'])('ignores a late note %s after switching away and 
     <Routes><Route path="/matters/:id" element={<MatterDetailPage />} /></Routes>
   </MemoryRouter>)
   await screen.findByRole('heading', { name: 'Matter A' })
-  fireEvent.click(screen.getByRole('button', { name: 'Add Note' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Quick note' }))
   fireEvent.change(screen.getByLabelText('Title', { exact: true }), { target: { value: 'Old A draft' } })
   fireEvent.change(screen.getByLabelText('Content', { exact: true }), { target: { value: 'Original note' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save Note', exact: true }))
@@ -36,7 +36,7 @@ it.each(['resolve', 'reject'])('ignores a late note %s after switching away and 
   await screen.findByRole('heading', { name: 'Matter B' })
   fireEvent.click(screen.getByRole('link', { name: 'Go A' }))
   await screen.findByRole('heading', { name: 'Matter A' })
-  fireEvent.click(screen.getByRole('button', { name: 'Add Note' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Quick note' }))
   fireEvent.change(screen.getByLabelText('Title', { exact: true }), { target: { value: 'New A draft' } })
   fireEvent.change(screen.getByLabelText('Content', { exact: true }), { target: { value: 'Do not replace this' } })
   const timelineCalls = api.getMatterTimeline.mock.calls.length
