@@ -255,10 +255,16 @@ export default function PaperworkDrawer({
                   ))}
                 </div>
                 {draft.channels.includes('sms') && (
-                  <label className="mt-3 flex items-start gap-2 text-[12px] text-brand-muted">
-                    <input type="checkbox" className="mt-0.5" checked={draft.smsPermissionVerified} onChange={event => set('smsPermissionVerified', event.target.checked)} />
-                    I verified this client&apos;s mobile number and recorded permission for intake texts. Existing opt-outs remain in effect.
-                  </label>
+                  <>
+                    <label className="mt-3 flex items-start gap-2 text-[12px] text-brand-muted">
+                      <input type="checkbox" className="mt-0.5" checked={draft.smsPermissionVerified} onChange={event => set('smsPermissionVerified', event.target.checked)} />
+                      I verified this client&apos;s mobile number and recorded permission for intake texts. Existing opt-outs remain in effect.
+                    </label>
+                    <label className="mt-2 flex items-start gap-2 text-[12px] text-brand-muted">
+                      <input type="checkbox" className="mt-0.5" checked={draft.smsCaseUpdatesVerified} onChange={event => set('smsCaseUpdatesVerified', event.target.checked)} />
+                      The client also agreed to texts about this case after onboarding — signature requests and deadline reminders. Without this, texting stops when intake does.
+                    </label>
+                  </>
                 )}
                 {users.length > 0 && (
                   <label className="mt-3 block">

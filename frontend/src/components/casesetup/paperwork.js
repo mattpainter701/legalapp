@@ -129,6 +129,7 @@ export function paperworkOptions(draft, timeZone) {
     timezone: timeZone,
     owner_id: draft.ownerId || null,
     sms_permission_verified: draft.smsPermissionVerified,
+    sms_case_updates_verified: Boolean(draft.smsCaseUpdatesVerified),
     agreement_document_id: draft.agreementDocumentId || null,
     agreement_due_at: dueDateToIso(draft.agreementDue, timeZone),
     questionnaire_due_at: draft.includeQuestionnaire ? dueDateToIso(draft.questionnaireDue, timeZone) : null,
@@ -165,6 +166,7 @@ export const emptyDraft = {
   email: '',
   channels: ['email'],
   smsPermissionVerified: false,
+  smsCaseUpdatesVerified: false,
   ownerId: '',
   portalAfterSigning: true,
 }

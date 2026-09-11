@@ -32,6 +32,7 @@ from app.models.user import User
 from app.services.connected_mail import send_client_email
 from app.services.email import email_service
 from app.services.matter_access import can_access_matter
+from app.services.sms_categories import disclosure_version, granted_categories
 from app.services.matter_file_store import MatterFileStore
 from app.services.rbac_service import get_user_capabilities
 from app.services.sms import (
@@ -351,11 +352,15 @@ async def start_packet(db, user, matter, body, filename, content):
                 mobile_e164=mobile,
                 consented_at=now(),
                 consent_source="staff_recorded_intake",
-                disclosure_version="intake-notifications-v1",
+                disclosure_version=disclosure_version(
+                    case_updates=body.sms_case_updates_verified
+                ),
                 consent_timezone=body.timezone,
                 quiet_hours_start="20:00",
                 quiet_hours_end="08:00",
-                allowed_categories=["intake"],
+                allowed_categories=granted_categories(
+                    case_updates=body.sms_case_updates_verified
+                ),
                 consent_language="en",
             )
             db.add(consent)

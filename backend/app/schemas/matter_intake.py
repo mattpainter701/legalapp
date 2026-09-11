@@ -43,6 +43,9 @@ class IntakeStart(BaseModel):
     channels: list[Literal["email", "sms"]] = Field(min_length=1, max_length=2)
     timezone: str = "America/Chicago"
     sms_permission_verified: bool = False
+    # Consent to texts about the live case, not just onboarding. Recorded
+    # separately because it is a wider permission than intake.
+    sms_case_updates_verified: bool = False
     questions: list[IntakeQuestion] = Field(default_factory=list, max_length=50)
     confirm_send: Literal[True]
 

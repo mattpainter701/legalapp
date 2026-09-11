@@ -5,7 +5,7 @@ import { dueDateToIso } from './casesetup/paperwork'
 export const defaultIntakeSetup = {
   agreement_document_id: '', selected_documents: [], upload_requirements: '', include_questionnaire: true, portal_after_signing: true,
   agreement_due: '', questionnaire_due: '', uploads_due: '',
-  email: '', channels: ['email'], timezone: 'America/Chicago', owner_id: '', sms_permission_verified: false,
+  email: '', channels: ['email'], timezone: 'America/Chicago', owner_id: '', sms_permission_verified: false, sms_case_updates_verified: false,
   questions: 'Please describe your legal matter.\nWho are the other people or organizations involved?\nWhat important dates should your legal team know about? Enter none if unknown.',
 }
 
@@ -51,7 +51,8 @@ export default function IntakeSetupFields({ value, onChange, onFile, clientEmail
     <p className="text-sm">Use the final fee agreement populated and reviewed by the attorney in matter Documents. The client will acknowledge it using the portal signature flow.</p>
     <label className="block">Client email<input className={input} type="email" value={value.email || clientEmail} onChange={e => field('email', e.target.value)} /></label>
     <div className="flex gap-4">{['email', 'sms'].map(channel => <label key={channel}><input type="checkbox" checked={value.channels.includes(channel)} onChange={e => field('channels', e.target.checked ? [...value.channels, channel] : value.channels.filter(c => c !== channel))} /> {channel === 'email' ? 'Email invitation and reminders' : 'SMS invitation and reminders'}</label>)}</div>
-    {value.channels.includes('sms') && <label className="block text-sm"><input type="checkbox" checked={value.sms_permission_verified} onChange={e => field('sms_permission_verified', e.target.checked)} /> I verified this client’s mobile number and recorded permission for intake texts. Existing opt-outs remain in effect.</label>}
+    {value.channels.includes('sms') && <><label className="block text-sm"><input type="checkbox" checked={value.sms_permission_verified} onChange={e => field('sms_permission_verified', e.target.checked)} /> I verified this client’s mobile number and recorded permission for intake texts. Existing opt-outs remain in effect.</label>
+    <label className="block text-sm"><input type="checkbox" checked={value.sms_case_updates_verified === true} onChange={e => field('sms_case_updates_verified', e.target.checked)} /> The client also agreed to texts about this case after onboarding. Without this, texting stops when intake does.</label></>}
     <label className="block">Client timezone<input className={input} value={value.timezone} onChange={e => field('timezone', e.target.value)} placeholder="America/Chicago" /></label>
     {users.length > 0 && <label className="block">Responsible staff<select className={input} value={value.owner_id} onChange={e => field('owner_id', e.target.value)}><option value="">Assign to me</option>{users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}</select></label>}
     <label className="block"><input type="checkbox" checked={value.include_questionnaire !== false} onChange={event => field('include_questionnaire', event.target.checked)} /> Include client questionnaire</label>

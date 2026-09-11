@@ -122,3 +122,14 @@ it('will not send paperwork without a reviewed fee agreement', async () => {
   expect(screen.getByRole('alert')).toHaveTextContent('reviewed fee agreement')
   expect(api.post).not.toHaveBeenCalled()
 })
+
+it('keeps case-update texts out of an intake-only consent', () => {
+  // A client who agreed to onboarding texts has not agreed to be texted for
+  // the life of the matter; the two permissions travel separately.
+  const base = {
+    email: 'jane@example.com', channels: ['email', 'sms'], forms: [], uploads: '',
+    includeQuestionnaire: false, questions: '', smsPermissionVerified: true,
+  }
+  expect(paperworkOptions(base, 'UTC').sms_case_updates_verified).toBe(false)
+  expect(paperworkOptions({ ...base, smsCaseUpdatesVerified: true }, 'UTC').sms_case_updates_verified).toBe(true)
+})

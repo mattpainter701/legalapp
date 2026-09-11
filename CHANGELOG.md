@@ -1,3 +1,10 @@
+## 2026.09.11.4 — Consent-scoped SMS for the live case
+
+- Add `app/services/sms_categories.py`: `intake` and `case_updates` as named consent categories, each with its own disclosure version, plus `granted_categories`, `disclosure_version`, and `allows_case_updates`.
+- Record `case_updates` only when the firm confirms the client agreed to it (`sms_case_updates_verified` on `IntakeStart`, a second checkbox in both the paperwork drawer and the matter-creation form). Intake-only consent keeps `allowed_categories: ["intake"]` and the existing `intake-notifications-v1` disclosure.
+- Text signers about a document waiting for signature via `notify_actionable_signers_sms`, sent under `case_updates` alongside the email that already goes. Signature notifications were email-only even for a client who asked to be texted.
+- No migration and no backfill: `send_sms` already gates on `category in consent.allowed_categories`, so every existing consent refuses `case_updates` on its own. Widening an old consent requires the client to agree again. An SMS failure is recorded on the signer's audit and never fails the send it accompanies.
+
 ## 2026.09.11.3 — Outbound correspondence, portfolio triage, creation deadlines
 
 - File a sent email as a document on the matter. `file_outbound_email` builds the `.eml` from exactly what was handed to the transport (compose sends via SMTP or a connected mailbox, so there is no provider message to fetch back), files it into Correspondence, and links it to the `CommunicationLog` row. Only a message that actually sent is filed, and a filing failure is logged rather than failing a request for mail that already left.

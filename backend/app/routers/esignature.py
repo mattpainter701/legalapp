@@ -53,6 +53,7 @@ from app.services.esign.followups import (
 from app.services.esign.notifications import (
     mark_signer_viewed,
     notify_actionable_signers,
+    notify_actionable_signers_sms,
 )
 from app.services.esign.placement import (
     PlacementError,
@@ -548,6 +549,7 @@ async def send_signature_request(
     req.status = "sent"
     req.sent_at = datetime.now(timezone.utc)
     await notify_actionable_signers(req)
+    await notify_actionable_signers_sms(db, req)
     await ensure_signature_followup(db, req)
     await db.commit()
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
