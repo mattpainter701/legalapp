@@ -91,9 +91,7 @@ async def list_sample_templates(
 
     if jurisdiction:
         samples = [
-            sample
-            for sample in samples
-            if jurisdiction in (sample.jurisdictions or [])
+            sample for sample in samples if jurisdiction in (sample.jurisdictions or [])
         ]
 
     count_stmt = select(func.count()).select_from(
