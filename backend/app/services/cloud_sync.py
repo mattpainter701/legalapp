@@ -807,12 +807,22 @@ class CloudSyncService:
         Tries ``get_fresh_user_token`` first (user-scoped OAuth), falls back
         to ``get_fresh_token`` (tenant-scoped / service account).
         Returns ``None`` when no token is available — caller should skip.
+
+        Resolving a token can refresh it, and token_vault commits the session to
+        persist the refreshed token (or the recorded failure) before returning.
+        Tenant context is transaction-local, so that commit drops it: the
+        caller's next write then runs with no tenant, and every RLS policy that
+        casts the setting to a UUID raises ``invalid input syntax for type
+        uuid: ""``. Re-apply it here so every provider sync writes under its
+        tenant whether or not a refresh happened.
         """
+        token = None
         if user_id:
             token = await get_fresh_user_token(db, tenant_id, user_id, provider)
-            if token:
-                return token
-        return await get_fresh_token(db, tenant_id, provider)
+        if not token:
+            token = await get_fresh_token(db, tenant_id, provider)
+        await set_tenant_context(db, tenant_id)
+        return token
 
     async def _upsert(
         self,
