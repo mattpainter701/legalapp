@@ -213,6 +213,19 @@ exit path (success or failure), the backend reader auto-expires a stranded
 marker after two hours, and a failed marker write only warns — it never blocks
 the deploy.
 
+## Deploy races worth knowing
+
+Two collisions are handled deliberately, both observed on real stage runs:
+
+- The hourly `legalapp-backup.timer` (`RandomizedDelaySec=10m`) can hold
+  restic's exclusive repository lock when a deploy's proven-backup step runs.
+  `backup_db.sh` passes `--retry-lock "${RESTIC_RETRY_LOCK:-10m}"` to
+  `restic backup`, so the loser waits a bounded window instead of failing.
+- A release that recreates the LiteLLM gateway (rare after the content-hash
+  cadence) waits up to six minutes for its first healthcheck before the
+  release verification gates run, so a slow gateway start is no longer
+  mistaken for a failure.
+
 ## Recovery
 
 If the IONOS runner is offline, inspect its systemd service and outbound HTTPS

@@ -447,6 +447,31 @@ if [[ "$backend_health" != healthy || "$scheduler_health" != healthy || "$studio
   exit 6
 fi
 
+# A recreated gateway needs minutes for its first healthcheck, while the
+# release verification gates require health=healthy. Wait here, bounded,
+# instead of racing them (observed on the B2 first-seed deploy as
+# "FAIL: litellm is state=running health=starting"). An unchanged gateway is
+# already healthy and this returns on the first probe.
+if [[ "$litellm_gateway_changed" == true ]]; then
+  echo "==> Waiting for the recreated LiteLLM gateway to report healthy"
+  for _ in $(seq 1 90); do
+    litellm_id="$("${compose[@]}" ps -q litellm 2>/dev/null || true)"
+    litellm_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$litellm_id" 2>/dev/null || true)"
+    [[ "$litellm_health" == healthy || "$litellm_health" == running ]] && break
+    if [[ "$litellm_health" == unhealthy ]]; then
+      "${compose[@]}" logs --tail=150 litellm
+      echo "ERROR: recreated LiteLLM gateway reported unhealthy" >&2
+      exit 6
+    fi
+    sleep 4
+  done
+  [[ "$litellm_health" == healthy || "$litellm_health" == running ]] || {
+    "${compose[@]}" logs --tail=150 litellm
+    echo "ERROR: recreated LiteLLM gateway did not become healthy within the bounded window" >&2
+    exit 6
+  }
+fi
+
 "${compose[@]}" exec -T nginx nginx -t
 
 echo "==> Requiring every active tenant heartbeat from the replacement scheduler"
