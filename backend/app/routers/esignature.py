@@ -46,6 +46,10 @@ from app.services.esign import (
     record_portal_signature,
     signer_can_act_now,
 )
+from app.services.esign.followups import (
+    close_signature_followup,
+    ensure_signature_followup,
+)
 from app.services.esign.notifications import (
     mark_signer_viewed,
     notify_actionable_signers,
@@ -105,6 +109,7 @@ async def _to_response(
         provider=req.provider,
         sent_at=req.sent_at,
         completed_at=req.completed_at,
+        due_at=req.due_at,
         expires_at=req.expires_at,
         reminders=req.reminders,
         enforce_signing_order=bool(req.enforce_signing_order),
@@ -392,6 +397,7 @@ async def create_signature_request(
         source_document_size=len(source_bytes),
         source_document_filename=doc.filename,
         created_by_user_id=user.id,
+        due_at=body.due_at,
         expires_at=body.expires_at,
         reminders=_build_reminders(body),
         enforce_signing_order=bool(body.enforce_signing_order),
@@ -512,6 +518,7 @@ async def send_signature_request(
         )
     if _expires_in_past(req.expires_at):
         req.status = "expired"
+        await close_signature_followup(db, req, "Signature request expired")
         await db.commit()
         raise HTTPException(
             status_code=409,
@@ -541,6 +548,7 @@ async def send_signature_request(
     req.status = "sent"
     req.sent_at = datetime.now(timezone.utc)
     await notify_actionable_signers(req)
+    await ensure_signature_followup(db, req)
     await db.commit()
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
     return await _to_response(db, req)
@@ -615,6 +623,7 @@ async def esign_webhook(  # pragma: no cover - exercised by provider integration
     event_type = str(event.get("event_type") or "")
     if event_type.endswith("declined"):
         req.status = "declined"
+        await close_signature_followup(db, req, "Signer declined")
         req.declined_at = datetime.now(timezone.utc)
     else:
         signatures = sr.get("signatures") or []
@@ -685,6 +694,7 @@ async def void_signature_request(
             status_code=409, detail=f"Cannot void from status '{req.status}'"
         )
     req.status = "voided"
+    await close_signature_followup(db, req, "Signature request voided")
     req.voided_at = datetime.now(timezone.utc)
     reason = body.reason if body else None
     req.void_reason = reason.strip() if reason and reason.strip() else None
@@ -816,6 +826,7 @@ async def portal_sign(
     if req.status == "completed":
         from app.services import matter_intake
 
+        await close_signature_followup(db, req, "Document signed")
         await db.flush()
         packet = await matter_intake.get_packet(
             db, req.tenant_id, req.matter_id, lock=True

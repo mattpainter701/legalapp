@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import CaseSetupCard from '../components/casesetup/CaseSetupCard'
+import ClientConversation from '../components/casesetup/ClientConversation'
 import { useAuth } from '../App'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
@@ -362,6 +363,9 @@ function MatterWorkspace() {
   })
   const noteRequest = useRef(null)
   const noteBusy = useRef(false)
+  // Surfaced on the tab bar so an unanswered client message is visible from
+  // anywhere on the matter, not only once you scroll the Overview.
+  const [clientUnread, setClientUnread] = useState(0)
   const [noteNotice, setNoteNotice] = useState(null)
   const [noteConflict, setNoteConflict] = useState(false)
 
@@ -947,6 +951,11 @@ function MatterWorkspace() {
             >
               <Icon d={icon} size={14} />
               {label}
+              {key === 'dashboard' && clientUnread > 0 && (
+                <span aria-label={`${clientUnread} unread client messages`} className="ml-1 rounded-full bg-brand-rose px-1.5 py-0.5 text-[10px] font-bold text-white">
+                  {clientUnread}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -971,6 +980,7 @@ function MatterWorkspace() {
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             <CaseSetupCard matterId={id} matter={matter} />
+            <ClientConversation matterId={id} onUnreadChange={setClientUnread} />
             <SignatureRequestsPanel matterId={id} />
             {/* Stats bar */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -2505,6 +2515,7 @@ export function SignatureRequestsPanel({ matterId }) {
   const [signingSource, setSigningSource] = useState(null)
   const [signers, setSigners] = useState([newSignerRow()])
   const [expiresOn, setExpiresOn] = useState('')
+  const [dueOn, setDueOn] = useState('')
   const [reminderDays, setReminderDays] = useState('7,1')
   const [enforceSigningOrder, setEnforceSigningOrder] = useState(true)
   const [voidReasonById, setVoidReasonById] = useState({})
@@ -2595,6 +2606,8 @@ export function SignatureRequestsPanel({ matterId }) {
         // Generated-PDF placement metadata is attached by the final-PDF
         // generation flow. Never derive this from a DOCX preview here.
         positioned_fields: positionedFields,
+        // 5pm, matching the deadline wording a client is given at intake.
+        due_at: dueOn ? new Date(`${dueOn}T17:00:00`).toISOString() : null,
         expires_at: expiresOn ? new Date(`${expiresOn}T23:59:59`).toISOString() : null,
         reminder_days: parsedReminderDays,
         enforce_signing_order: enforceSigningOrder,
@@ -2604,6 +2617,7 @@ export function SignatureRequestsPanel({ matterId }) {
       setDocId('')
       setReviewOpen(false); setSigningSource(null); setPositionedFields(EMPTY_SIGNING_FIELDS)
       setExpiresOn('')
+      setDueOn('')
       setReminderDays('7,1')
       setEnforceSigningOrder(true)
       setNotice(provider === 'dropbox_sign' ? 'Signature request sent through Dropbox Sign with the reviewed fields.' : 'Signature request sent. Signers will see it in their client portal Signatures tab when it is their turn.')
@@ -2680,13 +2694,29 @@ export function SignatureRequestsPanel({ matterId }) {
             <h3 className="text-sm font-sans font-semibold text-brand-ink">New request</h3>
             <p className="text-xs text-brand-muted mt-0.5">Choose a matter document and the portal signers who should sign it.</p>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <select aria-label="Document to sign" value={docId} onChange={(e) => chooseDocument(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
-              <option value="">Select document…</option>
-              {docs.map((d) => <option key={d.id} value={d.id}>{d.filename}</option>)}
-            </select>
-            <input type="date" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
-            <input value={reminderDays} onChange={(e) => setReminderDays(e.target.value)} placeholder="Reminder days: 7,1" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <label className="text-sm text-brand-ink">
+              <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Document to sign</span>
+              <select aria-label="Document to sign" value={docId} onChange={(e) => chooseDocument(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
+                <option value="">Select document…</option>
+                {docs.map((d) => <option key={d.id} value={d.id}>{d.filename}</option>)}
+              </select>
+            </label>
+            <label className="text-sm text-brand-ink">
+              <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Due from client</span>
+              <input type="date" aria-label="Due from client" value={dueOn} onChange={(e) => setDueOn(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+              <span className="mt-1 block text-[12px] text-brand-muted">Creates an assigned follow-up task. Optional.</span>
+            </label>
+            <label className="text-sm text-brand-ink">
+              <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Expires</span>
+              <input type="date" aria-label="Expires" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+              <span className="mt-1 block text-[12px] text-brand-muted">After this date the request can no longer be signed.</span>
+            </label>
+            <label className="text-sm text-brand-ink">
+              <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Reminders</span>
+              <input aria-label="Reminders" value={reminderDays} onChange={(e) => setReminderDays(e.target.value)} placeholder="7,1" className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+              <span className="mt-1 block text-[12px] text-brand-muted">Days before expiry to remind the signer.</span>
+            </label>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <label className="text-sm">Signing provider <select aria-label="Signing provider" value={provider} onChange={event => setProvider(event.target.value)} className="rounded border border-brand-line p-2"><option value="internal">Internal portal</option><option value="dropbox_sign">Dropbox Sign</option></select></label>
@@ -2737,6 +2767,11 @@ export function SignatureRequestsPanel({ matterId }) {
                         Expires {formatSignatureDate(r.expires_at)}
                         {r.enforce_signing_order ? ' · Sequential signing' : ''}
                       </p>
+                      {r.due_at && !['completed', 'declined', 'voided', 'expired'].includes(r.status) && (
+                        <p className={`text-xs mt-1 ${new Date(r.due_at) < new Date() ? 'text-brand-rose font-semibold' : 'text-brand-amber font-semibold'}`}>
+                          {new Date(r.due_at) < new Date() ? 'Overdue since' : 'Due'} {formatSignatureDate(r.due_at)}
+                        </p>
+                      )}
                       {(r.decline_reason || r.void_reason) && (
                         <p className="text-xs text-brand-rose mt-1">{r.decline_reason || r.void_reason}</p>
                       )}

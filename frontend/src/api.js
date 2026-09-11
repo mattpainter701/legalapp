@@ -1287,6 +1287,16 @@ export const listMatterPortalInvites = (matterId) =>
 export const revokeMatterPortalInvite = (matterId, inviteId) =>
   api.delete(`/matters/${matterId}/portal/invites/${inviteId}`).then((r) => r.data)
 
+// ── Portal conversation (firm side) ────────────────────────────────────────
+export const getMatterPortalMessages = (matterId, params = {}) =>
+  api.get(`/matters/${matterId}/portal/messages`, { params }).then((r) => r.data)
+
+export const sendMatterPortalMessage = (matterId, data) =>
+  api.post(`/matters/${matterId}/portal/messages`, data).then((r) => r.data)
+
+export const markMatterPortalMessagesRead = (matterId) =>
+  api.post(`/matters/${matterId}/portal/messages/read`).then((r) => r.data)
+
 // ── Client paperwork packet (matter intake) ────────────────────────────────
 export const getMatterPaperwork = (matterId) =>
   api.get(`/matters/${matterId}/intake`).then((r) => r.data)

@@ -35,7 +35,7 @@ class AgreementDefinition(Base):
     __table_args__ = (
         UniqueConstraint("kind", "version", name="uq_agreement_kind_version"),
         CheckConstraint(
-            "content_hash ~ '^[0-9a-f]{64}$' " "AND content_hash <> repeat('0', 64)",
+            "content_hash ~ '^[0-9a-f]{64}$' AND content_hash <> repeat('0', 64)",
             name="ck_agreement_definition_content_hash",
         ),
         CheckConstraint(

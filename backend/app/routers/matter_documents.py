@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 from fastapi import (
@@ -27,6 +28,10 @@ from app.models.matter_document import MatterDocument
 from app.models.matter_document_folder import MatterDocumentFolder
 from app.models.matter_document_tag import MatterDocumentTagLink
 from app.models.plugin import Matter
+from app.services.portal_client_alerts import (
+    notify_client_portal_update,
+    shared_document_headline,
+)
 from app.models.tenant import TenantSettings
 from app.schemas.matter_document import (
     MatterDocumentListResponse,
@@ -575,6 +580,7 @@ async def update_matter_document(
                 detail={"code": exc.code, "message": exc.message},
             ) from exc
         doc.document_category = body.document_category
+    announce = False
     if body.portal_visible is not None:
         if body.portal_visible:
             try:
@@ -589,10 +595,32 @@ async def update_matter_document(
                     status_code=exc.status_code,
                     detail={"code": exc.code, "message": exc.message},
                 ) from exc
+        # Sharing used to be silent: the bit flipped and the client was never
+        # told. Announce the first share only -- portal_shared_at is the record
+        # that it happened, so toggling visibility off and on never re-announces
+        # a document the client has already seen.
+        announce = body.portal_visible and doc.portal_shared_at is None
+        if announce:
+            doc.portal_shared_at = datetime.now(timezone.utc)
         doc.portal_visible = body.portal_visible
 
     await db.commit()
     await db.refresh(doc)
+    if announce:
+        matter = await db.scalar(
+            select(Matter).where(
+                Matter.id == doc.matter_id, Matter.tenant_id == user.tenant_id
+            )
+        )
+        if matter is not None and matter.portal_enabled:
+            await notify_client_portal_update(
+                db,
+                tenant_id=user.tenant_id,
+                actor_user_id=user.id,
+                matter=matter,
+                subject=f"A new document is available on {matter.matter_name or 'your matter'}",
+                headline=shared_document_headline(matter, doc.filename),
+            )
     return await serialize_document(db, tenant_id=user.tenant_id, document=doc)
 
 
@@ -739,7 +767,7 @@ async def download_matter_document(
             media_type=doc.content_type or "application/octet-stream",
             headers={
                 "Content-Disposition": (
-                    "attachment; filename*=UTF-8''" f"{quote(doc.filename, safe='')}"
+                    f"attachment; filename*=UTF-8''{quote(doc.filename, safe='')}"
                 ),
                 "Cache-Control": "private, no-store",
                 "X-Content-Type-Options": "nosniff",

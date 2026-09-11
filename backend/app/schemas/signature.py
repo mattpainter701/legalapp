@@ -21,6 +21,9 @@ class SignatureRequestCreate(BaseModel):
     document_id: str
     signers: list[SignerCreate]
     provider: str = "internal"
+    # The date the firm wants this signed by. It raises an assigned follow-up
+    # task; unlike expires_at it never invalidates the request.
+    due_at: datetime | None = None
     expires_at: datetime | None = None
     reminders: dict | None = None
     reminder_days: list[int] = Field(default_factory=list)
@@ -65,6 +68,7 @@ class SignatureRequestResponse(BaseModel):
     provider: str
     sent_at: datetime | None = None
     completed_at: datetime | None = None
+    due_at: datetime | None = None
     expires_at: datetime | None = None
     reminders: dict | None = None
     enforce_signing_order: bool = False
