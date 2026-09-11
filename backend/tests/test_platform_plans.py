@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timedelta, timezone
 from httpx import AsyncClient
 from sqlalchemy import select
 
@@ -178,6 +179,59 @@ async def test_operator_can_suspend_mcp_entitlement(
     assert resp.status_code == 200
     await db_session.refresh(test_tenant)
     assert test_tenant.mcp_entitlement_status == "suspended"
+
+
+@pytest.mark.asyncio
+async def test_operator_sets_and_revokes_trial_window(
+    client: AsyncClient, db_session, test_tenant
+):
+    future = datetime.now(timezone.utc) + timedelta(days=30)
+    start = await client.put(
+        f"/api/platform/tenants/{test_tenant.id}",
+        json={"trial_ends_at": future.isoformat()},
+        headers=platform_headers(),
+    )
+    assert start.status_code == 200
+    await db_session.refresh(test_tenant)
+    ts = (
+        await db_session.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == test_tenant.id)
+        )
+    ).scalar_one()
+    assert ts.custom_config["trial"] is True
+    assert ts.custom_config["trial_ends_at"] == future.isoformat()
+    assert test_tenant.expires_at is not None
+
+    detail = await client.get(
+        f"/api/platform/tenants/{test_tenant.id}", headers=platform_headers()
+    )
+    assert detail.status_code == 200
+    assert detail.json()["tenant"]["on_trial"] is True
+
+    # A past instant revokes access without deleting the tenant.
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    revoked = await client.put(
+        f"/api/platform/tenants/{test_tenant.id}",
+        json={"trial_ends_at": past.isoformat()},
+        headers=platform_headers(),
+    )
+    assert revoked.status_code == 200
+    await db_session.refresh(test_tenant)
+    await db_session.refresh(ts)
+    assert ts.custom_config["trial"] is False
+    assert test_tenant.expires_at <= datetime.now(timezone.utc)
+
+    # Null clears the trial/expiry outright.
+    cleared = await client.put(
+        f"/api/platform/tenants/{test_tenant.id}",
+        json={"trial_ends_at": None},
+        headers=platform_headers(),
+    )
+    assert cleared.status_code == 200
+    await db_session.refresh(test_tenant)
+    await db_session.refresh(ts)
+    assert test_tenant.expires_at is None
+    assert ts.custom_config["trial"] is False
 
 
 @pytest.mark.asyncio

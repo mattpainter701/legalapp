@@ -1857,6 +1857,14 @@ async def patch_user(
                 status_code=400,
                 detail="Premium AI requires an active standard license.",
             )
+        if body.premium_ai_enabled:
+            from app.services.trials import tenant_on_trial
+
+            if await tenant_on_trial(db, admin.tenant_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Premium AI is not available during the free trial.",
+                )
         user.premium_ai_enabled = body.premium_ai_enabled
 
     if body.payg_monthly_budget is not None:

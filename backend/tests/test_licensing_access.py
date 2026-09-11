@@ -162,3 +162,55 @@ async def test_accountant_can_manage_licensing_without_admin_role(
 
     app.dependency_overrides.clear()
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_trial_tenant_cannot_enable_premium_ai(db_session, test_tenant):
+    settings_row = TenantSettings(
+        tenant_id=test_tenant.id,
+        custom_config={
+            "plan": "full-platform",
+            "trial": True,
+            "trial_ends_at": "2099-01-01T00:00:00+00:00",
+        },
+    )
+    admin = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="trial-admin@testfirm.com",
+        role="admin",
+        is_active=True,
+        license_active=True,
+    )
+    target = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="trial-user@testfirm.com",
+        role="user",
+        is_active=True,
+        license_active=True,
+    )
+    db_session.add_all([settings_row, admin, target])
+    await db_session.commit()
+
+    async with await _client_for(
+        db_session, admin, test_tenant.billing_tier
+    ) as client:
+        blocked = await client.put(
+            f"/api/admin/users/{target.id}/premium",
+            json={"premium_ai_enabled": True},
+        )
+    app.dependency_overrides.clear()
+    assert blocked.status_code == 400
+    assert "trial" in blocked.json()["detail"].lower()
+
+    # Turning premium off is always permitted.
+    async with await _client_for(
+        db_session, admin, test_tenant.billing_tier
+    ) as client:
+        allowed_off = await client.put(
+            f"/api/admin/users/{target.id}/premium",
+            json={"premium_ai_enabled": False},
+        )
+    app.dependency_overrides.clear()
+    assert allowed_off.status_code == 200

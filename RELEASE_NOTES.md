@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.8 — Start with a 30-day trial
+
+Released September 11, 2026.
+
+New firms can start a 30-day LawHand trial, try the standard platform without premium AI, and the operator is alerted and can end any trial.
+
+- **A 30-day trial, set up automatically.** Signing up now starts a 30-day trial window, so a new firm can try the platform without a payment step or a setup call.
+- **Premium AI stays off during the trial.** Premium AI cannot be switched on until a firm converts, so trial usage stays on the standard models.
+- **Operators are notified and in control.** The operator gets a note when a trial starts and can extend, end, or revoke any trial from the platform console.
+
 ## 2026.09.11.7 — Start paperwork from a filled form
 
 Released September 11, 2026.

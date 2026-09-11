@@ -408,6 +408,11 @@ class Settings(BaseSettings):
     # Trials started from the product UI carry no expiry in the request, so the
     # server assigns one. Without this every UI-started trial runs forever.
     PLUGIN_TRIAL_DEFAULT_DAYS: int = 14
+    # Self-serve signups receive a bounded free trial. Access enforcement reads
+    # Tenant.expires_at (services/tenant_state.require_active_tenant); the same
+    # instant is mirrored in TenantSettings.custom_config["trial_ends_at"] for
+    # operator display. Premium AI stays off for the whole trial.
+    SIGNUP_TRIAL_DAYS: int = 30
 
     FRONTEND_URL: str = "http://localhost:3000"
     # OAuth callbacks must point to the backend, not the frontend.
