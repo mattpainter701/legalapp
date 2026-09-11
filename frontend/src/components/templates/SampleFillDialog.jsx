@@ -7,7 +7,7 @@ import { renderSampleTemplateFile } from '../../api'
 // the tenant's own template library, it only produces a one-off PDF download.
 const inputClass = 'w-full rounded-lg border border-brand-line bg-brand-bg px-3 py-2 text-sm text-brand-ink'
 
-function FieldInput({ field, value, onChange }) {
+export function FieldInput({ field, value, onChange }) {
   const label = field.label || String(field.name || '').replace(/_/g, ' ')
   const type = field.field_type || 'text'
   const inputId = `sample-field-${field.name}`

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FileText, X } from 'lucide-react'
+import { FileText, LibraryBig, X } from 'lucide-react'
 import { getIntakeStarterPack } from '../../api'
 import { startMatterIntake } from '../MatterIntakePanel'
+import FormLibraryDialog from './FormLibraryDialog'
 import { emptyDraft, paperworkOptions } from './paperwork'
 
 const STEPS = ['Documents', 'Deadlines', 'Send']
@@ -41,8 +42,22 @@ export default function PaperworkDrawer({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [packNote, setPackNote] = useState('')
+  const [attachedDocuments, setAttachedDocuments] = useState([])
+  const [libraryTarget, setLibraryTarget] = useState(null)
 
   const set = (key, value) => setDraft(previous => ({ ...previous, [key]: value }))
+
+  // Forms filled from the library are uploaded as matter documents and land
+  // here; merge them with the ones the matter already had so either source can
+  // become the fee agreement or an additional signing form.
+  const allDocuments = useMemo(() => {
+    const seen = new Set()
+    return [...attachedDocuments, ...documents].filter(document => {
+      if (!document?.id || seen.has(document.id)) return false
+      seen.add(document.id)
+      return true
+    })
+  }, [attachedDocuments, documents])
 
   // The card opens this drawer immediately and resolves the client's address
   // afterwards, so seed the field when it arrives -- but never overwrite an
@@ -51,11 +66,35 @@ export default function PaperworkDrawer({
     if (!clientEmail) return
     setDraft(previous => (previous.email ? previous : { ...previous, email: clientEmail }))
   }, [clientEmail])
-  const pdfs = useMemo(() => documents.filter(isPdf), [documents])
+  const pdfs = useMemo(() => allDocuments.filter(isPdf), [allDocuments])
   const selectable = useMemo(
-    () => documents.filter(document => document.id !== draft.agreementDocumentId),
-    [documents, draft.agreementDocumentId],
+    () => allDocuments.filter(document => document.id !== draft.agreementDocumentId),
+    [allDocuments, draft.agreementDocumentId],
   )
+
+  function attachFilled(document) {
+    if (!document?.id) return
+    setAttachedDocuments(current => [document, ...current])
+    setDraft(previous => {
+      if (libraryTarget === 'agreement') {
+        return {
+          ...previous,
+          agreementDocumentId: document.id,
+          forms: previous.forms.filter(form => form.documentId !== document.id),
+        }
+      }
+      if (libraryTarget === 'form') {
+        return {
+          ...previous,
+          forms: [
+            ...previous.forms.filter(form => form.documentId !== document.id),
+            { documentId: document.id, label: document.filename, requiresSignature: true, due: '' },
+          ],
+        }
+      }
+      return previous
+    })
+  }
   const hasAgreement = Boolean(draft.agreementDocumentId || agreementFile)
   const canSend = hasAgreement && draft.email && draft.channels.length > 0
     && (!draft.channels.includes('sms') || draft.smsPermissionVerified)
@@ -154,11 +193,25 @@ export default function PaperworkDrawer({
                     <input type="file" accept=".pdf,application/pdf" onChange={event => setAgreementFile(event.target.files?.[0] || null)} className="w-full text-[13px] text-brand-ink file:mr-3 file:rounded-lg file:border file:border-brand-line file:bg-brand-surface file:px-3 file:py-1.5 file:text-[13px]" />
                   </label>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setLibraryTarget('agreement')}
+                  className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-accent underline"
+                >
+                  <LibraryBig size={14} aria-hidden="true" /> Fill a firm template or sample
+                </button>
               </div>
 
               <div className={card}>
                 <h3 className="mb-1 font-semibold text-brand-ink">Additional forms</h3>
                 <p className="mb-3 text-[12px] text-brand-muted">Each signing form gets its own signature request and status.</p>
+                <button
+                  type="button"
+                  onClick={() => setLibraryTarget('form')}
+                  className="mb-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-accent underline"
+                >
+                  <LibraryBig size={14} aria-hidden="true" /> Fill a form from the library
+                </button>
                 {selectable.length === 0 ? (
                   <p className="text-[13px] text-brand-muted">Attach templates in Documents to include them here.</p>
                 ) : (
@@ -326,6 +379,14 @@ export default function PaperworkDrawer({
           </div>
         </footer>
       </div>
+      {libraryTarget && (
+        <FormLibraryDialog
+          matterId={matterId}
+          documentCategory={libraryTarget === 'agreement' ? 'contract' : 'general'}
+          onAttached={attachFilled}
+          onClose={() => setLibraryTarget(null)}
+        />
+      )}
     </div>
   )
 }
