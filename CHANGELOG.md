@@ -1,3 +1,10 @@
+## 2026.09.11.5 — Onboarding copy and follow-up clarity
+
+- Name the requested client records in the paperwork emails. `requested_upload_labels()` feeds both the initial "Review your paperwork" message and the post-signing portal-ready message, so the client learns what to upload without opening the portal. Previously only `selected_documents` were listed.
+- Format the staff follow-up description with `followup_task_description()` in the packet timezone instead of `due.isoformat()`. The raw ISO value (microseconds and `+00:00` offset) was rendered verbatim in the task row.
+- Prefer `task.title` over `task.task_type` for `task_due` calendar events, so a deadline reads "Fee agreement signed — follow up with client" rather than "follow_up".
+- Add `docs/matter-onboarding-ux-audit-2026-09-11.md` and the `E2E_AUDIT`-gated `frontend/e2e/matter-ux-audit.capture.e2e.js` capture harness.
+
 ## 2026.09.11.4 — Consent-scoped SMS for the live case
 
 - Add `app/services/sms_categories.py`: `intake` and `case_updates` as named consent categories, each with its own disclosure version, plus `granted_categories`, `disclosure_version`, and `allows_case_updates`.

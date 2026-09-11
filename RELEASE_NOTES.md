@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.5 — Say which records you still need
+
+Released September 11, 2026.
+
+Paperwork emails now name the records the client must upload, follow-up tasks show a normal date, and calendar entries use the task name.
+
+- **Ask for the records up front.** The first paperwork email and the portal-ready email now list the records the client was asked to upload, not just that something is needed.
+- **Readable follow-up dates.** A follow-up task shows a normal date and time in the client's timezone instead of a raw machine timestamp.
+- **Calendar names the job.** A calendar deadline created from a task now uses the task title instead of its internal type.
+
 ## 2026.09.11.4 — Texts about the case, only where the client agreed
 
 Released September 11, 2026.

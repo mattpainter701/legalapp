@@ -867,3 +867,35 @@ async def test_start_route_accepts_existing_reviewed_agreement(ctx, monkeypatch)
     with pytest.raises(HTTPException) as error:
         await r.start(c.matter.id, body.model_dump_json(), None, c.db, c.user)
     assert error.value.status_code == 422
+
+
+def test_followup_task_description_is_human_readable():
+    due = datetime(2026, 9, 12, 19, 28, tzinfo=timezone.utc)
+    text = s.followup_task_description(due, "America/Chicago")
+    assert "Intake action due Sep 12, 2026 02:28 PM." in text
+    assert "T19:28" not in text
+    assert "+00:00" not in text
+
+
+def test_packet_messages_list_requested_uploads(ctx):
+    c = ctx
+    c.packet.config["portal_after_signing"] = True
+    c.packet.config["selected_documents"] = [{"label": "General intake"}]
+    c.packet.requirements["upload_1"] = {
+        "kind": "upload",
+        "label": "Marriage certificate",
+        "completed": False,
+    }
+    assert (
+        "Marriage certificate"
+        in s.message(c.packet, "welcome", "https://portal.example")[1]
+    )
+    assert (
+        "Marriage certificate"
+        in s.message(c.packet, "signed", "https://portal.example")[1]
+    )
+    c.packet.requirements["upload_1"]["completed"] = True
+    assert (
+        "Marriage certificate"
+        not in s.message(c.packet, "signed", "https://portal.example")[1]
+    )

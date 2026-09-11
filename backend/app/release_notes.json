@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.11.5",
+      "version": "2026.09.11.5",
+      "title": "Say which records you still need",
+      "published_at": "2026-09-11",
+      "summary": "Paperwork emails now name the records the client must upload, follow-up tasks show a normal date, and calendar entries use the task name.",
+      "highlights": [
+        {
+          "title": "Ask for the records up front",
+          "description": "The first paperwork email and the portal-ready email now list the records the client was asked to upload, not just that something is needed."
+        },
+        {
+          "title": "Readable follow-up dates",
+          "description": "A follow-up task shows a normal date and time in the client's timezone instead of a raw machine timestamp."
+        },
+        {
+          "title": "Calendar names the job",
+          "description": "A calendar deadline created from a task now uses the task title instead of its internal type."
+        }
+      ]
+    },
+    {
       "id": "2026.09.11.4",
       "version": "2026.09.11.4",
       "title": "Texts about the case, only where the client agreed",
