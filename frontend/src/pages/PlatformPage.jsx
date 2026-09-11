@@ -1,7 +1,7 @@
 import TenantPanelSettings from '../components/TenantPanelSettings'
 import TemplateAIProfilePanel from '../components/TemplateAIProfilePanel'
 import React, { useState, useEffect, useCallback } from 'react'
-import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute, getLLMRoutingProfiles, createLLMRoutingProfile, updateLLMRoutingProfile, getBackgroundAssistantUsage, updateBackgroundAssistantQuota } from '../api'
+import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute, getLLMRoutingProfiles, createLLMRoutingProfile, updateLLMRoutingProfile, getBackgroundAssistantUsage, updateBackgroundAssistantQuota, getPlatformSmsProvider, updatePlatformSmsProvider, deletePlatformSmsProvider, sendPlatformSmsTest } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { getPlatformDemoWorkspaces, terminatePlatformDemoWorkspace } from '../api'
@@ -3329,6 +3329,180 @@ export function PlatformTenantRow({ tenant: t, expanded, onToggle }) {
   )
 }
 
+function PlatformSmsTab({ platformKey, onAuthError }) {
+  const [config, setConfig] = useState(null)
+  const [form, setForm] = useState({
+    account_sid: '',
+    auth_token: '',
+    messaging_service_sid: '',
+    from_number: '',
+    status_callback_url: '',
+    is_active: true,
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
+  const [testTo, setTestTo] = useState('')
+  const [testBody, setTestBody] = useState('')
+  const [testing, setTesting] = useState(false)
+
+  const load = useCallback(async () => {
+    setError(null)
+    try {
+      const data = await getPlatformSmsProvider(platformKey)
+      setConfig(data)
+      setForm((prev) => ({ ...prev, auth_token: '' }))
+    } catch (e) {
+      if (e?.response?.status === 403) onAuthError?.()
+      setError(apiErrorMessage(e, 'Failed to load SMS settings.'))
+    }
+  }, [platformKey, onAuthError])
+
+  useEffect(() => { load() }, [load])
+
+  const setField = (field) => (event) => {
+    const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value
+    setForm((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const handleSave = async (event) => {
+    event.preventDefault()
+    setSaving(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const payload = { is_active: form.is_active }
+      for (const field of ['account_sid', 'auth_token', 'messaging_service_sid', 'from_number', 'status_callback_url']) {
+        if (form[field].trim()) payload[field] = form[field].trim()
+      }
+      const data = await updatePlatformSmsProvider(platformKey, payload)
+      setConfig(data)
+      setForm((prev) => ({ ...prev, auth_token: '' }))
+      setNotice('Shared SMS sender saved.')
+    } catch (e) {
+      if (e?.response?.status === 403) onAuthError?.()
+      setError(apiErrorMessage(e, 'Failed to save SMS sender.'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleClear = async () => {
+    setError(null)
+    setNotice(null)
+    try {
+      await deletePlatformSmsProvider(platformKey)
+      setConfig(null)
+      setForm({ account_sid: '', auth_token: '', messaging_service_sid: '', from_number: '', status_callback_url: '', is_active: true })
+      setNotice('Shared SMS sender removed.')
+    } catch (e) {
+      if (e?.response?.status === 403) onAuthError?.()
+      setError(apiErrorMessage(e, 'Failed to remove SMS sender.'))
+    }
+  }
+
+  const handleTest = async (event) => {
+    event.preventDefault()
+    setTesting(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await sendPlatformSmsTest(platformKey, {
+        to: testTo.trim(),
+        body: testBody.trim() || undefined,
+      })
+      setNotice(`Test message accepted${result?.sid ? ` (${result.sid})` : ''}.`)
+    } catch (e) {
+      if (e?.response?.status === 403) onAuthError?.()
+      setError(apiErrorMessage(e, 'Failed to send test message.'))
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <section className="bg-brand-surface border border-brand-line rounded-xl shadow-sm p-6">
+        <h2 className="font-serif font-bold text-brand-ink flex items-center gap-2"><PhoneCall size={18} /> Shared SMS sender</h2>
+        <p className="text-brand-ink-2 font-sans text-sm mt-2 max-w-3xl">
+          One LawHand-owned Twilio account shared by tenants. The Auth Token is encrypted at rest and never shown again.
+        </p>
+
+        {config && (
+          <div className="mt-4 flex flex-wrap gap-2 text-xs font-sans">
+            <span className={`px-2 py-1 rounded ${config.sender_ready ? 'bg-brand-green/10 text-brand-green' : 'bg-brand-rose/10 text-brand-rose'}`}>
+              {config.sender_ready ? 'Ready' : 'Incomplete'}
+            </span>
+            <span className={`px-2 py-1 rounded ${config.is_active ? 'bg-brand-green/10 text-brand-green' : 'bg-brand-gold/10 text-brand-gold'}`}>
+              {config.is_active ? 'Active' : 'Inactive'}
+            </span>
+            <span className="px-2 py-1 rounded bg-brand-bg-soft text-brand-muted">
+              Token {config.auth_token_configured ? `set ••••${config.auth_token_hint || ''}` : 'not set'}
+            </span>
+          </div>
+        )}
+
+        {error && <div className="mt-4 bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">{error}</div>}
+        {notice && <div className="mt-4 bg-brand-green/10 border border-brand-green/20 rounded-lg px-4 py-3 text-sm text-brand-green font-sans">{notice}</div>}
+
+        <form onSubmit={handleSave} className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {[
+            ['account_sid', 'Account SID', 'AC…'],
+            ['auth_token', 'Auth Token', config?.auth_token_configured ? 'leave blank to keep' : ''],
+            ['messaging_service_sid', 'Messaging Service SID', 'MG… (or set a From number)'],
+            ['from_number', 'From number', '+15551234567'],
+            ['status_callback_url', 'Status callback URL', 'optional'],
+          ].map(([field, label, placeholder]) => (
+            <label key={field} className="block">
+              <span className="text-xs font-sans font-medium text-brand-muted">{label}</span>
+              <input
+                type={field === 'auth_token' ? 'password' : 'text'}
+                value={form[field]}
+                onChange={setField(field)}
+                placeholder={placeholder}
+                className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface text-brand-ink"
+              />
+            </label>
+          ))}
+          <label className="flex items-center gap-2 md:col-span-2 text-sm font-sans text-brand-ink-2">
+            <input type="checkbox" checked={form.is_active} onChange={setField('is_active')} />
+            Active
+          </label>
+          <div className="md:col-span-2 flex gap-3">
+            <button type="submit" disabled={saving} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-ink text-brand-surface text-sm font-sans disabled:opacity-50">
+              <Save size={15} /> {saving ? 'Saving…' : 'Save sender'}
+            </button>
+            {config && (
+              <button type="button" onClick={handleClear} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-rose/30 text-brand-rose text-sm font-sans">
+                <Trash2 size={15} /> Remove
+              </button>
+            )}
+          </div>
+        </form>
+      </section>
+
+      <section className="bg-brand-surface border border-brand-line rounded-xl shadow-sm p-6">
+        <h3 className="font-serif font-bold text-brand-ink">Send a test message</h3>
+        <p className="text-brand-ink-2 font-sans text-sm mt-2">Sends one message through the shared account using the saved credentials.</p>
+        <form onSubmit={handleTest} className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <label className="block">
+            <span className="text-xs font-sans font-medium text-brand-muted">Destination (E.164)</span>
+            <input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="+15551234567" className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface text-brand-ink" />
+          </label>
+          <label className="block md:col-span-2">
+            <span className="text-xs font-sans font-medium text-brand-muted">Message (optional)</span>
+            <input value={testBody} onChange={(e) => setTestBody(e.target.value)} placeholder="LawHand SMS test message." className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface text-brand-ink" />
+          </label>
+          <button type="submit" disabled={testing || !testTo.trim()} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-ink text-brand-surface text-sm font-sans disabled:opacity-50">
+            <PhoneCall size={15} /> {testing ? 'Sending…' : 'Send test'}
+          </button>
+        </form>
+      </section>
+    </div>
+  )
+}
+
+
 export default function PlatformPage() {
   const [platformKey, setPlatformKey] = useState(null)
   const [tab, setTab] = useState('dashboard')
@@ -3436,6 +3610,7 @@ export default function PlatformPage() {
     { id: 'demos', label: 'Demos', icon: Users },
     { id: 'integrations', label: 'Integrations', icon: Zap },
     { id: 'mcp', label: 'MCP', icon: Key },
+    { id: 'sms', label: 'SMS', icon: PhoneCall },
     { id: 'ai-routing', label: 'AI Routing', icon: Cpu },
     { id: 'logs', label: 'Logs', icon: FileText },
     { id: 'health', label: 'System', icon: Database },
@@ -3733,6 +3908,16 @@ export default function PlatformPage() {
         )}
 
         {tab === 'logs' && <LogsTab platformKey={platformKey} tenants={tenants} />}
+
+        {/* ── SMS Tab ── */}
+        {tab === 'sms' && (
+          <PlatformSmsTab
+            platformKey={platformKey}
+            onAuthError={() => {
+              setPlatformKey(null)
+            }}
+          />
+        )}
 
         {/* ── AI Routing Tab ── */}
         {tab === 'ai-routing' && (

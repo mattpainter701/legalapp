@@ -1,3 +1,10 @@
+## Unreleased — Platform-managed shared Twilio sender
+
+- Add `app/services/platform_sms.py`: the operator stores one LawHand-owned Twilio account in `platform_settings` (`platform_sms_provider_v1`), with the Auth Token encrypted by `token_vault` and only a last-4 hint exposed. A partial update keeps the stored token when the field is omitted.
+- Add `/api/platform/sms/provider` (GET/PUT/DELETE) and `/api/platform/sms/test` under the existing platform-operator token, so writes need `platform:write` and reads need `platform:read`. Test send validates E.164, resolves the saved credentials, and posts to Twilio `/Messages.json`.
+- Add an operator SMS tab in `frontend/src/pages/PlatformPage.jsx` to save the sender and send a test message.
+- No migration: configuration uses the existing `platform_settings` table. The separate, firm-owned tenant SMS path (`/api/sms/config`) is unchanged.
+
 ## 2026.09.11.8 — 30-day self-serve trials
 
 - Add `app/services/trials.py` and `SIGNUP_TRIAL_DAYS=30`: plan signup now provisions a bounded trial window. `Tenant.expires_at` is the enforced boundary (fail-closed in `require_active_tenant`) and `TenantSettings.custom_config` carries `trial`, `trial_started_at`, and `trial_ends_at` for operator display. Signup previously wrote a 14-day `trial_ends_at` that nothing read, so a self-serve tenant never expired.
