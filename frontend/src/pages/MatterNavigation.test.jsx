@@ -10,7 +10,7 @@ vi.mock('../api', async () => {
 })
 vi.mock('../App', () => ({ useAuth: () => ({ user: { id: 'user', role: 'admin' } }) }))
 vi.mock('../components/MatterDocumentsTab', () => ({ default: () => <p>Document workspace</p> }))
-vi.mock('../components/MatterPartiesTab', () => ({ default: () => null }))
+vi.mock('../components/MatterPartiesTab', () => ({ default: () => <p>Parties panel</p> }))
 
 function Navigation() {
   const location = useLocation()
@@ -43,8 +43,19 @@ it('opens a bookmarked section and restores it with browser back while preservin
   expect(screen.getByLabelText('Location')).toHaveTextContent('?tab=documents&source=estate')
 })
 
-it('falls back to dashboard for an unknown section and exposes scoped task correction links', async () => {
-  renderMatter('/matters/A?tab=unknown')
+it('keeps team and matter parties together under People', async () => {
+  renderMatter('/matters/A?tab=team')
+  expect(await screen.findByText('Parties panel')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Team Assignments' })).toBeInTheDocument()
+})
+
+it('keeps the Documents workspace free of the Parties panel', async () => {
+  renderMatter('/matters/A?tab=documents')
+  await screen.findByText('Document workspace')
+  expect(screen.queryByText('Parties panel')).not.toBeInTheDocument()
+})
+
+it('falls back to dashboard for an unknown section and exposes scoped task correction links', async () => {  renderMatter('/matters/A?tab=unknown')
   expect(await screen.findByRole('link', { name: 'Review inventory', exact: true })).toHaveAttribute('href', '/tasks/task-1?matter_id=A')
   expect(screen.getByRole('link', { name: 'Manage matter tasks' })).toHaveAttribute('href', '/tasks?matter_id=A')
 })

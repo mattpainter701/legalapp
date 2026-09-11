@@ -761,7 +761,7 @@ function MatterWorkspace() {
   const tabs = [
     { key: 'dashboard', label: 'Overview', icon: Icons.activity },
     { key: 'activity', label: 'Activity', icon: Icons.clock },
-    { key: 'team', label: 'Team', icon: Icons.users },
+    { key: 'team', label: 'People', icon: Icons.users },
     { key: 'workflow', label: 'Workflow', icon: Icons.checkCircle },
     { key: 'documents', label: 'Documents', icon: Icons.file },
     { key: 'correspondence', label: 'Correspondence', icon: Icons.mail },
@@ -1443,8 +1443,9 @@ function MatterWorkspace() {
           </div>
         )}
 
-        {/* ── Team Tab ─────────────────────────────────────────────────────────── */}
+        {/* ── People Tab (team assignments + matter parties) ───────────────────── */}
         {activeTab === 'team' && (
+          <>
           <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
             <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
               <h2 className="font-serif font-bold text-xl text-brand-ink">Team Assignments</h2>
@@ -1554,6 +1555,8 @@ function MatterWorkspace() {
               </div>
             </div>
           </div>
+          <div className="mt-8"><MatterPartiesTab matterId={id} /></div>
+          </>
         )}
 
         {activeTab === 'workflow' && (
@@ -1575,7 +1578,7 @@ function MatterWorkspace() {
           <MatterCorrespondenceTab matterId={id} matter={matter} />
         )}
 
-        {/* ── Documents Tab (includes Parties) ─────────────────────────────────── */}
+        {/* ── Documents Tab ───────────────────────────────────────────────────── */}
         {activeTab === 'documents' && (
           <div className="space-y-8">
             <MatterDocumentsTab
@@ -1587,15 +1590,6 @@ function MatterWorkspace() {
                 loadCloudFiles()
               }}
             />
-            <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
-              <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
-                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
-                  <Icon d={Icons.parties} size={18} className="text-brand-accent" /> Parties
-                </h2>
-                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Opposing counsel, plaintiffs, defendants, and other parties.</p>
-              </div>
-              <MatterPartiesTab matterId={id} embedded />
-            </div>
           </div>
         )}
 

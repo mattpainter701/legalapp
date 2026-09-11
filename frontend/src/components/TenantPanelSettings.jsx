@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { updatePlatformTenant } from '../api'
 const EMPTY = []
-const PANELS = { documents: 'Documents', activity: 'Activity', team: 'Team', workflow: 'Workflow', correspondence: 'Correspondence', portal: 'Client Portal', billing: 'Billing', chat: 'Matter assistant' }
+const PANELS = { documents: 'Documents', activity: 'Activity', team: 'People', workflow: 'Workflow', correspondence: 'Correspondence', portal: 'Client Portal', billing: 'Billing', chat: 'Matter assistant' }
 export default function TenantPanelSettings({ tenantId, hiddenPanels = EMPTY, platformKey, onSaved }) {
   const [hidden, setHidden] = useState(hiddenPanels)
   const [busy, setBusy] = useState(false)
