@@ -5,7 +5,7 @@ import { dismissReleaseAnnouncement } from './release-announcement.js'
 
 // Audit-only harness. Skipped unless E2E_AUDIT=true so it never runs in CI.
 const enabled = process.env.E2E_AUDIT === 'true'
-const outDir = process.env.E2E_AUDIT_OUT || 'F:/deepseek/legalapp/matter-ux-audit-2026-09-11'
+const outDir = path.resolve(process.env.E2E_AUDIT_OUT || 'test-results/matter-ux-audit')
 const fixture = name => path.resolve('e2e/fixtures', name)
 const mailbox = () => path.join(process.env.UPLOAD_DIR, 'onboarding-mailbox.jsonl')
 const messages = () => {

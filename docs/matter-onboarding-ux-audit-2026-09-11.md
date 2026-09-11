@@ -7,15 +7,16 @@ and a real browser (Chromium via Playwright). Only outbound client delivery was
 captured to a local mailbox; browser API responses and document storage were
 real. Nothing was sent to a live provider or a real client.
 
-- Audited checkout: `F:\deepseek\legalapp\legalapp-repo` at `main` `aace67ee`
-  plus the fixes on branch `feat/matter-onboarding-ux-audit`.
+- Audited checkout: the repository at `main` `aace67ee` plus the fixes on
+  branch `feat/matter-onboarding-ux-audit`.
 - Live deployment observed separately at `df3d5838` (built 2026-09-11); a live
   authenticated walk was not possible because the guided demo requires an
   access code we do not hold. The live version endpoint stayed reachable.
-- Artifacts: `F:\deepseek\legalapp\matter-ux-audit-2026-09-11\` (17 screenshots
-  and `observations.json`).
-- Harness: `frontend/e2e/matter-ux-audit.capture.e2e.js`, gated by
-  `E2E_AUDIT=true` so it never runs in CI.
+- Artifacts: the capture writes its screenshots and `observations.json` to
+  `frontend/test-results/matter-ux-audit/` by default; set `E2E_AUDIT_OUT` to
+  write elsewhere.
+- Harness: `frontend/e2e/matter-ux-audit.capture.e2e.js`, excluded by
+  `testIgnore` unless `E2E_AUDIT=true`, so it does not run in CI.
 
 ## Journey verdicts
 

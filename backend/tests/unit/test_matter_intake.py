@@ -895,7 +895,8 @@ def test_packet_messages_list_requested_uploads(ctx):
         in s.message(c.packet, "signed", "https://portal.example")[1]
     )
     c.packet.requirements["upload_1"]["completed"] = True
-    assert (
-        "Marriage certificate"
-        not in s.message(c.packet, "signed", "https://portal.example")[1]
-    )
+    no_uploads = s.message(c.packet, "signed", "https://portal.example")[1]
+    assert "Marriage certificate" not in no_uploads
+    # With nothing outstanding, the copy must not send the client hunting for
+    # an upload that was never requested.
+    assert "upload" not in no_uploads.lower()

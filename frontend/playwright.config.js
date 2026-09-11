@@ -16,6 +16,10 @@ delete runtimeEnv.E2E_ADMIN_DATABASE_URL
 export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.e2e.js',
+  testIgnore:
+    process.env.E2E_AUDIT === 'true'
+      ? []
+      : '**/matter-ux-audit.capture.e2e.js',
   outputDir: 'test-results',
   fullyParallel: false,
   workers: 1,

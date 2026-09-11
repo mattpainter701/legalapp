@@ -833,11 +833,19 @@ def requested_upload_labels(packet, *, outstanding_only=False):
 def message(packet, kind, url):
     if kind == "signed":
         uploads = requested_upload_labels(packet, outstanding_only=True)
-        records = f" Requested records: {', '.join(uploads)}." if uploads else ""
+        if uploads:
+            body = (
+                "Your fee agreement signature was received. Complete remaining paperwork "
+                f"and upload requested records: {', '.join(uploads)}. Secure portal link: {url}"
+            )
+        else:
+            body = (
+                "Your fee agreement signature was received. Complete any remaining paperwork "
+                f"in your secure portal: {url}"
+            )
         return (
             "Your client portal is ready",
-            "Your fee agreement signature was received. Complete remaining paperwork and upload requested records."
-            f"{records} Secure portal link: {url}",
+            body,
         )
     if kind == "welcome" and packet.config.get("portal_after_signing"):
         labels = [
