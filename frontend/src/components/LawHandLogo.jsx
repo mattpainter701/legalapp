@@ -1,3 +1,5 @@
+import { SITE_TAGLINE } from '../seo/config'
+
 const assetBase = '/brand/lawhand'
 
 /**
@@ -34,11 +36,11 @@ export default function LawHandLogo({
             compact ? 'text-xl' : 'text-3xl'
           }`}
         >
-          lawhand
+          LawHand™
         </span>
         {showTagline && !compact && (
           <span className={`mt-1.5 block font-sans text-xs font-medium tracking-wide ${taglineClass}`}>
-            The whole matter, in hand.
+            {SITE_TAGLINE}
           </span>
         )}
       </span>}

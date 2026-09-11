@@ -24,7 +24,7 @@ describe('SEO configuration', () => {
   it('ships the LawHand value proposition in the server-delivered HTML', () => {
     const html = readFileSync('index.html', 'utf8')
 
-    expect(html).toContain('The whole matter, in hand.')
+    expect(html).toContain('Law practice management, simplified.')
     expect(html).toContain('Book a demo')
     expect(html).not.toContain('<div id="root"></div>')
   })
@@ -291,7 +291,7 @@ describe('SEO configuration', () => {
     // The marketing hero must not survive into a policy page. The slogan may
     // still appear inside the Organization structured data, which describes the
     // publisher rather than this page, so assert on the rendered body.
-    expect(html).not.toContain('<h1>The whole matter, in hand.</h1>')
+    expect(html).not.toContain('<h1>Law practice management, simplified.</h1>')
     expect(html).not.toContain('<main class="server-marketing">')
     expect(html).toContain('<script type="module" src="/src/main.jsx"></script>')
   })

@@ -208,6 +208,7 @@ ${sections}
           <footer class="server-legal__footer">
             <p>The controlling subscription agreement and, where applicable, data-processing agreement are available from your organization. Contact your firm administrator for workspace-specific terms.</p>
             <p>Read the <a href="${route.otherPath}">${escapeHtml(route.otherLabel)}</a> or contact <a href="${escapeHtml(contactUrl)}">${escapeHtml(contactLabel(contactUrl))}</a>.</p>
+            <p>© 2026 Perevaga Group LLC d/b/a LawHand.</p>
           </footer>
         </article>
       </main>`
@@ -249,6 +250,7 @@ ${navigationLinks(pathname)}
 ${sections}
           <footer class="server-legal__footer">
             <p><a href="${escapeHtml(contactUrl)}">Book a LawHand demo</a> or <a href="/login">sign in</a>.</p>
+            <p>© 2026 Perevaga Group LLC d/b/a LawHand.</p>
           </footer>
         </article>
       </main>`

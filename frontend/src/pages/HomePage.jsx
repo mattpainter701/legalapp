@@ -285,7 +285,7 @@ export default function HomePage() {
               One source of truth for every matter
             </span>
             <h1 className="max-w-xl font-serif font-medium text-[52px] sm:text-[64px] md:text-[76px] leading-[0.98] tracking-[-0.06em] mt-4">
-              The whole matter, in hand.
+              Law practice management, simplified.
             </h1>
             <p className="text-brand-ink-2 font-sans text-[17px] sm:text-[18px] leading-relaxed mt-5 max-w-xl">
               Every fact, deadline, document, and decision—connected in one living record.
