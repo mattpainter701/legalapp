@@ -1546,10 +1546,14 @@ async def signup_with_plan(
     _require_public_signup_enabled()
 
     import re
-    from datetime import timedelta as _timedelta
 
     from app.models.tenant import TenantSettings
     from app.services.plans import get_plan
+    from app.services.trials import (
+        new_trial_window,
+        notify_operator_trial_started,
+        trial_config,
+    )
 
     plan = get_plan(body.plan)
     if plan is None or not plan.public_signup:
@@ -1566,6 +1570,7 @@ async def signup_with_plan(
     slug = re.sub(r"[^a-z0-9]+", "-", body.firm_name.lower()).strip("-") or "firm"
     domain = f"{slug}-{uuid.uuid4().hex[:8]}"
 
+    trial_start, trial_end = new_trial_window()
     tenant = Tenant(
         id=uuid.uuid4(),
         name=body.firm_name,
@@ -1576,15 +1581,17 @@ async def signup_with_plan(
         phone=body.phone,
         billing_tier=plan.billing_tier,
         is_active=True,
+        # Expiry is the enforced trial boundary; a lapsed trial fails closed in
+        # services/tenant_state.require_active_tenant on every request path.
+        expires_at=trial_end,
     )
     db.add(tenant)
     await db.flush()
 
-    trial_ends_at = (datetime.now(timezone.utc) + _timedelta(days=14)).isoformat()
     db.add(
         TenantSettings(
             tenant_id=tenant.id,
-            custom_config={"plan": plan.id, "trial_ends_at": trial_ends_at},
+            custom_config={"plan": plan.id, **trial_config(trial_start, trial_end)},
         )
     )
 
@@ -1597,6 +1604,8 @@ async def signup_with_plan(
         role="admin",
         is_active=True,
         license_active=True,
+        # Premium AI is held back for the whole trial window.
+        premium_ai_enabled=False,
     )
     db.add(user)
     await db.commit()
@@ -1612,6 +1621,14 @@ async def signup_with_plan(
 
     await provision_tenant_rbac(db, tenant.id, user.id)
     await db.commit()
+
+    # Best-effort operator alert; never blocks signup.
+    await notify_operator_trial_started(
+        tenant_name=tenant.name,
+        tenant_id=tenant.id,
+        admin_email=user.email,
+        trial_ends_at=trial_end,
+    )
 
     jwt_token = await _issue_access_token(db, user, tenant)
     refresh_token = await _create_refresh_token(request, user)

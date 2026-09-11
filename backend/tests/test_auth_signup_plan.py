@@ -1,5 +1,6 @@
 import pytest
 import pytest_asyncio
+from datetime import datetime, timedelta, timezone
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
@@ -8,6 +9,7 @@ from app.main import app
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 from app.routers import auth as auth_router
+from app.services.email import EmailDeliveryResult, email_service
 
 
 @pytest_asyncio.fixture
@@ -58,6 +60,93 @@ async def test_public_signup_provisions_intake_tenant(public_client, db_session)
     assert tenant.staff_size == 4
     assert tenant.address == "100 First Customer Way"
     assert tenant.phone == "+1 701-555-0101"
+
+
+@pytest.mark.asyncio
+async def test_public_signup_sets_thirty_day_trial_and_no_premium(
+    public_client, db_session
+):
+    resp = await public_client.post(
+        "/api/auth/signup/plan",
+        json={
+            "plan": "intake-only",
+            "firm_name": "Trial Co",
+            "email": "owner@trial.co",
+            "password": "longenoughpw123",
+            "full_name": "Trial Owner",
+        },
+    )
+    assert resp.status_code == 201
+
+    user = (
+        await db_session.execute(select(User).where(User.email == "owner@trial.co"))
+    ).scalar_one()
+    tenant = (
+        await db_session.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+    ).scalar_one()
+    ts = (
+        await db_session.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
+        )
+    ).scalar_one()
+
+    # Premium AI is held back for the whole trial.
+    assert user.premium_ai_enabled is False
+    # The trial is explicit in config and enforced through expires_at.
+    assert ts.custom_config["trial"] is True
+    assert "trial_ends_at" in ts.custom_config
+    assert tenant.expires_at is not None
+    remaining = tenant.expires_at.astimezone(timezone.utc) - datetime.now(timezone.utc)
+    assert timedelta(days=29, hours=23) < remaining <= timedelta(days=30, minutes=5)
+
+
+@pytest.mark.asyncio
+async def test_public_signup_notifies_operator(public_client, db_session, monkeypatch):
+    captured: dict = {}
+
+    async def fake_send(to, subject, html_body, text_body="", **kwargs):
+        captured["to"] = list(to)
+        captured["subject"] = subject
+        return EmailDeliveryResult.SENT
+
+    monkeypatch.setattr(email_service, "send_email", fake_send)
+
+    resp = await public_client.post(
+        "/api/auth/signup/plan",
+        json={
+            "plan": "intake-only",
+            "firm_name": "Notify Co",
+            "email": "owner@notify.co",
+            "password": "longenoughpw123",
+            "full_name": "Notify Owner",
+        },
+    )
+    assert resp.status_code == 201
+    assert captured.get("to")
+    assert "trial" in captured["subject"].lower()
+
+
+@pytest.mark.asyncio
+async def test_public_signup_survives_notification_failure(
+    public_client, db_session, monkeypatch
+):
+    async def boom(*args, **kwargs):
+        raise RuntimeError("smtp down")
+
+    monkeypatch.setattr(email_service, "send_email", boom)
+
+    resp = await public_client.post(
+        "/api/auth/signup/plan",
+        json={
+            "plan": "intake-only",
+            "firm_name": "Resilient Co",
+            "email": "owner@resilient.co",
+            "password": "longenoughpw123",
+            "full_name": "Resilient Owner",
+        },
+    )
+    # A notification failure must never fail the signup itself.
+    assert resp.status_code == 201
 
 
 @pytest.mark.asyncio

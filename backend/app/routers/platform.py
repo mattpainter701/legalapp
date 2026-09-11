@@ -65,6 +65,12 @@ from app.services.llm_routing import (
     upsert_platform_llm_config,
 )
 from app.services.module_visibility import KNOWN_MODULES, normalize_module_name
+from app.services.trials import (
+    TRIAL_ENDS_KEY,
+    TRIAL_MARKER,
+    TRIAL_STARTED_KEY,
+    config_marks_trial,
+)
 from app.services.operator_audit import record_operator_audit
 from app.services.durable_jobs import enqueue_job
 from app.services.corpus_revision import advance_rag_corpus_revision
@@ -335,6 +341,10 @@ class TenantSummary(BaseModel):
     # price label.
     tenant_type: str
     expires_at: datetime | None
+    # True when TenantSettings carries the trial marker, independent of the raw
+    # expiry so operators can distinguish a trial from a paid tenant that
+    # happens to carry an expiry.
+    on_trial: bool = False
     flat_seat_count: int
     is_active: bool
     stripe_customer_id: Optional[str]
@@ -366,6 +376,9 @@ class TenantUpdate(BaseModel):
     mcp_entitlement_status: Optional[str] = None
     mcp_billing_status: Optional[str] = None
     background_assistant_enabled: Optional[bool] = None
+    # Trial control: set a future instant to start/extend a trial, a past
+    # instant to revoke access, or null to end the trial marker outright.
+    trial_ends_at: Optional[datetime] = None
 
 
 class PlatformLLMConfigUpdate(BaseModel):
@@ -530,6 +543,7 @@ async def list_tenants(
     tenants = tenants_result.scalars().all()
     user_counts: dict[str, int] = {}
     usage: dict[str, tuple[int, float]] = {}
+    on_trial: dict[str, bool] = {}
     for tenant in tenants:
         async with _platform_tenant_scope(db, tenant.id):
             user_counts[str(tenant.id)] = int(
@@ -537,6 +551,13 @@ async def list_tenants(
                     select(func.count(User.id)).where(User.tenant_id == tenant.id)
                 )
                 or 0
+            )
+            on_trial[str(tenant.id)] = config_marks_trial(
+                await db.scalar(
+                    select(TenantSettings.custom_config).where(
+                        TenantSettings.tenant_id == tenant.id
+                    )
+                )
             )
             usage_row = (
                 await db.execute(
@@ -567,6 +588,7 @@ async def list_tenants(
                 billing_tier=t.billing_tier,
                 tenant_type=_tenant_type(t),
                 expires_at=t.expires_at,
+                on_trial=on_trial.get(str(t.id), False),
                 flat_seat_count=t.flat_seat_count,
                 is_active=t.is_active,
                 stripe_customer_id=_mask(t.stripe_customer_id),
@@ -872,6 +894,7 @@ async def get_tenant_detail(
             billing_tier=tenant.billing_tier,
             tenant_type=_tenant_type(tenant),
             expires_at=tenant.expires_at,
+            on_trial=config_marks_trial((ts.custom_config or {}) if ts else None),
             flat_seat_count=tenant.flat_seat_count,
             is_active=tenant.is_active,
             stripe_customer_id=_mask(tenant.stripe_customer_id),
@@ -1157,6 +1180,37 @@ async def update_tenant(
             "to": enabled,
         }
         custom_config["background_assistant_enabled"] = enabled
+        ts.custom_config = custom_config
+
+    if _field_was_sent(body, "trial_ends_at"):
+        ts_result = await db.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+        )
+        ts = ts_result.scalar_one_or_none()
+        if ts is None:
+            ts = TenantSettings(tenant_id=tenant.id)
+            db.add(ts)
+            await db.flush()
+        custom_config = dict(ts.custom_config or {})
+        new_end = body.trial_ends_at
+        if new_end is not None and new_end.tzinfo is None:
+            new_end = new_end.replace(tzinfo=timezone.utc)
+        audit_changes["trial_ends_at"] = {
+            "from": custom_config.get(TRIAL_ENDS_KEY),
+            "to": new_end.isoformat() if new_end else None,
+        }
+        if new_end is None:
+            tenant.expires_at = None
+            custom_config[TRIAL_MARKER] = False
+            custom_config.pop(TRIAL_ENDS_KEY, None)
+            custom_config.pop(TRIAL_STARTED_KEY, None)
+        else:
+            tenant.expires_at = new_end
+            custom_config[TRIAL_MARKER] = new_end > datetime.now(timezone.utc)
+            custom_config[TRIAL_ENDS_KEY] = new_end.isoformat()
+            custom_config.setdefault(
+                TRIAL_STARTED_KEY, datetime.now(timezone.utc).isoformat()
+            )
         ts.custom_config = custom_config
 
     standard_provider_sent = _field_was_sent(

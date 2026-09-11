@@ -1,3 +1,10 @@
+## 2026.09.11.8 — 30-day self-serve trials
+
+- Add `app/services/trials.py` and `SIGNUP_TRIAL_DAYS=30`: plan signup now provisions a bounded trial window. `Tenant.expires_at` is the enforced boundary (fail-closed in `require_active_tenant`) and `TenantSettings.custom_config` carries `trial`, `trial_started_at`, and `trial_ends_at` for operator display. Signup previously wrote a 14-day `trial_ends_at` that nothing read, so a self-serve tenant never expired.
+- Hold premium AI back for the trial: `PUT /admin/users/{id}/premium` and `PATCH /admin/users/{id}` reject enabling it while the tenant carries the trial marker, so trial spend stays on the standard route.
+- Notify the operator on signup (`notify_operator_trial_started`) through `MARKETING_LEAD_EMAIL`. Delivery is best-effort and never fails signup; live delivery requires `EMAIL_ENABLED=true` with SMTP configured.
+- Add `trial_ends_at` to the platform tenant update (future = start/extend, past = revoke, null = clear) and expose `on_trial` in the tenant list and detail. No migration.
+
 ## 2026.09.11.7 — Sample library routing, catalog seeding, and filled intake forms
 
 - Fix the global sample library never loading. `sample_templates_router` and `document_templates_router` share the `/api/templates` prefix; the tenant router's greedy `GET /{template_id}` was registered first, so `GET /api/templates/library` parsed "library" as a UUID and answered 422 (surfaced as "The sample library could not be loaded"). Register `sample_templates_router` first and add a regression test that reads real route registration order (`effective_route_contexts`), which the previous handler-level tests bypassed.
