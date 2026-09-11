@@ -119,7 +119,11 @@ services:
     env_file: ${APP_ENV_FILE:-.env}
     environment:
       DATABASE_URL: ${MIGRATOR_DATABASE_URL:?Set MIGRATOR_DATABASE_URL in .env}
-    command: alembic upgrade head
+    # Seed the platform-owned sample-form catalog after migrations. The seed is
+    # idempotent by slug and reads only the image's seed/ assets, but the
+    # migrator still gates backend startup, so a seeding failure fails the
+    # deploy instead of silently shipping an empty sample library.
+    command: sh -c "alembic upgrade head && python scripts/seed_sample_templates.py"
     restart: "no"
 
   backend:

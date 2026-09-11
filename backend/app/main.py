@@ -511,8 +511,13 @@ app.include_router(client_portal_firm_router)
 app.include_router(esignature_router)
 app.include_router(esignature_portal_router)
 app.include_router(template_intake_preview_router)
-app.include_router(document_templates_router)
+# The global sample library shares the /api/templates prefix. Register it
+# before the tenant document-template router: the latter declares a greedy
+# ``GET /{template_id}``, which otherwise captures ``GET /api/templates/library``
+# (and the library's ``/{sample_id}/source`` / ``/{sample_id}/render-file``
+# subpaths) and answers with a UUID validation error instead of the catalog.
 app.include_router(sample_templates_router)
+app.include_router(document_templates_router)
 
 app.include_router(user_aliases_router, prefix="/api")
 app.include_router(storage_migration_router)

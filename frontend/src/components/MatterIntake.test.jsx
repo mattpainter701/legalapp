@@ -92,23 +92,18 @@ it('offers call or in-person booking after both requirements complete', async ()
   await user.click(screen.getByRole('button', { name: 'Save meeting & notify client' }))
   expect(matterPaperworkAction).toHaveBeenCalledWith('matter', 'meeting', expect.objectContaining({ kind: 'in_person', details: 'Main office', starts_at: expect.stringMatching(/Z$/) }))
 })
-it('retries intake without creating a duplicate matter after setup failure', async () => {
+it('creates the matter from the modal without starting client intake', async () => {
   const user = userEvent.setup(); const onCreated = vi.fn()
   createMatterV2.mockResolvedValue({ id: 'matter', matter_name: 'Smith case' })
-  api.post.mockRejectedValueOnce({ response: { data: { detail: 'Storage unavailable' } } }).mockResolvedValueOnce({ data: packet() })
   render(<NewMatterModal open onClose={vi.fn()} onCreated={onCreated} />)
   await user.type(screen.getByLabelText(/Matter Title/), 'Smith case')
   await waitFor(() => expect(getContacts).toHaveBeenCalled())
   await user.selectOptions(screen.getByLabelText(/^Client$/), 'client')
-  await user.click(screen.getByLabelText('Start client intake with this matter'))
-  await user.upload(screen.getByLabelText('Reviewed fee agreement PDF'), new File(['%PDF-reviewed'], 'fee.pdf', { type: 'application/pdf' }))
-  await user.click(screen.getByRole('button', { name: 'Create Matter & Start Intake' }))
-  await screen.findByRole('button', { name: 'Retry intake packet' })
-  expect(onCreated).not.toHaveBeenCalled()
-  await user.click(screen.getByRole('button', { name: 'Retry intake packet' }))
+  await user.click(screen.getByRole('button', { name: 'Open Matter' }))
   await waitFor(() => expect(onCreated).toHaveBeenCalledOnce())
   expect(createMatterV2).toHaveBeenCalledOnce()
-  expect(screen.getByLabelText('Start client intake with this matter')).not.toBeChecked()
+  // Creating a matter no longer mounts an intake packet, so nothing posts to it.
+  expect(api.post).not.toHaveBeenCalled()
 })
 
 it('clears the previous intake when switching to a matter without a packet', async () => {
@@ -120,17 +115,16 @@ it('clears the previous intake when switching to a matter without a packet', asy
   expect(screen.queryByRole('heading', { name: 'Client paperwork' })).not.toBeInTheDocument()
 })
 
-it('keeps intake submission out of the historical import path', async () => {
+it('keeps the matter form out of the historical import path', async () => {
   const user = userEvent.setup()
   render(<NewMatterModal open onClose={vi.fn()} onCreated={vi.fn()} />)
-  await user.click(screen.getByLabelText('Start client intake with this matter'))
-  expect(screen.getByRole('button', { name: 'Create Matter & Start Intake' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Open Matter' })).toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: 'Import existing matters' }))
   expect(screen.getByText('Historical import wizard')).toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: 'Create Matter & Start Intake' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Open Matter' })).not.toBeInTheDocument()
   expect(api.post).not.toHaveBeenCalled()
   await user.click(screen.getByRole('button', { name: 'New matter' }))
-  expect(screen.getByRole('button', { name: 'Create Matter & Start Intake' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Open Matter' })).toBeInTheDocument()
 })
 
 it('sends the paperwork form as multipart so the server receives its fields', async () => {

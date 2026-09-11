@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.11.7",
+      "version": "2026.09.11.7",
+      "title": "Start paperwork from a filled form",
+      "published_at": "2026-09-11",
+      "summary": "The sample form library loads again, Start this case can fill a firm template or starter form and attach it, and creating a matter is one short form.",
+      "highlights": [
+        {
+          "title": "The sample form library works",
+          "description": "Template Studio's shared library loads its ready-to-fill starter forms again, ready to preview or fill and download."
+        },
+        {
+          "title": "Fill the fee agreement in Start this case",
+          "description": "Choose a firm template or a shared starter form, fill it out, and attach the finished PDF as the fee agreement or an additional signing form."
+        },
+        {
+          "title": "Create a matter in one step",
+          "description": "The New Matter form no longer includes the optional intake packet; client paperwork is started from the matter page once the matter exists."
+        }
+      ]
+    },
+    {
       "id": "2026.09.11.6",
       "version": "2026.09.11.6",
       "title": "Live in the matter, miss nothing",

@@ -22,9 +22,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app.main  # noqa: E402,F401 -- register complete model metadata
 from sqlalchemy import select  # noqa: E402
 
+# Register only the catalog table, not app.main: this runs as the deploy's
+# one-shot migrator, where pulling in every router and service (and their
+# LiteLLM/storage clients) would widen the startup surface for no reason.
 from app.database import async_session_maker  # noqa: E402
 from app.models.sample_template import SampleTemplate  # noqa: E402
 from app.services.pdf_templates import TemplatePdfError, discover_pdf_fields  # noqa: E402
