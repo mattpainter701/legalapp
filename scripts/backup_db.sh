@@ -285,7 +285,12 @@ if [[ -n "${RESTIC_REPOSITORY:-}" ]]; then
   )
   [[ -d "$CERTS_DIR" ]] && backup_paths+=("$CERTS_DIR")
   # The escrow copy exists only for the duration of this encrypted snapshot.
-  restic backup --tag legalapp-production --tag "$TIMESTAMP" "${backup_paths[@]}"
+  # Retry the exclusive repository lock for a bounded window: the hourly
+  # legalapp-backup.timer legitimately holds it (and vice versa), and a lock
+  # collision must delay, never fail, a proven backup. RESTIC_RETRY_LOCK takes
+  # restic duration syntax (e.g. 10m) and bounds the wait.
+  restic backup --retry-lock "${RESTIC_RETRY_LOCK:-10m}" \
+    --tag legalapp-production --tag "$TIMESTAMP" "${backup_paths[@]}"
   restic check --read-data-subset="${RESTIC_CHECK_SUBSET:-1/100}"
   snapshot_evidence="$(mktemp "$BACKUP_DIR/.restic-snapshots.XXXXXX")"
   trap 'rm -f -- "${snapshot_evidence:-}"; cleanup' EXIT
