@@ -75,7 +75,10 @@ def _sender_ready(config: dict) -> bool:
     return bool(
         _clean(config.get("account_sid"))
         and config.get("encrypted_auth_token")
-        and (_clean(config.get("messaging_service_sid")) or _clean(config.get("from_number")))
+        and (
+            _clean(config.get("messaging_service_sid"))
+            or _clean(config.get("from_number"))
+        )
     )
 
 
@@ -161,8 +164,7 @@ async def upsert_platform_sms_provider(
             code="platform_sms_incomplete",
         )
     if not (
-        _clean(config.get("messaging_service_sid"))
-        or _clean(config.get("from_number"))
+        _clean(config.get("messaging_service_sid")) or _clean(config.get("from_number"))
     ):
         raise PlatformSmsError(
             "A Messaging Service SID or a From number is required.",
