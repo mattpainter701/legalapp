@@ -5,6 +5,25 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.4 — Texts about the case, only where the client agreed
+
+Released September 11, 2026.
+
+Clients who agreed to be texted about their case now get a text when a document needs signing, separately from onboarding texts.
+
+- **A separate permission for case texts.** Agreeing to onboarding texts is recorded apart from agreeing to texts for the rest of the case, so each is asked for and held on its own.
+- **A text when something needs signing.** Where that permission is held, a client is texted as well as emailed when a document is sent for signature. Existing opt-outs still apply.
+
+## 2026.09.11.3 — Your sent email is filed with the matter
+
+Released September 11, 2026.
+
+Email you send is kept with the case, matter numbers appear where you read your matters, and the list you build stays put.
+
+- **A copy of what you sent.** An email sent to a client is filed with the matter as a document, alongside the ones that arrive. Only a message that actually sent is kept.
+- **Matter numbers where you look.** A matter number now shows on the board card and in the list, and searching for one finds the matter. Quote it on the phone and type it into search.
+- **Your filters stay put.** Filters, search, and the board or list choice are kept in the page address, so opening a matter and coming back no longer clears them.
+
 ## 2026.09.11.2 — Close a case, and stop losing email attachments
 
 Released September 11, 2026.

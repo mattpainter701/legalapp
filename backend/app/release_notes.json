@@ -2,6 +2,44 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.11.4",
+      "version": "2026.09.11.4",
+      "title": "Texts about the case, only where the client agreed",
+      "published_at": "2026-09-11",
+      "summary": "Clients who agreed to be texted about their case now get a text when a document needs signing, separately from onboarding texts.",
+      "highlights": [
+        {
+          "title": "A separate permission for case texts",
+          "description": "Agreeing to onboarding texts is recorded apart from agreeing to texts for the rest of the case, so each is asked for and held on its own."
+        },
+        {
+          "title": "A text when something needs signing",
+          "description": "Where that permission is held, a client is texted as well as emailed when a document is sent for signature. Existing opt-outs still apply."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.11.3",
+      "version": "2026.09.11.3",
+      "title": "Your sent email is filed with the matter",
+      "published_at": "2026-09-11",
+      "summary": "Email you send is kept with the case, matter numbers appear where you read your matters, and the list you build stays put.",
+      "highlights": [
+        {
+          "title": "A copy of what you sent",
+          "description": "An email sent to a client is filed with the matter as a document, alongside the ones that arrive. Only a message that actually sent is kept."
+        },
+        {
+          "title": "Matter numbers where you look",
+          "description": "A matter number now shows on the board card and in the list, and searching for one finds the matter. Quote it on the phone and type it into search."
+        },
+        {
+          "title": "Your filters stay put",
+          "description": "Filters, search, and the board or list choice are kept in the page address, so opening a matter and coming back no longer clears them."
+        }
+      ]
+    },
+    {
       "id": "2026.09.11.2",
       "version": "2026.09.11.2",
       "title": "Close a case, and stop losing email attachments",
