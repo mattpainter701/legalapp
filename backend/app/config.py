@@ -417,6 +417,11 @@ class Settings(BaseSettings):
     # Extra CORS origins (comma-separated); added to defaults (FRONTEND_URL, localhost)
     EXTRA_CORS_ORIGINS: str = ""
     UPLOAD_DIR: str = "/app/uploads"
+    # Directory holding the curated global sample-template library (PDFs + a
+    # manifest.json). Empty means resolve relative to the backend package
+    # (backend/seed/sample_templates), which works for source checkouts and the
+    # production image alike.
+    SAMPLE_TEMPLATE_DIR: str = ""
     MAX_FILE_SIZE_MB: int = 50
     # Rolling retention window for misc-chat (non-matter) attachments stored in
     # UPLOAD_DIR/{tenant_id}/chat-temp/. Matter-linked chat attachments persist.

@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import CaseSetupCard from '../components/casesetup/CaseSetupCard'
+import ClientConversation from '../components/casesetup/ClientConversation'
+import CloseMatterDialog from '../components/casesetup/CloseMatterDialog'
 import { useAuth } from '../App'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
@@ -14,7 +17,7 @@ import {
   getMatterDocuments, createSignatureRequest, listSignatureRequests,
   sendSignatureRequest, resendSignatureRequest, voidSignatureRequest, getMatterDocumentDownloadUrl, getMatterDocumentSigningSource,
   syncMatterCloudFolder, listTrustAccounts,
-  getContacts, getAdminUsers, getMatterByNumber,
+  getContacts, getAdminUsers, getMatterByNumber, reopenMatter,
 } from '../api'
 import { looksLikeMatterNumber, normalizeMatterNumber } from '../utils/matterNumber'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
@@ -232,6 +235,8 @@ function DueDateLabel({ dueDate }) {
 
 const KEY_DATE_TYPES = new Set(['hearing', 'filing', 'deposition', 'deadline'])
 const MATTER_SECTIONS = new Set(['dashboard', 'activity', 'team', 'workflow', 'documents', 'correspondence', 'portal', 'billing', 'chat', 'settings'])
+const PRIMARY_SECTIONS = ['dashboard', 'documents', 'activity', 'billing']
+const SECONDARY_SECTIONS = ['portal', 'team', 'workflow', 'correspondence', 'chat', 'settings']
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function MatterDetailPage() {
@@ -359,6 +364,10 @@ function MatterWorkspace() {
   })
   const noteRequest = useRef(null)
   const noteBusy = useRef(false)
+  // Surfaced on the tab bar so an unanswered client message is visible from
+  // anywhere on the matter, not only once you scroll the Overview.
+  const [clientUnread, setClientUnread] = useState(0)
+  const [closeOpen, setCloseOpen] = useState(false)
   const [noteNotice, setNoteNotice] = useState(null)
   const [noteConflict, setNoteConflict] = useState(false)
 
@@ -761,7 +770,12 @@ function MatterWorkspace() {
     { key: 'chat', label: 'Chat', icon: Icons.messageSquare },
     { key: 'settings', label: 'Settings', icon: Icons.settings },
   ].filter(tab => !hiddenPanels.includes(tab.key))
-  const primaryTabs = tabs.filter(tab => ['dashboard', 'documents', 'activity', 'portal', 'billing'].includes(tab.key))
+  // The native view is the case: what it needs, its files, what happened, what
+  // it costs. Team, Workflow, Portal, Correspondence, and Chat are real work
+  // but not daily work, so they group under Matter settings instead of
+  // crowding the page every case is run from.
+  const primaryTabs = tabs.filter(tab => PRIMARY_SECTIONS.includes(tab.key))
+  const secondaryTabs = tabs.filter(tab => SECONDARY_SECTIONS.includes(tab.key))
 
   const assignedIds = new Set(assignments.map(a => a.user_id))
   const pluginLabel = (pluginName) => {
@@ -809,6 +823,19 @@ function MatterWorkspace() {
         <div className="flex gap-2 md:gap-3 flex-shrink-0">
           <MatterViewGear hidden={view.hidden} onChange={view.save} />
           <button type="button" onClick={() => setActiveTab('settings')} className="rounded-lg border px-3 text-sm">Matter settings</button>
+          {matter.is_closed ? (
+            <button
+              type="button"
+              onClick={async () => { try { await reopenMatter(id); loadMatter() } catch { setSaveError('The matter could not be reopened.') } }}
+              className="rounded-lg border border-brand-line px-3 text-sm font-medium text-brand-ink hover:bg-brand-bg-soft"
+            >
+              Reopen matter
+            </button>
+          ) : (
+            <button type="button" onClick={() => setCloseOpen(true)} className="rounded-lg border border-brand-line px-3 text-sm font-medium text-brand-ink hover:bg-brand-bg-soft">
+              Close matter
+            </button>
+          )}
           {editing ? (
             <>
               <button onClick={() => { setEditing(false); setEditData(matter) }} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-2">
@@ -924,8 +951,11 @@ function MatterWorkspace() {
           </div>}
           <label htmlFor="mobile-matter-section" className="block text-sm font-semibold mb-2">Matter section</label>
           <select id="mobile-matter-section" value={activeTab} onChange={event => setActiveTab(event.target.value)} className="w-full min-h-11 rounded-lg border border-brand-line bg-brand-surface px-3 text-base">
-            {[...primaryTabs, ...tabs.filter(tab => tab.key === 'settings'), ...(!['dashboard', 'documents', 'activity', 'portal', 'billing', 'settings'].includes(activeTab) ? tabs.filter(tab => tab.key === activeTab) : [])].map(tab => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
+            {[...primaryTabs, ...secondaryTabs].map(tab => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
           </select>
+          {/* Not a duplicate of Quick Actions: these guarantee a 44px touch
+              target on a phone, which the desktop card's tighter buttons do
+              not, and they are the affordances the mobile journey drives. */}
           <div className="mt-3 grid grid-cols-2 gap-2">
             {[
               ['Quick note', () => { setActiveTab('activity'); setShowAddNote(true) }],
@@ -949,16 +979,37 @@ function MatterWorkspace() {
             >
               <Icon d={icon} size={14} />
               {label}
+              {key === 'dashboard' && clientUnread > 0 && (
+                <span aria-label={`${clientUnread} unread client messages`} className="ml-1 rounded-full bg-brand-rose px-1.5 py-0.5 text-[10px] font-bold text-white">
+                  {clientUnread}
+                </span>
+              )}
             </button>
           ))}
         </div>
 
-        {['settings', 'team', 'workflow'].includes(activeTab) && <nav aria-label="Matter settings sections" className="mb-4 flex flex-wrap gap-3">{tabs.filter(tab => ['settings', 'team', 'workflow'].includes(tab.key)).map(tab => <button type="button" key={tab.key} onClick={() => setActiveTab(tab.key)} className="rounded border px-3 py-2">{tab.label}</button>)}</nav>}
-        {['activity', 'correspondence'].includes(activeTab) && <nav aria-label="Matter activity sections" className="mb-4 flex gap-3">{tabs.filter(tab => ['activity', 'correspondence'].includes(tab.key)).map(tab => <button type="button" key={tab.key} onClick={() => setActiveTab(tab.key)} className="rounded border px-3 py-2">{tab.label}</button>)}</nav>}
-        {['dashboard', 'activity', 'chat'].includes(activeTab) && !hiddenPanels.includes('chat') && <button type="button" onClick={() => setActiveTab('chat')} className="mb-3 text-sm underline">Matter assistant</button>}
+        {SECONDARY_SECTIONS.includes(activeTab) && (
+          <nav aria-label="Matter settings sections" className="mb-6 flex flex-wrap gap-2">
+            {secondaryTabs.map(tab => (
+              <button
+                type="button"
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                aria-current={activeTab === tab.key ? 'page' : undefined}
+                className={`flex min-h-11 items-center gap-1.5 rounded-lg border px-3 text-[13px] font-semibold transition-colors ${activeTab === tab.key ? 'border-brand-ink bg-brand-ink text-white' : 'border-brand-line text-brand-ink-2 hover:border-brand-line-2 hover:text-brand-ink'}`}
+              >
+                <Icon d={tab.icon} size={13} />
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        )}
         {/* ── Dashboard Tab ─────────────────────────────────────────────────────── */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
+            <CaseSetupCard matterId={id} matter={matter} />
+            <ClientConversation matterId={id} onUnreadChange={setClientUnread} />
+            <SignatureRequestsPanel matterId={id} />
             {/* Stats bar */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
@@ -1010,8 +1061,7 @@ function MatterWorkspace() {
                   { label: 'Email Client', icon: Icons.mail, action: () => setShowCompose(true) },
                   { label: 'Add Task', icon: Icons.plus, action: () => setShowAddTask(true) },
                   { label: 'Start Chat', icon: Icons.messageSquare, action: handleStartChat },
-                  { label: cloudSyncing ? 'Syncing Cloud' : 'Sync Cloud', icon: Icons.refresh, action: handleMatterCloudSync },
-                  { label: 'Add Note', icon: Icons.edit, action: () => { setActiveTab('activity'); setTimeout(() => setShowAddNote(true), 50) } },
+                  { label: 'Add Note', icon: Icons.edit, action: () => { setActiveTab('activity'); setShowAddNote(true) } },
                 ].map((a, i) => (
                   <button
                     key={i}
@@ -2225,6 +2275,14 @@ function MatterWorkspace() {
         />
       )}
 
+      {closeOpen && (
+        <CloseMatterDialog
+          matterId={id}
+          matterName={matter.matter_name}
+          onClose={() => setCloseOpen(false)}
+          onClosed={loadMatter}
+        />
+      )}
       {showCompose && (
         <ComposeEmailModal
           matterId={id}
@@ -2444,7 +2502,6 @@ function ClientPortalTab({ matterId, matter }) {
       </div>
     </div>
 
-    <SignatureRequestsPanel matterId={matterId} />
     </div>
   )
 }
@@ -2494,6 +2551,7 @@ export function SignatureRequestsPanel({ matterId }) {
   const [signingSource, setSigningSource] = useState(null)
   const [signers, setSigners] = useState([newSignerRow()])
   const [expiresOn, setExpiresOn] = useState('')
+  const [dueOn, setDueOn] = useState('')
   const [reminderDays, setReminderDays] = useState('7,1')
   const [enforceSigningOrder, setEnforceSigningOrder] = useState(true)
   const [voidReasonById, setVoidReasonById] = useState({})
@@ -2502,7 +2560,11 @@ export function SignatureRequestsPanel({ matterId }) {
   const [notice, setNotice] = useState('')
 
   const load = useCallback(() => {
-    listSignatureRequests(matterId).then(setRequests).catch(() => {})
+    // The endpoint answers with a list, but a paged or empty body must not
+    // take the Overview down with it.
+    listSignatureRequests(matterId)
+      .then(data => setRequests(Array.isArray(data) ? data : data?.items || []))
+      .catch(() => {})
     getMatterDocuments(matterId)
       .then((data) => setDocs(Array.isArray(data) ? data : data.items || []))
       .catch(() => {})
@@ -2580,6 +2642,8 @@ export function SignatureRequestsPanel({ matterId }) {
         // Generated-PDF placement metadata is attached by the final-PDF
         // generation flow. Never derive this from a DOCX preview here.
         positioned_fields: positionedFields,
+        // 5pm, matching the deadline wording a client is given at intake.
+        due_at: dueOn ? new Date(`${dueOn}T17:00:00`).toISOString() : null,
         expires_at: expiresOn ? new Date(`${expiresOn}T23:59:59`).toISOString() : null,
         reminder_days: parsedReminderDays,
         enforce_signing_order: enforceSigningOrder,
@@ -2589,6 +2653,7 @@ export function SignatureRequestsPanel({ matterId }) {
       setDocId('')
       setReviewOpen(false); setSigningSource(null); setPositionedFields(EMPTY_SIGNING_FIELDS)
       setExpiresOn('')
+      setDueOn('')
       setReminderDays('7,1')
       setEnforceSigningOrder(true)
       setNotice(provider === 'dropbox_sign' ? 'Signature request sent through Dropbox Sign with the reviewed fields.' : 'Signature request sent. Signers will see it in their client portal Signatures tab when it is their turn.')
@@ -2665,13 +2730,29 @@ export function SignatureRequestsPanel({ matterId }) {
             <h3 className="text-sm font-sans font-semibold text-brand-ink">New request</h3>
             <p className="text-xs text-brand-muted mt-0.5">Choose a matter document and the portal signers who should sign it.</p>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <select aria-label="Document to sign" value={docId} onChange={(e) => chooseDocument(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
-              <option value="">Select document…</option>
-              {docs.map((d) => <option key={d.id} value={d.id}>{d.filename}</option>)}
-            </select>
-            <input type="date" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
-            <input value={reminderDays} onChange={(e) => setReminderDays(e.target.value)} placeholder="Reminder days: 7,1" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <label className="text-sm text-brand-ink">
+              <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Document to sign</span>
+              <select aria-label="Document to sign" value={docId} onChange={(e) => chooseDocument(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
+                <option value="">Select document…</option>
+                {docs.map((d) => <option key={d.id} value={d.id}>{d.filename}</option>)}
+              </select>
+            </label>
+            <label className="text-sm text-brand-ink">
+              <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Due from client</span>
+              <input type="date" aria-label="Due from client" value={dueOn} onChange={(e) => setDueOn(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+              <span className="mt-1 block text-[12px] text-brand-muted">Creates an assigned follow-up task. Optional.</span>
+            </label>
+            <label className="text-sm text-brand-ink">
+              <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Expires</span>
+              <input type="date" aria-label="Expires" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+              <span className="mt-1 block text-[12px] text-brand-muted">After this date the request can no longer be signed.</span>
+            </label>
+            <label className="text-sm text-brand-ink">
+              <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Reminders</span>
+              <input aria-label="Reminders" value={reminderDays} onChange={(e) => setReminderDays(e.target.value)} placeholder="7,1" className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+              <span className="mt-1 block text-[12px] text-brand-muted">Days before expiry to remind the signer.</span>
+            </label>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <label className="text-sm">Signing provider <select aria-label="Signing provider" value={provider} onChange={event => setProvider(event.target.value)} className="rounded border border-brand-line p-2"><option value="internal">Internal portal</option><option value="dropbox_sign">Dropbox Sign</option></select></label>
@@ -2722,6 +2803,11 @@ export function SignatureRequestsPanel({ matterId }) {
                         Expires {formatSignatureDate(r.expires_at)}
                         {r.enforce_signing_order ? ' · Sequential signing' : ''}
                       </p>
+                      {r.due_at && !['completed', 'declined', 'voided', 'expired'].includes(r.status) && (
+                        <p className={`text-xs mt-1 ${new Date(r.due_at) < new Date() ? 'text-brand-rose font-semibold' : 'text-brand-amber font-semibold'}`}>
+                          {new Date(r.due_at) < new Date() ? 'Overdue since' : 'Due'} {formatSignatureDate(r.due_at)}
+                        </p>
+                      )}
                       {(r.decline_reason || r.void_reason) && (
                         <p className="text-xs text-brand-rose mt-1">{r.decline_reason || r.void_reason}</p>
                       )}

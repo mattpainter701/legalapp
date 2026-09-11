@@ -5,6 +5,57 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.4 — Texts about the case, only where the client agreed
+
+Released September 11, 2026.
+
+Clients who agreed to be texted about their case now get a text when a document needs signing, separately from onboarding texts.
+
+- **A separate permission for case texts.** Agreeing to onboarding texts is recorded apart from agreeing to texts for the rest of the case, so each is asked for and held on its own.
+- **A text when something needs signing.** Where that permission is held, a client is texted as well as emailed when a document is sent for signature. Existing opt-outs still apply.
+
+## 2026.09.11.3 — Your sent email is filed with the matter
+
+Released September 11, 2026.
+
+Email you send is kept with the case, matter numbers appear where you read your matters, and the list you build stays put.
+
+- **A copy of what you sent.** An email sent to a client is filed with the matter as a document, alongside the ones that arrive. Only a message that actually sent is kept.
+- **Matter numbers where you look.** A matter number now shows on the board card and in the list, and searching for one finds the matter. Quote it on the phone and type it into search.
+- **Your filters stay put.** Filters, search, and the board or list choice are kept in the page address, so opening a matter and coming back no longer clears them.
+
+## 2026.09.11.2 — Close a case, and stop losing email attachments
+
+Released September 11, 2026.
+
+Matters can now be closed from the matter page, with a check of what is still outstanding, and documents file themselves into the right folder.
+
+- **Close a matter properly.** A Close matter button shows what is still outstanding first. Unbilled work and money held in trust stop the close; open tasks and paperwork are shown to acknowledge.
+- **Reopen if you close too soon.** Closing is reversible. A closed matter can be reopened from the same place, and both are recorded on the matter's timeline.
+- **Email attachments become real documents.** A file attached to an email now arrives as its own document in the matter, next to the message, instead of only inside the stored email.
+- **Documents file themselves.** Correspondence, signed agreements, intake paperwork and generated drafts land in named folders instead of piling up at the top of the matter.
+
+## 2026.09.11.1 — Run a case from one page
+
+Released September 11, 2026.
+
+The matter page now opens on the paperwork a new case needs, tracks every signature in one place, and gives each document its own due date.
+
+- **Start a case in one step.** A new matter opens with one prompt to send client paperwork: choose the fee agreement, forms, and questionnaire, then send by email or text.
+- **Watch every document until it is signed.** One strip shows each document, what is outstanding, what the client returned, and any message that did not arrive.
+- **Give any document a due date.** Set a deadline on any document. Each raises an assigned follow-up, due at 5pm in the client's timezone, and closes when the paperwork arrives.
+- **A calmer matter page.** Overview, Documents, Activity, and Billing are the page you work from. Team, Workflow, and the portal group under Matter settings.
+
+## 2026.09.10.3 — Browse sample legal forms in Template Studio
+
+Released September 10, 2026.
+
+Open Template Studio to see a shared library of fillable sample forms organized by state and type.
+
+- **A shared library of sample forms.** Template Studio now shows ready-to-fill sample forms such as wills, powers of attorney, and business agreements, organized by state and type.
+- **Fill a sample for any matter.** Preview and fill a sample form directly from the library without saving a copy.
+- **Your firm's templates stay separate.** Sample forms are read-only shared content; your own templates and drafts are left untouched.
+
 ## 2026.09.10.2 — A friendly heads-up while we polish things
 
 Released September 10, 2026.

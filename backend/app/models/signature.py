@@ -81,6 +81,11 @@ class SignatureRequest(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The date the firm wants this signed by. Unlike expires_at, a passed
+    # due date never invalidates the request -- it only means chase the client.
+    due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

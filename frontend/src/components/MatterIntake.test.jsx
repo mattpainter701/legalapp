@@ -2,15 +2,17 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import ClientIntakeChecklist from './ClientIntakeChecklist'
-import MatterIntakePanel, { startMatterIntake } from './MatterIntakePanel'
+import { startMatterIntake } from './MatterIntakePanel'
+import CaseSetupCard from './casesetup/CaseSetupCard'
 import NewMatterModal from './NewMatterModal'
-import api, { getClientIntake, submitClientIntake, createMatterV2, getContacts, getAdminUsers, getPlugins } from '../api'
+import api, { getClientIntake, submitClientIntake, createMatterV2, getContacts, getAdminUsers, getPlugins, getMatterPaperwork, matterPaperworkAction, getMatterDocuments } from '../api'
 
 vi.mock('./MatterImportWizard', () => ({ default: () => <div>Historical import wizard</div> }))
 
 vi.mock('../api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
   getClientIntake: vi.fn(), submitClientIntake: vi.fn(), createMatterV2: vi.fn(), getContacts: vi.fn(), getAdminUsers: vi.fn(), getPlugins: vi.fn(), createContact: vi.fn(),
+  getMatterPaperwork: vi.fn(), matterPaperworkAction: vi.fn(), getMatterDocuments: vi.fn(), getIntakeStarterPack: vi.fn(),
 }))
 afterEach(cleanup)
 const packet = () => ({
@@ -21,6 +23,9 @@ beforeEach(() => {
   vi.resetAllMocks()
   getClientIntake.mockResolvedValue(packet())
   api.get.mockResolvedValue({ data: packet() })
+  getMatterPaperwork.mockResolvedValue(packet())
+  matterPaperworkAction.mockResolvedValue(packet())
+  getMatterDocuments.mockResolvedValue([])
   getContacts.mockResolvedValue([{ id: 'client', first_name: 'Jane', last_name: 'Smith', email: 'jane@example.com' }])
   getAdminUsers.mockResolvedValue([])
   getPlugins.mockResolvedValue([])
@@ -48,34 +53,32 @@ it('preserves answers when submission fails', async () => {
 })
 it('requires explicit reviewed retry for uncertain delivery', async () => {
   const user = userEvent.setup()
-  api.get.mockResolvedValue({ data: { ...packet(), delivery: { 'welcome:email': { state: 'unknown', attempt: 0 } } } })
-  api.post.mockResolvedValue({ data: packet() })
-  render(<MatterIntakePanel matterId="matter" />)
+  getMatterPaperwork.mockResolvedValue({ ...packet(), delivery: { 'welcome:email': { state: 'unknown', attempt: 0 } } })
+  render(<CaseSetupCard matterId="matter" />)
   await user.click(await screen.findByRole('button', { name: 'Review delivery' }))
-  expect(api.post).not.toHaveBeenCalled()
+  expect(matterPaperworkAction).not.toHaveBeenCalled()
   await user.click(screen.getByRole('button', { name: /I verified it was not sent/ }))
-  expect(api.post).toHaveBeenCalledWith('/matters/matter/intake/retry', { delivery_key: 'welcome:email', confirm_not_sent: true })
+  expect(matterPaperworkAction).toHaveBeenCalledWith('matter', 'retry', { delivery_key: 'welcome:email', confirm_not_sent: true })
 })
 it('records the selected external document and verification note', async () => {
   const user = userEvent.setup()
-  api.post.mockResolvedValue({ data: packet() })
-  render(<MatterIntakePanel matterId="matter" documents={[{ id: 'doc', filename: 'Executed agreement.pdf' }]} />)
-  await user.click(await screen.findByText('Review received documents'))
+  getMatterDocuments.mockResolvedValue([{ id: 'doc', filename: 'Executed agreement.pdf' }])
+  render(<CaseSetupCard matterId="matter" />)
+  await user.click(await screen.findByText(/Review received documents/))
   await user.selectOptions(screen.getByLabelText('Received document'), 'doc')
   await user.type(screen.getByLabelText('Verification note'), 'Reviewed signature')
   await user.click(screen.getByRole('button', { name: 'Confirm document is complete' }))
-  expect(api.post).toHaveBeenCalledWith('/matters/matter/intake/receipt', { requirement: 'fee_agreement', document_id: 'doc', note: 'Reviewed signature' })
+  expect(matterPaperworkAction).toHaveBeenCalledWith('matter', 'receipt', { requirement: 'fee_agreement', document_id: 'doc', note: 'Reviewed signature' })
 })
 it('offers call or in-person booking after both requirements complete', async () => {
   const user = userEvent.setup()
-  api.get.mockResolvedValue({ data: { ...packet(), status: 'documents_complete', completed_at: '2026-09-06T14:00:00Z', requirements: { fee_agreement: { completed: true }, questionnaire: { completed: true } } } })
-  api.post.mockResolvedValue({ data: packet() })
-  render(<MatterIntakePanel matterId="matter" />)
+  getMatterPaperwork.mockResolvedValue({ ...packet(), status: 'documents_complete', completed_at: '2026-09-06T14:00:00Z', requirements: { fee_agreement: { completed: true }, questionnaire: { completed: true } } })
+  render(<CaseSetupCard matterId="matter" />)
   await user.selectOptions(await screen.findByLabelText('Meeting type'), 'in_person')
   fireEvent.change(screen.getByLabelText('Meeting date and time'), { target: { value: '2026-09-08T10:00' } })
   await user.type(screen.getByLabelText('Call details or office location'), 'Main office')
   await user.click(screen.getByRole('button', { name: 'Save meeting & notify client' }))
-  expect(api.post).toHaveBeenCalledWith('/matters/matter/intake/meeting', expect.objectContaining({ kind: 'in_person', details: 'Main office', starts_at: expect.stringMatching(/Z$/) }))
+  expect(matterPaperworkAction).toHaveBeenCalledWith('matter', 'meeting', expect.objectContaining({ kind: 'in_person', details: 'Main office', starts_at: expect.stringMatching(/Z$/) }))
 })
 it('retries intake without creating a duplicate matter after setup failure', async () => {
   const user = userEvent.setup(); const onCreated = vi.fn()
@@ -97,12 +100,12 @@ it('retries intake without creating a duplicate matter after setup failure', asy
 })
 
 it('clears the previous intake when switching to a matter without a packet', async () => {
-  const { rerender } = render(<MatterIntakePanel matterId="first" />)
-  await screen.findByText('Initial packet sent: Not yet')
-  api.get.mockRejectedValue({ response: { status: 404 } })
-  rerender(<MatterIntakePanel matterId="second" />)
+  const { rerender } = render(<CaseSetupCard matterId="first" />)
+  await screen.findByRole('heading', { name: 'Client paperwork' })
+  getMatterPaperwork.mockRejectedValue({ response: { status: 404 } })
+  rerender(<CaseSetupCard matterId="second" />)
   await screen.findByRole('button', { name: 'Send client paperwork' })
-  expect(screen.queryByText('Initial packet sent: Not yet')).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'Client paperwork' })).not.toBeInTheDocument()
 })
 
 it('keeps intake submission out of the historical import path', async () => {

@@ -48,6 +48,10 @@ async def test_connected_delivery_and_audit(
         client_contact_id=None,
         matter_name="A & B",
         case_number="<case>",
+        # A real Matter carries these, and the endpoint reads them before
+        # dispatch so filing the sent copy survives a token refresh.
+        slug="a-and-b",
+        cloud_folder=None,
     )
     events = []
 

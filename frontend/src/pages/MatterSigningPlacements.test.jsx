@@ -68,3 +68,29 @@ it('retains custom Word roles and rejects a partial final placement review', asy
   expect(await screen.findByText('Add signing fields for every role required by this document.')).toBeInTheDocument()
   expect(api.createSignatureRequest).not.toHaveBeenCalled()
 })
+
+it('sends a due date so the signature raises a follow-up task', async () => {
+  api.getMatterDocuments.mockResolvedValue({ items: [{ id: 'auth', filename: 'Medical authorization.pdf' }] })
+  render(<MemoryRouter><SignatureRequestsPanel matterId="matter" /></MemoryRouter>)
+  await screen.findByRole('option', { name: 'Medical authorization.pdf' })
+  fireEvent.change(screen.getByLabelText('Document to sign'), { target: { value: 'auth' } })
+  fireEvent.change(screen.getByLabelText('Due from client'), { target: { value: '2026-10-02' } })
+  await fillSigner()
+  fireEvent.submit(screen.getByPlaceholderText('Signer 1 full name').closest('form'))
+  await waitFor(() => expect(api.createSignatureRequest).toHaveBeenCalled())
+  const [, payload] = api.createSignatureRequest.mock.calls.at(-1)
+  // A deadline is what the firm chases; expiry is what voids the request.
+  expect(payload.due_at).toMatch(/^2026-10-02T/)
+  expect(payload.expires_at).toBeNull()
+})
+
+it('leaves the due date out when the firm sets none', async () => {
+  api.getMatterDocuments.mockResolvedValue({ items: [{ id: 'auth', filename: 'Medical authorization.pdf' }] })
+  render(<MemoryRouter><SignatureRequestsPanel matterId="matter" /></MemoryRouter>)
+  await screen.findByRole('option', { name: 'Medical authorization.pdf' })
+  fireEvent.change(screen.getByLabelText('Document to sign'), { target: { value: 'auth' } })
+  await fillSigner()
+  fireEvent.submit(screen.getByPlaceholderText('Signer 1 full name').closest('form'))
+  await waitFor(() => expect(api.createSignatureRequest).toHaveBeenCalled())
+  expect(api.createSignatureRequest.mock.calls.at(-1)[1].due_at).toBeNull()
+})

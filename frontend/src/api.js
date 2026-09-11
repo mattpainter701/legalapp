@@ -1287,6 +1287,23 @@ export const listMatterPortalInvites = (matterId) =>
 export const revokeMatterPortalInvite = (matterId, inviteId) =>
   api.delete(`/matters/${matterId}/portal/invites/${inviteId}`).then((r) => r.data)
 
+// ── Portal conversation (firm side) ────────────────────────────────────────
+export const getMatterPortalMessages = (matterId, params = {}) =>
+  api.get(`/matters/${matterId}/portal/messages`, { params }).then((r) => r.data)
+
+export const sendMatterPortalMessage = (matterId, data) =>
+  api.post(`/matters/${matterId}/portal/messages`, data).then((r) => r.data)
+
+export const markMatterPortalMessagesRead = (matterId) =>
+  api.post(`/matters/${matterId}/portal/messages/read`).then((r) => r.data)
+
+// ── Client paperwork packet (matter intake) ────────────────────────────────
+export const getMatterPaperwork = (matterId) =>
+  api.get(`/matters/${matterId}/intake`).then((r) => r.data)
+
+export const matterPaperworkAction = (matterId, action, body) =>
+  api.post(`/matters/${matterId}/intake/${action}`, body).then((r) => r.data)
+
 // ── E-signature (firm side) ─────────────────────────────────────────────────
 export const createSignatureRequest = (matterId, data) =>
   api.post(`/matters/${matterId}/signatures`, data).then((r) => r.data)
@@ -2233,6 +2250,44 @@ export const renderTemplateFile = (id, data) =>
     throw error
   })
 
+export const getSampleTemplates = (params = {}) =>
+  api.get('/templates/library', { params }).then(r => r.data)
+
+export const getSampleTemplate = (id) =>
+  api.get(`/templates/library/${id}`).then(r => r.data)
+
+export const getSampleTemplateSource = (id) =>
+  api.get(`/templates/library/${id}/source`, { responseType: 'blob' }).then(r => r.data)
+
+export const renderSampleTemplateFile = (id, data) =>
+  api.post(`/templates/library/${id}/render-file`, data, { responseType: 'blob' }).then((r) => {
+    const disposition = r.headers?.['content-disposition'] || ''
+    const encodedMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+    const basicMatch = disposition.match(/filename="?([^";]+)"?/i)
+    const filename = encodedMatch
+      ? decodeURIComponent(encodedMatch[1])
+      : basicMatch?.[1] || `sample-${id}.pdf`
+    return {
+      blob: r.data,
+      filename,
+      contentType: r.headers?.['content-type'] || r.data?.type || 'application/pdf',
+    }
+  }).catch(async (error) => {
+    const blob = error?.response?.data
+    if (blob instanceof Blob) {
+      try {
+        const detail = await readBlobErrorDetail(blob)
+        if (detail) {
+          error.message = String(detail)
+          if (error.response) error.response.data = { detail: String(detail) }
+        }
+      } catch {
+        // Preserve the original transport error when the blob cannot be read.
+      }
+    }
+    throw error
+  })
+
 export const createBriefCheck = (matterId, { file, selectedDocumentId, opposingFile }) => {
   const form = new FormData()
   if (file) form.append('file', file)
@@ -2316,8 +2371,19 @@ export const getMatterByNumber = (matterNumber) =>
   api.get(`/matters/by-number/${encodeURIComponent(matterNumber)}`).then(r => r.data)
 export const updateMatterV2 = (id, data) =>
   api.patch(`/matters/${id}`, data).then(r => r.data)
-export const closeMatterV2 = (id) =>
-  api.delete(`/matters/${id}`)
+// A soft close behind DELETE: the matter stays, is_closed flips. The server
+// refuses while unbilled work or a trust balance is outstanding, and asks for
+// acknowledgement of the non-blocking warnings.
+export const closeMatterV2 = (id, { acknowledgeWarnings = false, reason = '' } = {}) =>
+  api.delete(`/matters/${id}`, {
+    params: { acknowledge_warnings: acknowledgeWarnings, ...(reason ? { reason } : {}) },
+  })
+
+export const getMatterCloseReadiness = (id) =>
+  api.get(`/matters/${id}/close-readiness`).then((r) => r.data)
+
+export const reopenMatter = (id) =>
+  api.post(`/matters/${id}/reopen`).then((r) => r.data)
 export const getMyMatters = () =>
   api.get('/matters/my').then(r => r.data)
 export const getMatterStats = () =>

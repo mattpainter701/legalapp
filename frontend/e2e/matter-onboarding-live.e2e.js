@@ -53,13 +53,18 @@ test('Jane Doe: create matter, review fee, send paperwork, sign, unlock portal, 
   await page.getByRole('button', { name: 'Preview Fee agreement.pdf', exact: true }).click()
   await expect(labelled(page, 'PDF page 1')).toBeVisible()
   await page.getByRole('button', { name: 'Close preview', exact: true }).click()
-  await page.getByRole('button', { name: 'Client paperwork', exact: true }).click()
-  await page.getByRole('combobox', { name: 'Fee agreement from matter Documents' }).selectOption(fee.id)
-  await expect(labelled(page, 'Client email')).toHaveValue('jane.onboarding@example.com')
-  await labelled(page, 'General intake form.pdf').check()
-  await page.getByLabel('Questionnaire — one required question per line').fill('Describe your matter')
-  await page.getByLabel('Requested client uploads — one per line').fill('Marriage certificate')
+  // Paperwork is started from the matter's Overview now, not the Documents
+  // tab: the case-setup card owns it, and the drawer walks documents,
+  // deadlines, then delivery.
+  await page.getByRole('button', { name: 'Overview', exact: true }).click()
   await page.getByRole('button', { name: 'Send client paperwork', exact: true }).click()
+  await page.getByRole('combobox', { name: 'From matter documents' }).selectOption(fee.id)
+  await labelled(page, 'General intake form.pdf').check()
+  await page.getByLabel('One question per line').fill('Describe your matter')
+  await page.getByLabel('Requested client uploads — one per line').fill('Marriage certificate')
+  await page.getByRole('button', { name: '3. Send' }).click()
+  await expect(labelled(page, 'Client email')).toHaveValue('jane.onboarding@example.com')
+  await page.getByRole('button', { name: 'Send paperwork', exact: true }).click()
   await expect.poll(() => messages().length).toBe(1)
   const initial = messages()[0]
   expect(initial.body).toContain('General intake form')
@@ -105,13 +110,14 @@ test('Jane Doe: create matter, review fee, send paperwork, sign, unlock portal, 
     expect(submitted.requirements.upload_1.completed).toBe(false)
     const docId = submitted.requirements.upload_1.submitted_document_id
     await page.reload()
-    await page.getByRole('button', { name: 'Client paperwork', exact: true }).click()
-    await page.getByText('Review received documents', { exact: true }).click()
+    // The strip is on the Overview, which is where a reload lands, and its
+    // summary counts what is waiting on staff.
+    await page.getByText(/^\s*Review received documents/).click()
     await page.getByRole('combobox', { name: 'Requirement', exact: true }).selectOption('upload_1')
     await page.getByRole('combobox', { name: 'Received document', exact: true }).selectOption(docId)
     await labelled(page, 'Verification note').fill('Reviewed the requested record')
     await page.getByRole('button', { name: 'Confirm document is complete', exact: true }).click()
-    await expect(page.getByText(/Contact client to schedule by/)).toBeVisible()
+    await expect(page.getByText(/Contact the client to schedule by/)).toBeVisible()
     await page.goto('/tasks')
     // Exactly one task per packet is pinned by the backend acceptance test; a
     // reused disposable database also holds earlier runs', so match the first.

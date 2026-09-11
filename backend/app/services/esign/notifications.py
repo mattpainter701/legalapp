@@ -1,5 +1,7 @@
 """Email delivery and reminder orchestration for native e-sign requests."""
 
+import logging
+
 from datetime import datetime, timezone
 from html import escape
 
@@ -11,6 +13,8 @@ from app.config import get_settings
 from app.models.signature import SignatureRequest, SignatureSigner
 from app.services.email import EmailDeliveryResult, email_service
 from app.services.esign.service import next_pending_signers
+
+logger = logging.getLogger(__name__)
 
 
 def _audit(signer: SignatureSigner) -> dict:
@@ -83,4 +87,74 @@ async def process_due_reminders(db: AsyncSession, *, now=None) -> int:
                 signer.audit = audit
                 sent += 1
     await db.commit()
+    return sent
+
+
+async def notify_signer_sms(db, signer, request, *, kind="invitation"):
+    """Text a signer about a document waiting for them, where consent covers it.
+
+    Signature notifications have always been email-only, even for a client who
+    asked to be texted. They are sent under the ``case_updates`` category, not
+    intake: a client who agreed to onboarding texts has not agreed to be texted
+    for the life of the matter, so a consent that covers only intake silently
+    declines here rather than being stretched to fit.
+    """
+    from app.services.sms import SmsError, load_sms_consents, send_sms
+    from app.services.sms_categories import (
+        SMS_CATEGORY_CASE_UPDATES,
+        allows_case_updates,
+    )
+
+    if not signer.contact_id:
+        return None
+    consents = await load_sms_consents(db, request.tenant_id, signer.contact_id)
+    if not any(allows_case_updates(consent) for consent in consents):
+        return None
+
+    document_name = request.source_document_filename or "a document"
+    url = f"{get_settings().FRONTEND_URL.rstrip('/')}/client-portal"
+    lead = "Reminder" if kind == "reminder" else "Your legal team"
+    body = (
+        f"{lead}: {document_name} is ready for your signature in your secure "
+        f"client portal: {url}"
+    )
+    audit = _audit(signer)
+    stamp = datetime.now(timezone.utc).isoformat()
+    try:
+        result = await send_sms(
+            db,
+            tenant_id=request.tenant_id,
+            user_id=request.created_by_user_id,
+            contact_id=signer.contact_id,
+            matter_id=request.matter_id,
+            body=body,
+            category=SMS_CATEGORY_CASE_UPDATES,
+            idempotency_key=f"signature:{request.id}:{signer.id}:{kind}",
+        )
+    except SmsError as exc:
+        audit[f"{kind}_sms_status"] = exc.code or "failed"
+        audit[f"{kind}_sms_attempted_at"] = stamp
+        signer.audit = audit
+        return None
+    audit[f"{kind}_sms_status"] = result.delivery_certainty
+    audit[f"{kind}_sms_attempted_at"] = stamp
+    signer.audit = audit
+    return result
+
+
+async def notify_actionable_signers_sms(db, request, *, kind="invitation"):
+    """SMS the signers whose turn it is, alongside the email they already get."""
+    sent = []
+    for signer in next_pending_signers(request):
+        try:
+            result = await notify_signer_sms(db, signer, request, kind=kind)
+        except Exception:
+            # A text is an extra channel on top of the email that already went.
+            # Losing it must never fail the send it accompanies.
+            logger.exception(
+                "Signature SMS could not be attempted for request %s", request.id
+            )
+            continue
+        if result is not None:
+            sent.append(result)
     return sent

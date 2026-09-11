@@ -16,12 +16,14 @@ class IntakeDocumentSelection(BaseModel):
     document_id: uuid.UUID
     label: str = Field(min_length=1, max_length=200)
     requires_signature: bool = True
+    due_at: datetime | None = None
 
 
 class IntakeUploadRequirement(BaseModel):
     key: str = Field(pattern=r"^upload_[a-z0-9_]{1,40}$")
     label: str = Field(min_length=1, max_length=200)
     required: bool = True
+    due_at: datetime | None = None
 
 
 class IntakeStart(BaseModel):
@@ -33,12 +35,17 @@ class IntakeStart(BaseModel):
         default_factory=list, max_length=30
     )
     include_questionnaire: bool = True
+    agreement_due_at: datetime | None = None
+    questionnaire_due_at: datetime | None = None
     portal_after_signing: bool = False
     owner_id: uuid.UUID | None = None
     email: EmailStr
     channels: list[Literal["email", "sms"]] = Field(min_length=1, max_length=2)
     timezone: str = "America/Chicago"
     sms_permission_verified: bool = False
+    # Consent to texts about the live case, not just onboarding. Recorded
+    # separately because it is a wider permission than intake.
+    sms_case_updates_verified: bool = False
     questions: list[IntakeQuestion] = Field(default_factory=list, max_length=50)
     confirm_send: Literal[True]
 
@@ -66,6 +73,16 @@ class IntakeStart(BaseModel):
             self.upload_requirements
         ):
             raise ValueError("Upload requirements must have unique keys")
+        for due in (
+            self.agreement_due_at,
+            self.questionnaire_due_at,
+            *(item.due_at for item in self.selected_documents),
+            *(item.due_at for item in self.upload_requirements),
+        ):
+            # A naive due date would be read as UTC and chase the client at the
+            # wrong hour; the caller knows the client's offset, so it sends one.
+            if due is not None and due.tzinfo is None:
+                raise ValueError("A paperwork due date requires a timezone")
         return self
 
 
