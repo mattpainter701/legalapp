@@ -88,6 +88,7 @@ async def test_cloud_sync_rebinds_tenant_context_around_each_provider(monkeypatc
     assert result == {
         "google": {"files": 2, "emails": 3},
         "microsoft": {"files": 12, "emails": 11},
+        "failures": [],
     }
     assert provider_calls == [
         "google_drive",

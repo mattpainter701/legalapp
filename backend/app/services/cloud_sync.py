@@ -70,9 +70,12 @@ class CloudSyncService:
         Returns ``{google: {files, emails}, microsoft: {files, emails}}``
         with counts of records upserted per provider group.
         Per-provider errors are caught individually so a single failure
-        does not prevent the other providers from syncing.
+        does not prevent the other providers from syncing. Each failure is
+        returned under ``failures`` as ``{group, provider, error}`` so callers
+        can record it; a failed provider must never read as zero items synced.
         """
         await set_tenant_context(db, tenant_id)
+        failures: list[dict] = []
         migration = await self._latest_completed_migration(db, tenant_id)
         if migration:
             from app.services.storage_migration_reindex import storage_migration_reindex
@@ -96,8 +99,14 @@ class CloudSyncService:
             }
             result[target_group]["files"] = reindex.get("items", 0)
             result[target_group]["emails"] = await self._run_provider_sync(
-                db, tenant_id, "Target mail", lambda: mail(db, tenant_id)
+                db,
+                tenant_id,
+                "Target mail",
+                lambda: mail(db, tenant_id),
+                group=target_group,
+                failures=failures,
             )
+            result["failures"] = failures
             return result
 
         result: dict = {
@@ -112,14 +121,26 @@ class CloudSyncService:
                 tenant_id,
                 "Google Drive",
                 lambda: self.sync_google_drive(db, tenant_id),
+                group="google",
+                failures=failures,
             )
             result["google"]["emails"] = await self._run_provider_sync(
-                db, tenant_id, "Gmail", lambda: self.sync_gmail_metadata(db, tenant_id)
+                db,
+                tenant_id,
+                "Gmail",
+                lambda: self.sync_gmail_metadata(db, tenant_id),
+                group="google",
+                failures=failures,
             )
         if not migration or target in {"onedrive", "sharepoint"}:
             if not migration or target == "onedrive":
                 result["microsoft"]["files"] = await self._run_provider_sync(
-                    db, tenant_id, "OneDrive", lambda: self.sync_onedrive(db, tenant_id)
+                    db,
+                    tenant_id,
+                    "OneDrive",
+                    lambda: self.sync_onedrive(db, tenant_id),
+                    group="microsoft",
+                    failures=failures,
                 )
             if not migration or target == "sharepoint":
                 result["microsoft"]["files"] += await self._run_provider_sync(
@@ -127,14 +148,19 @@ class CloudSyncService:
                     tenant_id,
                     "SharePoint",
                     lambda: self.sync_sharepoint(db, tenant_id),
+                    group="microsoft",
+                    failures=failures,
                 )
             result["microsoft"]["emails"] = await self._run_provider_sync(
                 db,
                 tenant_id,
                 "Outlook mail",
                 lambda: self.sync_outlook_mail(db, tenant_id),
+                group="microsoft",
+                failures=failures,
             )
 
+        result["failures"] = failures
         return result
 
     async def sync_matter_folders(
@@ -246,6 +272,9 @@ class CloudSyncService:
         tenant_id: str,
         provider_name: str,
         sync_call: Callable[[], Awaitable[int]],
+        *,
+        group: str,
+        failures: list[dict],
     ) -> int:
         await set_tenant_context(db, tenant_id)
         try:
@@ -257,6 +286,11 @@ class CloudSyncService:
                 provider_name,
                 tenant_id,
                 exc,
+            )
+            # Only the exception type leaves this method: the message of a
+            # database or HTTP error can carry file names and query parameters.
+            failures.append(
+                {"group": group, "provider": provider_name, "error": type(exc).__name__}
             )
             await set_tenant_context(db, tenant_id)
             return 0
@@ -379,7 +413,7 @@ class CloudSyncService:
             except Exception as exc:
                 await db.rollback()
                 logger.warning("Google Drive sync error: %s", exc)
-                return 0
+                raise
 
         logger.info("Google Drive synced %d files for tenant %s", count, tenant_id)
         return count
@@ -528,7 +562,7 @@ class CloudSyncService:
             except Exception as exc:
                 await db.rollback()
                 logger.warning("Gmail sync error: %s", exc)
-                return 0
+                raise
 
         logger.info("Gmail synced %d emails for tenant %s", count, tenant_id)
         return count
@@ -649,7 +683,7 @@ class CloudSyncService:
             except Exception as exc:
                 await db.rollback()
                 logger.warning("SharePoint sync error: %s", exc)
-                return 0
+                raise
 
         final = min(count, MAX_FILES)
         logger.info("SharePoint synced %d files for tenant %s", final, tenant_id)
@@ -788,7 +822,7 @@ class CloudSyncService:
             except Exception as exc:
                 await db.rollback()
                 logger.warning("Outlook mail sync error: %s", exc)
-                return 0
+                raise
 
         logger.info("Outlook mail synced %d emails for tenant %s", count, tenant_id)
         return count
@@ -977,7 +1011,7 @@ class CloudSyncService:
             except Exception as exc:
                 await db.rollback()
                 logger.warning("Google Drive folder sync error: %s", exc)
-                return 0
+                raise
 
         return count
 
@@ -1092,7 +1126,7 @@ class CloudSyncService:
             except Exception as exc:
                 await db.rollback()
                 logger.warning("Graph files sync error (%s): %s", children_url, exc)
-                return 0
+                raise
 
         return count
 
