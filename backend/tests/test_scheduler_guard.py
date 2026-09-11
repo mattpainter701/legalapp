@@ -71,13 +71,13 @@ def _mock_session_with_results(scalar_values):
 
 
 def _patch_session_maker(session):
-    """Patch ``async_session_maker`` in the scheduler module to yield ``session``."""
+    """Patch the scheduler's advisory-lock session maker to yield ``session``."""
 
     @asynccontextmanager
     async def _maker():
         yield session
 
-    return patch.object(sched, "async_session_maker", _maker)
+    return patch.object(sched, "_advisory_lock_session_maker", _maker)
 
 
 # ─── job_lock ─────────────────────────────────────────────────────────────────
@@ -211,3 +211,32 @@ async def test_scheduler_start_registers_automation_service_job():
         for call in mock_scheduler.add_job.call_args_list
     )
     mock_scheduler.start.assert_called_once()
+
+
+# ─── pool isolation ───────────────────────────────────────────────────────────
+
+
+def test_advisory_lock_engine_is_unpooled():
+    """A held lock must not count against the application connection pool."""
+    from sqlalchemy.pool import NullPool
+
+    engine = sched._advisory_lock_session_maker.kw["bind"]
+    assert isinstance(engine.pool, NullPool)
+
+
+@pytest.mark.asyncio
+async def test_job_lock_never_draws_from_the_application_pool():
+    """Production starved its pool when every guarded job held a lock connection."""
+
+    def _application_pool_is_off_limits():
+        raise AssertionError("job_lock must not use the application session pool")
+
+    session = _mock_session_with_results([True])
+    with (
+        patch.object(sched, "async_session_maker", _application_pool_is_off_limits),
+        _patch_session_maker(session),
+    ):
+        async with job_lock("task-reminder") as acquired:
+            assert acquired is True
+
+    assert session.execute.await_count == 2
