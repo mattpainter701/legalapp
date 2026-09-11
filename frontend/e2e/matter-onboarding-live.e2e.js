@@ -104,7 +104,8 @@ test('Jane Doe: create matter, review fee, send paperwork, sign, unlock portal, 
     await clientPage.getByLabel('Describe your matter', { exact: false }).fill('Divorce consultation')
     await clientPage.getByRole('button', { name: 'Submit completed questionnaire' }).click()
     await expect(clientPage.getByText('Questionnaire: Complete', { exact: true })).toBeVisible()
-    await labelled(clientPage, 'Upload completed document').setInputFiles(fixture('general-intake.pdf'))
+    // The upload control names the requested record (audit finding 8).
+    await labelled(clientPage, 'Upload Marriage certificate').setInputFiles(fixture('general-intake.pdf'))
     await expect(clientPage.getByText('Submitted — awaiting staff review', { exact: true })).toBeVisible()
     const submitted = await json(await page.request.get(base + '/intake'))
     expect(submitted.requirements.upload_1.completed).toBe(false)
