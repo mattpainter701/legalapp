@@ -221,6 +221,9 @@ export default function LegalNoticePage({ type }) {
             <a href='#top' className='inline-flex min-h-11 items-center gap-1.5 hover:text-brand-ink'>Back to top <ArrowUp size={14} aria-hidden='true' /></a>
           </nav>
         </div>
+        <div className='mx-auto max-w-6xl px-5 pb-8 sm:px-6'>
+          <p className='font-sans text-xs text-brand-muted'>© 2026 Perevaga Group LLC d/b/a LawHand.</p>
+        </div>
       </footer>
     </div>
   )

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ArrowRight } from 'lucide-react'
 import LawHandLogo from './LawHandLogo'
-import { PRIMARY_NAVIGATION } from '../seo/config'
+import { PRIMARY_NAVIGATION, SITE_TAGLINE } from '../seo/config'
 
 // Derived from the one list that also drives the SiteNavigationElement
 // structured data and the no-JavaScript shells, so the internal links Google
@@ -60,7 +60,7 @@ export function MarketingFooter() {
       <div className="mx-auto grid max-w-6xl gap-8 px-6 py-10 sm:grid-cols-[1fr_auto] sm:items-end">
         <div>
           <LawHandLogo compact />
-          <p className="mt-3 font-sans text-[13px] text-brand-muted">The whole matter, in hand.</p>
+          <p className="mt-3 font-sans text-[13px] text-brand-muted">{SITE_TAGLINE}</p>
         </div>
         <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-2 font-sans text-[12.5px] text-brand-muted sm:justify-end">
           <Link to="/product" className="inline-flex min-h-11 items-center hover:text-brand-ink">Platform</Link>
@@ -72,7 +72,7 @@ export function MarketingFooter() {
           <Link to="/trust-center" className="inline-flex min-h-11 items-center hover:text-brand-ink">Trust center</Link>
           <Link to="/privacy" className="inline-flex min-h-11 items-center hover:text-brand-ink">Privacy</Link>
           <Link to="/terms" className="inline-flex min-h-11 items-center hover:text-brand-ink">Terms</Link>
-          <span>© {new Date().getFullYear()} LawHand</span>
+          <span>© 2026 Perevaga Group LLC d/b/a LawHand.</span>
         </nav>
       </div>
     </footer>

@@ -6,7 +6,7 @@ export const SITE_NAME = 'LawHand'
 // skimming a result all need to learn what LawHand *is* before they learn what
 // it is called, so every public surface leads with this and not the tagline.
 export const SITE_CATEGORY = 'legal automation platform for law firms'
-export const SITE_TAGLINE = 'The whole matter, in hand.'
+export const SITE_TAGLINE = 'Law practice management, simplified.'
 
 // Kept under ~60 characters so Google renders it without truncation, and
 // front-loaded with the product category rather than the brand slogan.

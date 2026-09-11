@@ -91,7 +91,7 @@ describe('HomePage launch routing and claims', () => {
       </MemoryRouter>,
     )
 
-    expect(screen.getByRole('heading', { level: 1, name: /the whole matter, in hand/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: /law practice management, simplified/i })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'LawHand home' })).toBeInTheDocument()
     expect(screen.queryByText(/Clarity Legal/i)).not.toBeInTheDocument()
   })

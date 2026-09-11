@@ -31,7 +31,7 @@ describe('login', () => {
 
   it('presents LawHand as the firm source of truth', () => {
     render(<MemoryRouter><LoginPage /></MemoryRouter>)
-    expect(screen.getByText('lawhand')).toBeInTheDocument()
+    expect(screen.getByText(/LawHand™/i)).toBeInTheDocument()
     expect(screen.getByText(/source of truth for matters/i)).toBeInTheDocument()
     expect(screen.queryByText(/Clarity Legal/i)).not.toBeInTheDocument()
   })
