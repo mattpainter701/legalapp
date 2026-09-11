@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
+from app.main import app
 from app.routers import sample_templates
 from app.services.pdf_templates import discover_pdf_fields
 
@@ -153,3 +154,37 @@ async def test_download_source_streams_pdf(monkeypatch):
     )
     assert response.media_type == "application/pdf"
     assert response.body == b"%PDF-1.4 x"
+
+
+def _effective_routes():
+    """Yield (path, methods) in real registration order.
+
+    FastAPI 0.139 keeps included routers behind lazy wrappers, so ``app.routes``
+    entries need unwrapping through ``effective_route_contexts``.
+    """
+    for route in app.routes:
+        contexts = getattr(route, "effective_route_contexts", None)
+        entries = list(contexts()) if callable(contexts) else [route]
+        for entry in entries:
+            path = getattr(entry, "path", None)
+            if path is not None:
+                yield path, getattr(entry, "methods", None) or set()
+
+
+def test_sample_library_route_is_not_shadowed_by_tenant_templates():
+    """``GET /api/templates/library`` must resolve to the catalog, not a template id.
+
+    ``document_templates`` declares a greedy ``GET /{template_id}`` under the same
+    ``/api/templates`` prefix. If it is registered first, the library path is
+    parsed as a template UUID and answered with 422, which surfaced in Template
+    Studio as "The sample library could not be loaded."
+    """
+    for path, methods in _effective_routes():
+        if path == "/api/templates/library" and "GET" in methods:
+            return
+        if path == "/api/templates/{template_id}" and "GET" in methods:
+            raise AssertionError(
+                "GET /api/templates/library is shadowed by the tenant template "
+                "detail route; register sample_templates_router first"
+            )
+    raise AssertionError("GET /api/templates/library is not registered")

@@ -89,13 +89,13 @@
     },
     {
       "image": "legalapp-backend:${APP_COMMIT:-dev}",
-      "line": 117,
+      "line": 120,
       "pinned_by_digest": false,
       "source": "docker-compose.yml"
     },
     {
       "image": "legalapp-backend:${APP_COMMIT:-dev}",
-      "line": 167,
+      "line": 170,
       "pinned_by_digest": false,
       "source": "docker-compose.yml"
     },
@@ -149,13 +149,13 @@
     },
     {
       "image": "legalapp-backend:${APP_COMMIT:-dev}",
-      "line": 129,
+      "line": 133,
       "pinned_by_digest": false,
       "source": "docker-compose.hypervisor.yml"
     },
     {
       "image": "legalapp-backend:${APP_COMMIT:-dev}",
-      "line": 223,
+      "line": 227,
       "pinned_by_digest": false,
       "source": "docker-compose.hypervisor.yml"
     },
