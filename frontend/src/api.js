@@ -1275,11 +1275,20 @@ export const listClientPortalInvoices = () =>
 export const createClientPortalInvoicePayment = (invoiceId) =>
   clientPortalApi.post(`/portal/client/invoices/${invoiceId}/pay`).then((r) => r.data)
 
-export const activateClientPortalAccount = (token, password) =>
-  clientPortalApi.post('/portal/client/activate', { token, password }).then((r) => r.data)
+export const requestClientPortalCode = (email) =>
+  clientPortalApi.post('/portal/client/request-code', { email }).then((r) => r.data)
 
-export const loginClientPortalAccount = (email, password, matterId) =>
-  clientPortalApi.post('/portal/client/login', { email, password, matter_id: matterId }).then((r) => r.data)
+export const verifyClientPortalCode = (email, code) =>
+  clientPortalApi.post('/portal/client/verify-code', { email, code }).then((r) => r.data)
+
+export const selectClientPortalMatter = (ticket, matterId) =>
+  clientPortalApi.post('/portal/client/select-matter', { ticket, matter_id: matterId }).then((r) => r.data)
+
+export const listClientPortalMatters = () =>
+  clientPortalApi.get('/portal/client/matters').then((r) => r.data)
+
+export const switchClientPortalMatter = (matterId) =>
+  clientPortalApi.post('/portal/client/switch-matter', { matter_id: matterId }).then((r) => r.data)
 
 export const downloadClientPortalInvoiceUrl = (invoiceId) =>
   `${BASE_URL}/portal/client/invoices/${invoiceId}/download`

@@ -12,6 +12,8 @@ import {
   listClientPortalDocuments,
   listClientPortalInvoices,
   listClientPortalSignatures,
+  listClientPortalMatters,
+  switchClientPortalMatter,
   logoutClientPortal,
 } from '../api'
 
@@ -35,6 +37,8 @@ vi.mock('../api', () => ({
   listClientPortalSignatures: vi.fn(),
   signClientPortalSignature: vi.fn(),
   declineClientPortalSignature: vi.fn(),
+  listClientPortalMatters: vi.fn().mockResolvedValue([]),
+  switchClientPortalMatter: vi.fn(),
 }))
 
 vi.mock('../components/dialog/ConfirmProvider', () => ({
@@ -330,5 +334,28 @@ describe('ClientPortalMatterPage', () => {
     expect(await screen.findByText('Something went wrong')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Try again' }))
     expect(await screen.findByText('Rivera v. Northline Freight')).toBeInTheDocument()
+  })
+
+  it('offers a matter switcher only when the client has more than one', async () => {
+    listClientPortalMatters.mockResolvedValue([
+      { matter_id: 'matter-1', matter_name: 'Rivera v. Northline Freight', matter_number: 'RIV0001' },
+      { matter_id: 'matter-2', matter_name: 'Alpha v. Beta', matter_number: 'ALP0002' },
+    ])
+    switchClientPortalMatter.mockResolvedValue({ matter_id: 'matter-2', matter_name: 'Alpha v. Beta' })
+    const user = userEvent.setup()
+    render(<ClientPortalMatterPage />)
+
+    const switcher = await screen.findByRole('combobox', { name: /Switch matter/ })
+    await user.selectOptions(switcher, 'matter-2')
+    await waitFor(() => expect(switchClientPortalMatter).toHaveBeenCalledWith('matter-2'))
+  })
+
+  it('hides the matter switcher when only one matter is available', async () => {
+    listClientPortalMatters.mockResolvedValue([
+      { matter_id: 'matter-1', matter_name: 'Rivera v. Northline Freight', matter_number: 'RIV0001' },
+    ])
+    render(<ClientPortalMatterPage />)
+    expect(await screen.findByText('Unread messages')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: /Switch matter/ })).not.toBeInTheDocument()
   })
 })

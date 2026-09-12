@@ -20,12 +20,14 @@ import {
   listClientPortalSignatures,
   signClientPortalSignature,
   declineClientPortalSignature,
+  listClientPortalMatters,
+  switchClientPortalMatter,
 } from '../api'
 import {
   ShieldCheck, MessageSquare, FileText, Receipt, Send,
   Download, AlertTriangle, Scale, PenLine, CheckCircle2, LockKeyhole,
   LogOut, CalendarClock, CreditCard, RefreshCw, Clock, Handshake,
-  Phone, Mail, Globe,
+  Phone, Mail, Globe, Repeat,
 } from 'lucide-react'
 
 const TABS = [
@@ -104,6 +106,8 @@ export default function ClientPortalMatterPage() {
   const [matter, setMatter] = useState(null)
   const [mediation, setMediation] = useState(null)
   const [session, setSession] = useState(null)
+  const [matters, setMatters] = useState([])
+  const [switching, setSwitching] = useState(false)
   const [tab, setTab] = useState('overview')
   const [loadError, setLoadError] = useState('')
   const [expired, setExpired] = useState(false)
@@ -173,6 +177,33 @@ export default function ClientPortalMatterPage() {
     const timer = setInterval(() => { getClientIntake().then(() => refreshMatter()).catch(() => {}) }, 15000)
     return () => clearInterval(timer)
   }, [matter?.paperwork_only, refreshMatter, tab])
+
+  // The client may hold several matters. Keep the list for the header switcher
+  // so it is always obvious which matter a document is being sent to.
+  useEffect(() => {
+    if (!matter) return undefined
+    let active = true
+    listClientPortalMatters()
+      .then((rows) => { if (active) setMatters(Array.isArray(rows) ? rows : []) })
+      .catch(() => { if (active) setMatters([]) })
+    return () => { active = false }
+  }, [matter?.matter_id])
+
+  const switchMatter = async (matterId) => {
+    if (!matterId || matterId === matter?.matter_id || switching) return
+    setSwitching(true)
+    setLoadError('')
+    try {
+      await switchClientPortalMatter(matterId)
+      setTab('overview')
+      setMediation(null)
+      await refreshMatter()
+    } catch (err) {
+      if (!handleSessionExpiry(err)) setLoadError('Unable to switch matters. Please try again.')
+    } finally {
+      setSwitching(false)
+    }
+  }
 
   const signOut = async () => {
     const confirmed = await confirmAction({
@@ -267,6 +298,24 @@ export default function ClientPortalMatterPage() {
               <p className="text-xs text-white/60 font-sans hidden sm:block truncate max-w-[16rem]">
                 {session.email}
               </p>
+            )}
+            {matters.length > 1 && (
+              <label className="mt-1 flex items-center justify-end gap-1.5 text-xs text-white/80">
+                <Repeat size={13} className="shrink-0" />
+                <span className="sr-only">Switch matter</span>
+                <select
+                  value={matter.matter_id}
+                  disabled={switching}
+                  onChange={(event) => switchMatter(event.target.value)}
+                  className="max-w-[13rem] bg-white/10 border border-white/25 rounded-lg px-2 py-1.5 text-xs font-sans text-white focus:outline-none focus:ring-2 focus:ring-white/40 disabled:opacity-50"
+                >
+                  {matters.map((option) => (
+                    <option key={option.matter_id} value={option.matter_id} className="text-brand-ink">
+                      {option.matter_name}{option.matter_number ? ` — ${option.matter_number}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
             <button
               onClick={signOut}

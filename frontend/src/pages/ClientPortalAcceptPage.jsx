@@ -1,27 +1,23 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { acceptClientPortalInvite, activateClientPortalAccount, getClientPortalInviteInfo } from '../api'
+import { acceptClientPortalInvite, getClientPortalInviteInfo } from '../api'
 import { ShieldCheck, AlertTriangle, Check, LogIn } from 'lucide-react'
 
 export default function ClientPortalAcceptPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const token = searchParams.get('token')
-  const [status, setStatus] = useState('loading')
+  const [status, setStatus] = useState(token ? 'loading' : 'need-token')
   const [errorMsg, setErrorMsg] = useState('')
   const [info, setInfo] = useState(null)
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [activating, setActivating] = useState(false)
-  const [activateError, setActivateError] = useState('')
   const [manualToken, setManualToken] = useState('')
 
   useEffect(() => {
     if (!token) {
-      setStatus('error')
-      setErrorMsg('No invitation token provided. If you have an account, sign in below. Otherwise use the link from your invitation email.')
+      setStatus('need-token')
       return
     }
+    setStatus('loading')
     let cancelled = false
     // The firm identity is best-effort: a failure must never block acceptance.
     getClientPortalInviteInfo(token)
@@ -36,7 +32,7 @@ export default function ClientPortalAcceptPage() {
         if (cancelled) return
         const detail = err?.response?.data?.detail
         if (err?.response?.status === 410) {
-          setErrorMsg('This invitation has expired. Ask your legal team for a new link.')
+          setErrorMsg('This invitation has expired. Ask your legal team for a new link, or sign in with your email.')
         } else if (err?.response?.status === 404) {
           setErrorMsg('Invitation not found. It may have been revoked or already used.')
         } else {
@@ -49,32 +45,6 @@ export default function ClientPortalAcceptPage() {
 
   const firm = info?.firm
   const firmName = firm?.firm_name
-
-  const activate = async (event) => {
-    event.preventDefault()
-    if (activating) return
-    if (password.length < 12) {
-      setActivateError('Choose a password of at least 12 characters.')
-      return
-    }
-    if (password !== confirmPassword) {
-      setActivateError('Those passwords do not match.')
-      return
-    }
-    setActivating(true)
-    setActivateError('')
-    try {
-      await activateClientPortalAccount(token, password)
-      navigate('/portal/client/matter', { replace: true })
-    } catch (err) {
-      setActivateError(
-        err?.response?.data?.detail
-          || 'We could not save your password. You can still continue to your portal.',
-      )
-    } finally {
-      setActivating(false)
-    }
-  }
 
   const contactLine = (firm?.firm_phone || firm?.firm_email) && (
     <p className="text-xs text-brand-ink-2 font-sans mt-4">
@@ -110,47 +80,55 @@ export default function ClientPortalAcceptPage() {
             </div>
             <h1 className="font-serif font-bold text-2xl text-brand-ink mb-2">Welcome</h1>
             <p className="text-brand-ink-2 font-sans text-sm mb-6">
-              You're signed in{info?.matter_name ? ` to ${info.matter_name}` : ''}. Set a password so you can
-              come back any time without the invitation email.
+              You're signed in{info?.matter_name ? ` to ${info.matter_name}` : ''}. Next time,
+              sign in by entering this email address and the code we send you.
             </p>
-            <form onSubmit={activate} className="space-y-3 text-left">
-              <label className="block">
-                <span className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">New password</span>
-                <input
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={12}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  className="w-full border border-brand-line rounded-xl px-3 py-2.5 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-                />
-              </label>
-              <label className="block">
-                <span className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Confirm password</span>
-                <input
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={12}
-                  value={confirmPassword}
-                  onChange={(event) => setConfirmPassword(event.target.value)}
-                  className="w-full border border-brand-line rounded-xl px-3 py-2.5 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-                />
-              </label>
-              {activateError && <p role="alert" className="text-sm text-brand-rose">{activateError}</p>}
-              <button
-                type="submit"
-                disabled={activating || !password || !confirmPassword}
-                className="w-full px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all disabled:opacity-50"
-              >
-                {activating ? 'Saving…' : 'Create password and continue'}
-              </button>
-            </form>
             <button
               type="button"
               onClick={() => navigate('/portal/client/matter', { replace: true })}
-              className="mt-4 text-sm text-brand-ink-2 hover:text-brand-ink underline"
+              className="w-full px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all"
             >
-              Continue without a password
+              Continue to my portal
+            </button>
+          </>
+        )}
+
+        {status === 'need-token' && (
+          <>
+            <h1 className="font-serif font-bold text-2xl text-brand-ink mb-2">Enter your invitation</h1>
+            <p className="text-brand-ink-2 font-sans text-sm leading-relaxed mb-6">
+              Paste the invitation code from your email to open the portal for the first time.
+            </p>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                const value = manualToken.trim()
+                if (value) navigate(`/portal/client/accept?token=${encodeURIComponent(value)}`)
+              }}
+              className="space-y-3 text-left"
+            >
+              <label className="block">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Invitation code</span>
+                <input
+                  value={manualToken}
+                  onChange={(event) => setManualToken(event.target.value)}
+                  placeholder="Paste the code from your invitation email"
+                  className="w-full border border-brand-line rounded-xl px-3 py-2.5 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={!manualToken.trim()}
+                className="w-full px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all disabled:opacity-50"
+              >
+                Open invitation
+              </button>
+            </form>
+            <button
+              onClick={() => navigate('/portal/client/login')}
+              className="mt-4 inline-flex items-center gap-2 text-sm text-brand-ink-2 hover:text-brand-ink underline"
+            >
+              <LogIn size={15} /> Already have access? Sign in
             </button>
           </>
         )}
@@ -172,7 +150,7 @@ export default function ClientPortalAcceptPage() {
                 className="space-y-3 text-left mb-2"
               >
                 <label className="block">
-                  <span className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Invitation token</span>
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Invitation code</span>
                   <input
                     value={manualToken}
                     onChange={(event) => setManualToken(event.target.value)}
