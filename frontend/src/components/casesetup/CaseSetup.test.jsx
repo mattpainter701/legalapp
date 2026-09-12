@@ -199,7 +199,7 @@ it('sends the chosen documents and their deadlines from the drawer', async () =>
   expect(screen.queryByText(/Reset to standard questions/)).not.toBeInTheDocument()
   expect(screen.queryByLabelText('One question per line')).not.toBeInTheDocument()
 
-  await user.selectOptions(screen.getByLabelText('From matter documents'), 'agreement')
+  await user.selectOptions(screen.getByLabelText('Choose the fee agreement'), 'agreement')
   await user.click(screen.getByLabelText(/Intake form\.pdf/))
   expect(screen.getByRole('checkbox', { name: 'Client signs this form' })).toBeChecked()
 
@@ -245,7 +245,7 @@ it('prepares the fee agreement from a firm template and sends it', async () => {
   expect(screen.queryByRole('dialog', { name: 'Attach template' })).not.toBeInTheDocument()
   // The saved document is listed and pre-selected as the fee agreement, not
   // offered again as an additional form.
-  expect(await screen.findByLabelText('From matter documents')).toHaveValue('rendered-doc')
+  expect(await screen.findByLabelText('Choose the fee agreement')).toHaveValue('rendered-doc')
   expect(screen.queryByRole('checkbox', { name: /Engagement Letter\.pdf/ })).not.toBeInTheDocument()
 
   // The prepared agreement makes the packet sendable.
@@ -272,10 +272,10 @@ it('prepares an additional signing form from a firm template', async () => {
   expect(form).toBeChecked()
   expect(screen.getByRole('checkbox', { name: 'Client signs this form' })).toBeChecked()
   // It is a signing form; the fee agreement is still unchosen.
-  expect(screen.getByLabelText('From matter documents')).toHaveValue('')
+  expect(screen.getByLabelText('Choose the fee agreement')).toHaveValue('')
 })
 
-it('attaches a locally filled form uploaded through Choose a file', async () => {
+it('attaches a locally filled form uploaded through the additional forms card', async () => {
   const user = userEvent.setup()
   uploadMatterDocument.mockResolvedValue({
     id: 'filled-doc', filename: 'Filled form.pdf', content_type: 'application/pdf',
@@ -283,10 +283,39 @@ it('attaches a locally filled form uploaded through Choose a file', async () => 
 
   render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
 
-  await user.upload(screen.getByLabelText('Choose a file'), new File(['%PDF-1.4'], 'Filled form.pdf', { type: 'application/pdf' }))
+  await user.upload(screen.getByLabelText('Upload an additional form'), new File(['%PDF-1.4'], 'Filled form.pdf', { type: 'application/pdf' }))
 
   await waitFor(() => expect(uploadMatterDocument).toHaveBeenCalledOnce())
   expect(await screen.findByRole('checkbox', { name: /Filled form\.pdf/ })).toBeChecked()
+})
+
+it('uploads the fee agreement to the matter so one control names the choice', async () => {
+  const user = userEvent.setup()
+  uploadMatterDocument.mockResolvedValue({
+    id: 'uploaded-agreement', filename: 'Signed fee agreement.pdf', content_type: 'application/pdf',
+  })
+
+  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
+
+  await user.upload(
+    screen.getByLabelText('Upload a prepared fee agreement'),
+    new File(['%PDF-1.4'], 'Signed fee agreement.pdf', { type: 'application/pdf' }),
+  )
+
+  await waitFor(() => expect(uploadMatterDocument).toHaveBeenCalledOnce())
+  // The upload lands in the same select the dropdown and the template picker
+  // write to, so no second control is left claiming nothing is chosen.
+  expect(await screen.findByLabelText('Choose the fee agreement')).toHaveValue('uploaded-agreement')
+  // It is the fee agreement, not an additional form.
+  expect(screen.queryByRole('checkbox', { name: /Signed fee agreement\.pdf/ })).not.toBeInTheDocument()
+
+  await user.click(screen.getByRole('button', { name: '3. Send' }))
+  await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
+  const [, body] = api.post.mock.calls.at(-1)
+  expect(body.get('agreement')).toBeNull()
+  const options = JSON.parse(body.get('options'))
+  expect(options.agreement_document_id).toBe('uploaded-agreement')
+  expect(options.selected_documents).toEqual([])
 })
 
 it('sends without a fee agreement when another standard piece is included', async () => {
