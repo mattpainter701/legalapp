@@ -37,21 +37,35 @@ MATTER_SUBFOLDERS = [
 
 
 def canonical_matter_folder_name(
-    matter_name: str | None, matter_id, matter_slug: str = "matter"
+    matter_name: str | None,
+    matter_id,
+    matter_slug: str = "matter",
+    matter_number: str | None = None,
 ) -> str:
-    """Stable naming convention for newly bound folders on every provider."""
-    identity = str(uuid.UUID(str(matter_id)))[:8]
+    """Stable naming convention for newly bound folders on every provider.
+
+    The identity suffix is the human-readable matter number (``CYBE0012``) when
+    the matter has one. Matters created before matter numbers existed — or any
+    caller that cannot resolve one — fall back to the first eight characters of
+    the matter UUID, which is the historic convention. Both are unique within a
+    tenant and stable across renames, so a saved folder keeps its identity.
+    """
+    number = (matter_number or "").strip()
+    identity = number or str(uuid.UUID(str(matter_id)))[:8]
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", matter_name or matter_slug)
     name = re.sub(r"\s+", " ", name).strip(" .") or "matter"
     return f"{name[:189].rstrip(' .')} ({identity})"
 
 
 def matter_relative_path(
-    matter_name: str, matter_id=None, matter_slug: str = "matter"
+    matter_name: str,
+    matter_id=None,
+    matter_slug: str = "matter",
+    matter_number: str | None = None,
 ) -> str:
     """Return a logical path; existing persisted paths remain authoritative."""
     name = (
-        canonical_matter_folder_name(matter_name, matter_id, matter_slug)
+        canonical_matter_folder_name(matter_name, matter_id, matter_slug, matter_number)
         if matter_id
         else matter_name
     )
@@ -247,15 +261,20 @@ async def initialize_matter_folders(
     matter_id=None,
     existing_folder: dict | None = None,
     tokens: dict[str, str | None] | None = None,
+    matter_number: str | None = None,
 ) -> dict:
     """Ensure one named, marked folder per matter/provider, retaining saved bindings.
 
     All application callers provide the matter UUID. Existing provider IDs and
     logical paths survive folder renames and subsequent provider connections.
+    The identity suffix prefers the human-readable matter number and falls back
+    to the historic UUID prefix.
     """
     if matter_id is None:
         raise ValueError("Matter identity is required to provision cloud folders")
-    name = canonical_matter_folder_name(folder_name, matter_id, matter_slug)
+    name = canonical_matter_folder_name(
+        folder_name, matter_id, matter_slug, matter_number
+    )
     # Refresh credentials before acquiring the matter lock: token refresh commits
     # its own state. The retry route supplies pre-resolved tokens so each matter
     # can run inside an independent savepoint.
@@ -297,6 +316,14 @@ async def initialize_matter_folders(
         if locked_matter is None:
             raise ValueError("Matter not found for cloud provisioning")
         existing_folder = locked_matter.cloud_folder
+        # Safety net: derive the identity suffix from the locked row when a
+        # caller did not resolve the matter number itself.
+        if not (matter_number or "").strip():
+            locked_number = getattr(locked_matter, "matter_number", None)
+            if (locked_number or "").strip():
+                name = canonical_matter_folder_name(
+                    folder_name, matter_id, matter_slug, locked_number
+                )
     existing_folder = existing_folder or {}
     result = {}
     for provider in ("onedrive", "google_drive", "sharepoint"):

@@ -105,6 +105,31 @@ def test_classify_binding_not_found_is_ambiguous():
     assert result["ambiguous"] is True
     assert "binding_not_found_among_matching_folders" in result["ambiguity_reasons"]
 
+
+def test_classify_numbered_matter_accepts_numbered_name():
+    result = audit.classify_matter_folders(
+        matter_id="12345678-aaaa-bbbb-cccc-123456789abc",
+        matter_name="Acme v Beta", matter_slug="acme-v-beta",
+        current_binding_id="bound", matter_number="CYBE0012",
+        children=[{"id": "bound", "name": "Acme v Beta (CYBE0012)"}],
+    )
+    assert result["expected_id_named"] == "Acme v Beta (CYBE0012)"
+    assert result["ambiguous"] is False
+    assert result["id_named_matches"] == [{"id": "bound", "name": "Acme v Beta (CYBE0012)"}]
+
+
+def test_classify_numbered_matter_accepts_legacy_uuid_name():
+    """Folders created before matter numbers existed remain recognised."""
+    result = audit.classify_matter_folders(
+        matter_id="12345678-aaaa-bbbb-cccc-123456789abc",
+        matter_name="Acme v Beta", matter_slug="acme-v-beta",
+        current_binding_id="bound", matter_number="CYBE0012",
+        children=[{"id": "bound", "name": "Acme v Beta (12345678)"}],
+    )
+    assert result["expected_legacy_named"] == "Acme v Beta (12345678)"
+    assert result["legacy_named_matches"] == [{"id": "bound", "name": "Acme v Beta (12345678)"}]
+    assert result["ambiguous"] is False
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('provider', ['google_drive', 'onedrive', 'sharepoint'])
 async def test_audit_walks_provider_pages_without_mutation(monkeypatch, provider):

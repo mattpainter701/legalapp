@@ -314,7 +314,12 @@ def _cloud_folder_status(status: str, message: str = "") -> dict:
 
 
 async def _provision_cloud_folders(
-    matter_id: str, tenant_id: str, slug: str, cloud_root: str, matter_name: str = ""
+    matter_id: str,
+    tenant_id: str,
+    slug: str,
+    cloud_root: str,
+    matter_name: str = "",
+    matter_number: str | None = None,
 ) -> None:
     """Fire-and-forget: provision cloud folders for a newly created matter.
 
@@ -332,6 +337,7 @@ async def _provision_cloud_folders(
                 cloud_root=cloud_root,
                 folder_name=matter_name,
                 matter_id=matter_id,
+                matter_number=matter_number,
             )
             if not cloud_folder:
                 raise RuntimeError(
@@ -916,6 +922,7 @@ async def create_matter(
                 slug,
                 tenant.cloud_root_folder,
                 matter_name=body.matter_name,
+                matter_number=matter.matter_number,
             )
         )
 
@@ -2738,7 +2745,7 @@ def _apply_cloud_provider_metadata(
     cloud_folder[provider] = metadata
     cloud_folder["path"] = (
         cloud_folder.get("path")
-        or f"{ROOT_FOLDER_NAME}/{canonical_matter_folder_name(matter.matter_name, matter.id, matter.slug)}"
+        or f"{ROOT_FOLDER_NAME}/{canonical_matter_folder_name(matter.matter_name, matter.id, matter.slug, getattr(matter, 'matter_number', None))}"
     )
     cloud_folder["subfolder_paths"] = {
         **(cloud_folder.get("subfolder_paths") or {}),
@@ -2878,6 +2885,7 @@ async def provision_matter_cloud_folder(
             matter_id=matter.id,
             folder_name=matter.matter_name,
             existing_folder=matter.cloud_folder,
+            matter_number=matter.matter_number,
         )
     except Exception as exc:
         logger.warning(
@@ -2969,7 +2977,12 @@ async def remap_matter_cloud_folder(
             matter.id,
             provider,
             provider_metadata,
-            canonical_matter_folder_name(matter.matter_name, matter.id, matter.slug),
+            canonical_matter_folder_name(
+                matter.matter_name,
+                matter.id,
+                matter.slug,
+                getattr(matter, "matter_number", None),
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -3187,6 +3200,7 @@ async def sync_matter_cloud_folder(
             matter_id=matter.id,
             folder_name=matter.matter_name,
             existing_folder=matter.cloud_folder,
+            matter_number=matter.matter_number,
         )
         if not cloud_folder:
             raise HTTPException(
