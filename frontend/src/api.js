@@ -2658,6 +2658,12 @@ export const updateInvoiceLineItem = (invoiceId, lineItemId, data) =>
 export const deleteInvoiceLineItem = (invoiceId, lineItemId) =>
   api.delete(`/billing/invoices/${invoiceId}/line-items/${lineItemId}`).then(r => r.data)
 
+export const getInvoiceAvailableTrust = (invoiceId) =>
+  api.get(`/billing/invoices/${invoiceId}/available-trust`).then(r => r.data)
+
+export const applyTrustToInvoice = (invoiceId, data) =>
+  api.post(`/billing/invoices/${invoiceId}/apply-trust`, data).then(r => r.data)
+
 export const sendInvoice = (invoiceId, data = {}) =>
   api.post(`/billing/invoices/${invoiceId}/send`, data).then(r => r.data)
 

@@ -6,10 +6,12 @@ import InvoiceDetailPage from './InvoiceDetailPage'
 
 const api = vi.hoisted(() => ({
   addInvoiceLineItem: vi.fn(),
+  applyTrustToInvoice: vi.fn(),
   createInvoicePaymentLink: vi.fn(),
   deleteInvoiceLineItem: vi.fn(),
   exportInvoice: vi.fn(),
   getInvoice: vi.fn(),
+  getInvoiceAvailableTrust: vi.fn(() => Promise.resolve([])),
   getQBOStatus: vi.fn(() => Promise.resolve({ connected: true })),
   recordPayment: vi.fn(),
   sendInvoice: vi.fn(),
@@ -260,5 +262,71 @@ describe('InvoiceDetailPage billing operations', () => {
     expect(screen.queryByRole('button', { name: /Void invoice/ })).not.toBeInTheDocument()
     await user.click(await screen.findByRole('button', { name: /Write off balance/ }))
     await waitFor(() => expect(api.updateInvoice).toHaveBeenCalledWith('invoice-1', { status: 'written_off' }))
+  })
+
+  it('applies client funds held on retainer to an outstanding bill', async () => {
+    api.getInvoice.mockResolvedValue({
+      ...baseInvoice,
+      status: 'sent',
+      amount_paid: 0,
+      balance_due: 500,
+    })
+    api.getInvoiceAvailableTrust.mockResolvedValue([{
+      retainer_id: 'retainer-1',
+      contact_name: 'Acme Holdings',
+      retainer_type: 'evergreen',
+      current_balance: 2000,
+      minimum_balance: 500,
+      status: 'active',
+      needs_replenishment: false,
+    }])
+    api.applyTrustToInvoice.mockResolvedValue(baseInvoice)
+    const user = userEvent.setup()
+    renderPage()
+
+    // Only the balance due is drawn, never the whole retainer.
+    await user.click(await screen.findByRole('button', { name: /Apply \$500\.00/ }))
+    await waitFor(() => expect(api.applyTrustToInvoice).toHaveBeenCalledWith('invoice-1', {
+      retainer_id: 'retainer-1',
+    }))
+    expect(toast.success).toHaveBeenCalledWith('$500.00 applied from the retainer')
+  })
+
+  it('flags a retainer that has fallen under its evergreen floor', async () => {
+    api.getInvoice.mockResolvedValue({
+      ...baseInvoice,
+      status: 'sent',
+      amount_paid: 0,
+      balance_due: 500,
+    })
+    api.getInvoiceAvailableTrust.mockResolvedValue([{
+      retainer_id: 'retainer-1',
+      contact_name: 'Acme Holdings',
+      retainer_type: 'evergreen',
+      current_balance: 300,
+      minimum_balance: 500,
+      status: 'active',
+      needs_replenishment: true,
+    }])
+    renderPage()
+
+    expect(await screen.findByText(/Below its \$500\.00 minimum/)).toBeInTheDocument()
+    // Only what is actually there can be applied.
+    expect(screen.getByRole('button', { name: /Apply \$300\.00/ })).toBeEnabled()
+  })
+
+  it('does not offer client funds on a draft', async () => {
+    api.getInvoice.mockResolvedValue(baseInvoice)
+    api.getInvoiceAvailableTrust.mockResolvedValue([{
+      retainer_id: 'retainer-1',
+      contact_name: 'Acme Holdings',
+      current_balance: 2000,
+      status: 'active',
+      needs_replenishment: false,
+    }])
+    renderPage()
+
+    await screen.findByText('Contract review')
+    expect(screen.queryByText('Client funds on hand')).not.toBeInTheDocument()
   })
 })

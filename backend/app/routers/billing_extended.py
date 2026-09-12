@@ -12,6 +12,7 @@ from fastapi.responses import Response
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import noload, selectinload
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context, async_session_maker
@@ -56,6 +57,8 @@ from app.schemas.billing import (
     InvoiceLineItemUpdateRequest,
     InvoiceSendRequest,
     InvoiceSendResponse,
+    ApplyTrustRequest,
+    RetainerAvailability,
 )
 from app.services.billing_workflow import (
     DEFAULT_ROUNDING_MINUTES,
@@ -1782,6 +1785,175 @@ async def send_invoice(
         detail=f"Invoice emailed to {', '.join(recipients)}.",
         invoice=refreshed,
     )
+
+
+# ── Trust and retainer application ──────────────────────────────────────────
+# Applying client funds already held to a bill is the defining move in legal
+# billing. Drawing the retainer down and recording the payment must happen in
+# one transaction, or the two ledgers drift apart.
+
+
+@router.get("/invoices/{invoice_id}/available-trust")
+async def list_available_trust(
+    invoice_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> list[RetainerAvailability]:
+    """Retainers on this invoice's matter that could be applied to it."""
+    from app.models.retainer import Retainer
+
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
+
+    invoice = (
+        await db.execute(
+            select(Invoice).where(
+                Invoice.id == invoice_uuid, Invoice.tenant_id == user.tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    result = await db.execute(
+        select(Retainer)
+        .options(selectinload(Retainer.contact))
+        .where(
+            Retainer.matter_id == invoice.matter_id,
+            Retainer.tenant_id == user.tenant_id,
+            Retainer.status == "active",
+        )
+    )
+    return [
+        RetainerAvailability(
+            retainer_id=str(r.id),
+            contact_name=r.contact.display_name if r.contact else None,
+            retainer_type=r.retainer_type,
+            current_balance=r.current_balance,
+            minimum_balance=r.minimum_balance,
+            status=r.status,
+            needs_replenishment=bool(
+                r.minimum_balance is not None and r.current_balance < r.minimum_balance
+            ),
+        )
+        for r in result.unique().scalars().all()
+    ]
+
+
+@router.post("/invoices/{invoice_id}/apply-trust", status_code=201)
+async def apply_trust_to_invoice(
+    invoice_id: str,
+    body: ApplyTrustRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceResponse:
+    """Draw retainer funds down and post the matching payment, atomically."""
+    from app.models.retainer import Retainer, RetainerTransaction
+
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
+    retainer_uuid = _parse_uuid(body.retainer_id, "retainer")
+
+    invoice = (
+        await db.execute(
+            select(Invoice)
+            .where(Invoice.id == invoice_uuid, Invoice.tenant_id == user.tenant_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status in ("draft", "void", "written_off"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot apply funds to a '{invoice.status}' invoice. Send it first.",
+        )
+
+    retainer = (
+        await db.execute(
+            select(Retainer)
+            # Retainer.contact eager-loads by default; Postgres refuses to lock
+            # the nullable side of that outer join, so suppress it here.
+            .options(noload(Retainer.contact))
+            .where(
+                Retainer.id == retainer_uuid,
+                Retainer.matter_id == invoice.matter_id,
+                Retainer.tenant_id == user.tenant_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not retainer:
+        raise HTTPException(
+            status_code=404, detail="Retainer not found on this invoice's matter"
+        )
+    if retainer.status != "active":
+        raise HTTPException(status_code=400, detail="Retainer is not active")
+
+    paid_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.invoice_id == invoice.id
+        )
+    )
+    balance_due = invoice.total - Decimal(str(paid_result.scalar() or 0))
+    if balance_due <= 0:
+        raise HTTPException(status_code=400, detail="This invoice is already covered")
+
+    # Default to whatever settles the bill without overdrawing the client.
+    amount = (
+        body.amount
+        if body.amount is not None
+        else min(balance_due, retainer.current_balance)
+    )
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="No retainer funds available")
+    if amount > balance_due:
+        raise HTTPException(
+            status_code=400, detail="Amount exceeds the invoice balance"
+        )
+    if amount > retainer.current_balance:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient retainer balance. Available: {retainer.current_balance}",
+        )
+
+    # 1. Draw the retainer down.
+    retainer.current_balance = retainer.current_balance - amount
+    if retainer.current_balance <= 0:
+        retainer.status = "depleted"
+    db.add(
+        RetainerTransaction(
+            tenant_id=user.tenant_id,
+            retainer_id=retainer.id,
+            transaction_type="drawdown",
+            amount=-amount,
+            invoice_id=invoice.id,
+            description=body.notes or f"Applied to invoice {invoice.invoice_number}",
+            created_by=user.id,
+        )
+    )
+
+    # 2. Record the matching payment, so both ledgers move together.
+    db.add(
+        Payment(
+            tenant_id=user.tenant_id,
+            invoice_id=invoice.id,
+            amount=amount,
+            payment_date=body.payment_date or date.today(),
+            method="trust",
+            reference_number=f"retainer:{retainer.id}",
+            notes=body.notes,
+        )
+    )
+
+    # 3. Move the invoice to match what is now paid.
+    new_paid = invoice.total - balance_due + amount
+    invoice.status = "paid" if new_paid >= invoice.total else "partially_paid"
+
+    await db.commit()
+    return await _load_invoice_response(db, invoice.id, user.tenant_id)
 
 
 # ── Payments ────────────────────────────────────────────────────────────────

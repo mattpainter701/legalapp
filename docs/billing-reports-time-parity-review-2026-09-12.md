@@ -8,8 +8,13 @@ takes for granted. This is the billing counterpart to
 
 Reviewed at `947e192` on `claude/competitor-parity-reports-invoices-ssaonv`.
 Source read, not a live walk; every finding cites the file and line that
-produces it. Findings marked *unverified* were not proven in code. No product
-code was changed by this review.
+produces it. Findings marked *unverified* were not proven in code.
+
+**Remediation status.** The review itself changed no product code. The commits
+that follow it on this branch fix every Blocking finding and most Majors; see
+"What has been fixed" at the end for the list, and the CHANGELOG entry for the
+detail. Line and file citations below describe the code *as reviewed*, so they
+are the record of what was wrong, not of the current tree.
 
 `BillingPage.jsx` and `BillingStatusBanner.jsx` are LawHand's own subscription
 billing (tenant plan, Stripe checkout) and are out of scope here.
@@ -627,3 +632,70 @@ Worth keeping intact through any remediation:
   tenant-scoped with a test proving it.
 - Both list pages have honest loading, empty, and error states, and the invoice
   detail page reloads after every mutation so it never shows stale money.
+
+---
+
+## What has been fixed
+
+Everything below landed on this branch after the review, each with tests. The
+findings above are left as written so the reasoning stays legible.
+
+**Fixed — reports**
+
+- `R1` Finance gate on the billing report endpoints, the matter budget report,
+  and the `/reports` and `/invoices` routes. The frontend check now honours the
+  billing capabilities, not just the admin and accountant roles.
+- `R2` Date range on realization and WIP, with presets, a custom range, an
+  inverted-range 400, and the window in the CSV filename.
+- `R3` Written-off invoices no longer count as receivables.
+- `R5` Invoiced amount reported alongside collected; billing realization and
+  collection rate shown separately.
+- `R6` A Current bucket, so an invoice that is not yet due is not read as late.
+  Each row carries a Total Due and each table a totals row.
+- `R7` Matter rows link through to the matter's billing tab; overdue tasks link
+  to Tasks and the card caps its preview.
+- `R8` Empty CSV exports carry a header row.
+- Minor: `format` validated, tablist semantics, `aria-sort` on sortable headers,
+  Retry on a failed load, loading no longer blanks the page.
+
+**Fixed — time tracking**
+
+- `T1` Narrative required and recorded when a timer stops.
+- `T2` Manual entry accepts the increment the timer produces; durations parse as
+  `1.5`, `1:30`, `90m` or `1h15m` and round to the firm's increment.
+- `T3` Local calendar date on manual entries and on timer start.
+- `T5` Billing defaults card in Admin for the firm rate and the increment, plus
+  a timekeeper-readable endpoint for the increment alone.
+- `T7` Timekeeper name returned and shown, a Mine/All filter, and edit and
+  delete hidden on entries the user cannot change.
+- `T8` Server totals instead of summing the first page.
+- Also fixed, beyond the review: a Pydantic field named `date` annotated
+  `Optional[date]` resolved to `NoneType`, so **editing any time entry or
+  expense failed with a 422** whenever the date was sent, which both edit forms
+  always do. Found while adding the local-date field.
+
+**Fixed — invoices**
+
+- `I1` Draft line items can be reworded, re-priced and removed, and discount,
+  flat fee and adjustment lines added. Removing a line releases its work.
+- `I2` Invoices are emailed with their PDF; a delivery failure leaves the bill a
+  draft rather than claiming it was sent.
+- `I3` Recurring numbering continues the tenant's sequence, commits per matter,
+  and recovers on failure.
+- `I4` Trust and retainer funds apply to a bill in one transaction that both
+  draws the retainer down and records the payment, with an evergreen shortfall
+  flagged.
+- `I5` Write-off reachable once a part payment rules out voiding.
+- `I11` QuickBooks refuses to sync an unreviewed draft.
+- `I12` Money on the matter invoice endpoint serialised as decimal strings.
+
+**Still open**
+
+The larger items are unchanged and still need their own work: per-line dates,
+timekeeper and UTBMS codes persisted at generation, which the PDF (`I6`) and a
+vendor-valid LEDES file (`I7`, `T6`) both depend on; a Bill To block and
+selectable templates; bulk generation and bulk send (`I9`, part of `I2`);
+interest, payment plans, split billing, statements and numbering settings
+(`I10`); list search, sort and paging (`I8`); credits and refunds (part of
+`I5`); a timekeeper dimension and the missing report library entries (`R4`,
+`R9`); saved and scheduled reports (`R11`); and a global header timer (`T4`).

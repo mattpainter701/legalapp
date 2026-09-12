@@ -429,6 +429,29 @@ class GenerateInvoiceRequest(BaseModel):
 # ── Payments ─────────────────────────────────────────────────────────────────
 
 
+class ApplyTrustRequest(BaseModel):
+    """Apply retainer or trust funds held for the client to an invoice."""
+
+    retainer_id: str
+    # Omit to apply the lesser of the balance due and the funds available.
+    amount: Optional[Decimal] = Field(default=None, gt=0)
+    payment_date: Optional[_date] = None
+    notes: Optional[str] = Field(default=None, max_length=4000)
+
+
+class RetainerAvailability(BaseModel):
+    """A retainer the matter holds, and what it can cover on this bill."""
+
+    retainer_id: str
+    contact_name: Optional[str] = None
+    retainer_type: Optional[str] = None
+    current_balance: Decimal
+    minimum_balance: Optional[Decimal] = None
+    status: str
+    # True when the balance has fallen under the evergreen floor.
+    needs_replenishment: bool = False
+
+
 class PaymentCreate(BaseModel):
     invoice_id: str
     amount: Decimal = Field(..., gt=0)

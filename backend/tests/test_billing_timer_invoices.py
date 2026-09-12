@@ -860,3 +860,160 @@ class TestInvoiceDelivery:
         )
         assert refused.status_code == 400
         assert "recipient" in refused.json()["detail"].lower()
+
+
+class TestTrustApplication:
+    """Applying client funds already held is the defining legal-billing move."""
+
+    async def _retainer(self, db_session, tenant_id, matter_id, user_id, amount):
+        from app.models.contact import Contact
+        from app.models.retainer import Retainer
+
+        contact = Contact(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            first_name="Trust",
+            last_name="Client",
+            email="trust@example.com",
+        )
+        db_session.add(contact)
+        await db_session.commit()
+
+        retainer = Retainer(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            contact_id=contact.id,
+            retainer_type="evergreen",
+            amount=Decimal(amount),
+            current_balance=Decimal(amount),
+            minimum_balance=Decimal("500.00"),
+            status="active",
+        )
+        db_session.add(retainer)
+        await db_session.commit()
+        await db_session.refresh(retainer)
+        return retainer
+
+    async def _sent_invoice(self, client, matter_id, hours="4.0"):
+        await _log_time(client, matter_id, hours=hours)
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate", json={"matter_id": str(matter_id)}
+            )
+        ).json()
+        await client.patch(
+            f"/api/billing/invoices/{invoice['id']}", json={"status": "sent"}
+        )
+        return invoice
+
+    async def test_applying_trust_moves_both_ledgers_together(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        from app.models.retainer import Retainer
+
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "2000.00"
+        )
+        invoice = await self._sent_invoice(client, test_matter.id)
+
+        # Snapshot the id: the session is expired below, and touching an
+        # expired ORM attribute afterwards triggers a sync refresh.
+        retainer_id = retainer.id
+
+        applied = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer_id), "amount": "400.00"},
+        )
+        assert applied.status_code == 201, applied.text
+        body = applied.json()
+
+        # The invoice records the payment...
+        assert Decimal(body["amount_paid"]) == Decimal("400.00")
+        assert body["status"] == "partially_paid"
+        assert body["payments"][0]["method"] == "trust"
+
+        # ...and the retainer balance actually moved. Without this the two
+        # ledgers drift: the old drawdown route never wrote a payment, and the
+        # payment route never touched the retainer.
+        db_session.expire_all()
+        balance = await db_session.scalar(
+            select(Retainer.current_balance).where(Retainer.id == retainer_id)
+        )
+        assert balance == Decimal("1600.00")
+
+    async def test_applying_trust_defaults_to_settling_the_bill(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "5000.00"
+        )
+        invoice = await self._sent_invoice(client, test_matter.id)
+
+        applied = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer.id)},
+        )
+        assert applied.status_code == 201, applied.text
+        assert applied.json()["status"] == "paid"
+        assert Decimal(applied.json()["balance_due"]) == Decimal("0.00")
+
+    async def test_cannot_overdraw_the_retainer(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "100.00"
+        )
+        invoice = await self._sent_invoice(client, test_matter.id)
+
+        refused = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer.id), "amount": "500.00"},
+        )
+        assert refused.status_code == 400
+        assert "insufficient" in refused.json()["detail"].lower()
+
+    async def test_cannot_apply_trust_to_a_draft(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "2000.00"
+        )
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        refused = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer.id)},
+        )
+        assert refused.status_code == 400
+
+    async def test_available_trust_flags_an_evergreen_shortfall(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "2000.00"
+        )
+        retainer_id = retainer.id
+        invoice = await self._sent_invoice(client, test_matter.id, hours="8.0")
+
+        # Draw the balance under its evergreen floor of $500.
+        drawn = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer_id), "amount": "1600.00"},
+        )
+        assert drawn.status_code == 201, drawn.text
+        db_session.expire_all()
+
+        available = await client.get(
+            f"/api/billing/invoices/{invoice['id']}/available-trust"
+        )
+        assert available.status_code == 200, available.text
+        row = next(r for r in available.json() if r["retainer_id"] == str(retainer_id))
+        assert Decimal(row["current_balance"]) == Decimal("400.00")
+        assert row["needs_replenishment"] is True

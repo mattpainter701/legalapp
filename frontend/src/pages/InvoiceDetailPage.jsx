@@ -8,6 +8,7 @@ import {
   Download,
   ExternalLink,
   FileText,
+  Landmark,
   Link2,
   Minus,
   Pencil,
@@ -21,10 +22,12 @@ import {
 } from 'lucide-react'
 import {
   addInvoiceLineItem,
+  applyTrustToInvoice,
   createInvoicePaymentLink,
   deleteInvoiceLineItem,
   exportInvoice,
   getInvoice,
+  getInvoiceAvailableTrust,
   getQBOStatus,
   recordPayment,
   sendInvoice,
@@ -136,6 +139,7 @@ export default function InvoiceDetailPage() {
   const [lineForm, setLineForm] = useState({ description: '', quantity: '', unit_price: '' })
   const [lineError, setLineError] = useState(null)
   const [showAdjustment, setShowAdjustment] = useState(false)
+  const [trustOptions, setTrustOptions] = useState([])
   const [adjustmentForm, setAdjustmentForm] = useState({ description: '', amount: '', source_type: 'discount' })
 
   const loadInvoice = useCallback(async () => {
@@ -164,6 +168,15 @@ export default function InvoiceDetailPage() {
   useEffect(() => {
     loadInvoice()
   }, [loadInvoice])
+
+  // Retainers the matter holds, so client funds can settle the bill.
+  useEffect(() => {
+    let cancelled = false
+    getInvoiceAvailableTrust(id)
+      .then((rows) => { if (!cancelled) setTrustOptions(Array.isArray(rows) ? rows : []) })
+      .catch(() => { if (!cancelled) setTrustOptions([]) })
+    return () => { cancelled = true }
+  }, [id, invoice?.amount_paid, invoice?.status])
 
   useEffect(() => {
     getQBOStatus()
@@ -321,6 +334,30 @@ export default function InvoiceDetailPage() {
     } catch (error) {
       const detail = error?.response?.data?.detail
       setLineError(typeof detail === 'string' ? detail : 'The charge could not be added.')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleApplyTrust = async (retainer, amountDue) => {
+    const applied = Math.min(Number(retainer.current_balance || 0), amountDue)
+    const confirmed = await confirmAction({
+      title: 'Apply client funds to this invoice?',
+      message: `${money.format(applied)} will be drawn from the retainer and recorded as a payment on this invoice.`,
+      confirmLabel: 'Apply funds',
+    })
+    if (!confirmed) return
+
+    setBusyAction(`trust-${retainer.retainer_id}`)
+    try {
+      await applyTrustToInvoice(id, { retainer_id: retainer.retainer_id })
+      toast.success(`${money.format(applied)} applied from the retainer`)
+      await loadInvoice()
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      toast.error('Funds were not applied', {
+        message: typeof detail === 'string' ? detail : 'Please try again.',
+      })
     } finally {
       setBusyAction(null)
     }
@@ -788,6 +825,53 @@ export default function InvoiceDetailPage() {
               </div>
             )}
           </section>
+
+          {canCollect && trustOptions.length > 0 && (
+            <section className="overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-sm">
+              <div className="flex items-center gap-2 border-b border-brand-line px-4 py-4 sm:px-5">
+                <Landmark size={18} className="text-brand-accent" />
+                <div>
+                  <h2 className="font-serif text-lg font-bold text-brand-ink">Client funds on hand</h2>
+                  <p className="mt-1 text-xs text-brand-muted">
+                    Applying funds draws the retainer down and records the payment in one step.
+                  </p>
+                </div>
+              </div>
+              <ul className="divide-y divide-brand-line">
+                {trustOptions.map((retainer) => {
+                  const available = Number(retainer.current_balance || 0)
+                  const applied = Math.min(available, balance)
+                  return (
+                    <li key={retainer.retainer_id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-5">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-brand-ink">
+                          {retainer.contact_name || 'Client retainer'}
+                          {retainer.retainer_type ? ` · ${statusLabel(retainer.retainer_type)}` : ''}
+                        </p>
+                        <p className="mt-1 text-xs text-brand-muted">
+                          {money.format(available)} available
+                          {retainer.needs_replenishment && retainer.minimum_balance != null && (
+                            <span className="ml-2 text-brand-amber">
+                              Below its {money.format(Number(retainer.minimum_balance))} minimum — request a top-up
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyTrust(retainer, balance)}
+                        disabled={busyAction === `trust-${retainer.retainer_id}` || available <= 0}
+                        className="btn-secondary inline-flex min-h-10 items-center gap-2 disabled:opacity-60"
+                      >
+                        <Landmark size={14} />
+                        {busyAction === `trust-${retainer.retainer_id}` ? 'Applying' : `Apply ${money.format(applied)}`}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </section>
+          )}
 
           <section className="overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-sm">
             <div className="flex flex-col gap-3 border-b border-brand-line px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
