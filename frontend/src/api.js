@@ -1443,6 +1443,20 @@ export const syncEnvKeys = (key) =>
 export const fetchProviderModels = (key, keyId) =>
   platformApi(key).post(`/platform/llm/provider-keys/${keyId}/fetch-models`).then((r) => r.data)
 
+// ── Platform SMS (shared Twilio sender) ───────────────────────────────────
+
+export const getPlatformSmsProvider = (key) =>
+  platformApi(key).get('/platform/sms/provider').then((r) => r.data)
+
+export const updatePlatformSmsProvider = (key, data) =>
+  platformApi(key).put('/platform/sms/provider', data).then((r) => r.data)
+
+export const deletePlatformSmsProvider = (key) =>
+  platformApi(key).delete('/platform/sms/provider').then((r) => r.data)
+
+export const sendPlatformSmsTest = (key, data) =>
+  platformApi(key).post('/platform/sms/test', data).then((r) => r.data)
+
 export const getLLMModelCatalog = (key) =>
   platformApi(key).get('/platform/llm/model-catalog').then((r) => r.data)
 
