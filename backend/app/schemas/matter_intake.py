@@ -125,3 +125,12 @@ class IntakeMeeting(BaseModel):
 class IntakeRetry(BaseModel):
     delivery_key: str = Field(max_length=100)
     confirm_not_sent: Literal[True]
+
+
+class IntakePreviewResponse(BaseModel):
+    """The exact message a draft packet would send, for staff review."""
+
+    subject: str
+    html_body: str
+    text_body: str
+    sms_body: str

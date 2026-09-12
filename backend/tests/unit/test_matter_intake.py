@@ -657,10 +657,10 @@ def test_meeting_requires_timezone_and_messages_only_reference_missing_items(ctx
             kind="in_person", starts_at=datetime(2026, 9, 7), details="Office"
         )
     complete(ctx, "fee_agreement")
-    subject, body = s.message(ctx.packet, "reminder", "https://portal.example")
-    assert "questionnaire" in body and "fee agreement" not in body
-    assert "meeting" in s.message(ctx.packet, "meeting", "url")[0]
-    assert "complete" in s.message(ctx.packet, "complete", "url")[0]
+    rendered = s.message(ctx.packet, "reminder", "https://portal.example")
+    assert "questionnaire" in rendered.text and "fee agreement" not in rendered.text
+    assert "meeting" in s.message(ctx.packet, "meeting", "url").subject
+    assert "complete" in s.message(ctx.packet, "complete", "url").subject
 
 
 @pytest.mark.asyncio
@@ -850,8 +850,8 @@ async def test_cancel_selected_signature_and_packet_message_labels(ctx):
     c = ctx
     c.packet.config["portal_after_signing"] = True
     c.packet.config["selected_documents"] = [{"label": "General intake"}]
-    assert "General intake" in s.message(c.packet, "welcome", "link")[1]
-    assert "portal is ready" in s.message(c.packet, "signed", "link")[0]
+    assert "General intake" in s.message(c.packet, "welcome", "link").text
+    assert "portal is ready" in s.message(c.packet, "signed", "link").subject
     extra = s.SignatureRequest(id=uuid.uuid4(), status="sent")
     c.packet.requirements["document_extra"] = {
         "kind": "signature",
@@ -859,7 +859,7 @@ async def test_cancel_selected_signature_and_packet_message_labels(ctx):
         "label": "General intake",
         "completed": False,
     }
-    assert "General intake" in s.message(c.packet, "reminder", "link")[1]
+    assert "General intake" in s.message(c.packet, "reminder", "link").text
     scalar = c.db.scalar
 
     async def lookup(query):
@@ -919,17 +919,123 @@ def test_packet_messages_list_requested_uploads(ctx):
         "label": "Marriage certificate",
         "completed": False,
     }
-    assert (
-        "Marriage certificate"
-        in s.message(c.packet, "welcome", "https://portal.example")[1]
-    )
-    assert (
-        "Marriage certificate"
-        in s.message(c.packet, "signed", "https://portal.example")[1]
-    )
+    assert "Marriage certificate" in s.message(c.packet, "welcome", "url").text
+    assert "Marriage certificate" in s.message(c.packet, "signed", "url").text
     c.packet.requirements["upload_1"]["completed"] = True
-    no_uploads = s.message(c.packet, "signed", "https://portal.example")[1]
+    no_uploads = s.message(c.packet, "signed", "url").text
     assert "Marriage certificate" not in no_uploads
     # With nothing outstanding, the copy must not send the client hunting for
     # an upload that was never requested.
     assert "upload" not in no_uploads.lower()
+
+
+def test_welcome_message_is_branded_and_names_the_firm(ctx):
+    c = ctx
+    c.packet.config["portal_after_signing"] = True
+    c.packet.config["selected_documents"] = [{"label": "General intake"}]
+    rendered = s.message(
+        c.packet,
+        "welcome",
+        "https://portal.example/accept?token=abc",
+        brand={
+            "firm_name": "Painter Law",
+            "firm_phone": "+13125550100",
+            "firm_email": "team@painterlaw.example",
+        },
+        client_name="Jane Smith",
+        expires_at=TIME + timedelta(days=30),
+    )
+    # The subject and both bodies name the firm the client actually hired.
+    assert rendered.subject.startswith("Painter Law:")
+    assert "Painter Law" in rendered.text and "Painter Law" in rendered.html
+    # The broken promise from the old copy is gone; the link is the portal.
+    assert "portal link will follow" not in rendered.text
+    assert "portal link will follow" not in rendered.html
+    assert "<!DOCTYPE html>" in rendered.html
+    assert "Open Secure Client Portal" in rendered.html
+    assert "Hi Jane," in rendered.text
+    # A signing note explains what signing unlocks, without promising a
+    # second link.
+    assert "opens your full client portal" in rendered.text
+
+
+def test_sms_body_is_short_and_separate_from_the_email(ctx):
+    c = ctx
+    c.packet.config["portal_after_signing"] = True
+    c.packet.config["selected_documents"] = [{"label": "General intake"}]
+    rendered = s.message(c.packet, "welcome", "https://portal.example/accept?token=abc")
+    assert "https://portal.example/accept?token=abc" in rendered.sms
+    assert len(rendered.sms) < len(rendered.text)
+    # The rich greeting and checklist never leak into the text message.
+    assert "Hi " not in rendered.sms
+    assert "<ul>" not in rendered.sms
+    assert "General intake" not in rendered.sms
+
+
+@pytest.mark.asyncio
+async def test_preview_route_renders_the_exact_message_without_sending(
+    ctx, monkeypatch
+):
+    c = ctx
+    c.db.rows[s.Tenant] = SimpleNamespace(id=c.matter.tenant_id, name="Painter Law")
+    monkeypatch.setattr(
+        r,
+        "get_settings",
+        lambda: SimpleNamespace(FRONTEND_URL="https://portal.example"),
+    )
+    monkeypatch.setattr(
+        r,
+        "get_firm_branding",
+        AsyncMock(
+            return_value={
+                "firm_name": "Painter Law",
+                "firm_phone": "+13125550100",
+                "firm_email": "team@painterlaw.example",
+            }
+        ),
+    )
+    body = start_body(
+        c,
+        agreement_document_id=c.doc.id,
+        selected_documents=[
+            {
+                "document_id": uuid.uuid4(),
+                "label": "General intake",
+                "requires_signature": False,
+            }
+        ],
+        upload_requirements=[{"key": "upload_1", "label": "Marriage certificate"}],
+        include_questionnaire=False,
+        portal_after_signing=True,
+    )
+    result = await r.preview(c.matter.id, body, c.db, c.user)
+    assert result.subject.startswith("Painter Law:")
+    assert "General intake" in result.text_body
+    assert "Marriage certificate" in result.text_body
+    assert (
+        "https://portal.example/portal/client/accept?token=preview" in result.text_body
+    )
+    assert (
+        result.text_body
+        == s.render_client_message(
+            "welcome",
+            "https://portal.example/portal/client/accept?token=preview",
+            labels=["Fee agreement", "General intake"],
+            uploads=["Marriage certificate"],
+            has_fee_agreement=True,
+            portal_after_signing=True,
+            brand={
+                "firm_name": "Painter Law",
+                "firm_phone": "+13125550100",
+                "firm_email": "team@painterlaw.example",
+            },
+            client_name="Jane Smith",
+            expires_at=TIME + timedelta(days=30),
+        ).text
+    )
+    assert "<!DOCTYPE html>" in result.html_body
+    assert "Open Secure Client Portal" in result.html_body
+    # Read-only: no packet was created and no message queued.
+    assert c.packet.delivery == {}
+    s.send_client_email.assert_not_awaited()
+    s.send_sms.assert_not_awaited()

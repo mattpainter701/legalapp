@@ -7,6 +7,7 @@ import json
 import logging
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import escape
 from zoneinfo import ZoneInfo
@@ -30,7 +31,7 @@ from app.models.task import Task
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.connected_mail import send_client_email
-from app.services.email import email_service
+from app.services.email import email_service, render_branded_email
 from app.services.matter_access import can_access_matter
 from app.services.sms_categories import disclosure_version, granted_categories
 from app.services.matter_file_store import MatterFileStore
@@ -876,51 +877,264 @@ def requested_upload_labels(packet, *, outstanding_only=False):
     return labels
 
 
-def message(packet, kind, url):
+@dataclass(frozen=True)
+class ClientMessage:
+    """One client-facing intake notification across both delivery channels.
+
+    The same event reads differently by channel: email gets the branded shell
+    and the full checklist, while the text stays short enough to read on a
+    lock screen. Keeping them on one object stops a rich email body from
+    leaking into an SMS.
+    """
+
+    subject: str
+    text: str
+    html: str
+    sms: str
+
+
+def _client_first_name(name):
+    if not name:
+        return None
+    stripped = name.strip()
+    return stripped.split()[0] if stripped else None
+
+
+def _firm_display(brand):
+    name = (brand or {}).get("firm_name")
+    return name.strip() if name and name.strip() else "Your legal team"
+
+
+def _html_bullets(items):
+    if not items:
+        return ""
+    return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ul>"
+
+
+def _text_bullets(items):
+    return "\n".join(f"- {item}" for item in items)
+
+
+def _contact_line(brand):
+    bits = []
+    if (brand or {}).get("firm_phone"):
+        bits.append(f"call {brand['firm_phone']}")
+    if (brand or {}).get("firm_email"):
+        bits.append(f"email {brand['firm_email']}")
+    return "Questions? " + " or ".join(bits) + "." if bits else ""
+
+
+_HEADER_SUBTITLES = {
+    "welcome": "You have secure paperwork waiting",
+    "signed": "Your portal is ready",
+    "reminder": "Your paperwork is waiting",
+    "meeting": "Your meeting is confirmed",
+    "complete": "Your intake is complete",
+}
+
+
+def render_client_message(
+    kind,
+    url,
+    *,
+    labels=None,
+    uploads=None,
+    missing=None,
+    has_fee_agreement=False,
+    portal_after_signing=False,
+    brand=None,
+    client_name=None,
+    expires_at=None,
+):
+    """Build the subject, email and text copy for one intake notification.
+
+    Deliberately packet-free: the preview endpoint calls it before a packet
+    exists and delivery calls it after, so what staff preview is the exact
+    copy that gets sent. ``email.render_branded_email`` supplies only the
+    chrome; every word of the message lives here.
+    """
+    labels = list(labels or [])
+    uploads = list(uploads or [])
+    missing = list(missing or [])
+    brand = brand or {}
+    firm = _firm_display(brand)
+    has_firm_name = firm != "Your legal team"
+    first_name = _client_first_name(client_name)
+    safe_url = escape(url, quote=True)
+    header_title = escape(firm) if has_firm_name else "Client Portal"
+
+    sections = []  # (heading, [items]) rendered under the intro
+    note_text = ""
+    if kind == "welcome":
+        subject = (
+            f"{firm}: Please review and complete your paperwork"
+            if has_firm_name
+            else "Please review and complete your paperwork"
+        )
+        if labels:
+            intro = f"{firm} has prepared the following for you to review and complete:"
+        elif uploads:
+            intro = f"{firm} has asked you to provide the following:"
+        else:
+            intro = f"{firm} has paperwork for you in your secure client portal:"
+        if uploads:
+            sections.append(("Please have these records ready to upload:", uploads))
+        if portal_after_signing and has_fee_agreement:
+            # The link in this message opens the portal; signing is what
+            # unlocks the rest of it. No second link is coming, so say what
+            # signing actually does instead of promising a follow-up email.
+            note_text = (
+                "Signing your fee agreement also opens your full client portal — "
+                "secure messages, documents, and billing."
+            )
+        sms = (
+            f"{firm}: Your paperwork is ready to review and complete in your "
+            f"secure portal: {url}"
+        )
+    elif kind == "signed":
+        subject = "Your client portal is ready"
+        if uploads:
+            intro = (
+                "Your fee agreement signature was received. Please complete the "
+                "remaining paperwork and upload the requested records:"
+            )
+            sections.append(("Please have these records ready to upload:", uploads))
+        else:
+            intro = (
+                "Your fee agreement signature was received. Complete any remaining "
+                "paperwork in your secure client portal:"
+            )
+        sms = (
+            f"{firm}: Your fee agreement was received. Continue in your secure "
+            f"portal: {url}"
+        )
+    elif kind == "reminder":
+        subject = "Your intake needs attention"
+        intro = "Please complete the following in your secure client portal:"
+        if missing:
+            sections.append(("Still needed:", missing))
+        sms = (
+            f"{firm}: Reminder — your paperwork is waiting in your secure portal: {url}"
+        )
+    elif kind == "meeting":
+        subject = "Initial meeting confirmed"
+        intro = (
+            "Your initial meeting details are available in your secure client portal:"
+        )
+        sms = (
+            f"{firm}: Your initial meeting is confirmed. Details in your secure "
+            f"portal: {url}"
+        )
+    else:  # complete
+        subject = "Your intake documents are complete"
+        intro = (
+            "Thank you. Your legal team will contact you to arrange a conference "
+            "call or in-person meeting. Your secure portal:"
+        )
+        sms = f"{firm}: Your intake is complete. We'll be in touch to schedule. {url}"
+
+    expiry_text = (
+        f"It expires on {expires_at.strftime('%B %d, %Y')}."
+        if expires_at is not None
+        else "It expires after 30 days."
+    )
+    contact_text = _contact_line(brand)
+
+    html_parts = []
+    if first_name:
+        html_parts.append(f"<p>Hi {escape(first_name)},</p>")
+    html_parts.append(f"<p>{escape(intro)}</p>")
+    html_parts.append(_html_bullets(labels))
+    for heading, items in sections:
+        html_parts.append(f"<p>{escape(heading)}</p>")
+        html_parts.append(_html_bullets(items))
+    html_parts.append(
+        '<p style="margin:24px 0;">'
+        f'<a href="{safe_url}" style="background:#0f2d5e;color:#ffffff;'
+        "text-decoration:none;padding:12px 24px;border-radius:6px;"
+        'font-weight:bold;display:inline-block;">Open Secure Client Portal</a></p>'
+    )
+    html_parts.append(
+        '<p style="font-size:12px;color:#888;">If the button doesn\'t work, '
+        f"copy and paste this link into your browser:<br/>{safe_url}</p>"
+    )
+    if note_text:
+        html_parts.append(
+            f'<p style="font-size:12px;color:#888;">{escape(note_text)}</p>'
+        )
+    html_parts.append(
+        '<p style="font-size:12px;color:#888;">This link is unique to you. '
+        f"Do not forward it. {escape(expiry_text)}</p>"
+    )
+    if contact_text:
+        html_parts.append(f"<p>{escape(contact_text)}</p>")
+    content_html = (
+        f'<div class="header"><h1>{header_title}</h1>'
+        f"<p>{escape(_HEADER_SUBTITLES.get(kind, 'Your intake is complete'))}</p></div>"
+        f'<div class="body">{"".join(p for p in html_parts if p)}</div>'
+    )
+
+    text_parts = [intro]
+    if labels:
+        text_parts.append(_text_bullets(labels))
+    for heading, items in sections:
+        text_parts.append(heading)
+        text_parts.append(_text_bullets(items))
+    text_parts.append("Open your secure client portal:")
+    text_parts.append(url)
+    text_parts.append(expiry_text)
+    if note_text:
+        text_parts.append(note_text)
+    if contact_text:
+        text_parts.append(contact_text)
+    text_parts.append(f"Thank you,\n{firm}")
+    text = "\n\n".join(part for part in text_parts if part)
+    if first_name:
+        text = f"Hi {first_name},\n\n{text}"
+
+    return ClientMessage(
+        subject=subject,
+        text=text,
+        html=render_branded_email(content_html),
+        sms=sms,
+    )
+
+
+def message(packet, kind, url, *, brand=None, client_name=None, expires_at=None):
+    """Render a notification from packet state.
+
+    Thin adapter over :func:`render_client_message` so delivery and the unit
+    tests keep a single packet-shaped entry point.
+    """
     if kind == "signed":
         uploads = requested_upload_labels(packet, outstanding_only=True)
-        if uploads:
-            body = (
-                "Your fee agreement signature was received. Complete remaining paperwork "
-                f"and upload requested records: {', '.join(uploads)}. Secure portal link: {url}"
-            )
-        else:
-            body = (
-                "Your fee agreement signature was received. Complete any remaining paperwork "
-                f"in your secure portal: {url}"
-            )
-        return (
-            "Your client portal is ready",
-            body,
-        )
-    if kind == "welcome" and packet.config.get("portal_after_signing"):
-        labels = [
-            "Fee agreement",
-            *[item["label"] for item in packet.config.get("selected_documents", [])],
-        ]
-        uploads = requested_upload_labels(packet)
-        records = (
-            f" Please have these records ready to upload: {', '.join(uploads)}."
-            if uploads
-            else ""
-        )
-        return (
-            "Review your paperwork",
-            f"Please review and complete each document: {', '.join(labels)}."
-            f"{records} Secure paperwork link: {url}. Your general client portal link will follow after the fee agreement is signed.",
+        return render_client_message(
+            kind,
+            url,
+            uploads=uploads,
+            brand=brand,
+            client_name=client_name,
+            expires_at=expires_at,
         )
     if kind == "welcome":
-        # No fee agreement to wait on: the portal is open now, so the message
-        # names the records to have ready and nothing about signing.
-        records = requested_upload_labels(packet)
-        records_text = (
-            f" Please have these records ready to upload: {', '.join(records)}."
-            if records
-            else ""
-        )
-        return (
-            "Welcome — complete your intake",
-            f"Please complete your paperwork in your secure client portal: {url}.{records_text}",
+        has_fee_agreement = "fee_agreement" in packet.requirements
+        # The fee agreement is listed whenever it is part of the packet, not
+        # only when the portal waits on signing, so a checkbox never hides a
+        # document the client still has to sign.
+        labels = [
+            *(["Fee agreement"] if has_fee_agreement else []),
+            *[item["label"] for item in packet.config.get("selected_documents", [])],
+        ]
+        return render_client_message(
+            kind,
+            url,
+            labels=labels,
+            uploads=requested_upload_labels(packet),
+            has_fee_agreement=has_fee_agreement,
+            portal_after_signing=bool(packet.config.get("portal_after_signing")),
+            brand=brand,
+            client_name=client_name,
+            expires_at=expires_at,
         )
     if kind == "reminder":
         missing = [
@@ -928,18 +1142,20 @@ def message(packet, kind, url):
             for key, item in packet.requirements.items()
             if item.get("required", True) and not item["completed"]
         ]
-        return (
-            "Your intake needs attention",
-            f"Please complete your {' and '.join(missing)} in your secure portal: {url}",
+        return render_client_message(
+            kind,
+            url,
+            missing=missing,
+            brand=brand,
+            client_name=client_name,
+            expires_at=expires_at,
         )
-    if kind == "meeting":
-        return (
-            "Initial meeting confirmed",
-            f"Your initial meeting details are available in your secure portal: {url}",
-        )
-    return (
-        "Your intake documents are complete",
-        f"Thank you. Your legal team will contact you to arrange a conference call or in-person meeting. Your secure portal: {url}",
+    return render_client_message(
+        kind,
+        url,
+        brand=brand,
+        client_name=client_name,
+        expires_at=expires_at,
     )
 
 
@@ -1011,8 +1227,21 @@ async def deliver(db, packet, key):
         actor.id,
         contact.id,
     )
+    # Branding is resolved here so the email identifies the firm the client
+    # actually hired. Imported locally to avoid a service -> router cycle.
+    from app.routers.firm import get_firm_branding
+
+    tenant = await db.get(Tenant, tenant_id)
+    brand = await get_firm_branding(db, tenant) if tenant else {}
     url = f"{get_settings().FRONTEND_URL.rstrip('/')}/portal/client/accept?token={decrypt_token(packet.encrypted_invite)}"
-    subject, body = message(packet, kind, url)
+    rendered = message(
+        packet,
+        kind,
+        url,
+        brand=brand,
+        client_name=contact.display_name,
+        expires_at=invite.expires_at,
+    )
     email = packet.config["email"]
     packet.delivery = {
         **packet.delivery,
@@ -1032,9 +1261,9 @@ async def deliver(db, packet, key):
                 tenant_id=tenant_id,
                 actor_user_id=actor_id,
                 to=[email],
-                subject=subject,
-                html_body=f"<p>{escape(body)}</p>",
-                text_body=body,
+                subject=rendered.subject,
+                html_body=rendered.html,
+                text_body=rendered.text,
                 smtp_service=email_service,
             )
             outcome = {"confirmed_sent": "sent", "not_attempted": "failed"}.get(
@@ -1049,7 +1278,7 @@ async def deliver(db, packet, key):
                 user_id=actor_id,
                 contact_id=contact_id,
                 matter_id=matter_id,
-                body=body,
+                body=rendered.sms,
                 category="intake",
                 idempotency_key=f"intake:{packet_id}:{key}:{state['attempt']}",
             )
@@ -1112,7 +1341,7 @@ async def deliver(db, packet, key):
                     channel="email",
                     direction="outbound",
                     status="sent",
-                    subject=subject,
+                    subject=rendered.subject,
                     body="Secure intake portal notification sent.",
                     external_ref=f"intake:{packet_id}:{key}:{state['attempt']}",
                 )

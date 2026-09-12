@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FileText, LibraryBig, X } from 'lucide-react'
-import { getIntakeStarterPack, getMatterDocuments, uploadMatterDocument } from '../../api'
+import { getIntakeStarterPack, getMatterDocuments, previewMatterPaperwork, uploadMatterDocument } from '../../api'
 import { startMatterIntake } from '../MatterIntakePanel'
 import MatterTemplatePicker from '../templates/MatterTemplatePicker'
 import { emptyDraft, paperworkOptions } from './paperwork'
@@ -76,6 +76,12 @@ export default function PaperworkDrawer({
   const [pack, setPack] = useState(null)
   const [packNote, setPackNote] = useState('')
   const [attachedDocuments, setAttachedDocuments] = useState([])
+  // The exact message the client would receive for the current draft. Rendered
+  // server-side so it matches delivery byte for byte, with a sample token.
+  const [preview, setPreview] = useState(null)
+  const [previewChannel, setPreviewChannel] = useState('email')
+  const [previewError, setPreviewError] = useState('')
+  const [previewLoading, setPreviewLoading] = useState(false)
   // Which card opened the firm-template picker: the document it saves becomes
   // the fee agreement, the intake form, or an additional signing form.
   const [pickerTarget, setPickerTarget] = useState(null)
@@ -257,6 +263,35 @@ export default function PaperworkDrawer({
       setBusy(false)
     }
   }
+
+  // The preview is a server round-trip so it cannot drift from the sent copy.
+  // It waits for a sendable draft and debounces while the firm is still typing.
+  useEffect(() => {
+    if (step !== 2 || !draft.email || !hasItem || draft.channels.length === 0) {
+      setPreview(null)
+      setPreviewLoading(false)
+      setPreviewError('')
+      return undefined
+    }
+    let active = true
+    const timer = setTimeout(async () => {
+      setPreviewLoading(true)
+      setPreviewError('')
+      try {
+        const value = await previewMatterPaperwork(matterId, paperworkOptions(draft, timeZone))
+        if (active) setPreview(value)
+      } catch (caught) {
+        if (active) {
+          const detail = caught?.response?.data?.detail
+          setPreview(null)
+          setPreviewError(typeof detail === 'string' ? detail : 'Could not render the preview yet.')
+        }
+      } finally {
+        if (active) setPreviewLoading(false)
+      }
+    }, 350)
+    return () => { active = false; clearTimeout(timer) }
+  }, [step, matterId, timeZone, draft, hasItem])
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-brand-ink/30" role="dialog" aria-modal="true" aria-label="Send client paperwork">
@@ -520,6 +555,50 @@ export default function PaperworkDrawer({
                   Signing a fee agreement opens the client portal and creates a follow-up due within 24 hours.
                   Without one, the portal opens on the first message. SMS respects recorded permission and quiet hours.
                 </p>
+              </div>
+
+              <div className={card}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-semibold text-brand-ink">Message the client will receive</h3>
+                  <div role="tablist" aria-label="Preview channel" className="flex gap-1">
+                    {[['email', 'Email'], ['sms', 'Text']].map(([channel, name]) => (
+                      <button
+                        key={channel}
+                        type="button"
+                        role="tab"
+                        aria-selected={previewChannel === channel}
+                        onClick={() => setPreviewChannel(channel)}
+                        className={`rounded-lg px-3 py-1 text-[12px] font-semibold ${previewChannel === channel ? 'bg-brand-ink text-white' : 'border border-brand-line text-brand-muted hover:text-brand-ink'}`}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {previewLoading && <p role="status" className="mt-3 text-[12px] text-brand-muted">Rendering the message…</p>}
+                {previewError && <p role="alert" className="mt-3 text-[12px] text-brand-rose">{previewError}</p>}
+                {preview && previewChannel === 'email' && (
+                  <div className="mt-3">
+                    <p className="text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Subject</p>
+                    <p className="text-[13px] font-semibold text-brand-ink">{preview.subject}</p>
+                    <p className="mt-2 text-[12px] text-brand-muted">The link below is a sample; the real one is created when you send.</p>
+                    <iframe
+                      title="Client email preview"
+                      sandbox=""
+                      srcDoc={preview.html_body}
+                      className="mt-2 h-96 w-full rounded-lg border border-brand-line bg-white"
+                    />
+                  </div>
+                )}
+                {preview && previewChannel === 'sms' && (
+                  <div className="mt-3">
+                    <p className="text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Text message</p>
+                    <p className="mt-1 whitespace-pre-wrap rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-[13px] text-brand-ink">{preview.sms_body}</p>
+                  </div>
+                )}
+                {!preview && !previewLoading && !previewError && (
+                  <p className="mt-3 text-[12px] text-brand-muted">Add a client email and at least one item to preview the message.</p>
+                )}
               </div>
 
               {!hasItem && <p role="alert" className="text-[13px] text-brand-rose">Add at least one document, the questionnaire, or a requested upload before sending.</p>}

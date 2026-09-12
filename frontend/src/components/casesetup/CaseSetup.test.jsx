@@ -5,12 +5,13 @@ import CaseSetupCard from './CaseSetupCard'
 import PaperworkDrawer from './PaperworkDrawer'
 import { dueDateToIso, paperworkOptions } from './paperwork'
 import api, {
-  getAdminUsers, getIntakeStarterPack, getMatterDocuments, getMatterPaperwork, matterPaperworkAction, uploadMatterDocument,
+  getAdminUsers, getIntakeStarterPack, getMatterDocuments, getMatterPaperwork, matterPaperworkAction, previewMatterPaperwork, uploadMatterDocument,
 } from '../../api'
 
 vi.mock('../../api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
-  getMatterPaperwork: vi.fn(), matterPaperworkAction: vi.fn(), getMatterDocuments: vi.fn(),
+  getMatterPaperwork: vi.fn(), matterPaperworkAction: vi.fn(), previewMatterPaperwork: vi.fn(),
+  getMatterDocuments: vi.fn(),
   getAdminUsers: vi.fn(), getContacts: vi.fn(), getIntakeStarterPack: vi.fn(),
   uploadMatterDocument: vi.fn(),
 }))
@@ -48,6 +49,12 @@ beforeEach(() => {
   matterPaperworkAction.mockResolvedValue(packet())
   getMatterDocuments.mockResolvedValue([])
   getAdminUsers.mockResolvedValue([])
+  previewMatterPaperwork.mockResolvedValue({
+    subject: 'Painter Law: Please review and complete your paperwork',
+    html_body: '<!DOCTYPE html><div class="header"><h1>Painter Law</h1></div><p>Open Secure Client Portal</p>',
+    text_body: 'Hi Jane, open your secure client portal.',
+    sms_body: 'Painter Law: Your paperwork is ready in your secure portal.',
+  })
   api.post.mockResolvedValue({ data: packet() })
 })
 
@@ -243,6 +250,31 @@ it('includes the client intake form as an unsigned document', async () => {
   expect(options.selected_documents).toEqual([
     expect.objectContaining({ document_id: 'intake', requires_signature: false }),
   ])
+})
+
+it('previews the exact branded message the client will receive', async () => {
+  const user = userEvent.setup()
+  render(<PaperworkDrawer
+    matterId="matter"
+    documents={[]}
+    clientEmail="jane@example.com"
+    timeZone="UTC"
+    onClose={vi.fn()}
+    onSent={vi.fn()}
+  />)
+
+  await user.click(screen.getByRole('button', { name: '3. Send' }))
+
+  // The server renders the copy; the drawer only displays it.
+  expect(await screen.findByText('Painter Law: Please review and complete your paperwork')).toBeInTheDocument()
+  await waitFor(() => expect(previewMatterPaperwork).toHaveBeenCalledWith(
+    'matter', expect.objectContaining({ email: 'jane@example.com' }),
+  ))
+  // The branded HTML is sandboxed so a template can never run script.
+  expect(screen.getByTitle('Client email preview')).toHaveAttribute('sandbox')
+
+  await user.click(screen.getByRole('tab', { name: 'Text' }))
+  expect(await screen.findByText('Painter Law: Your paperwork is ready in your secure portal.')).toBeInTheDocument()
 })
 
 it('seeds the matter type questions and upload hint from the starter pack', async () => {

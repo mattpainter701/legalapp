@@ -41,6 +41,8 @@ In **Start this case**, the fee agreement, the client questionnaire, and the cli
 
 When a fee agreement is included, signing it opens the portal and starts the 24-hour follow-up clock; the packet still requires an attorney-reviewed fee agreement chosen from the matter's documents or uploaded as a PDF. With no fee agreement, the portal is open on the first message and the follow-up still runs.
 
+The Send step previews the client message before anything goes out. *Message the client will receive* shows the branded email, with the firm's name and contact details and an **Open Secure Client Portal** button, and a **Text** tab shows the shorter SMS copy. Email and text are separate messages. The preview link is a sample because the real portal token is created only when the packet is sent; signing the fee agreement opens the rest of the portal on that same link rather than sending a second one.
+
 ## Capture a call
 
 The Call Intake dashboard supports recent caller matching, call capture, partner routing, the partner log, call-record exports, and administrator-managed rotation rules. When Zoom Phone is configured, a live call feed may provide call metadata.

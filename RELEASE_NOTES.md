@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.12 — Preview the message before you send it
+
+Released September 11, 2026.
+
+Client paperwork now goes out as a branded email with the firm's name and contact details and a clear portal button, with a separate short text, and the Send step previews both before anything is sent.
+
+- **See the message before you send it.** The Send step shows the exact branded email and short text the client will receive, rendered by the same code that delivers them.
+- **The email looks like your firm.** Paperwork now carries your firm's name and contact details and an Open Secure Client Portal button instead of one plain paragraph.
+- **Email and text are separate messages.** The full checklist stays in the email; the text is a short line with the link, so the message is readable on any phone.
+- **One link, described correctly.** The message no longer promises a second portal link: the invitation link is the portal, and signing the fee agreement unlocks the rest.
+
 ## 2026.09.11.11 — Send any of the three standard pieces
 
 Released September 11, 2026.

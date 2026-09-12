@@ -5,6 +5,14 @@
 - Add an operator SMS tab in `frontend/src/pages/PlatformPage.jsx` to save the sender and send a test message.
 - No migration: configuration uses the existing `platform_settings` table. The separate, firm-owned tenant SMS path (`/api/sms/config`) is unchanged.
 
+## 2026.09.11.12 — Branded client paperwork message and preview
+
+- Replace the single run-on paragraph sent to clients with `render_client_message` in `services/matter_intake.py`, wrapped by the new `email.render_branded_email` in the firm's existing `_BASE_HTML` shell: a greeting by first name, the firm's name and contact details, the document and upload lists, and an **Open Secure Client Portal** button. `deliver` resolves firm branding via `get_firm_branding` and the client's display name and passes them through.
+- Drop the false "your general client portal link will follow after the fee agreement is signed" line. The invitation link is the portal; the copy now says signing unlocks the rest of the portal. The fee agreement is listed whenever it is in the packet, not only when `portal_after_signing` is set, so a checkbox can no longer hide a document the client still has to sign.
+- Give SMS its own short body (`ClientMessage.sms`) so the branded HTML and checklist cannot arrive as a text message.
+- Add `POST /api/matters/{id}/intake/preview` (`IntakePreviewResponse`) rendering the exact subject, HTML, text and SMS for the current draft with a sample token. Read-only and gated by `manage_matters` plus matter access; no packet row is created.
+- Add a **Message the client will receive** card to the drawer's Send step with Email/Text tabs, a debounced preview from the new endpoint, and the branded HTML in a sandboxed iframe. Update the onboarding e2e link extraction for the multi-line text body.
+
 ## 2026.09.11.11 — Optional fee agreement and matter-type questionnaire
 
 - `PaperworkDrawer` now lists the three common pieces as selectable cards — fee agreement, client questionnaire, client intake form — and allows any subset. `canSend` no longer requires a fee agreement; the Send step warns only when nothing at all is included. The router previously raised 422 when no agreement was passed (`routers/matter_intake.py`); it now hands empty bytes through.
