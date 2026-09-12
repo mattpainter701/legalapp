@@ -39,22 +39,39 @@ def classify_matter_folders(
     matter_slug: str,
     current_binding_id: str | None,
     children: list[dict[str, Any]],
+    matter_number: str | None = None,
 ) -> dict[str, Any]:
-    """Classify children without selecting, changing, or repairing a folder."""
-    id_name = canonical_matter_folder_name(matter_name, matter_id, matter_slug)
+    """Classify children without selecting, changing, or repairing a folder.
+
+    A folder is recognised under either the current name (matter number when
+    present, otherwise the UUID prefix) or the historic UUID-prefixed name, so
+    folders provisioned before matter numbers existed are not reported as
+    unbound or ambiguous.
+    """
+    id_name = canonical_matter_folder_name(
+        matter_name, matter_id, matter_slug, matter_number
+    )
+    legacy_name = canonical_matter_folder_name(matter_name, matter_id, matter_slug)
     slug_name = (matter_slug or "").strip()
     id_matches = [item for item in children if item.get("name") == id_name]
+    legacy_matches = (
+        []
+        if legacy_name == id_name
+        else [item for item in children if item.get("name") == legacy_name]
+    )
     slug_matches = [item for item in children if item.get("name") == slug_name]
     all_matches = {
-        str(item.get("id")) for item in id_matches + slug_matches if item.get("id")
+        str(item.get("id"))
+        for item in id_matches + legacy_matches + slug_matches
+        if item.get("id")
     }
     binding_in_matches = bool(
         current_binding_id and str(current_binding_id) in all_matches
     )
     reasons: list[str] = []
-    if id_matches and slug_matches:
+    if (id_matches or legacy_matches) and slug_matches:
         reasons.append("both_slug_and_id_named_folders")
-    if len(id_matches) > 1 or len(slug_matches) > 1:
+    if len(id_matches) + len(legacy_matches) > 1 or len(slug_matches) > 1:
         reasons.append("duplicate_matching_names")
     if current_binding_id and not binding_in_matches:
         reasons.append("binding_not_found_among_matching_folders")
@@ -63,9 +80,11 @@ def classify_matter_folders(
         "matter_name": matter_name,
         "matter_slug": matter_slug,
         "expected_id_named": id_name,
+        "expected_legacy_named": legacy_name,
         "expected_slug_named": slug_name,
         "current_binding_id": current_binding_id,
         "id_named_matches": id_matches,
+        "legacy_named_matches": legacy_matches,
         "slug_named_matches": slug_matches,
         "ambiguous": bool(reasons),
         "ambiguity_reasons": reasons,
@@ -295,6 +314,7 @@ async def audit_matter_cloud_folders(
                     if isinstance(binding, dict)
                     else None,
                     children=children,
+                    matter_number=getattr(matter, "matter_number", None),
                 )
                 provider_rows.append(row)
                 rows.append({"provider": provider, **row})

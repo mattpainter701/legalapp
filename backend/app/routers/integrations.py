@@ -2301,6 +2301,7 @@ async def cloud_init_retry(
             matter.id,
             getattr(matter, "slug", None) or str(matter.id),
             matter.matter_name,
+            getattr(matter, "matter_number", None),
         )
         for matter in matters
     ]
@@ -2312,7 +2313,7 @@ async def cloud_init_retry(
 
     initialized = 0
     failed = 0
-    for matter_id, slug, matter_name in matter_attempts:
+    for matter_id, slug, matter_name, matter_number in matter_attempts:
         try:
             # A lock timeout (or any database error) marks the active
             # transaction as failed in Postgres. A savepoint contains that
@@ -2327,6 +2328,7 @@ async def cloud_init_retry(
                     matter_id=matter_id,
                     folder_name=matter_name,
                     tokens=tokens,
+                    matter_number=matter_number,
                 )
             if not folder:
                 # initialize_matter_folders can return no binding when a

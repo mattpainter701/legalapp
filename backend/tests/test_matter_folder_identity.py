@@ -16,6 +16,12 @@ def test_folder_name_normalizes_unsafe_characters_and_always_has_identity():
     assert len(cloud_init.canonical_matter_folder_name('x' * 300, MATTER_ID)) <= 200
 
 
+def test_folder_name_prefers_human_readable_matter_number():
+    assert cloud_init.canonical_matter_folder_name('Smith', MATTER_ID, 'smith', 'CYBE0012') == 'Smith (CYBE0012)'
+    assert cloud_init.canonical_matter_folder_name('Smith', MATTER_ID, 'smith', '  ') == 'Smith (12345678)'
+    assert cloud_init.canonical_matter_folder_name('Smith', MATTER_ID, 'smith', None) == 'Smith (12345678)'
+
+
 def test_logical_path_survives_provider_remap_and_rename():
     from app.routers.matters import _apply_cloud_provider_metadata
     matter = SimpleNamespace(id=MATTER_ID, slug='smith', matter_name='Smith', cloud_folder=None)
@@ -76,3 +82,56 @@ async def test_provision_reloads_binding_after_refresh_under_tenant_and_matter_l
     assert 'tenants' in str(statements[0]) and 'matters' in str(statements[1])
     assert all(call.args[-1] == 'saved' for call in ensure.await_args_list)
     db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_provision_derives_number_from_locked_matter_when_not_passed(monkeypatch):
+    from unittest.mock import Mock
+    current_root = {'google_drive': {'id': 'current-root'}}
+    matter = SimpleNamespace(matter_number='CYBE0012', cloud_folder=None)
+    statements = []
+
+    async def execute(statement):
+        statements.append(statement)
+        return Mock(
+            scalar_one_or_none=Mock(
+                return_value=current_root if len(statements) == 1 else matter
+            )
+        )
+
+    db = Mock(execute=AsyncMock(side_effect=execute), flush=AsyncMock())
+    monkeypatch.setattr('app.database.set_tenant_context', AsyncMock())
+    monkeypatch.setattr(cloud_init, 'get_fresh_token', AsyncMock(return_value='token'))
+    ensure = AsyncMock(side_effect=lambda *args: 'created-' + args[-2])
+    monkeypatch.setattr(cloud_init, '_ensure_gdrive_folder', ensure)
+    monkeypatch.setattr(cloud_init, '_get_gdrive_folder_metadata', AsyncMock(return_value={'name': 'Smith (CYBE0012)'}))
+    monkeypatch.setattr(cloud_init, 'ensure_matter_marker', AsyncMock())
+    result = await cloud_init.initialize_matter_folders(
+        db, str(uuid.uuid4()), 'smith', {'google_drive': {'id': 'stale-root'}},
+        folder_name='Smith', matter_id=MATTER_ID,
+    )
+    assert ensure.call_args_list[0].args[-2] == 'Smith (CYBE0012)'
+    assert result['path'] == 'claritylegal-records/Smith (CYBE0012)'
+
+
+@pytest.mark.asyncio
+async def test_provision_uses_matter_number_for_new_folder_name(monkeypatch):
+    monkeypatch.setattr(cloud_init, 'get_fresh_token', AsyncMock(return_value='token'))
+    ensure = AsyncMock(side_effect=lambda *args: 'created-' + args[-2])
+    monkeypatch.setattr(cloud_init, '_ensure_gdrive_folder', ensure)
+    monkeypatch.setattr(cloud_init, '_get_gdrive_folder_metadata', AsyncMock(return_value={'name': 'Smith (CYBE0012)'}))
+    monkeypatch.setattr(cloud_init, 'ensure_matter_marker', AsyncMock())
+    root = {'google_drive': {'id': 'root-id'}}
+    result = await cloud_init.initialize_matter_folders(
+        None, str(uuid.uuid4()), 'smith', root,
+        folder_name='Smith', matter_id=MATTER_ID, matter_number='CYBE0012',
+    )
+    assert ensure.call_args_list[0].args[-2] == 'Smith (CYBE0012)'
+    assert result['path'] == 'claritylegal-records/Smith (CYBE0012)'
+
+
+def test_logical_path_prefers_matter_number_over_uuid():
+    from app.routers.matters import _apply_cloud_provider_metadata
+    matter = SimpleNamespace(id=MATTER_ID, slug='smith', matter_name='Smith', matter_number='CYBE0012', cloud_folder=None)
+    result = _apply_cloud_provider_metadata(matter, 'onedrive', {'folder_name': 'Smith (CYBE0012)', 'subfolders': {}})
+    assert result['path'] == 'claritylegal-records/Smith (CYBE0012)'
