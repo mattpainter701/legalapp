@@ -735,3 +735,241 @@ async def test_provider_with_no_credential_is_never_scheduled(monkeypatch):
     )
 
     assert called == ["graph", "index"]
+
+
+@pytest.mark.asyncio
+async def test_gmail_metadata_is_fetched_concurrently_and_stays_aligned(monkeypatch):
+    """The message list and its metadata round trips share one client."""
+    service = CloudSearchService()
+    msg_ids = ["m0", "m1", "m2"]
+    created: list[object] = []
+    inflight = {"now": 0, "peak": 0}
+
+    class _Payload:
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self):
+            created.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, *, headers=None, params=None):
+            if url.endswith("/messages"):
+                return _Payload({"messages": [{"id": mid} for mid in msg_ids]})
+            inflight["now"] += 1
+            inflight["peak"] = max(inflight["peak"], inflight["now"])
+            await asyncio.sleep(0.01)
+            inflight["now"] -= 1
+            mid = url.rsplit("/", 1)[-1]
+            return _Payload(
+                {
+                    "snippet": f"snippet {mid}",
+                    "payload": {
+                        "headers": [
+                            {"name": "Subject", "value": f"Subject {mid}"},
+                            {"name": "From", "value": f"{mid}@firm.test"},
+                        ]
+                    },
+                }
+            )
+
+    async def fake_token(*_args, **_kwargs):
+        return "access-token"
+
+    monkeypatch.setattr(service, "_get_google_token", fake_token)
+    monkeypatch.setattr(
+        "app.services.cloud_search.httpx.AsyncClient", lambda **_kwargs: _Client()
+    )
+
+    hits = await service._search_gmail(
+        db=None,
+        keywords=["acme"],
+        date_after="",
+        max_hits=10,
+        tenant_id="tenant-1",
+        user_id=None,
+    )
+
+    assert len(created) == 1, "metadata must reuse the search client"
+    assert inflight["peak"] > 1, "metadata must be fetched concurrently"
+    # Each hit keeps the subject of its own message: the fan-out returns in
+    # completion order, so the zip below it has to pair by position.
+    assert [(hit.object_id, hit.title) for hit in hits] == [
+        (mid, f"Subject {mid}") for mid in msg_ids
+    ]
+    assert [hit.snippet for hit in hits] == [f"snippet {mid}" for mid in msg_ids]
+    # Reverse-chronological scoring survives the change.
+    assert hits[0].relevance_score > hits[-1].relevance_score
+
+
+@pytest.mark.asyncio
+async def test_gmail_metadata_opens_its_own_client_when_called_alone(monkeypatch):
+    """Callers outside a search still get a working request."""
+    service = CloudSearchService()
+    created: list[object] = []
+
+    class _Client:
+        def __init__(self):
+            created.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url, *, headers=None, params=None):
+            class _Payload:
+                status_code = 200
+
+                @staticmethod
+                def json():
+                    return {
+                        "snippet": "lone snippet",
+                        "payload": {"headers": [{"name": "Subject", "value": "Lone"}]},
+                    }
+
+            return _Payload()
+
+    monkeypatch.setattr(
+        "app.services.cloud_search.httpx.AsyncClient", lambda **_kwargs: _Client()
+    )
+
+    detail = await service._get_gmail_metadata("access-token", "m0")
+
+    assert len(created) == 1
+    assert detail["headers"]["Subject"] == "Lone"
+    assert detail["snippet"] == "lone snippet"
+
+
+@pytest.mark.asyncio
+async def test_token_lookup_failure_skips_that_provider(monkeypatch):
+    """A vault error reads as "not connected", it does not fail the search."""
+    service = CloudSearchService()
+    called: list[str] = []
+
+    async def broken_google_token(*_args, **_kwargs):
+        raise RuntimeError("token vault unavailable")
+
+    async def microsoft_token(*_args, **_kwargs):
+        return "access-token"
+
+    def record(name):
+        async def provider(*_args, **_kwargs):
+            called.append(name)
+            return []
+
+        return provider
+
+    monkeypatch.setattr(service, "_get_google_token", broken_google_token)
+    monkeypatch.setattr(service, "_get_microsoft_token", microsoft_token)
+    monkeypatch.setattr(service, "_search_google_drive", record("drive"))
+    monkeypatch.setattr(service, "_search_gmail", record("gmail"))
+    monkeypatch.setattr(service, "_search_graph", record("graph"))
+    monkeypatch.setattr(service, "search_index", record("index"))
+
+    hits = await service.search(
+        db=object(),
+        plan={"sources": ["drive", "gmail", "onedrive"], "keywords": ["acme"]},
+        tenant_id="tenant-1",
+        user_id="user-1",
+    )
+
+    assert called == ["graph", "index"]
+    assert hits == []
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_search_cancels_every_source(monkeypatch):
+    """A client that walks away must not leave provider calls in flight."""
+    service = CloudSearchService()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def stalled_drive(*_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return []
+
+    async def stalled_index(*_args, **_kwargs):
+        await asyncio.sleep(30)
+        return []
+
+    monkeypatch.setattr(service, "_search_google_drive", stalled_drive)
+    monkeypatch.setattr(service, "search_index", stalled_index)
+
+    task = asyncio.ensure_future(
+        service.search(
+            db=None,
+            plan={"sources": ["drive"], "keywords": ["acme"]},
+            tenant_id="tenant-1",
+            user_id="user-1",
+            budget_seconds=30,
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await asyncio.wait_for(cancelled.wait(), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_collecting_no_sources_is_not_a_wait():
+    assert await CloudSearchService._collect_within_budget([], None) == []
+
+
+@pytest.mark.asyncio
+async def test_graph_and_sharepoint_resolve_their_own_token_when_called_directly():
+    """Direct callers keep the per-source lookup the fan-out now skips."""
+    service = CloudSearchService()
+    lookups: list[str] = []
+
+    async def fake_token(_db, tenant_id, _user_id):
+        lookups.append(tenant_id)
+        return None
+
+    service._get_microsoft_token = fake_token
+
+    assert (
+        await service._search_graph(
+            db=object(),
+            keywords=["acme"],
+            date_after="",
+            max_hits=10,
+            tenant_id="tenant-1",
+            user_id="user-1",
+        )
+        == []
+    )
+    assert (
+        await service._search_sharepoint_folder(
+            db=object(),
+            keywords=["acme"],
+            max_hits=10,
+            tenant_id="tenant-2",
+            user_id="user-1",
+            drive_id="drive-1",
+            folder_id="folder-1",
+        )
+        == []
+    )
+
+    assert lookups == ["tenant-1", "tenant-2"]
