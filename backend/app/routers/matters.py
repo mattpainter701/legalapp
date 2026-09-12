@@ -2967,7 +2967,12 @@ async def remap_matter_cloud_folder(
             matter.id,
             provider,
             provider_metadata,
-            canonical_matter_folder_name(matter.matter_name, matter.id, matter.slug, getattr(matter, 'matter_number', None)),
+            canonical_matter_folder_name(
+                matter.matter_name,
+                matter.id,
+                matter.slug,
+                getattr(matter, "matter_number", None),
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
