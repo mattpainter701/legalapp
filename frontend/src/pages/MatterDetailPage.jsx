@@ -528,14 +528,17 @@ function MatterWorkspace() {
   }, [id])
 
   useEffect(() => {
-    loadMatter()
+    // Cloud files runs a live search across every connected provider and is
+    // by far the slowest request this page makes. It waits until the matter
+    // itself has landed so it never sits ahead of the header, the paperwork
+    // strip, and the task panels in the browser's connection queue.
+    loadMatter().then(loadCloudFiles)
     getMatterBudgetV2(id).then(setBudget).catch(() => {})
     listTrustAccounts({ matter_id: id }).then(data => setTrustAccounts(data.items || [])).catch(() => {})
     getPlugins().then(data => {
       const list = Array.isArray(data) ? data : data.plugins || []
       setPluginOptions(list.filter(p => p.supports_matter_assignment !== false))
     }).catch(() => {})
-    loadCloudFiles()
   }, [id, loadMatter, loadCloudFiles])
 
   useEffect(() => {
