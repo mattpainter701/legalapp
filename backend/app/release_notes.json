@@ -2,6 +2,39 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.12.2",
+      "version": "2026.09.12.2",
+      "title": "Bills you can correct, send, and settle from trust",
+      "published_at": "2026-09-12",
+      "summary": "Draft invoices can be corrected, discounted and emailed to the client, and client funds on retainer settle a bill in one step. Timers ask what you worked on, and firm financial reports are now partner-only.",
+      "highlights": [
+        {
+          "title": "Correct a bill before the client sees it",
+          "description": "Reword, re-price or remove a charge on a draft, and add a discount or flat fee. Removing a charge returns the work to your unbilled queue."
+        },
+        {
+          "title": "Email an invoice with its PDF",
+          "description": "Send the bill to your client from the invoice screen. If delivery fails the invoice stays a draft, so it is never recorded as sent."
+        },
+        {
+          "title": "Settle a bill from client funds",
+          "description": "Apply a retainer to an invoice in one step: the retainer is drawn down and the payment recorded together, with a low balance flagged."
+        },
+        {
+          "title": "Timers that produce a billable entry",
+          "description": "Describe the work on the running timer and it lands ready to bill. Enter time as 1.5, 1:30 or 90m, in your firm's own billing increment."
+        },
+        {
+          "title": "Financial reports are partner-only",
+          "description": "Receivables, realization and work in progress now need billing access. Aging separates invoices not yet due from those overdue."
+        },
+        {
+          "title": "Editing a time entry or expense date works again",
+          "description": "Saving an edited time entry or expense failed whenever the date was included, which was every save. It now saves."
+        }
+      ]
+    },
+    {
       "id": "2026.09.12.1",
       "version": "2026.09.12.1",
       "title": "Sign and fill inside the document",
