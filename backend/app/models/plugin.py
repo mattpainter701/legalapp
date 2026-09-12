@@ -201,6 +201,9 @@ class Matter(Base):
     role: Mapped[str | None] = mapped_column(String(100), nullable=True)
     counterparty: Mapped[str | None] = mapped_column(String(500), nullable=True)
     jurisdiction: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Forum where a fee action or the matter itself would be heard; free text
+    # because it is often a county plus a state rather than a court name.
+    venue: Mapped[str | None] = mapped_column(String(300), nullable=True)
     status: Mapped[str] = mapped_column(
         String(100), default="open", server_default="open"
     )

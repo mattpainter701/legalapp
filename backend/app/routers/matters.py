@@ -70,10 +70,12 @@ from app.schemas.matter import (
     RetainerDrawdownRequest,
     RetainerResponse,
     RetainerTransactionResponse,
+    ResolvedPractice,
     TimelineEntry,
 )
 from app.services.plugins.manifest import get_plugin_manifest
 from app.models.tenant_credential import TenantCredential
+from app.services.practice_resolution import DEFAULT_PRACTICE, resolve_practice
 from app.services.cloud_search import CloudSearchService
 from app.services.cloud_sync import CloudSyncService
 from app.services.cache import ExpertiseCacheManager
@@ -444,6 +446,11 @@ def _matter_to_response(
 
     updated_at = matter.updated_at or matter.created_at or datetime.now(timezone.utc)
 
+    resolved = resolve_practice(matter.matter_type, matter.practice_area)
+    resolved_practice = None
+    if resolved is not DEFAULT_PRACTICE:
+        resolved_practice = ResolvedPractice(slug=resolved.slug, label=resolved.label)
+
     return MatterResponse(
         id=str(matter.id),
         slug=_matter_slug(matter),
@@ -452,9 +459,11 @@ def _matter_to_response(
         description=matter.description,
         matter_type=matter.matter_type,
         practice_area=matter.practice_area,
+        resolved_practice=resolved_practice,
         role=matter.role,
         counterparty=matter.counterparty,
         jurisdiction=matter.jurisdiction,
+        venue=matter.venue,
         status=matter.status or "open",
         stage=matter.stage,
         source=matter.source,
@@ -787,6 +796,7 @@ async def create_matter(
         role=body.role,
         counterparty=body.counterparty,
         jurisdiction=body.jurisdiction,
+        venue=body.venue,
         source=body.source,
         practice_area=body.practice_area,
         court=body.court,

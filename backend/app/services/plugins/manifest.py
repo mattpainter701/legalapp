@@ -8,6 +8,7 @@ which integrations it can use, and where its workspace lives.
 from dataclasses import dataclass, field
 
 from app.services.plugins.prompts import PLUGIN_DISPLAY_NAMES, PLUGIN_SKILLS
+from app.services.practice_resolution import DEFAULT_PRACTICE, resolve_practice
 
 
 @dataclass(frozen=True)
@@ -279,8 +280,19 @@ def suggest_plugin_for_matter(
     if not haystack:
         return None
 
+    resolved = resolve_practice(matter_type, practice_area)
+    resolved_slug: str | None = None
+    resolved_label = ""
+    if resolved is not DEFAULT_PRACTICE:
+        resolved_slug = resolved.slug
+        resolved_label = resolved.label.casefold()
+
     for manifest in list_plugin_manifests():
         for term in manifest.matter_types:
-            if term and term.lower() in haystack:
+            term_l = term.lower()
+            if term_l in haystack or (
+                resolved_slug is not None
+                and (term_l == resolved_slug or term_l in resolved_label)
+            ):
                 return manifest.plugin_name
     return None

@@ -61,6 +61,7 @@ SAMPLE_VALUES: dict[str, str] = {
         "temporary-relief hearings."
     ),
     "retainer_amount": "$3,500.00",
+    "retainer_minimum_balance": "$1,000.00",
     "hourly_rate": "$315.00 per hour",
     "staff_rate_range": "$120.00 to $180.00 per hour",
     "attorney_rate_range": "$225.00 to $470.00 per hour",

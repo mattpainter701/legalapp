@@ -22,35 +22,11 @@ MARKER = re.compile(r"\{\{\s*\#(?:if|unless|each)\s+([A-Za-z][A-Za-z0-9_.-]*)\s*
 
 
 @pytest.mark.parametrize(
-    "matter_type,expected",
-    [
-        ("Divorce", "family"),
-        ("family_law", "family"),
-        ("Custody modification — Ruiz", "family"),
-        ("DUI", "criminal"),
-        ("Criminal Defense", "criminal"),
-        ("Car accident claim", "injury"),
-        ("Estate Planning", "estate"),
-        ("Wrongful termination", "employment"),
-        ("SaaS vendor contract", "business"),
-        ("Landlord/tenant eviction", "real_estate"),
-        ("Naturalization", "immigration"),
-        ("Chapter 7", "bankruptcy"),
-        ("Breach of contract lawsuit", "litigation"),
-        ("Mediation", "mediation"),
-    ],
-)
-def test_free_text_matter_types_resolve_to_a_practice(matter_type, expected):
-    assert pack.resolve_practice(matter_type).slug == expected
-
-
-@pytest.mark.parametrize(
     "matter_type", ["", None, "   ", "Something we have never handled"]
 )
 def test_an_unrecognised_type_still_gets_a_questionnaire(matter_type):
     """A client always receives questions; nothing falls through to an empty pack."""
 
-    assert pack.resolve_practice(matter_type) is pack.DEFAULT_PRACTICE
     assert pack.questionnaire(matter_type)
 
 
@@ -84,10 +60,14 @@ def test_every_alias_is_claimed_by_exactly_one_practice():
     seen: dict[str, str] = {}
     for practice in pack.practices():
         for alias in practice.aliases:
-            assert alias not in seen, (
-                f"{alias} claimed by {seen.get(alias)} and {practice.slug}"
-            )
+            assert (
+                alias not in seen
+            ), f"{alias} claimed by {seen.get(alias)} and {practice.slug}"
             seen[alias] = practice.slug
+
+def test_the_pack_resolves_the_practice_from_either_label():
+    assert pack.pack("general", "Family Law")["practice"] == "family"
+    assert pack.pack("DUI", "Family Law")["practice"] == "criminal"
 
 
 @pytest.mark.parametrize("practice", pack.practices(), ids=lambda p: p.slug)
@@ -185,22 +165,39 @@ def test_only_settled_terms_carry_a_default():
     } & set(defaults)
 
 
-def test_fee_terms_are_never_bound_to_a_record():
-    """A fee, deposit, or contingency term is decided by a person, never inferred."""
+def test_fee_terms_the_firm_decides_are_never_bound_to_a_record():
+    """A fee or deposit the firm must set is decided by a person, never inferred."""
 
-    money = {
+    decided_by_the_firm = {
         field.binding
         for field in pack.FEE_AGREEMENT.fields
         if field.name
         in {
             "flat_fee_amount",
-            "contingency_percentage",
             "advance_deposit_amount",
             "scope_of_representation",
             "excluded_matters",
         }
     }
-    assert money == {"manual"}
+    assert decided_by_the_firm == {"manual"}
+
+
+def test_fee_terms_the_matter_record_carries_bind_to_it():
+    """Contingency, retainer, and venue already live on the matter's records,
+    so Smart Fill fills them from there instead of asking again."""
+
+    by_name = {field.name: field.binding for field in pack.FEE_AGREEMENT.fields}
+    assert by_name["contingency_percentage"] == "matter.contingency_percentage"
+
+    nd_by_name = {
+        field.name: field.binding for field in pack.HOURLY_FEE_AGREEMENT_ND.fields
+    }
+    assert nd_by_name["retainer_amount"] == "matter.retainer_amount"
+    assert nd_by_name["retainer_minimum_balance"] == "matter.retainer_minimum_balance"
+    assert nd_by_name["venue"] == "matter.venue"
+    # Rate ranges are the firm's own schedule, not a record the matter carries.
+    assert nd_by_name["staff_rate_range"] == "manual"
+    assert nd_by_name["attorney_rate_range"] == "manual"
 
 
 def test_the_pack_names_the_documents_that_travel_with_it():

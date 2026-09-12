@@ -212,6 +212,7 @@ _CARDS: tuple[Card, ...] = (
                 alias="matter_jurisdiction",
                 legacy_path="matter.jurisdiction",
             ),
+            CardField("venue", "Venue", alias="venue", legacy_path="matter.venue"),
             CardField(
                 "case_number",
                 "Case number",
@@ -265,6 +266,29 @@ _CARDS: tuple[Card, ...] = (
                 alias="budget_amount",
                 value_kind="number",
                 legacy_path="matter.budget_amount",
+            ),
+            CardField(
+                "contingency_percentage",
+                "Contingency percentage",
+                alias="contingency_percentage",
+                value_kind="number",
+                legacy_path="matter.contingency_percentage",
+            ),
+            # Retainer fields resolve from the matter's current retainer record,
+            # the same source the flat bindings name.
+            CardField(
+                "retainer_amount",
+                "Retainer amount",
+                alias="retainer_amount",
+                value_kind="number",
+                legacy_path="matter.retainer_amount",
+            ),
+            CardField(
+                "retainer_minimum_balance",
+                "Retainer minimum balance",
+                alias="retainer_minimum_balance",
+                value_kind="number",
+                legacy_path="matter.retainer_minimum_balance",
             ),
         ),
     ),
