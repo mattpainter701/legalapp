@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["173_rls_tenant_guc_nullif"]
+    assert heads == ["174_firm_currency"]
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():

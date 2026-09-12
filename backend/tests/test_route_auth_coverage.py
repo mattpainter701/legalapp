@@ -308,23 +308,37 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         "envelope and RFC 822 bytes before its select-only alias lookup"
     ),
     # Portal magic-link acceptance — the invite token IS the credential; there
-    # is no prior session to authenticate against.
+    # is no prior session to authenticate against. Sign-in is passwordless: a
+    # one-time code emailed to the client is the credential, and the selection
+    # ticket stands in for it while the client picks among several matters.
     (
         frozenset({"POST"}),
         "/api/portal/client/accept",
     ): "authenticated by the invite token hash",
     (
         frozenset({"POST"}),
-        "/api/portal/client/activate",
-    ): "authenticated by the invite token hash and bounded password activation",
+        "/api/portal/client/request-code",
+    ): "enumeration-safe; sends a code only when the address has a live portal",
     (
         frozenset({"POST"}),
-        "/api/portal/client/login",
-    ): "authenticated by client credentials plus explicit matter scope",
+        "/api/portal/client/verify-code",
+    ): "authenticated by a single-use code emailed to the client",
+    (
+        frozenset({"POST"}),
+        "/api/portal/client/select-matter",
+    ): "authenticated by the short-lived ticket issued after code verification",
+    (
+        frozenset({"GET"}),
+        "/api/portal/client/invite-info",
+    ): "authenticated by the invite token hash; returns only firm branding for that token",
     (
         frozenset({"POST"}),
         "/api/portal/mediation/accept",
     ): "authenticated by the invite token hash",
+    (
+        frozenset({"POST"}),
+        "/api/portal/mediation/logout",
+    ): "clears the mediation cookie; tolerates a missing or expired token by design",
     # Client-portal data routes — authenticated by get_client_portal_context,
     # a separate JWT scheme (client_portal claim) not covered by the
     # canonical-name literal fallback since it's imported by exact name here.
@@ -336,9 +350,18 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         "/api/portal/client/logout",
     ): "clears the portal cookie; tolerates a missing or expired token by design",
     (frozenset({"GET"}), "/api/portal/client/matter"): "get_client_portal_context",
+    (frozenset({"GET"}), "/api/portal/client/matters"): "get_client_portal_context",
+    (
+        frozenset({"POST"}),
+        "/api/portal/client/switch-matter",
+    ): "get_client_portal_context",
     (frozenset({"GET"}), "/api/portal/client/messages"): "get_client_portal_context",
     (frozenset({"POST"}), "/api/portal/client/messages"): "get_client_portal_context",
     (frozenset({"GET"}), "/api/portal/client/documents"): "get_client_portal_context",
+    (
+        frozenset({"GET"}),
+        "/api/portal/client/documents/upload-policy",
+    ): "get_client_portal_context",
     (
         frozenset({"POST"}),
         "/api/portal/client/documents/upload",

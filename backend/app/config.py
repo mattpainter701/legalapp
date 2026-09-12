@@ -428,6 +428,15 @@ class Settings(BaseSettings):
     # production image alike.
     SAMPLE_TEMPLATE_DIR: str = ""
     MAX_FILE_SIZE_MB: int = 50
+    # ── Client portal sign-in ────────────────────────────────────────────────
+    # Clients sign in with a one-time code emailed to the address on file; there
+    # is no password. The code is short-lived and single-use, and the cached
+    # session is deliberately capped rather than sliding so a shared machine
+    # does not stay signed in indefinitely.
+    PORTAL_SIGNIN_CODE_TTL_SECONDS: int = 600
+    PORTAL_SIGNIN_CODE_ATTEMPTS: int = 5
+    PORTAL_SIGNIN_CODE_COOLDOWN_SECONDS: int = 60
+    PORTAL_SESSION_TTL_HOURS: int = 24
     # Rolling retention window for misc-chat (non-matter) attachments stored in
     # UPLOAD_DIR/{tenant_id}/chat-temp/. Matter-linked chat attachments persist.
     CHAT_ATTACHMENT_TTL_DAYS: int = 7
