@@ -1,20 +1,36 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import CaseSetupCard from './CaseSetupCard'
 import PaperworkDrawer from './PaperworkDrawer'
 import { dueDateToIso, paperworkOptions } from './paperwork'
 import api, {
-  getAdminUsers, getMatterDocuments, getMatterPaperwork, matterPaperworkAction,
-  getSampleTemplates, getTemplates, renderSampleTemplateFile, uploadMatterDocument,
+  getAdminUsers, getMatterDocuments, getMatterPaperwork, matterPaperworkAction, uploadMatterDocument,
 } from '../../api'
 
 vi.mock('../../api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
   getMatterPaperwork: vi.fn(), matterPaperworkAction: vi.fn(), getMatterDocuments: vi.fn(),
   getAdminUsers: vi.fn(), getContacts: vi.fn(), getIntakeStarterPack: vi.fn(),
-  getTemplates: vi.fn(), getSampleTemplates: vi.fn(),
-  renderTemplateFile: vi.fn(), renderSampleTemplateFile: vi.fn(), uploadMatterDocument: vi.fn(),
+  uploadMatterDocument: vi.fn(),
+}))
+
+// The real picker lazy-loads the Template Studio render modal. Stand in for it
+// with the same contract: pinned to the matter, reports the render response
+// through onSaved, and is dismissed through onClose.
+const renderResponse = {
+  rendered: '', matter_document_id: 'rendered-doc', output_format: 'pdf',
+  output_filename: 'Engagement Letter.pdf',
+  download_url: '/api/matters/matter/documents/rendered-doc/download',
+}
+vi.mock('../templates/MatterTemplatePicker', () => ({
+  default: ({ matterId, onSaved, onClose }) => (
+    <div role="dialog" aria-label="Attach template">
+      <p>Preparing for {matterId}</p>
+      <button type="button" onClick={() => onSaved(renderResponse)}>Save to matter</button>
+      <button type="button" onClick={onClose}>Close</button>
+    </div>
+  ),
 }))
 
 afterEach(cleanup)
@@ -32,8 +48,6 @@ beforeEach(() => {
   matterPaperworkAction.mockResolvedValue(packet())
   getMatterDocuments.mockResolvedValue([])
   getAdminUsers.mockResolvedValue([])
-  getTemplates.mockResolvedValue({ items: [] })
-  getSampleTemplates.mockResolvedValue({ items: [] })
   api.post.mockResolvedValue({ data: packet() })
 })
 
@@ -121,39 +135,70 @@ it('sends the chosen documents and their deadlines from the drawer', async () =>
   expect(onSent).toHaveBeenCalledOnce()
 })
 
-it('fills a library form, attaches it, and sends it as the fee agreement', async () => {
+it('prepares the fee agreement from a firm template and sends it', async () => {
   const user = userEvent.setup()
-  getSampleTemplates.mockResolvedValue({
-    items: [{
-      id: 'sample-lease', title: 'ND Residential Lease', category: 'leases', format: 'pdf',
-      variable_schema: { fields: [{ name: 'tenant_name', label: 'Tenant name', field_type: 'text' }] },
-    }],
-  })
-  renderSampleTemplateFile.mockResolvedValue({
-    blob: new Blob(['%PDF-1.4'], { type: 'application/pdf' }),
-    filename: 'ND Residential Lease.pdf',
-  })
-  uploadMatterDocument.mockResolvedValue({
-    id: 'filled-doc', filename: 'ND Residential Lease.pdf', content_type: 'application/pdf',
+  // The matter's own record of the saved document carries the content type
+  // the render response omits.
+  getMatterDocuments.mockResolvedValue({
+    items: [{ id: 'rendered-doc', filename: 'Engagement Letter.pdf', content_type: 'application/pdf' }],
+    total: 1,
   })
 
   render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
 
-  await user.click(screen.getByRole('button', { name: /Fill a firm template or sample/ }))
-  await user.click(await screen.findByRole('tab', { name: 'Sample forms' }))
-  await user.click(await screen.findByRole('button', { name: /ND Residential Lease/ }))
-  await user.type(screen.getByLabelText(/Tenant name/), 'Ada Lovelace')
-  await user.click(screen.getByRole('button', { name: /Fill and attach/ }))
+  const [prepareAgreement] = screen.getAllByRole('button', { name: /Prepare from a firm template/ })
+  await user.click(prepareAgreement)
+  const picker = screen.getByRole('dialog', { name: 'Attach template' })
+  expect(picker).toHaveTextContent('Preparing for matter')
+  await user.click(within(picker).getByRole('button', { name: 'Save to matter' }))
+  await user.click(within(picker).getByRole('button', { name: 'Close' }))
 
-  await waitFor(() => expect(uploadMatterDocument).toHaveBeenCalledOnce())
-  expect(renderSampleTemplateFile).toHaveBeenCalledWith('sample-lease', { variables: { tenant_name: 'Ada Lovelace' } })
+  await waitFor(() => expect(getMatterDocuments).toHaveBeenCalledWith('matter', { limit: 200 }))
+  expect(screen.queryByRole('dialog', { name: 'Attach template' })).not.toBeInTheDocument()
+  // The saved document is listed and pre-selected as the fee agreement, not
+  // offered again as an additional form.
+  expect(await screen.findByLabelText('From matter documents')).toHaveValue('rendered-doc')
+  expect(screen.queryByRole('checkbox', { name: /Engagement Letter\.pdf/ })).not.toBeInTheDocument()
 
-  // The filled PDF became the fee agreement, so the packet is sendable.
+  // The prepared agreement makes the packet sendable.
   await user.click(screen.getByRole('button', { name: '3. Send' }))
   await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
   const [, body] = api.post.mock.calls.at(-1)
   const options = JSON.parse(body.get('options'))
-  expect(options.agreement_document_id).toBe('filled-doc')
+  expect(options.agreement_document_id).toBe('rendered-doc')
+  expect(options.selected_documents).toEqual([])
+})
+
+it('prepares an additional signing form from a firm template', async () => {
+  const user = userEvent.setup()
+  // No matter listing yet: the drawer falls back to the render response.
+  getMatterDocuments.mockResolvedValue([])
+
+  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
+
+  const [, prepareForm] = screen.getAllByRole('button', { name: /Prepare from a firm template/ })
+  await user.click(prepareForm)
+  await user.click(screen.getByRole('button', { name: 'Save to matter' }))
+
+  const form = await screen.findByRole('checkbox', { name: /Engagement Letter\.pdf/ })
+  expect(form).toBeChecked()
+  expect(screen.getByRole('checkbox', { name: /Track signature/ })).toBeChecked()
+  // It is a signing form; the fee agreement is still unchosen.
+  expect(screen.getByLabelText('From matter documents')).toHaveValue('')
+})
+
+it('attaches a locally filled form uploaded through Choose a file', async () => {
+  const user = userEvent.setup()
+  uploadMatterDocument.mockResolvedValue({
+    id: 'filled-doc', filename: 'Filled form.pdf', content_type: 'application/pdf',
+  })
+
+  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
+
+  await user.upload(screen.getByLabelText('Choose a file'), new File(['%PDF-1.4'], 'Filled form.pdf', { type: 'application/pdf' }))
+
+  await waitFor(() => expect(uploadMatterDocument).toHaveBeenCalledOnce())
+  expect(await screen.findByRole('checkbox', { name: /Filled form\.pdf/ })).toBeChecked()
 })
 
 it('will not send paperwork without a reviewed fee agreement', async () => {

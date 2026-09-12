@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.10 — Prepare paperwork from a firm template
+
+Released September 11, 2026.
+
+Start this case now prepares the fee agreement or an additional form from a firm template without leaving the matter, with values filled from the matter, and a finished form can be uploaded directly.
+
+- **Prepare the fee agreement from a firm template.** Choose a firm template from the paperwork drawer, review it with values filled from this matter, and save it as the fee agreement in one step.
+- **Add an additional form the same way.** The Additional forms card prepares a signing form from a firm template too; it is saved to the matter and checked for signature automatically.
+- **Attach a completed form directly.** Additional forms now take a Choose a file upload, so a filled form can be attached without first saving it to the matter's documents.
+
 ## 2026.09.11.9 — A front door to your client portal
 
 Released September 11, 2026.

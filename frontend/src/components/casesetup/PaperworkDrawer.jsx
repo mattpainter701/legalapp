@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FileText, LibraryBig, X } from 'lucide-react'
-import { getIntakeStarterPack } from '../../api'
+import { getIntakeStarterPack, getMatterDocuments, uploadMatterDocument } from '../../api'
 import { startMatterIntake } from '../MatterIntakePanel'
-import FormLibraryDialog from './FormLibraryDialog'
+import MatterTemplatePicker from '../templates/MatterTemplatePicker'
 import { emptyDraft, paperworkOptions } from './paperwork'
 
 const STEPS = ['Documents', 'Deadlines', 'Send']
@@ -13,6 +13,32 @@ const card = 'rounded-xl border border-brand-line bg-brand-bg-soft/40 p-4'
 
 function isPdf(document) {
   return document.content_type === 'application/pdf' || document.filename?.toLowerCase().endsWith('.pdf')
+}
+
+const RENDER_CONTENT_TYPES = {
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  markdown: 'text/markdown',
+}
+
+// The template render response names the saved matter document but not its
+// content type. Prefer the matter's own record so the drawer treats the new
+// file exactly like one that was already attached; fall back to the response.
+async function resolveRenderedDocument(matterId, response) {
+  const id = response?.matter_document_id
+  if (!id) return null
+  const fallback = {
+    id,
+    filename: response.output_filename || response.filename || 'Generated document',
+    content_type: RENDER_CONTENT_TYPES[response.output_format || response.format] || null,
+  }
+  try {
+    const listed = await getMatterDocuments(matterId, { limit: 200 })
+    const documents = Array.isArray(listed) ? listed : listed?.items || []
+    return documents.find(document => document.id === id) || fallback
+  } catch {
+    return fallback
+  }
 }
 
 function DueDate({ id, value, onChange, hint }) {
@@ -43,13 +69,16 @@ export default function PaperworkDrawer({
   const [error, setError] = useState('')
   const [packNote, setPackNote] = useState('')
   const [attachedDocuments, setAttachedDocuments] = useState([])
-  const [libraryTarget, setLibraryTarget] = useState(null)
+  // Which card opened the firm-template picker: the document it saves becomes
+  // the fee agreement or an additional signing form accordingly.
+  const [pickerTarget, setPickerTarget] = useState(null)
+  const [uploadingForm, setUploadingForm] = useState(false)
 
   const set = (key, value) => setDraft(previous => ({ ...previous, [key]: value }))
 
-  // Forms filled from the library are uploaded as matter documents and land
-  // here; merge them with the ones the matter already had so either source can
-  // become the fee agreement or an additional signing form.
+  // Documents prepared from a firm template or uploaded here are saved to the
+  // matter and land in this list; merge them with the ones the matter already
+  // had so either source can become the fee agreement or a signing form.
   const allDocuments = useMemo(() => {
     const seen = new Set()
     return [...attachedDocuments, ...documents].filter(document => {
@@ -66,35 +95,66 @@ export default function PaperworkDrawer({
     if (!clientEmail) return
     setDraft(previous => (previous.email ? previous : { ...previous, email: clientEmail }))
   }, [clientEmail])
-  const pdfs = useMemo(() => allDocuments.filter(isPdf), [allDocuments])
+  // The agreement select lists PDFs, plus whatever is currently chosen so a
+  // template that rendered as Word is still visible as the fee agreement.
+  const agreementChoices = useMemo(
+    () => allDocuments.filter(document => isPdf(document) || document.id === draft.agreementDocumentId),
+    [allDocuments, draft.agreementDocumentId],
+  )
   const selectable = useMemo(
     () => allDocuments.filter(document => document.id !== draft.agreementDocumentId),
     [allDocuments, draft.agreementDocumentId],
   )
 
-  function attachFilled(document) {
+  // A document saved to the matter from this drawer joins the list and is
+  // pre-selected: as the fee agreement, or as an additional signing form.
+  function attachDocument(document, target) {
     if (!document?.id) return
-    setAttachedDocuments(current => [document, ...current])
+    setAttachedDocuments(current => [document, ...current.filter(item => item.id !== document.id)])
     setDraft(previous => {
-      if (libraryTarget === 'agreement') {
+      if (target === 'agreement') {
         return {
           ...previous,
           agreementDocumentId: document.id,
           forms: previous.forms.filter(form => form.documentId !== document.id),
         }
       }
-      if (libraryTarget === 'form') {
-        return {
-          ...previous,
-          forms: [
-            ...previous.forms.filter(form => form.documentId !== document.id),
-            { documentId: document.id, label: document.filename, requiresSignature: true, due: '' },
-          ],
-        }
+      return {
+        ...previous,
+        forms: [
+          ...previous.forms.filter(form => form.documentId !== document.id),
+          { documentId: document.id, label: document.filename, requiresSignature: true, due: '' },
+        ],
       }
-      return previous
     })
   }
+
+  // The firm-template picker renders and saves to this matter itself; the
+  // drawer only needs the resulting matter document.
+  async function attachRendered(response) {
+    const target = pickerTarget
+    const document = await resolveRenderedDocument(matterId, response)
+    if (document) attachDocument(document, target)
+  }
+
+  async function uploadFormFile(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setUploadingForm(true)
+    setError('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      attachDocument(await uploadMatterDocument(matterId, form), 'form')
+    } catch (caught) {
+      const detail = caught?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : 'The form could not be uploaded. Please try again.')
+    } finally {
+      setUploadingForm(false)
+    }
+  }
+
   const hasAgreement = Boolean(draft.agreementDocumentId || agreementFile)
   const canSend = hasAgreement && draft.email && draft.channels.length > 0
     && (!draft.channels.includes('sms') || draft.smsPermissionVerified)
@@ -171,7 +231,7 @@ export default function PaperworkDrawer({
             <>
               <div className={card}>
                 <h3 className="mb-3 font-semibold text-brand-ink">Fee agreement</h3>
-                {pdfs.length > 0 && (
+                {agreementChoices.length > 0 && (
                   <label className="mb-3 block">
                     <span className={label}>From matter documents</span>
                     <select
@@ -183,7 +243,7 @@ export default function PaperworkDrawer({
                       }}
                     >
                       <option value="">Upload a reviewed PDF instead</option>
-                      {pdfs.map(document => <option key={document.id} value={document.id}>{document.filename}</option>)}
+                      {agreementChoices.map(document => <option key={document.id} value={document.id}>{document.filename}</option>)}
                     </select>
                   </label>
                 )}
@@ -195,22 +255,33 @@ export default function PaperworkDrawer({
                 )}
                 <button
                   type="button"
-                  onClick={() => setLibraryTarget('agreement')}
+                  onClick={() => setPickerTarget('agreement')}
                   className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-accent underline"
                 >
-                  <LibraryBig size={14} aria-hidden="true" /> Fill a firm template or sample
+                  <LibraryBig size={14} aria-hidden="true" /> Prepare from a firm template
                 </button>
               </div>
 
               <div className={card}>
                 <h3 className="mb-1 font-semibold text-brand-ink">Additional forms</h3>
                 <p className="mb-3 text-[12px] text-brand-muted">Each signing form gets its own signature request and status.</p>
+                <label className="mb-3 block">
+                  <span className={label}>Choose a file</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.docx,application/pdf"
+                    onChange={uploadFormFile}
+                    disabled={uploadingForm}
+                    className="w-full text-[13px] text-brand-ink file:mr-3 file:rounded-lg file:border file:border-brand-line file:bg-brand-surface file:px-3 file:py-1.5 file:text-[13px] disabled:opacity-50"
+                  />
+                  {uploadingForm && <span role="status" className="mt-1 block text-[12px] text-brand-muted">Uploading…</span>}
+                </label>
                 <button
                   type="button"
-                  onClick={() => setLibraryTarget('form')}
+                  onClick={() => setPickerTarget('form')}
                   className="mb-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-accent underline"
                 >
-                  <LibraryBig size={14} aria-hidden="true" /> Fill a form from the library
+                  <LibraryBig size={14} aria-hidden="true" /> Prepare from a firm template
                 </button>
                 {selectable.length === 0 ? (
                   <p className="text-[13px] text-brand-muted">Attach templates in Documents to include them here.</p>
@@ -379,12 +450,11 @@ export default function PaperworkDrawer({
           </div>
         </footer>
       </div>
-      {libraryTarget && (
-        <FormLibraryDialog
+      {pickerTarget && (
+        <MatterTemplatePicker
           matterId={matterId}
-          documentCategory={libraryTarget === 'agreement' ? 'contract' : 'general'}
-          onAttached={attachFilled}
-          onClose={() => setLibraryTarget(null)}
+          onSaved={attachRendered}
+          onClose={() => setPickerTarget(null)}
         />
       )}
     </div>

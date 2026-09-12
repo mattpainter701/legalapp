@@ -5,6 +5,13 @@
 - Add an operator SMS tab in `frontend/src/pages/PlatformPage.jsx` to save the sender and send a test message.
 - No migration: configuration uses the existing `platform_settings` table. The separate, firm-owned tenant SMS path (`/api/sms/config`) is unchanged.
 
+## 2026.09.11.10 — Matter-aware template flow for paperwork forms
+
+- Replace the in-app fill form in the paperwork drawer with the matter-aware template flow that Case Documents already uses. `PaperworkDrawer` opens `MatterTemplatePicker` pinned to the matter, so a fee agreement or additional form is completed in `RenderModal` with Smart Fills from the matter, previewed, and saved to the matter by the template render endpoint. The previous renderer exposed each sample's raw `variable_schema` (detected text placeholders, duplicate and blank field names) as an unusable form — the Nevada Living Will showed "undefined" and dozens of stray fields.
+- On save the drawer resolves the new matter document from the render response (`matter_document_id`, `output_filename`, `output_format`), preferring the matter's own record from `GET /matters/{id}/documents` for its `content_type`, and pre-selects it: from the Fee agreement card it becomes `agreement_document_id`; from the Additional forms card it is attached as a checked signing form. The agreement select also lists the chosen document when it rendered as Word, since the intake endpoint accepts any reviewed matter document.
+- Remove `FormLibraryDialog`. Shared samples are no longer offered from the drawer; they remain available from the Template Studio home.
+- Add a "Choose a file" upload to the drawer's Additional forms card. `uploadFormFile` posts to `POST /matters/{id}/documents/upload` and attaches the returned document as an additional signing form, so a locally filled form no longer has to be saved to the matter's documents first.
+
 ## 2026.09.11.9 — A front door to the client portal
 
 - Add a passwordless `frontend/src/pages/ClientPortalLoginPage.jsx` at `/portal/client/login` (with `/portal/client` redirecting to it). It emails a one-time code, verifies it, and opens the portal. Client `User` rows are created without a password, so `POST /portal/client/request-code` and `/verify-code` replace the unused `/activate` and `/login` endpoints and the `activateClientPortalAccount`/`loginClientPortalAccount` wrappers.
