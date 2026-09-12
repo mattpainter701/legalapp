@@ -94,7 +94,7 @@ workstream.
 |---|---|
 | `backend/app/services/template_sets.py` | `build_interview`, `answers_for_documents`, `unanswered_required`. Pure, no I/O. |
 | `backend/app/models/document_template_set.py` | `DocumentTemplateSet`, `DocumentTemplateSetItem`. |
-| `backend/migrations/versions/174_document_template_sets.py` | Both tables, RLS enabled and forced, `tenant_isolation` in the NULLIF form 173 established. |
+| `backend/migrations/versions/175_document_template_sets.py` | Both tables, RLS enabled and forced, `tenant_isolation` in the NULLIF form 173 established (renumbered to 175 after `174_firm_currency` merged). |
 | `backend/app/routers/template_sets.py` | CRUD plus `GET /api/template-sets/{id}/interview`. |
 | `frontend/src/api.js` | The six client functions. |
 | `backend/tests/test_template_sets_unit.py`, `test_template_set_interview.py`, `test_template_set_routes.py` | 17 + 9 + 14 tests. |
@@ -138,7 +138,7 @@ workstream.
   `template_cards.py` 97%, `template_sets.py` (router) 92% — all clear of the
   80% diff-coverage gate.
 - **Frontend: 1054 passed across 166 files** — the entire suite.
-- Migration graph resolves with `174_document_template_sets` as the single
+- Migration graph resolves with `175_document_template_sets` as the single
   head; `test_migrations.py` and `test_studio_render_migration.py` updated to
   match, per `AGENTS.md` §1. The head was confirmed against `origin/main`.
 - Model metadata registration confirmed: both new tables reach

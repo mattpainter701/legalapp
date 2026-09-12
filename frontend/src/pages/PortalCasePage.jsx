@@ -6,8 +6,9 @@ import {
   createPortalAsset, updatePortalAsset, submitPortalAsset, decidePortalAsset,
   uploadPortalDocument, downloadPortalDocumentUrl,
   createPortalProposal,
+  logoutMediationPortal,
 } from '../api'
-import { Handshake, Plus, Upload, Download, Send, Check, X, AlertTriangle } from 'lucide-react'
+import { Handshake, Plus, Upload, Download, Send, Check, X, AlertTriangle, LogOut } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useToast } from '../components/toast/useToast'
 
@@ -78,6 +79,8 @@ export default function PortalCasePage() {
 
   const [uploading, setUploading] = useState(false)
   const [uploadDesc, setUploadDesc] = useState('')
+  const [selectedFile, setSelectedFile] = useState(null)
+  const [signingOut, setSigningOut] = useState(false)
   const fileRef = useRef(null)
 
   const [deciding, setDeciding] = useState(null)
@@ -140,13 +143,38 @@ export default function PortalCasePage() {
   }
 
   const handleUpload = async () => {
-    const file = fileRef.current?.files?.[0]
+    const file = selectedFile || fileRef.current?.files?.[0]
     if (!file) return
     setUploading(true)
+    setActionError(null)
     try {
       await uploadPortalDocument(file, uploadDesc || undefined, caseId)
-      setUploadDesc(''); if (fileRef.current) fileRef.current.value = ''; loadCase()
-    } catch { setActionError('Upload failed.') } finally { setUploading(false) }
+      setUploadDesc('')
+      setSelectedFile(null)
+      if (fileRef.current) fileRef.current.value = ''
+      loadCase()
+    } catch (err) {
+      setActionError(err?.response?.data?.detail || 'Upload failed. Please try again.')
+    } finally { setUploading(false) }
+  }
+
+  const handleSignOut = async () => {
+    const confirmed = await confirmAction({
+      title: 'Sign out of the mediation portal?',
+      message: 'You will need your invitation link or code to get back in. Do this before leaving a shared computer.',
+      confirmLabel: 'Sign out',
+      destructive: true,
+    })
+    if (!confirmed) return
+    setSigningOut(true)
+    try {
+      await logoutMediationPortal()
+    } catch {
+      // Clearing the local notice is what matters; the cookie is httpOnly.
+    } finally {
+      setSigningOut(false)
+      navigate('/portal/accept')
+    }
   }
 
   const handleCreateProposal = async () => {
@@ -167,9 +195,19 @@ export default function PortalCasePage() {
       <div className="min-h-screen bg-brand-bg flex items-center justify-center px-4">
         <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm max-w-md w-full p-10 text-center">
           <Handshake size={48} className="mx-auto text-brand-rose mb-6" strokeWidth={1.5} />
-          <h1 className="font-serif font-bold text-2xl text-brand-ink mb-3">Access Denied</h1>
+          <h1 className="font-serif font-bold text-2xl text-brand-ink mb-3">We couldn't open your case</h1>
           <p className="text-brand-ink-2 font-sans text-sm leading-relaxed mb-6">{error || 'Unable to load case.'}</p>
-          <button onClick={() => navigate('/portal/accept')} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm">Enter Invite Token</button>
+          <div className="flex flex-col gap-2">
+            <button onClick={() => navigate('/portal/accept')} className="w-full px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm">
+              Enter a different invitation code
+            </button>
+            <button onClick={() => navigate('/login')} className="w-full px-5 py-2.5 border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-xl hover:border-brand-ink transition-all">
+              Go to firm login
+            </button>
+          </div>
+          <p className="text-xs text-brand-ink-2 font-sans mt-5">
+            If your invitation has expired, contact the mediator or your legal team for a new one.
+          </p>
         </div>
       </div>
     )
@@ -179,15 +217,24 @@ export default function PortalCasePage() {
 
   return (
     <div className="min-h-screen bg-brand-bg">
-      <div className="bg-brand-surface border-b border-brand-line px-8 py-4 flex items-center justify-between sticky top-0 z-30">
-        <div className="flex items-center gap-3">
-          <Handshake size={20} className="text-brand-accent" />
-          <span className="font-serif font-bold text-lg text-brand-ink tracking-tight">{c?.case_name || 'Mediation Portal'}</span>
+      <div className="bg-brand-surface border-b border-brand-line px-4 sm:px-8 py-4 flex items-center justify-between gap-3 sticky top-0 z-30">
+        <div className="flex items-center gap-3 min-w-0">
+          <Handshake size={20} className="text-brand-accent shrink-0" />
+          <span className="font-serif font-bold text-lg text-brand-ink tracking-tight truncate">{c?.case_name || 'Mediation Portal'}</span>
         </div>
-        <span className="text-[12px] font-sans font-medium text-brand-muted uppercase tracking-wide">{party_role?.replace(/_/g, ' ') || ''}</span>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="hidden sm:inline text-[12px] font-sans font-medium text-brand-muted uppercase tracking-wide">{party_role?.replace(/_/g, ' ') || ''}</span>
+          <button
+            onClick={handleSignOut}
+            disabled={signingOut}
+            className="inline-flex items-center gap-1.5 text-xs font-sans font-medium text-brand-muted hover:text-brand-ink border border-brand-line rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50"
+          >
+            <LogOut size={14} /> {signingOut ? 'Signing out…' : 'Sign out'}
+          </button>
+        </div>
       </div>
 
-      <div className="max-w-[1100px] mx-auto px-8 py-10">
+      <div className="max-w-[1100px] mx-auto px-4 sm:px-8 py-8 sm:py-10">
         <div className="mb-8">
           <h1 className="font-serif text-3xl font-bold text-brand-ink tracking-tight mb-3">{c?.case_name || 'Mediation Case'}</h1>
           <div className="flex items-center gap-3 flex-wrap">
@@ -213,7 +260,7 @@ export default function PortalCasePage() {
         </div>
 
         {actionError && (
-          <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4 mb-6 text-brand-rose text-sm font-sans flex items-start gap-3">
+          <div role="alert" className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4 mb-6 text-brand-rose text-sm font-sans flex items-start gap-3">
             <AlertTriangle size={16} className="shrink-0 mt-0.5" /> {actionError}
             <button onClick={() => setActionError(null)} className="ml-auto"><X size={14} /></button>
           </div>
@@ -253,9 +300,32 @@ export default function PortalCasePage() {
             {my_assets.length === 0 ? (
               <div className="bg-brand-surface border border-brand-line rounded-2xl p-16 text-center shadow-sm"><p className="text-brand-ink font-serif text-lg font-bold mb-1">No items yet</p><p className="text-brand-muted text-sm font-sans">Add your assets and debts for disclosure. Submit them for attorney review when ready.</p></div>
             ) : (
-              <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
-                <table className="min-w-full text-left">
-                  <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">{['Description','Type','Category','Value','Owned By','Status','Actions'].map((h) => <th key={h} className="px-5 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans">{h}</th>)}</tr></thead>
+              <div className="space-y-3">
+                <div className="md:hidden space-y-3">
+                  {my_assets.map((a) => (
+                    <div key={a.id} className="bg-brand-surface border border-brand-line rounded-2xl p-4 shadow-sm space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-[14px] font-sans font-semibold text-brand-ink">{a.description}</p>
+                        <StatusBadge status={a.status} />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-[12px] font-sans text-brand-ink-2">
+                        <Pill color={a.kind === 'asset' ? 'bg-brand-green/10 text-brand-green border-brand-green/20' : 'bg-brand-rose/10 text-brand-rose border-brand-rose/20'}>{a.kind}</Pill>
+                        <span>{a.category ? a.category.replace(/_/g, ' ') : '--'}</span>
+                        <span>{a.value ? Number(a.value).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '--'}</span>
+                        <span>{a.owned_by ? a.owned_by.replace(/_/g, ' ') : '--'}</span>
+                      </div>
+                      {a.status === 'draft' && (
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => startEditAsset(a)} className="px-3 py-1.5 text-[11px] font-sans font-semibold uppercase rounded-md border hover:bg-brand-bg-soft">Edit</button>
+                          <button onClick={() => handleSubmitAsset(a)} className="px-3 py-1.5 text-[11px] font-sans font-semibold uppercase rounded-md border bg-brand-ink text-white hover:bg-brand-ink-2 flex items-center gap-1"><Send size={11} /> Submit</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="hidden md:block bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
+                  <table className="min-w-full text-left">
+                    <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">{['Description','Type','Category','Value','Owned By','Status','Actions'].map((h) => <th key={h} className="px-5 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans">{h}</th>)}</tr></thead>
                   <tbody className="divide-y divide-brand-line">
                     {my_assets.map((a) => (
                       <tr key={a.id} className="hover:bg-brand-bg-soft transition-colors">
@@ -277,6 +347,7 @@ export default function PortalCasePage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>
@@ -290,7 +361,39 @@ export default function PortalCasePage() {
             {shared_assets.length === 0 ? (
               <div className="bg-brand-surface border border-brand-line rounded-2xl p-16 text-center shadow-sm"><p className="text-brand-ink font-serif text-lg font-bold mb-1">Nothing shared yet</p><p className="text-brand-muted text-sm font-sans">No assets have been sent to you for review.</p></div>
             ) : (
-              <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
+              <div className="space-y-3">
+                <div className="md:hidden space-y-3">
+                  {shared_assets.map((a) => (
+                    <div key={a.id} className="bg-brand-surface border border-brand-line rounded-2xl p-4 shadow-sm space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-[14px] font-sans font-semibold text-brand-ink">{a.description}</p>
+                        <StatusBadge status={a.status} />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-[12px] font-sans text-brand-ink-2">
+                        <Pill color={a.kind === 'asset' ? 'bg-brand-green/10 text-brand-green border-brand-green/20' : 'bg-brand-rose/10 text-brand-rose border-brand-rose/20'}>{a.kind}</Pill>
+                        <span>{a.category ? a.category.replace(/_/g, ' ') : '--'}</span>
+                        <span>{a.value ? Number(a.value).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '--'}</span>
+                        <span>{a.owned_by ? a.owned_by.replace(/_/g, ' ') : '--'}</span>
+                      </div>
+                      {isOpposing && a.status === 'sent' && (
+                        deciding === a.id ? (
+                          <div className="flex items-center gap-2">
+                            <input type="text" value={disputeReason} onChange={(e) => setDisputeReason(e.target.value)} placeholder="Reason..." className="border border-brand-line rounded px-2 py-1 text-[12px] flex-1 min-w-0" />
+                            <button onClick={() => handleDecide(a, 'approved')} className="p-1 text-brand-green hover:bg-brand-green/10 rounded"><Check size={16} /></button>
+                            <button onClick={() => handleDecide(a, 'disputed')} className="p-1 text-brand-rose hover:bg-brand-rose/10 rounded"><X size={16} /></button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => { setDeciding(a.id); setDisputeReason('') }} className="px-3 py-1.5 text-[11px] font-sans font-semibold uppercase rounded-md border bg-brand-green/10 text-brand-green hover:bg-brand-green/20 flex items-center gap-1"><Check size={11} /> Approve</button>
+                            <button onClick={() => handleDecide(a, 'disputed')} className="px-3 py-1.5 text-[11px] font-sans font-semibold uppercase rounded-md border bg-brand-rose/10 text-brand-rose hover:bg-brand-rose/20 flex items-center gap-1"><X size={11} /> Dispute</button>
+                          </div>
+                        )
+                      )}
+                      {a.status === 'opposing_approved' && <span className="text-[11px] text-brand-green font-sans font-semibold">Approved</span>}
+                    </div>
+                  ))}
+                </div>
+                <div className="hidden md:block bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
                 <table className="min-w-full text-left">
                   <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">{['Description','Type','Category','Value','Owned By','Status',''].map((h) => <th key={h} className="px-5 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans">{h}</th>)}</tr></thead>
                   <tbody className="divide-y divide-brand-line">
@@ -320,31 +423,58 @@ export default function PortalCasePage() {
                           {a.status === 'opposing_approved' && <span className="text-[11px] text-brand-green font-sans font-semibold">Approved</span>}
                         </td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
+                     ))}
+                   </tbody>
+                 </table>
+                 </div>
+               </div>
+             )}
+           </div>
+         )}
 
         {/* Documents tab */}
         {tab === 'documents' && (
           <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="font-serif font-bold text-xl text-brand-ink">Documents</h2>
-              <div className="flex items-center gap-3">
-                <span className="hidden lg:inline text-[12px] text-brand-muted font-sans">Uploads stay private until released by your attorney.</span>
-                <input type="text" value={uploadDesc} onChange={(e) => setUploadDesc(e.target.value)} placeholder="Description (optional)" className="border border-brand-line rounded-lg px-3 py-2 text-[13px] font-sans w-48" />
-                <input type="file" ref={fileRef} className="hidden" />
-                <button onClick={() => fileRef.current?.click()} className="flex items-center gap-1.5 px-3 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink"><Upload size={14} /> Choose File</button>
-                <button onClick={handleUpload} disabled={uploading || !fileRef.current?.files?.[0]} className="flex items-center gap-1.5 px-3 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:bg-brand-line disabled:text-brand-muted">{uploading ? 'Uploading...' : 'Upload'}</button>
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="font-serif font-bold text-xl text-brand-ink">Documents</h2>
+                <span className="text-[12px] text-brand-muted font-sans text-right">Uploads stay private until released by your attorney.</span>
+              </div>
+              <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
+                <input type="text" value={uploadDesc} onChange={(e) => setUploadDesc(e.target.value)} placeholder="Description (optional)" className="border border-brand-line rounded-lg px-3 py-2 text-[13px] font-sans w-full sm:w-48" />
+                <input
+                  type="file"
+                  ref={fileRef}
+                  className="hidden"
+                  aria-label="Choose a document to upload"
+                  onChange={(event) => { setSelectedFile(event.target.files?.[0] || null); setActionError(null) }}
+                />
+                <button type="button" onClick={() => fileRef.current?.click()} className="flex items-center justify-center gap-1.5 px-3 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink"><Upload size={14} /> Choose File</button>
+                <button type="button" onClick={handleUpload} disabled={uploading || !selectedFile} className="flex items-center justify-center gap-1.5 px-3 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:bg-brand-line disabled:text-brand-muted">{uploading ? 'Uploading...' : 'Upload'}</button>
+                {selectedFile && <span className="text-[12px] text-brand-muted font-sans truncate max-w-full sm:max-w-[16rem]">{selectedFile.name}</span>}
               </div>
             </div>
             {documents.length === 0 ? (
               <div className="bg-brand-surface border border-brand-line rounded-2xl p-16 text-center shadow-sm"><p className="text-brand-ink font-serif text-lg font-bold mb-1">No documents</p><p className="text-brand-muted text-sm font-sans">Upload supporting documents here.</p></div>
             ) : (
-              <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
+              <div className="space-y-3">
+                <div className="md:hidden space-y-3">
+                  {documents.map((d) => (
+                    <div key={d.id} className="bg-brand-surface border border-brand-line rounded-2xl p-4 shadow-sm space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-[14px] font-sans font-semibold text-brand-ink truncate">{d.filename}</p>
+                        <ReleaseBadge isReleased={d.is_released} isOwn={d.uploaded_by_party_id === data.party_id} />
+                      </div>
+                      {d.description && <p className="text-[12px] text-brand-ink-2">{d.description}</p>}
+                      <p className="text-[12px] text-brand-ink-2">
+                        {d.file_size ? `${(d.file_size / 1024).toFixed(1)} KB · ` : ''}
+                        {d.created_at ? (() => { try { return format(parseISO(d.created_at), 'MMM d, yyyy') } catch { return d.created_at } })() : '--'}
+                      </p>
+                      <a href={downloadPortalDocumentUrl(d.id, caseId)} className="inline-flex items-center gap-1 px-3 py-1.5 text-[11px] font-sans font-semibold uppercase rounded-md border hover:bg-brand-bg-soft text-brand-ink"><Download size={13} /> Download</a>
+                    </div>
+                  ))}
+                </div>
+                <div className="hidden md:block bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
                 <table className="min-w-full text-left">
                   <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">{['Filename','Description','Type','Size','Uploaded','Release',''].map((h) => <th key={h} className="px-5 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans">{h}</th>)}</tr></thead>
                   <tbody className="divide-y divide-brand-line">
@@ -361,6 +491,7 @@ export default function PortalCasePage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>

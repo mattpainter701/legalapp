@@ -157,6 +157,17 @@ async def accept_invite(
 # ── Context resolution ─────────────────────────────────────────────────────
 
 
+@router.post("/logout", status_code=204)
+async def portal_logout(response: Response):
+    """End a mediation portal session.
+
+    Parties can reach the portal on a shared machine; without this the only way
+    to end the session was to wait for the token to expire. Clears the dedicated
+    mediation cookie only, so a firm login on the same browser is untouched.
+    """
+    response.delete_cookie(MEDIATION_PORTAL_COOKIE_NAME, path="/")
+
+
 async def _resolve(
     request: Request, db: AsyncSession, case_id: str | None
 ) -> PortalContext:

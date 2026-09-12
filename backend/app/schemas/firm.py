@@ -18,6 +18,8 @@ class FirmBrandingResponse(BaseModel):
     firm_phone: Optional[str] = None
     firm_email: Optional[str] = None
     firm_website: Optional[str] = None
+    # ISO 4217 code. Resolved to "USD" when unset.
+    firm_currency: Optional[str] = None
     firm_pdf_footer: Optional[str] = None
 
 
@@ -30,4 +32,5 @@ class FirmBrandingUpdate(BaseModel):
     firm_phone: Optional[str] = None
     firm_email: Optional[str] = None
     firm_website: Optional[str] = None
+    firm_currency: Optional[str] = None
     firm_pdf_footer: Optional[str] = None

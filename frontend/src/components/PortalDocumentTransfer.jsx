@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { getClientPortalUploadLink, sendClientPortalMessage, uploadClientPortalDocument } from '../api'
+import {
+  getClientPortalUploadLink,
+  getClientPortalUploadPolicy,
+  sendClientPortalMessage,
+  uploadClientPortalDocument,
+} from '../api'
+import { FileText, Link2, Upload, X } from 'lucide-react'
 
 const LIMIT = 10000
+const DEFAULT_POLICY = { max_upload_bytes: 50 * 1024 * 1024, max_files_per_batch: LIMIT, allowed_extensions: [] }
 
 export async function droppedFiles(dataTransfer) {
   const files = []
@@ -27,6 +34,13 @@ export async function droppedFiles(dataTransfer) {
   return files
 }
 
+const FRIENDLY_EXTENSIONS = 'PDFs, Word documents, spreadsheets, images and scans'
+
+function extensionText(policy) {
+  if (!policy.allowed_extensions?.length) return FRIENDLY_EXTENSIONS
+  return FRIENDLY_EXTENSIONS
+}
+
 export default function PortalDocumentTransfer({ matterName, onUploaded, onSessionError }) {
   const [entries, setEntries] = useState([])
   const [busy, setBusy] = useState(false)
@@ -35,20 +49,37 @@ export default function PortalDocumentTransfer({ matterName, onUploaded, onSessi
   const [url, setUrl] = useState('')
   const [description, setDescription] = useState('')
   const [uploadUrl, setUploadUrl] = useState(null)
+  const [policy, setPolicy] = useState(DEFAULT_POLICY)
   const locked = useRef(false)
 
   useEffect(() => {
     let active = true
     getClientPortalUploadLink().then(result => { if (active) setUploadUrl(result.url) }).catch(() => {})
+    getClientPortalUploadPolicy().then(result => { if (active && result) setPolicy({ ...DEFAULT_POLICY, ...result }) }).catch(() => {})
     return () => { active = false }
   }, [])
+
+  const maxMb = Math.round((policy.max_upload_bytes || DEFAULT_POLICY.max_upload_bytes) / 1024 / 1024)
+  const accept = (policy.allowed_extensions || []).map(extension => `.${extension}`).join(',') || undefined
+  const actionable = entries.filter(entry => entry.status !== 'uploaded' && !entry.blocked)
 
   function select(files) {
     if (locked.current) return
     setError('')
     setNotice('')
-    if (files.length > LIMIT) { setError('Select at most 10,000 files per batch.'); return }
-    setEntries(files.map(entry => ({ ...entry, status: 'pending', error: '' })))
+    if (files.length > (policy.max_files_per_batch || LIMIT)) {
+      setError(`Please send at most ${policy.max_files_per_batch || LIMIT} files at a time.`)
+      return
+    }
+    setEntries(files.map(entry => {
+      const tooBig = entry.file.size > (policy.max_upload_bytes || DEFAULT_POLICY.max_upload_bytes)
+      return {
+        ...entry,
+        status: tooBig ? 'failed' : 'pending',
+        error: tooBig ? `Too large — the limit is ${maxMb} MB per file.` : '',
+        blocked: tooBig,
+      }
+    }))
   }
 
   async function upload() {
@@ -59,7 +90,7 @@ export default function PortalDocumentTransfer({ matterName, onUploaded, onSessi
     const next = entries.map(entry => ({ ...entry }))
     let sessionExpired = false
     for (const entry of next) {
-      if (entry.status === 'uploaded') continue
+      if (entry.status === 'uploaded' || entry.blocked) continue
       entry.status = 'uploading'
       entry.error = ''
       setEntries(next.map(row => ({ ...row })))
@@ -91,39 +122,111 @@ export default function PortalDocumentTransfer({ matterName, onUploaded, onSessi
     try {
       await sendClientPortalMessage({ subject: 'Files to import: shared folder', body: `Please review and import the files for this matter from this shared folder:\n${parsed.href}` })
       setUrl('')
-      setNotice('Link sent to your legal team for review. Files have not been imported yet.')
+      setNotice('Your legal team has the link. They will review the folder before anything is added to your matter.')
     } catch (err) {
       if (!onSessionError(err)) setError('Could not send the link. Please retry.')
     } finally { locked.current = false; setBusy(false) }
   }
 
-  return <section className="space-y-3" aria-label="Transfer matter documents">
-    <p>Send files for {matterName || 'this matter'} only. Choose this client’s folder from your computer or USB drive. Your legal team can import multiple clients through New Matter.</p>
-    <label className="block">Description (optional)<input value={description} maxLength={500} disabled={busy} onChange={event => setDescription(event.target.value)} className="block w-full border rounded-lg p-2" /></label>
-    <div className="border-2 border-dashed border-brand-line rounded-xl p-5 space-y-3"
+  const remaining = actionable.length
+  const uploadedCount = entries.filter(entry => entry.status === 'uploaded').length
+
+  return <section className="space-y-4 font-sans" aria-label="Send documents to your legal team">
+    <p className="text-sm text-brand-ink-2">
+      Send documents to your legal team for {matterName || 'your matter'}. Choose a photo, a scan, or a file from
+      your computer or phone. Everything you send is private to the firm.
+    </p>
+    <p className="text-xs text-brand-ink-2">
+      {extensionText(policy)} · up to {maxMb} MB per file.
+    </p>
+
+    <label className="block text-sm text-brand-ink">
+      What are you sending? (optional)
+      <input
+        value={description}
+        maxLength={500}
+        disabled={busy}
+        onChange={event => setDescription(event.target.value)}
+        placeholder="e.g. Photos of the letter I received"
+        className="mt-1 block w-full border border-brand-line rounded-xl px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+      />
+    </label>
+
+    <div className="border-2 border-dashed border-brand-line rounded-xl p-5 space-y-3 bg-brand-bg-soft/40"
       onDragOver={event => event.preventDefault()}
       onDrop={async event => {
         event.preventDefault()
         if (locked.current) return
         try { select(await droppedFiles(event.dataTransfer)) } catch (err) { setError(err.message) }
       }}>
-      <p>Drop files or a folder here, or select them below.</p>
-      <label className="block">Choose files<input className="block" type="file" multiple disabled={busy} onChange={event => { select(Array.from(event.target.files || []).map(file => ({ file, path: file.name }))); event.target.value = '' }} /></label>
-      <label className="block">Choose folder<input className="block" type="file" multiple webkitdirectory="" directory="" disabled={busy} onChange={event => { select(Array.from(event.target.files || []).map(file => ({ file, path: file.webkitRelativePath || file.name }))); event.target.value = '' }} /></label>
+      <p className="text-sm text-brand-ink-2">Drag files here, or choose them below.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <label className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all cursor-pointer">
+          <Upload size={15} /> Choose files
+          <input className="sr-only" type="file" multiple accept={accept} disabled={busy} onChange={event => { select(Array.from(event.target.files || []).map(file => ({ file, path: file.name }))); event.target.value = '' }} />
+        </label>
+        <label className="inline-flex items-center justify-center gap-2 px-4 py-2.5 border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-xl hover:border-brand-ink transition-all cursor-pointer">
+          <Upload size={15} /> Choose a folder (desktop)
+          <input className="sr-only" type="file" multiple webkitdirectory="" directory="" accept={accept} disabled={busy} onChange={event => { select(Array.from(event.target.files || []).map(file => ({ file, path: file.webkitRelativePath || file.name }))); event.target.value = '' }} />
+        </label>
+      </div>
     </div>
+
     {!!entries.length && <>
-      <p role="status">{entries.filter(entry => entry.status === 'uploaded').length} of {entries.length} files uploaded</p>
-      <ul className="max-h-56 overflow-auto text-sm">{entries.map((entry, index) => <li key={index}>{entry.path} — {entry.status}{entry.error && `: ${entry.error}`}</li>)}</ul>
-      <button type="button" className="border rounded-lg px-4 py-2" disabled={busy || entries.every(entry => entry.status === 'uploaded')} onClick={upload}>{busy ? 'Uploading…' : 'Upload remaining files / retry failures'}</button>
-      <p className="text-xs">Keep this page open until every file is accounted for. ZIPs are stored as bundles; ask your legal team to unpack them. Email originals are preserved for review.</p>
+      <p role="status" className="text-sm text-brand-ink-2">{uploadedCount} of {entries.length} files sent</p>
+      <ul className="max-h-56 overflow-auto text-sm divide-y divide-brand-line border border-brand-line rounded-xl">
+        {entries.map((entry, index) => (
+          <li key={index} className="flex items-center justify-between gap-3 px-3 py-2">
+            <span className="flex items-center gap-2 min-w-0">
+              <FileText size={15} className="text-brand-ink-2 shrink-0" />
+              <span className="truncate text-brand-ink">{entry.path}</span>
+            </span>
+            <span className={`shrink-0 text-xs ${entry.status === 'failed' ? 'text-brand-rose' : entry.status === 'uploaded' ? 'text-brand-green' : 'text-brand-ink-2'}`}>
+              {entry.status === 'uploaded' ? 'Sent' : entry.status === 'uploading' ? 'Sending…' : entry.error || 'Ready'}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        className="inline-flex items-center gap-2 px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all disabled:opacity-50"
+        disabled={busy || remaining === 0}
+        onClick={upload}
+      >
+        {busy ? 'Sending…' : remaining === 0 ? 'All files sent' : `Send ${remaining} file${remaining === 1 ? '' : 's'}`}
+      </button>
+      <p className="text-xs text-brand-ink-2">Keep this page open until every file is sent. A ZIP is stored as a bundle; your legal team can unpack it.</p>
     </>}
-    {uploadUrl && <p><a href={uploadUrl} target="_blank" rel="noopener noreferrer" className="underline">Open the upload folder shared by your legal team</a></p>}
-    <form onSubmit={submitLink} className="space-y-2">
-      <label className="block">Or send a cloud/fileshare link<input type="url" required maxLength={2000} value={url} onChange={event => setUrl(event.target.value)} className="block w-full border rounded-lg p-2" placeholder="https://…" disabled={busy} /></label>
-      <p className="text-xs">Give your legal team access using your storage provider’s sharing controls. They will review the link before importing.</p>
-      <button className="border rounded-lg px-4 py-2" disabled={busy || !url.trim()}>Send link for import</button>
+
+    {uploadUrl && (
+      <p>
+        <a href={uploadUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-brand-accent hover:underline">
+          <Link2 size={15} /> Open the upload folder shared by your legal team
+        </a>
+      </p>
+    )}
+
+    <form onSubmit={submitLink} className="space-y-2 border-t border-brand-line pt-4">
+      <label className="block text-sm text-brand-ink">
+        Or paste a link to a shared folder
+        <input
+          type="url"
+          required
+          maxLength={2000}
+          value={url}
+          onChange={event => setUrl(event.target.value)}
+          className="mt-1 block w-full border border-brand-line rounded-xl px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+          placeholder="https://…"
+          disabled={busy}
+        />
+      </label>
+      <p className="text-xs text-brand-ink-2">Give your legal team access using your storage provider&apos;s sharing controls. They will review the link before importing anything.</p>
+      <button className="inline-flex items-center gap-2 px-4 py-2.5 border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-xl hover:border-brand-ink transition-all disabled:opacity-50" disabled={busy || !url.trim()}>
+        <Link2 size={15} /> Send link to my legal team
+      </button>
     </form>
-    {error && <p role="alert">{error}</p>}
-    {notice && <p role="status">{notice}</p>}
+
+    {error && <p role="alert" className="flex items-start gap-2 text-sm text-brand-rose"><X size={15} className="mt-0.5 shrink-0" /> {error}</p>}
+    {notice && <p role="status" className="text-sm text-brand-green">{notice}</p>}
   </section>
 }

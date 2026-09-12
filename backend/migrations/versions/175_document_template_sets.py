@@ -1,4 +1,4 @@
-"""174 — Sets: the templates a firm drafts together.
+"""175 — Sets: the templates a firm drafts together.
 
 Two tenant-scoped tables under the same RLS posture as the rest of the Studio:
 row-level security enabled and forced, with a tenant_isolation policy in the
@@ -9,8 +9,8 @@ A set references templates; it never copies them. Deleting a template removes
 it from every set that named it rather than leaving a member that cannot be
 drafted.
 
-Revision ID: 174_document_template_sets
-Revises: 173_rls_tenant_guc_nullif
+Revision ID: 175_document_template_sets
+Revises: 174_firm_currency
 """
 
 from alembic import op
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "174_document_template_sets"
-down_revision = "173_rls_tenant_guc_nullif"
+revision = "175_document_template_sets"
+down_revision = "174_firm_currency"
 branch_labels = None
 depends_on = None
 
