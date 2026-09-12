@@ -1311,14 +1311,14 @@ async def portal_matter(
     db: AsyncSession = Depends(get_db),
 ):
     ctx, matter = resolved
-    firm = await _portal_firm_branding(db, ctx.tenant_id)
     if getattr(ctx, "paperwork_only", False):
+        # This restricted view stays free of the general case reads; the portal
+        # shell gets firm branding from /session instead.
         return PortalMatterView(
             matter_id=str(matter.id),
             matter_name=matter.matter_name,
             paperwork_only=True,
             pending_signature_count=len(ctx.paperwork_signature_ids),
-            firm=firm,
         )
 
     assignments = await db.execute(
@@ -1380,7 +1380,7 @@ async def portal_matter(
         open_invoice_count=sum(1 for inv in open_invoices if inv.balance_due > 0),
         outstanding_balance=outstanding,
         last_activity_at=_aware(last_activity_at),
-        firm=firm,
+        firm=await _portal_firm_branding(db, ctx.tenant_id),
     )
 
 

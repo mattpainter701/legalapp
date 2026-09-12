@@ -43,6 +43,14 @@ export default function ClientPortalAcceptPage() {
     return () => { cancelled = true }
   }, [token])
 
+  // First-time entry should move straight into the portal; the welcome copy is
+  // a moment, not a gate.
+  useEffect(() => {
+    if (status !== 'success') return undefined
+    const timer = setTimeout(() => navigate('/portal/client/matter', { replace: true }), 1200)
+    return () => clearTimeout(timer)
+  }, [status, navigate])
+
   const firm = info?.firm
   const firmName = firm?.firm_name
 

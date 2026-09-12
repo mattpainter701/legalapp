@@ -19,7 +19,7 @@ async def test_profile_is_tenant_scoped_and_uses_existing_branding_fallbacks():
     settings = SimpleNamespace(
         firm_name=None, firm_address=None, firm_phone=" 555-0100 ",
         firm_email="office@example.com", firm_website="https://example.com",
-        firm_logo_url=None, firm_pdf_footer=None,
+        firm_logo_url=None, firm_currency=None, firm_pdf_footer=None,
     )
     db = SimpleNamespace(execute=AsyncMock(side_effect=[
         MagicMock(scalar_one_or_none=lambda: tenant),
