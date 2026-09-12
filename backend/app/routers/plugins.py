@@ -941,6 +941,7 @@ async def create_matter(
                 matter_id=matter.id,
                 folder_name=matter.matter_name,
                 existing_folder=matter.cloud_folder,
+                matter_number=matter.matter_number,
             )
             if cloud_folder:
                 matter.cloud_folder = {**(matter.cloud_folder or {}), **cloud_folder}
