@@ -26,7 +26,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -43,12 +43,14 @@ from app.models.mediation import (
     MediationProposalRecipient,
 )
 from app.models.plugin import Matter, MediationCase, MediationCaseEvent
+from app.models.contact import Contact
 from app.models.task import Task
 from app.services.task_workflow import append_task_event, transition_task
 from app.models.user import User
 from app.schemas.mediation import (
     AssetCreate,
     AssetResponse,
+    AssetRelease,
     AssetUpdate,
     DocumentResponse,
     InviteResponse,
@@ -212,9 +214,9 @@ async def _next_task_map(
 
 
 async def _get_case_or_404(
-    db: AsyncSession, case_id: str, tenant_id: uuid.UUID
+    db: AsyncSession, case_id: str, tenant_id: uuid.UUID, *, for_update: bool = False
 ) -> MediationCase:
-    result = await db.execute(
+    statement = (
         select(MediationCase)
         .options(
             selectinload(MediationCase.events),
@@ -223,6 +225,9 @@ async def _get_case_or_404(
         )
         .where(MediationCase.id == case_id, MediationCase.tenant_id == tenant_id)
     )
+    if for_update:
+        statement = statement.with_for_update()
+    result = await db.execute(statement)
     case = result.scalar_one_or_none()
     if case is None:
         raise HTTPException(status_code=404, detail="Mediation case not found")
@@ -527,7 +532,34 @@ async def delete_case(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
-    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    case = await _get_case_or_404(db, case_id, user.tenant_id, for_update=True)
+    protected = any(asset.status not in ("draft", "submitted") for asset in case.assets)
+    for model, condition in (
+        (MediationDocument, MediationDocument.recipients.any()),
+        (
+            MediationProposal,
+            or_(
+                MediationProposal.recipients.any(),
+                MediationProposal.review_state != "pending",
+            ),
+        ),
+    ):
+        protected = protected or bool(
+            await db.scalar(
+                select(model.id)
+                .where(
+                    model.case_id == case.id,
+                    model.tenant_id == user.tenant_id,
+                    condition,
+                )
+                .limit(1)
+            )
+        )
+    if protected:
+        raise HTTPException(
+            status_code=409,
+            detail="This case has reviewed or released records. Close the case to preserve its evidence.",
+        )
     await db.delete(case)
     await db.commit()
 
@@ -565,15 +597,21 @@ async def add_session(
 
 
 async def _get_party_or_404(
-    db: AsyncSession, party_id: str, case_id: str, tenant_id: uuid.UUID
+    db: AsyncSession,
+    party_id: str,
+    case_id: str,
+    tenant_id: uuid.UUID,
+    *,
+    for_update: bool = False,
 ) -> MediationParty:
-    result = await db.execute(
-        select(MediationParty).where(
-            MediationParty.id == party_id,
-            MediationParty.case_id == case_id,
-            MediationParty.tenant_id == tenant_id,
-        )
+    statement = select(MediationParty).where(
+        MediationParty.id == _as_uuid(party_id),
+        MediationParty.case_id == case_id,
+        MediationParty.tenant_id == tenant_id,
     )
+    if for_update:
+        statement = statement.with_for_update()
+    result = await db.execute(statement)
     obj = result.scalar_one_or_none()
     if obj is None:
         raise HTTPException(status_code=404, detail="Party not found")
@@ -608,6 +646,17 @@ async def list_parties(
     return [ms.party_to_response(p, invited=str(p.id) in invited_ids) for p in parties]
 
 
+async def _party_contact_id(db: AsyncSession, value: str | None, tenant_id: uuid.UUID):
+    contact_id = _as_uuid(value)
+    if contact_id is not None and not await db.scalar(
+        select(Contact.id).where(
+            Contact.id == contact_id, Contact.tenant_id == tenant_id
+        )
+    ):
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return contact_id
+
+
 @router.post("/cases/{case_id}/parties", response_model=PartyResponse, status_code=201)
 async def create_party(
     case_id: str,
@@ -625,7 +674,7 @@ async def create_party(
         role=body.role,
         name=body.name,
         email=body.email,
-        contact_id=_as_uuid(body.contact_id),
+        contact_id=await _party_contact_id(db, body.contact_id, user.tenant_id),
         is_initiator=body.is_initiator,
     )
     db.add(party)
@@ -647,7 +696,9 @@ async def update_party(
     party = await _get_party_or_404(db, party_id, case_id, user.tenant_id)
     update_data = body.model_dump(exclude_unset=True)
     if "contact_id" in update_data:
-        update_data["contact_id"] = _as_uuid(update_data["contact_id"])
+        update_data["contact_id"] = await _party_contact_id(
+            db, update_data["contact_id"], user.tenant_id
+        )
     for field, value in update_data.items():
         setattr(party, field, value)
     await db.commit()
@@ -664,7 +715,47 @@ async def delete_party(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
-    party = await _get_party_or_404(db, party_id, case_id, user.tenant_id)
+    party = await _get_party_or_404(
+        db, party_id, case_id, user.tenant_id, for_update=True
+    )
+    for model, involvement in (
+        (
+            MediationAsset,
+            or_(
+                MediationAsset.submitted_by_party_id == party.id,
+                MediationAsset.released_to_party_id == party.id,
+            ),
+        ),
+        (
+            MediationDocument,
+            or_(
+                MediationDocument.uploaded_by_party_id == party.id,
+                MediationDocument.recipients.any(
+                    MediationDocumentRecipient.party_id == party.id
+                ),
+            ),
+        ),
+        (
+            MediationProposal,
+            or_(
+                MediationProposal.proposed_by_party_id == party.id,
+                MediationProposal.recipients.any(
+                    MediationProposalRecipient.party_id == party.id
+                ),
+            ),
+        ),
+    ):
+        if await db.scalar(
+            select(model.id)
+            .where(
+                model.case_id == case_id, model.tenant_id == user.tenant_id, involvement
+            )
+            .limit(1)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="This party has mediation records or releases. Revoke portal access instead of deleting its evidence.",
+            )
     await db.delete(party)
     await db.commit()
 
@@ -942,7 +1033,7 @@ async def approve_asset(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     await _require_legal_approval(db, user)
-    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    case = await _get_case_or_404(db, case_id, user.tenant_id, for_update=True)
     asset = await _get_asset_or_404(
         db, asset_id, case_id, user.tenant_id, for_update=True
     )
@@ -971,29 +1062,41 @@ async def approve_asset(
 async def send_asset(
     case_id: str,
     asset_id: str,
+    body: AssetRelease,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     await _require_legal_approval(db, user)
-    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    case = await _get_case_or_404(db, case_id, user.tenant_id, for_update=True)
     asset = await _get_asset_or_404(
         db, asset_id, case_id, user.tenant_id, for_update=True
     )
     if asset.status != "attorney_approved":
         raise HTTPException(
             status_code=409,
-            detail="Asset must be attorney-approved before sending to the opposing party",
+            detail="Asset must be attorney-approved before release",
+        )
+    party = await _get_party_or_404(
+        db, body.party_id, case_id, user.tenant_id, for_update=True
+    )
+    if party.role != "opposing_party" or party.id == asset.submitted_by_party_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Select an opposing party other than the submitting party",
         )
     asset.status = "sent"
+    asset.released_to_party_id = party.id
+    asset.released_by_user_id = user.id
     asset.sent_at = datetime.now(timezone.utc)
     asset.updated_at = asset.sent_at
     await _append_event(
         db,
         case,
         event_type="sent",
-        title=f"Sent to opposing party: {asset.description}",
+        title=f"Released asset: {asset.description}",
+        content=f"Recipient: {party.name}",
         added_by=user.full_name or user.email,
     )
     await db.commit()
@@ -1022,11 +1125,13 @@ async def _release_parties(
 ) -> list[MediationParty]:
     parsed = {_parse_uuid(value, "party") for value in party_ids}
     result = await db.execute(
-        select(MediationParty).where(
+        select(MediationParty)
+        .where(
             MediationParty.id.in_(parsed),
             MediationParty.case_id == _parse_uuid(case_id, "case"),
             MediationParty.tenant_id == tenant_id,
         )
+        .with_for_update()
     )
     parties = list(result.scalars().all())
     if len(parties) != len(parsed):
@@ -1151,12 +1256,14 @@ async def release_document(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     await _require_legal_approval(db, user)
-    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    case = await _get_case_or_404(db, case_id, user.tenant_id, for_update=True)
     doc = await _get_doc_or_404(db, doc_id, case_id, user.tenant_id, for_update=True)
     if not doc.storage_path or not os.path.exists(doc.storage_path):
         raise HTTPException(status_code=409, detail="Document file is unavailable")
     # Release only the exact bytes whose digest was captured at upload.
-    await ms.case_document_download_response(doc)
+    verified_file = await ms.case_document_download_response(doc)
+    if not doc.content_sha256:
+        doc.content_sha256 = hashlib.sha256(verified_file.body).hexdigest()
 
     parties = await _release_parties(
         db,
@@ -1307,6 +1414,16 @@ async def create_proposal(
     proposed_by_party_id = _as_uuid(body.proposed_by_party_id)
     if proposed_by_party_id:
         await _get_party_or_404(db, str(proposed_by_party_id), case_id, user.tenant_id)
+        if parent_id and not any(
+            recipient.party_id == proposed_by_party_id
+            for recipient in parent.recipients
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="The proposing party must have received the parent proposal",
+            )
+    if parent_id:
+        ms.assert_proposal_integrity(parent)
 
     proposal = MediationProposal(
         id=uuid.uuid4(),
@@ -1345,7 +1462,7 @@ async def review_proposal(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     await _require_legal_approval(db, user)
-    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    case = await _get_case_or_404(db, case_id, user.tenant_id, for_update=True)
     proposal = await _get_proposal_or_404(
         db, proposal_id, case_id, user.tenant_id, for_update=True
     )
@@ -1363,6 +1480,12 @@ async def review_proposal(
     if body.decision not in {"approved", "changes_requested", "rejected"}:
         raise HTTPException(status_code=400, detail="Invalid review decision")
 
+    if not proposal.content_sha256:
+        proposal.content_sha256 = ms.proposal_content_sha256(
+            title=proposal.title,
+            body=proposal.body,
+            parent_proposal_id=proposal.parent_proposal_id,
+        )
     proposal.review_state = body.decision
     proposal.review_notes = body.notes
     proposal.reviewed_by_user_id = user.id
@@ -1394,7 +1517,7 @@ async def release_proposal(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     await _require_legal_approval(db, user)
-    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    case = await _get_case_or_404(db, case_id, user.tenant_id, for_update=True)
     proposal = await _get_proposal_or_404(
         db, proposal_id, case_id, user.tenant_id, for_update=True
     )
@@ -1404,7 +1527,7 @@ async def release_proposal(
             status_code=409,
             detail="Only an active proposal can be released",
         )
-    if proposal.review_state != "approved":
+    if proposal.review_state != "approved" or not proposal.content_sha256:
         raise HTTPException(
             status_code=409,
             detail="Proposal must be attorney-approved before release",
@@ -1443,7 +1566,7 @@ async def release_proposal(
         proposal.released_at = proposal.released_at or now
         proposal.released_by_user_id = proposal.released_by_user_id or user.id
         proposal.updated_at = now
-        if proposal.parent_proposal_id:
+        if proposal.parent_proposal_id and not existing:
             parent = await _get_proposal_or_404(
                 db,
                 str(proposal.parent_proposal_id),

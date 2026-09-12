@@ -51,6 +51,7 @@ from app.schemas.mediation import (
     PortalAcceptRequest,
     PortalAcceptResponse,
     PortalCaseView,
+    PortalCaseSummary,
     ProposalCreate,
     ProposalResponse,
 )
@@ -201,9 +202,7 @@ async def _load_case(db: AsyncSession, ctx: PortalContext) -> MediationCase:
 
 
 def _can_see_asset(asset: MediationAsset, ctx: PortalContext) -> bool:
-    if str(asset.submitted_by_party_id) == str(ctx.party_id):
-        return True
-    return asset.status in ms.SHARED_ASSET_STATUSES
+    return ms.asset_visible_to_party(asset, ctx.party_id)
 
 
 def _document_visible_to_party(ctx: PortalContext):
@@ -250,6 +249,7 @@ def _portal_proposal_response(
     proposed_by_name: str | None = None,
 ) -> ProposalResponse:
     """Return only the current party's grant in a portal response."""
+    ms.assert_proposal_integrity(proposal)
     response = ms.proposal_to_response(proposal, proposed_by_name)
     recipient = next(
         (row for row in proposal.recipients if str(row.party_id) == str(ctx.party_id)),
@@ -288,15 +288,14 @@ async def portal_case(
     )
     assets = assets_result.scalars().all()
     my_assets = [
-        ms.asset_to_response(a)
+        ms.portal_asset_response(a, ctx.party_id)
         for a in assets
         if str(a.submitted_by_party_id) == str(ctx.party_id)
     ]
     shared_assets = [
-        ms.asset_to_response(a)
+        ms.portal_asset_response(a, ctx.party_id)
         for a in assets
-        if str(a.submitted_by_party_id) != str(ctx.party_id)
-        and a.status in ms.SHARED_ASSET_STATUSES
+        if str(a.submitted_by_party_id) != str(ctx.party_id) and _can_see_asset(a, ctx)
     ]
 
     docs_result = await db.execute(
@@ -317,7 +316,18 @@ async def portal_case(
     proposals = await _list_proposals(db, ctx)
 
     return PortalCaseView(
-        case=ms.case_to_response(case),
+        case=PortalCaseSummary(
+            id=str(case.id),
+            case_name=case.case_name or case.title,
+            party_a=case.party_a,
+            party_b=case.party_b,
+            dispute_type=case.dispute_type,
+            mediation_stage=case.mediation_stage,
+            status=case.status,
+            mediator=case.mediator,
+            scheduled_session=case.scheduled_session,
+            confidentiality_signed=bool(case.confidentiality_signed),
+        ),
         party_role=ctx.party_role,
         party_id=str(ctx.party_id),
         my_assets=my_assets,
@@ -367,7 +377,7 @@ async def portal_list_assets(
         .order_by(MediationAsset.created_at)
     )
     return [
-        ms.asset_to_response(a)
+        ms.portal_asset_response(a, ctx.party_id)
         for a in result.scalars().all()
         if _can_see_asset(a, ctx)
     ]
@@ -398,7 +408,7 @@ async def portal_create_asset(
     db.add(asset)
     await db.commit()
     await db.refresh(asset)
-    return ms.asset_to_response(asset)
+    return ms.portal_asset_response(asset, ctx.party_id)
 
 
 @router.patch("/assets/{asset_id}", response_model=AssetResponse)
@@ -420,7 +430,7 @@ async def portal_update_asset(
     asset.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(asset)
-    return ms.asset_to_response(asset)
+    return ms.portal_asset_response(asset, ctx.party_id)
 
 
 @router.post("/assets/{asset_id}/submit", response_model=AssetResponse)
@@ -443,7 +453,7 @@ async def portal_submit_asset(
     asset.updated_at = asset.submitted_at
     await db.commit()
     await db.refresh(asset)
-    return ms.asset_to_response(asset)
+    return ms.portal_asset_response(asset, ctx.party_id)
 
 
 @router.post("/assets/{asset_id}/decision", response_model=AssetResponse)
@@ -460,6 +470,8 @@ async def portal_decide_asset(
             status_code=403, detail="Only the opposing party can decide on sent items"
         )
     asset = await _get_asset(db, ctx, asset_id, for_update=True)
+    if str(asset.released_to_party_id) != str(ctx.party_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
     if asset.status != "sent":
         raise HTTPException(
             status_code=409, detail="Asset is not awaiting your decision"
@@ -473,7 +485,7 @@ async def portal_decide_asset(
     asset.updated_at = asset.opposing_decided_at
     await db.commit()
     await db.refresh(asset)
-    return ms.asset_to_response(asset)
+    return ms.portal_asset_response(asset, ctx.party_id)
 
 
 # ── Documents ──────────────────────────────────────────────────────────────
@@ -643,6 +655,7 @@ async def portal_create_proposal(
         parent = parent_result.scalar_one_or_none()
         if parent is None:
             raise HTTPException(status_code=404, detail="Parent proposal not found")
+        ms.assert_proposal_integrity(parent)
         if parent.status != "open":
             raise HTTPException(
                 status_code=409,
