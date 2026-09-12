@@ -22,8 +22,9 @@ import {
   Undo2,
 } from 'lucide-react'
 
-import { getTemplateBindings } from '../../api'
+import { getTemplateBindings, getTemplateCards } from '../../api'
 import DocxDocumentView from './DocxDocumentView'
+import TemplateBindingPicker from './TemplateBindingPicker'
 import DrawFieldLayer from './DrawFieldLayer'
 import WordDocumentPreview from './WordDocumentPreview'
 import { resolveWordPageSelection } from './wordPlaceholderMatches'
@@ -128,24 +129,32 @@ export const docxFieldName = (text) => {
 
 /** Load the binding catalogue once and group it for the picker.
  *  The catalogue is static server-owned vocabulary, so a failure to load it
- *  degrades to name matching rather than blocking the editor. */
+ *  degrades to name matching rather than blocking the editor.
+ *
+ *  Cards and the flat catalogue are loaded together and neither is required:
+ *  cards drive the picker, while the flat catalogue still supplies tenant
+ *  custom fields, the collections a repeating section may iterate, and the
+ *  scenario lookup. Either request failing leaves the other usable. */
 function useBindingCatalogue() {
-  const [catalogue, setCatalogue] = useState({ groups: {}, collections: [] })
+  const [catalogue, setCatalogue] = useState({ groups: {}, collections: [], bindings: [], cards: [] })
 
   useEffect(() => {
     let cancelled = false
-    getTemplateBindings()
-      .then((loaded) => {
+    Promise.allSettled([getTemplateBindings(), getTemplateCards()])
+      .then(([flat, cards]) => {
         if (cancelled) return
+        const loaded = flat.status === 'fulfilled' ? flat.value : null
         const groups = {}
         for (const entry of loaded?.bindings || []) {
           if (!entry?.path) continue
           ;(groups[entry.group || 'Other'] ||= []).push(entry)
         }
-        setCatalogue({ groups, collections: loaded?.collections || [] })
-      })
-      .catch(() => {
-        if (!cancelled) setCatalogue({ groups: {}, collections: [] })
+        setCatalogue({
+          groups,
+          collections: loaded?.collections || [],
+          bindings: loaded?.bindings || [],
+          cards: cards.status === 'fulfilled' ? (cards.value?.cards || []) : [],
+        })
       })
     return () => { cancelled = true }
   }, [])
@@ -188,7 +197,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
   useEffect(() => { onDirtyChange?.(dirty || Boolean(wordingSelection)) }, [dirty, wordingSelection, onDirtyChange])
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
-  const { groups: bindingGroups, collections } = useBindingCatalogue()
+  const { groups: bindingGroups, collections, bindings, cards } = useBindingCatalogue()
 
   const scenarioBinding = fields.find(field => field.name === applicability?.field)?.binding
   const scenarioDefinition = Object.values(bindingGroups).flat().find(entry => entry.path === scenarioBinding)
@@ -564,7 +573,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
 
       <div className={`studio-editor-grid grid gap-0 ${pdfSource ? 'lg:grid-cols-[92px_minmax(0,1fr)_288px]' : 'lg:grid-cols-[minmax(0,1fr)_288px]'}`}>
         {!pdfSource && isDocx && (
-          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256} fields={fields} paragraphs={wordParagraphs} selectedIdentity={selectedIdentity} onSelectField={setSelectedIdentity}
+          <WordDocumentPreview key={`${template.id}:${template.source_sha256 || ''}`} templateId={template.id} sourceDigest={template.source_sha256} fields={fields} paragraphs={wordParagraphs} cards={cards} selectedIdentity={selectedIdentity} onSelectField={setSelectedIdentity}
             wordingDisabled={dirty || saving}
             wordingActive={Boolean(wordingSelection)}
             onWordingModeChange={onDerived ? (enabled) => { setEditingWording(enabled); setWordingSelection(null) } : undefined}
@@ -583,6 +592,7 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
               setSelectedIdentity(fieldIdentity(next[entry.index], entry.index))
             }}>
           <DocxDocumentView
+            cards={cards}
             templateId={template.id}
             fields={fields}
             regions={regions}
@@ -793,21 +803,12 @@ export default function TemplateStudioEditor({ template, source, sourceError, on
                 </PropertyRow>
               )}
               <PropertyRow label="Fills from">
-                <select
+                <TemplateBindingPicker
                   value={selected.binding || ''}
-                  onChange={(event) => updateField(selectedEntry.identity, { binding: event.target.value || undefined })}
-                  className="mt-1 w-full rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-sm text-brand-ink"
-                >
-                  <option value="">Match by field name</option>
-                  <option value="manual">Always typed by hand</option>
-                  {Object.entries(bindingGroups).map(([group, entries]) => (
-                    <optgroup key={group} label={group}>
-                      {entries.map((entry) => (
-                        <option key={entry.path} value={entry.path}>{entry.label}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
+                  cards={cards}
+                  bindings={bindings}
+                  onChange={(binding) => updateField(selectedEntry.identity, { binding })}
+                />
               </PropertyRow>
               <p className="text-[11px] leading-4 text-brand-muted">
                 {selected.binding && selected.binding !== 'manual'

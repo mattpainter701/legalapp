@@ -30,3 +30,20 @@
 }
 .word-placeholder-text .markedContent { display: contents; }
 .word-placeholder-text ::selection { background: rgb(59 130 246 / 35%); }
+
+/* A bound placeholder takes its card's hue. The three custom properties come
+   from cardStyle(), so the chip, the rail entry and any other surface showing
+   the same subject read from one derivation rather than three. */
+.word-placeholder-carded {
+  border: 1px solid var(--card-accent);
+  background: color-mix(in srgb, var(--card-wash) 70%, transparent);
+  color: hsl(var(--card-hue) 70% 22%);
+}
+.word-placeholder-carded:hover {
+  background: var(--card-wash);
+}
+.word-placeholder-carded-tab {
+  border: 1px solid var(--card-accent);
+  border-bottom: 0;
+  background: var(--card-wash);
+}

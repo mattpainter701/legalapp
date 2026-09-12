@@ -33,7 +33,33 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); delete Range.prototype.getClientRects })
 
+const cards = [{
+  key: 'client',
+  label: 'Client',
+  fields: [{ key: 'full_name', path: 'client.full_name', legacy_paths: ['client.name'] }],
+}]
+
 describe('Word placeholder layer', () => {
+  it('shows a bound placeholder in its card colour', async () => {
+    // The subject a blank belongs to should be legible from the document
+    // itself, not only from the properties panel.
+    const bound = [{ name: 'client_name', label: 'Client name', binding: 'client.full_name' }]
+    render(<WordPlaceholderLayer document={pdf} pageNumber={1} viewport={viewport} fields={bound} cards={cards} />)
+    const button = await screen.findByRole('button', { name: 'Select Client name placeholder' })
+    expect(button).toHaveAttribute('data-card', 'client')
+    expect(button.className).toContain('word-placeholder-carded')
+    expect(button.style.getPropertyValue('--card-accent')).toBeTruthy()
+  })
+
+  it('leaves an unbound placeholder neutral rather than picking a colour for it', async () => {
+    // Nothing yet says where its value comes from, and a colour would imply
+    // something does.
+    render(<WordPlaceholderLayer document={pdf} pageNumber={1} viewport={viewport} fields={fields} cards={cards} />)
+    const button = await screen.findByRole('button', { name: 'Select Client name placeholder' })
+    expect(button).not.toHaveAttribute('data-card')
+    expect(button.className).toContain('border-amber-600')
+  })
+
   it('selects the matching field from a keyboard-accessible page highlight', async () => {
     const onSelect = vi.fn()
     const user = userEvent.setup()

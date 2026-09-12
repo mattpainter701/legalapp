@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Loader2, Repeat, SplitSquareVertical } from 'lucide-react'
 
 import { getTemplateOutline } from '../../api'
+import { cardKeyForBinding, cardStyle } from './cardColor'
 
 const CONTAINER_LABELS = {
   body: '',
@@ -171,6 +172,7 @@ function ParagraphRow({
   regionDepth,
   inRange,
   opensRegion,
+  regionCardKey = '',
   selectedName,
   onSelectField,
   onSelectText,
@@ -226,7 +228,11 @@ function ParagraphRow({
   return (
     <div className="relative">
       {opensRegion && (
-        <div className="mt-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-brand-accent-2">
+        <div
+          style={regionCardKey ? { ...cardStyle(regionCardKey), color: 'var(--card-accent)' } : undefined}
+          data-card={regionCardKey || undefined}
+          className={`mt-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide ${regionCardKey ? '' : 'text-brand-accent-2'}`}
+        >
           {opensRegion.keyword === 'each'
             ? <Repeat size={13} aria-hidden="true" />
             : <SplitSquareVertical size={13} aria-hidden="true" />}
@@ -284,6 +290,7 @@ function ParagraphRow({
 export default function DocxDocumentView({
   templateId,
   fields,
+  cards = [],
   regions,
   selectedName,
   collections = [],
@@ -357,6 +364,18 @@ export default function DocxDocumentView({
     }
     return openers
   }, [allRegions])
+  /* A region is controlled by one field; colouring the marker by that field's
+   * card says which subject decides whether the clause appears. A region over
+   * an unbound field stays neutral, because nothing yet says what decides it. */
+  const regionCardByOrdinal = useMemo(() => {
+    const resolved = new Map()
+    for (const [ordinal, region] of openerByOrdinal) {
+      const field = (fields || []).find((entry) => entry?.name === region.name)
+      const key = cardKeyForBinding(field?.binding, cards)
+      if (key) resolved.set(ordinal, key)
+    }
+    return resolved
+  }, [openerByOrdinal, fields, cards])
 
   const [range, setRange] = useState(null)
   useEffect(() => { setPending(null); setRange(null) }, [editingWording])
@@ -412,6 +431,7 @@ export default function DocxDocumentView({
               regionDepth={depthByOrdinal.get(paragraph.ordinal) || 0}
               inRange={Boolean(range) && paragraph.ordinal >= range.from && paragraph.ordinal <= range.to}
               opensRegion={openerByOrdinal.get(paragraph.ordinal)}
+              regionCardKey={regionCardByOrdinal.get(paragraph.ordinal) || ''}
               selectedName={selectedName}
               onSelectField={onSelectField}
               onSelectText={(selection) => { setRange(null); setPending(selection); onSelectText?.(selection) }}

@@ -51,6 +51,7 @@ vi.mock('../api', () => ({
   renderTemplateFile: vi.fn(),
   discoverTemplateVariables: vi.fn(),
   getTemplateBindings: vi.fn().mockResolvedValue({ bindings: [], collections: [], operators: [] }),
+  getTemplateCards: vi.fn().mockResolvedValue({ cards: [], operators: [] }),
   getTemplateOutline: vi.fn().mockResolvedValue({ paragraphs: [], paragraph_count: 0, truncated: false }),
   listTemplateVersions: vi.fn().mockResolvedValue({
     template_id: 'template-1', current_version_no: 0, total: 0, versions: [],

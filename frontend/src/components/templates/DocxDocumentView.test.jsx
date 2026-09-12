@@ -215,6 +215,36 @@ describe('DocxDocumentView', () => {
     expect(onSelectField).toHaveBeenCalledWith(expect.objectContaining({ name: 'client_name' }))
   })
 
+  it('colours a region marker by the card that decides it', async () => {
+    getTemplateOutline.mockResolvedValue(outline([{ text: 'Entity clause' }, { text: 'After' }]))
+    render(
+      <DocxDocumentView
+        templateId="t1"
+        fields={[{ name: 'is_entity', binding: 'client.full_name' }]}
+        cards={[{ key: 'client', label: 'Client', fields: [{ key: 'full_name', path: 'client.full_name', legacy_paths: [] }] }]}
+        regions={[{ kind: 'if', name: 'is_entity', from_ordinal: 0, to_ordinal: 0 }]}
+      />,
+    )
+    const marker = await screen.findByText(/Only when is_entity/)
+    expect(marker.closest('[data-card]')).toHaveAttribute('data-card', 'client')
+  })
+
+  it('leaves a region over an unbound field neutral', async () => {
+    // Nothing yet says what decides the clause, and a colour would imply
+    // something does.
+    getTemplateOutline.mockResolvedValue(outline([{ text: 'Entity clause' }, { text: 'After' }]))
+    render(
+      <DocxDocumentView
+        templateId="t1"
+        fields={[{ name: 'is_entity' }]}
+        cards={[{ key: 'client', label: 'Client', fields: [{ key: 'full_name', path: 'client.full_name', legacy_paths: [] }] }]}
+        regions={[{ kind: 'if', name: 'is_entity', from_ordinal: 0, to_ordinal: 0 }]}
+      />,
+    )
+    const marker = await screen.findByText(/Only when is_entity/)
+    expect(marker.closest('[data-card]')).toBeNull()
+  })
+
   it('surfaces a read failure with the server’s reason', async () => {
     getTemplateOutline.mockRejectedValue({
       response: { data: { detail: 'The original template file is unavailable' } },
