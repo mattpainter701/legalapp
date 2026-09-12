@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MediationDetailPage from './MediationDetailPage'
 import {
   getMediationCase, listMediationParties, listMediationAssets,
-  listMediationDocuments, listMediationProposals, reviewMediationProposal,
+  listMediationDocuments, listMediationProposals, reviewMediationProposal, sendMediationAsset,
 } from '../api'
 
 const authHarness = vi.hoisted(() => ({
@@ -65,6 +65,32 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('MediationDetailPage review and release controls', () => {
+  it('requires one explicit opposing recipient before releasing a financial disclosure', async () => {
+    listMediationAssets.mockResolvedValue([{
+      id: 'asset-1', description: 'Retirement account', kind: 'asset', value: '1000',
+      status: 'attorney_approved', submitted_by_party_id: 'party-a',
+    }])
+    listMediationParties.mockResolvedValue([...parties,
+      { id: 'party-c', name: 'Other opponent', role: 'opposing_party' },
+      { id: 'neutral', name: 'Mediator', role: 'mediator' },
+    ])
+    sendMediationAsset.mockResolvedValue({})
+    const user = userEvent.setup()
+    render(<MediationDetailPage />)
+    await screen.findAllByText('Doe v. Doe')
+    await user.click(screen.getByRole('tab', { name: 'Assets' }))
+    await user.click(await screen.findByRole('button', { name: 'Release' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Release approved asset' })
+    expect(sendMediationAsset).not.toHaveBeenCalled()
+    expect(within(dialog).queryByText('Jane Doe')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('Mediator')).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('radio', { name: /John Doe/ }))
+    await user.click(within(dialog).getByRole('radio', { name: /Other opponent/ }))
+    expect(within(dialog).getByRole('radio', { name: /John Doe/ })).not.toBeChecked()
+    await user.click(within(dialog).getByRole('button', { name: 'Release to 1 party' }))
+    await waitFor(() => expect(sendMediationAsset).toHaveBeenCalledWith('case-1', 'asset-1', 'party-c'))
+  })
+
   it('loads parties with the case and excludes the uploader from document release candidates', async () => {
     listMediationDocuments.mockResolvedValue([{
       id: 'doc-1', filename: 'private.pdf', description: 'Private statement',

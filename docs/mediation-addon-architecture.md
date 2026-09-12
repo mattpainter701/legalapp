@@ -51,6 +51,14 @@ Mediation negotiation is private by default.
 - Released documents and proposals are immutable. Corrections are new records
   with new hashes and lineage, not edits to released evidence.
 - Approved or sent asset-schedule rows are likewise immutable.
+- Financial disclosures bind release to one explicitly selected opposing party,
+  matching the existing single-decision record. `released_to_party_id` and
+  `released_by_user_id` record that audience and actor. Legacy sent rows without
+  an audience are not shared implicitly; staff issue reviewed replacements.
+- Parties with submissions or release evidence cannot be deleted, and reviewed
+  or released cases cannot be deleted through case CRUD. Revoke portal access
+  or close the case instead. This is application-level evidence preservation,
+  not a complete legal-hold/retention subsystem.
 - New uploads and proposal bodies receive SHA-256 digests. Downloads verify a
   stored digest before returning bytes, and recipient download timestamps are
   recorded.
@@ -73,6 +81,14 @@ The first implementation slice establishes the safe extension seam:
 6. private/pending/released states in the external-party portal; and
 7. a read-only, entitlement-gated Mediation tab in native My Matters, including
    authenticated downloads.
+
+The September add-on review also introduces dedicated intake, brief, settlement,
+and caucus drafting templates; an allowlisted external case summary; proposal
+digest verification at both portal read surfaces; bounded uploads with opaque
+storage filenames; and tenant validation for linked party contacts. A reviewed
+legacy proposal receives a digest before release, and legacy document bytes are
+hashed on their first deliberate release. Templates guide model behavior but
+never replace the server's RBAC, recipient, or review checks.
 
 The separate external-party portal remains supported for participants who are
 not the firm's client. It is not embedded into My Matters and its party token

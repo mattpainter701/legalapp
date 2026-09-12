@@ -395,6 +395,7 @@ async def test_native_mediation_overlay_filters_records_and_recipient_ids(
         case_id=fixture["case"].id,
         submitted_by_party_id=other_party.id,
         description="Shared asset",
+        released_to_party_id=fixture["party"].id,
         kind="asset",
         status="sent",
     )
