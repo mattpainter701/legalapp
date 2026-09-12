@@ -5,12 +5,13 @@ import CaseSetupCard from './CaseSetupCard'
 import PaperworkDrawer from './PaperworkDrawer'
 import { dueDateToIso, paperworkOptions } from './paperwork'
 import api, {
-  getAdminUsers, getMatterDocuments, getMatterPaperwork, matterPaperworkAction, uploadMatterDocument,
+  getAdminUsers, getIntakeStarterPack, getMatterDocuments, getMatterPaperwork, matterPaperworkAction, previewMatterPaperwork, uploadMatterDocument,
 } from '../../api'
 
 vi.mock('../../api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
-  getMatterPaperwork: vi.fn(), matterPaperworkAction: vi.fn(), getMatterDocuments: vi.fn(),
+  getMatterPaperwork: vi.fn(), matterPaperworkAction: vi.fn(), previewMatterPaperwork: vi.fn(),
+  getMatterDocuments: vi.fn(),
   getAdminUsers: vi.fn(), getContacts: vi.fn(), getIntakeStarterPack: vi.fn(),
   uploadMatterDocument: vi.fn(),
 }))
@@ -48,6 +49,12 @@ beforeEach(() => {
   matterPaperworkAction.mockResolvedValue(packet())
   getMatterDocuments.mockResolvedValue([])
   getAdminUsers.mockResolvedValue([])
+  previewMatterPaperwork.mockResolvedValue({
+    subject: 'Painter Law: Please review and complete your paperwork',
+    html_body: '<!DOCTYPE html><div class="header"><h1>Painter Law</h1></div><p>Open Secure Client Portal</p>',
+    text_body: 'Hi Jane, open your secure client portal.',
+    sms_body: 'Painter Law: Your paperwork is ready in your secure portal.',
+  })
   api.post.mockResolvedValue({ data: packet() })
 })
 
@@ -146,7 +153,7 @@ it('prepares the fee agreement from a firm template and sends it', async () => {
 
   render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
 
-  const [prepareAgreement] = screen.getAllByRole('button', { name: /Prepare from a firm template/ })
+  const prepareAgreement = screen.getByRole('button', { name: /Prepare the fee agreement/ })
   await user.click(prepareAgreement)
   const picker = screen.getByRole('dialog', { name: 'Attach template' })
   expect(picker).toHaveTextContent('Preparing for matter')
@@ -176,7 +183,7 @@ it('prepares an additional signing form from a firm template', async () => {
 
   render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
 
-  const [, prepareForm] = screen.getAllByRole('button', { name: /Prepare from a firm template/ })
+  const prepareForm = screen.getByRole('button', { name: /Prepare an additional form/ })
   await user.click(prepareForm)
   await user.click(screen.getByRole('button', { name: 'Save to matter' }))
 
@@ -201,13 +208,85 @@ it('attaches a locally filled form uploaded through Choose a file', async () => 
   expect(await screen.findByRole('checkbox', { name: /Filled form\.pdf/ })).toBeChecked()
 })
 
-it('will not send paperwork without a reviewed fee agreement', async () => {
+it('sends without a fee agreement when another standard piece is included', async () => {
+  const user = userEvent.setup()
+  const onSent = vi.fn()
+  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={onSent} />)
+  await user.click(screen.getByRole('button', { name: '3. Send' }))
+  const send = screen.getByRole('button', { name: 'Send paperwork' })
+  expect(send).toBeEnabled()
+  await user.click(send)
+  const [, body] = api.post.mock.calls.at(-1)
+  const options = JSON.parse(body.get('options'))
+  expect(options.agreement_document_id).toBeNull()
+  expect(onSent).toHaveBeenCalledOnce()
+})
+
+it('will not send a packet with nothing included', async () => {
   const user = userEvent.setup()
   render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
+  await user.click(screen.getByLabelText(/Client questionnaire/))
   await user.click(screen.getByRole('button', { name: '3. Send' }))
   expect(screen.getByRole('button', { name: 'Send paperwork' })).toBeDisabled()
-  expect(screen.getByRole('alert')).toHaveTextContent('reviewed fee agreement')
+  expect(screen.getByRole('alert')).toHaveTextContent('at least one')
   expect(api.post).not.toHaveBeenCalled()
+})
+
+it('includes the client intake form as an unsigned document', async () => {
+  const user = userEvent.setup()
+  render(<PaperworkDrawer
+    matterId="matter"
+    documents={[{ id: 'intake', filename: 'Client intake form.pdf', content_type: 'application/pdf' }]}
+    clientEmail="jane@example.com"
+    timeZone="UTC"
+    onClose={vi.fn()}
+    onSent={vi.fn()}
+  />)
+  await user.selectOptions(screen.getByLabelText('Choose the client intake form'), 'intake')
+  await user.click(screen.getByRole('button', { name: '3. Send' }))
+  await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
+  const [, body] = api.post.mock.calls.at(-1)
+  const options = JSON.parse(body.get('options'))
+  expect(options.selected_documents).toEqual([
+    expect.objectContaining({ document_id: 'intake', requires_signature: false }),
+  ])
+})
+
+it('previews the exact branded message the client will receive', async () => {
+  const user = userEvent.setup()
+  render(<PaperworkDrawer
+    matterId="matter"
+    documents={[]}
+    clientEmail="jane@example.com"
+    timeZone="UTC"
+    onClose={vi.fn()}
+    onSent={vi.fn()}
+  />)
+
+  await user.click(screen.getByRole('button', { name: '3. Send' }))
+
+  // The server renders the copy; the drawer only displays it.
+  expect(await screen.findByText('Painter Law: Please review and complete your paperwork')).toBeInTheDocument()
+  await waitFor(() => expect(previewMatterPaperwork).toHaveBeenCalledWith(
+    'matter', expect.objectContaining({ email: 'jane@example.com' }),
+  ))
+  // The branded HTML is sandboxed so a template can never run script.
+  expect(screen.getByTitle('Client email preview')).toHaveAttribute('sandbox')
+
+  await user.click(screen.getByRole('tab', { name: 'Text' }))
+  expect(await screen.findByText('Painter Law: Your paperwork is ready in your secure portal.')).toBeInTheDocument()
+})
+
+it('seeds the matter type questions and upload hint from the starter pack', async () => {
+  getIntakeStarterPack.mockResolvedValue({
+    practice: 'family',
+    practice_label: 'Family and domestic relations',
+    questions: [{ key: 'matter_summary', label: 'What happened?' }],
+    upload_requirements: [{ key: 'upload_family_orders', label: 'Any existing court orders' }],
+  })
+  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
+  await waitFor(() => expect(getIntakeStarterPack).toHaveBeenCalledWith({ matter_id: 'matter' }))
+  expect(await screen.findByPlaceholderText('Any existing court orders')).toBeInTheDocument()
 })
 
 it('keeps case-update texts out of an intake-only consent', () => {

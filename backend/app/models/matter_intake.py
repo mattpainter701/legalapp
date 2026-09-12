@@ -56,8 +56,11 @@ class MatterIntake(Base):
     contact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    signature_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("signature_requests.id"), nullable=False
+    # Null when the packet carries no fee agreement. The portal invite below is
+    # always present, so a questionnaire/upload-only packet still reaches the
+    # client without a signing milestone.
+    signature_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("signature_requests.id"), nullable=True
     )
     invite_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("client_portal_invites.id"), nullable=False

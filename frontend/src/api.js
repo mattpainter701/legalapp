@@ -1320,6 +1320,11 @@ export const getMatterPaperwork = (matterId) =>
 export const matterPaperworkAction = (matterId, action, body) =>
   api.post(`/matters/${matterId}/intake/${action}`, body).then((r) => r.data)
 
+// Render the client message for a draft packet without sending it. The portal
+// token is minted at send, so the preview carries a sample link.
+export const previewMatterPaperwork = (matterId, options) =>
+  api.post(`/matters/${matterId}/intake/preview`, options).then((r) => r.data)
+
 // ── E-signature (firm side) ─────────────────────────────────────────────────
 export const createSignatureRequest = (matterId, data) =>
   api.post(`/matters/${matterId}/signatures`, data).then((r) => r.data)

@@ -7,6 +7,7 @@ import json
 import logging
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import escape
 from zoneinfo import ZoneInfo
@@ -30,7 +31,7 @@ from app.models.task import Task
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.connected_mail import send_client_email
-from app.services.email import email_service
+from app.services.email import email_service, render_branded_email
 from app.services.matter_access import can_access_matter
 from app.services.sms_categories import disclosure_version, granted_categories
 from app.services.matter_file_store import MatterFileStore
@@ -69,7 +70,7 @@ def public_packet(packet, *, client=False):
         if packet.completed_at
         else None,
         "meeting": packet.meeting,
-        "signature_id": str(packet.signature_id),
+        "signature_id": str(packet.signature_id) if packet.signature_id else None,
         "signing_followup_due_at": packet.config.get("signing_followup_due_at"),
         # Deadlines are stated in the client's own timezone on both sides.
         "timezone": packet.config["timezone"],
@@ -323,7 +324,9 @@ async def start_packet(db, user, matter, body, filename, content):
         raise HTTPException(
             422, "Assign intake to an active staff member with matter access."
         )
-    if not content.startswith(b"%PDF-") or len(content) > MAX_AGREEMENT_BYTES:
+    if content and (
+        not content.startswith(b"%PDF-") or len(content) > MAX_AGREEMENT_BYTES
+    ):
         raise HTTPException(
             422, "Upload the reviewed fee agreement as a PDF up to 20 MiB."
         )
@@ -389,82 +392,90 @@ async def start_packet(db, user, matter, body, filename, content):
             )
             contact.sms_opt_in = True
             contact.sms_opt_in_at = consent.consented_at
-    if body.agreement_document_id:
-        document = await db.scalar(
-            select(MatterDocument).where(
-                MatterDocument.id == body.agreement_document_id,
-                MatterDocument.tenant_id == user.tenant_id,
-                MatterDocument.matter_id == matter.id,
+    document = None
+    signature = None
+    # An agreement is optional: a packet may carry only the questionnaire, the
+    # intake form, or requested uploads. The portal invite below is created
+    # either way, so the client can always reach that paperwork.
+    if content:
+        if body.agreement_document_id:
+            document = await db.scalar(
+                select(MatterDocument).where(
+                    MatterDocument.id == body.agreement_document_id,
+                    MatterDocument.tenant_id == user.tenant_id,
+                    MatterDocument.matter_id == matter.id,
+                )
             )
-        )
-        if document is None:
-            raise HTTPException(404, "Fee agreement not found")
-        if document.signing_placement_required or document.positioned_fields:
-            raise HTTPException(
-                422, "Positioned signing fields require the document signing workflow"
+            if document is None:
+                raise HTTPException(404, "Fee agreement not found")
+            if document.signing_placement_required or document.positioned_fields:
+                raise HTTPException(
+                    422,
+                    "Positioned signing fields require the document signing workflow",
+                )
+            # The packet entitles its own recipient to read this agreement. A
+            # matter-wide visibility bit would hand it to every other live invite.
+        else:
+            stored = await store_file(
+                user.tenant_id,
+                matter,
+                f"intake-{packet_id}.pdf",
+                content,
+                "application/pdf",
             )
-        # The packet entitles its own recipient to read this agreement. A
-        # matter-wide visibility bit would hand it to every other live invite.
-    else:
-        stored = await store_file(
-            user.tenant_id,
-            matter,
-            f"intake-{packet_id}.pdf",
-            content,
-            "application/pdf",
-        )
-        if not stored.succeeded:
-            raise HTTPException(
-                503, "Agreement storage is unavailable. Reconnect storage and retry."
+            if not stored.succeeded:
+                raise HTTPException(
+                    503,
+                    "Agreement storage is unavailable. Reconnect storage and retry.",
+                )
+            document = MatterDocument(
+                id=uuid.uuid4(),
+                tenant_id=user.tenant_id,
+                matter_id=matter.id,
+                uploaded_by_user_id=user.id,
+                filename=filename[:250],
+                content_type="application/pdf",
+                file_size=len(content),
+                document_category="contract",
+                storage_path=stored.storage_path,
+                storage_provider=stored.provider,
+                storage_backend=stored.backend,
+                provider_object_id=stored.provider_item_id,
+                provider_drive_id=stored.drive_id,
+                provider_parent_id=stored.parent_id,
             )
-        document = MatterDocument(
+            db.add(document)
+            await db.flush()
+        signature = SignatureRequest(
             id=uuid.uuid4(),
             tenant_id=user.tenant_id,
             matter_id=matter.id,
-            uploaded_by_user_id=user.id,
-            filename=filename[:250],
-            content_type="application/pdf",
-            file_size=len(content),
-            document_category="contract",
-            storage_path=stored.storage_path,
-            storage_provider=stored.provider,
-            storage_backend=stored.backend,
-            provider_object_id=stored.provider_item_id,
-            provider_drive_id=stored.drive_id,
-            provider_parent_id=stored.parent_id,
+            document_id=document.id,
+            status="sent",
+            provider="internal",
+            source_document_sha256=hashlib.sha256(content).hexdigest(),
+            source_document_size=len(content),
+            source_document_filename=document.filename,
+            created_by_user_id=user.id,
+            sent_at=now(),
+            expires_at=now() + timedelta(days=30),
+            reminders={},
         )
-        db.add(document)
+        db.add(signature)
         await db.flush()
-    signature = SignatureRequest(
-        id=uuid.uuid4(),
-        tenant_id=user.tenant_id,
-        matter_id=matter.id,
-        document_id=document.id,
-        status="sent",
-        provider="internal",
-        source_document_sha256=hashlib.sha256(content).hexdigest(),
-        source_document_size=len(content),
-        source_document_filename=document.filename,
-        created_by_user_id=user.id,
-        sent_at=now(),
-        expires_at=now() + timedelta(days=30),
-        reminders={},
-    )
-    db.add(signature)
-    await db.flush()
-    db.add(
-        SignatureSigner(
-            id=uuid.uuid4(),
-            tenant_id=user.tenant_id,
-            request_id=signature.id,
-            contact_id=contact.id,
-            name=contact.display_name or str(body.email),
-            email=str(body.email),
-            role="signer",
-            sign_order=0,
-            status="pending",
+        db.add(
+            SignatureSigner(
+                id=uuid.uuid4(),
+                tenant_id=user.tenant_id,
+                request_id=signature.id,
+                contact_id=contact.id,
+                name=contact.display_name or str(body.email),
+                email=str(body.email),
+                role="signer",
+                sign_order=0,
+                status="pending",
+            )
         )
-    )
     token = secrets.token_urlsafe(32)
     invite = ClientPortalInvite(
         id=uuid.uuid4(),
@@ -485,20 +496,32 @@ async def start_packet(db, user, matter, body, filename, content):
         contact_id=contact.id,
         owner_id=owner_id,
         created_by=user.id,
-        signature_id=signature.id,
+        signature_id=signature.id if signature else None,
         invite_id=invite.id,
         encrypted_invite=encrypt_token(token),
         status="awaiting_documents",
         config={
             **body.model_dump(mode="json"),
             "request_hash": request_hash,
-            "source_sha256": signature.source_document_sha256,
+            # An agreement-confirming signature only exists when one was sent;
+            # without it the client gets full portal access from the first
+            # message instead of waiting on a signing milestone.
+            "portal_after_signing": body.portal_after_signing and signature is not None,
+            **(
+                {"source_sha256": signature.source_document_sha256} if signature else {}
+            ),
         },
         requirements={
-            "fee_agreement": {
-                "completed": False,
-                "due_at": due_iso(body.agreement_due_at),
-            },
+            **(
+                {
+                    "fee_agreement": {
+                        "completed": False,
+                        "due_at": due_iso(body.agreement_due_at),
+                    }
+                }
+                if signature
+                else {}
+            ),
             "questionnaire": {
                 "completed": not body.include_questionnaire,
                 "required": body.include_questionnaire,
@@ -593,7 +616,7 @@ async def start_packet(db, user, matter, body, filename, content):
         db,
         packet,
         "Intake started",
-        "Fee agreement and questionnaire requested; portal delivery queued.",
+        "Client paperwork requested; portal delivery queued.",
     )
     await db.commit()
     return packet
@@ -608,12 +631,14 @@ async def cancel_packet(db, packet, reason):
     ]
     for kind in ("documents", "scheduling", "delivery", "signed", *dated):
         await close_task(db, packet, kind, reason)
-    signature = await db.scalar(
-        select(SignatureRequest).where(
-            SignatureRequest.id == packet.signature_id,
-            SignatureRequest.tenant_id == packet.tenant_id,
+    signature = None
+    if packet.signature_id:
+        signature = await db.scalar(
+            select(SignatureRequest).where(
+                SignatureRequest.id == packet.signature_id,
+                SignatureRequest.tenant_id == packet.tenant_id,
+            )
         )
-    )
     if signature and signature.status not in ("completed", "voided"):
         signature.status = "voided"
         signature.voided_at = now()
@@ -658,18 +683,20 @@ async def reconcile(db, packet):
         return
     if packet.status == "scheduled":
         return
-    signature = await db.scalar(
-        select(SignatureRequest).where(
-            SignatureRequest.id == packet.signature_id,
-            SignatureRequest.tenant_id == packet.tenant_id,
-            SignatureRequest.matter_id == packet.matter_id,
+    signature = None
+    if packet.signature_id:
+        signature = await db.scalar(
+            select(SignatureRequest).where(
+                SignatureRequest.id == packet.signature_id,
+                SignatureRequest.tenant_id == packet.tenant_id,
+                SignatureRequest.matter_id == packet.matter_id,
+            )
         )
-    )
     if (
         signature
         and signature.status == "completed"
         and signature.completed_at
-        and signature.source_document_sha256 == packet.config["source_sha256"]
+        and signature.source_document_sha256 == packet.config.get("source_sha256")
         and signature.completion_artifact_sha256
     ):
         try:
@@ -687,13 +714,14 @@ async def reconcile(db, packet):
             if artifact_id
             else None
         )
-        if artifact and not packet.requirements["fee_agreement"]["completed"]:
+        fee_requirement = packet.requirements.get("fee_agreement")
+        if artifact and fee_requirement and not fee_requirement["completed"]:
             packet.requirements = {
                 **packet.requirements,
                 "fee_agreement": {
                     # Keep the requirement's own fields, its due date among
                     # them, so its follow-up task can be closed on completion.
-                    **packet.requirements["fee_agreement"],
+                    **fee_requirement,
                     "completed": True,
                     "completed_at": signature.completed_at.isoformat(),
                     "evidence": "signature_acknowledgment_certificate",
@@ -808,9 +836,10 @@ async def reconcile(db, packet):
             f"{label} declined — revise and resend",
             now() + timedelta(days=1),
         )
-    agreement = packet.requirements["fee_agreement"]
+    agreement = packet.requirements.get("fee_agreement")
     if (
-        packet.config.get("portal_after_signing")
+        agreement
+        and packet.config.get("portal_after_signing")
         and agreement["completed"]
         and not packet.config.get("signing_followup_due_at")
     ):
@@ -826,6 +855,24 @@ async def reconcile(db, packet):
             packet,
             "Fee agreement signed",
             "Portal delivery queued. Follow up with the client within 24 hours.",
+        )
+    elif (
+        agreement is None
+        and packet.sent_at
+        and not packet.config.get("signing_followup_due_at")
+    ):
+        # No fee agreement to wait on: the clock starts when the first message
+        # goes out, so the firm still follows up with the client within 24 hours.
+        due = packet.sent_at + timedelta(hours=24)
+        await ensure_task(
+            db, packet, "signed", "Paperwork sent — follow up with client", due
+        )
+        packet.config = {**packet.config, "signing_followup_due_at": due.isoformat()}
+        event(
+            db,
+            packet,
+            "Client paperwork sent",
+            "No fee agreement included. Follow up with the client within 24 hours.",
         )
     # Each dated requirement carries its own assigned follow-up. The task is
     # keyed by requirement, so a reconcile pass never duplicates it, and the
@@ -903,43 +950,267 @@ def requested_upload_labels(packet, *, outstanding_only=False):
     return labels
 
 
-def message(packet, kind, url):
+@dataclass(frozen=True)
+class ClientMessage:
+    """One client-facing intake notification across both delivery channels.
+
+    The same event reads differently by channel: email gets the branded shell
+    and the full checklist, while the text stays short enough to read on a
+    lock screen. Keeping them on one object stops a rich email body from
+    leaking into an SMS.
+    """
+
+    subject: str
+    text: str
+    html: str
+    sms: str
+
+
+def _client_first_name(name):
+    if not name:
+        return None
+    stripped = name.strip()
+    return stripped.split()[0] if stripped else None
+
+
+def _firm_display(brand):
+    name = (brand or {}).get("firm_name")
+    return name.strip() if name and name.strip() else "Your legal team"
+
+
+def _html_bullets(items):
+    if not items:
+        return ""
+    return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ul>"
+
+
+def _text_bullets(items):
+    return "\n".join(f"- {item}" for item in items)
+
+
+def _contact_line(brand):
+    bits = []
+    if (brand or {}).get("firm_phone"):
+        bits.append(f"call {brand['firm_phone']}")
+    if (brand or {}).get("firm_email"):
+        bits.append(f"email {brand['firm_email']}")
+    return "Questions? " + " or ".join(bits) + "." if bits else ""
+
+
+_HEADER_SUBTITLES = {
+    "welcome": "You have secure paperwork waiting",
+    "signed": "Your portal is ready",
+    "reminder": "Your paperwork is waiting",
+    "meeting": "Your meeting is confirmed",
+    "complete": "Your intake is complete",
+}
+
+
+def render_client_message(
+    kind,
+    url,
+    *,
+    labels=None,
+    uploads=None,
+    missing=None,
+    has_fee_agreement=False,
+    portal_after_signing=False,
+    brand=None,
+    client_name=None,
+    expires_at=None,
+):
+    """Build the subject, email and text copy for one intake notification.
+
+    Deliberately packet-free: the preview endpoint calls it before a packet
+    exists and delivery calls it after, so what staff preview is the exact
+    copy that gets sent. ``email.render_branded_email`` supplies only the
+    chrome; every word of the message lives here.
+    """
+    labels = list(labels or [])
+    uploads = list(uploads or [])
+    missing = list(missing or [])
+    brand = brand or {}
+    firm = _firm_display(brand)
+    has_firm_name = firm != "Your legal team"
+    first_name = _client_first_name(client_name)
+    safe_url = escape(url, quote=True)
+    header_title = escape(firm) if has_firm_name else "Client Portal"
+
+    sections = []  # (heading, [items]) rendered under the intro
+    note_text = ""
+    if kind == "welcome":
+        subject = (
+            f"{firm}: Please review and complete your paperwork"
+            if has_firm_name
+            else "Please review and complete your paperwork"
+        )
+        if labels:
+            intro = (
+                f"{firm} has prepared the following paperwork for you to "
+                "review and complete:"
+            )
+        elif uploads:
+            intro = f"{firm} has asked you to provide the following:"
+        else:
+            intro = f"{firm} has paperwork for you in your secure client portal:"
+        if uploads:
+            sections.append(("Please have these records ready to upload:", uploads))
+        if portal_after_signing and has_fee_agreement:
+            # The link in this message opens the portal; signing is what
+            # unlocks the rest of it. No second link is coming, so say what
+            # signing actually does instead of promising a follow-up email.
+            note_text = (
+                "Signing your fee agreement also opens your full client portal — "
+                "secure messages, documents, and billing."
+            )
+        sms = (
+            f"{firm}: Your paperwork is ready to review and complete in your "
+            f"secure portal: {url}"
+        )
+    elif kind == "signed":
+        subject = "Your client portal is ready"
+        if uploads:
+            intro = (
+                "Your fee agreement signature was received. Please complete the "
+                "remaining paperwork and upload the requested records:"
+            )
+            sections.append(("Please have these records ready to upload:", uploads))
+        else:
+            intro = (
+                "Your fee agreement signature was received. Complete any remaining "
+                "paperwork in your secure client portal:"
+            )
+        sms = (
+            f"{firm}: Your fee agreement was received. Continue in your secure "
+            f"portal: {url}"
+        )
+    elif kind == "reminder":
+        subject = "Your intake needs attention"
+        intro = "Please complete the following in your secure client portal:"
+        if missing:
+            sections.append(("Still needed:", missing))
+        sms = (
+            f"{firm}: Reminder — your paperwork is waiting in your secure portal: {url}"
+        )
+    elif kind == "meeting":
+        subject = "Initial meeting confirmed"
+        intro = (
+            "Your initial meeting details are available in your secure client portal:"
+        )
+        sms = (
+            f"{firm}: Your initial meeting is confirmed. Details in your secure "
+            f"portal: {url}"
+        )
+    else:  # complete
+        subject = "Your intake documents are complete"
+        intro = (
+            "Thank you. Your legal team will contact you to arrange a conference "
+            "call or in-person meeting. Your secure portal:"
+        )
+        sms = f"{firm}: Your intake is complete. We'll be in touch to schedule. {url}"
+
+    expiry_text = (
+        f"It expires on {expires_at.strftime('%B %d, %Y')}."
+        if expires_at is not None
+        else "It expires after 30 days."
+    )
+    contact_text = _contact_line(brand)
+
+    html_parts = []
+    if first_name:
+        html_parts.append(f"<p>Hi {escape(first_name)},</p>")
+    html_parts.append(f"<p>{escape(intro)}</p>")
+    html_parts.append(_html_bullets(labels))
+    for heading, items in sections:
+        html_parts.append(f"<p>{escape(heading)}</p>")
+        html_parts.append(_html_bullets(items))
+    html_parts.append(
+        '<p style="margin:24px 0;">'
+        f'<a href="{safe_url}" style="background:#0f2d5e;color:#ffffff;'
+        "text-decoration:none;padding:12px 24px;border-radius:6px;"
+        'font-weight:bold;display:inline-block;">Open Secure Client Portal</a></p>'
+    )
+    html_parts.append(
+        '<p style="font-size:12px;color:#888;">If the button doesn\'t work, '
+        f"copy and paste this link into your browser:<br/>{safe_url}</p>"
+    )
+    if note_text:
+        html_parts.append(
+            f'<p style="font-size:12px;color:#888;">{escape(note_text)}</p>'
+        )
+    html_parts.append(
+        '<p style="font-size:12px;color:#888;">This link is unique to you. '
+        f"Do not forward it. {escape(expiry_text)}</p>"
+    )
+    if contact_text:
+        html_parts.append(f"<p>{escape(contact_text)}</p>")
+    content_html = (
+        f'<div class="header"><h1>{header_title}</h1>'
+        f"<p>{escape(_HEADER_SUBTITLES.get(kind, 'Your intake is complete'))}</p></div>"
+        f'<div class="body">{"".join(p for p in html_parts if p)}</div>'
+    )
+
+    text_parts = [intro]
+    if labels:
+        text_parts.append(_text_bullets(labels))
+    for heading, items in sections:
+        text_parts.append(heading)
+        text_parts.append(_text_bullets(items))
+    text_parts.append("Open your secure client portal:")
+    text_parts.append(url)
+    text_parts.append(expiry_text)
+    if note_text:
+        text_parts.append(note_text)
+    if contact_text:
+        text_parts.append(contact_text)
+    text_parts.append(f"Thank you,\n{firm}")
+    text = "\n\n".join(part for part in text_parts if part)
+    if first_name:
+        text = f"Hi {first_name},\n\n{text}"
+
+    return ClientMessage(
+        subject=subject,
+        text=text,
+        html=render_branded_email(content_html),
+        sms=sms,
+    )
+
+
+def message(packet, kind, url, *, brand=None, client_name=None, expires_at=None):
+    """Render a notification from packet state.
+
+    Thin adapter over :func:`render_client_message` so delivery and the unit
+    tests keep a single packet-shaped entry point.
+    """
     if kind == "signed":
         uploads = requested_upload_labels(packet, outstanding_only=True)
-        if uploads:
-            body = (
-                "Your fee agreement signature was received. Complete remaining paperwork "
-                f"and upload requested records: {', '.join(uploads)}. Secure portal link: {url}"
-            )
-        else:
-            body = (
-                "Your fee agreement signature was received. Complete any remaining paperwork "
-                f"in your secure portal: {url}"
-            )
-        return (
-            "Your client portal is ready",
-            body,
-        )
-    if kind == "welcome" and packet.config.get("portal_after_signing"):
-        labels = [
-            "Fee agreement",
-            *[item["label"] for item in packet.config.get("selected_documents", [])],
-        ]
-        uploads = requested_upload_labels(packet)
-        records = (
-            f" Please have these records ready to upload: {', '.join(uploads)}."
-            if uploads
-            else ""
-        )
-        return (
-            "Review your paperwork",
-            f"Please review and complete each document: {', '.join(labels)}."
-            f"{records} Secure paperwork link: {url}. Your general client portal link will follow after the fee agreement is signed.",
+        return render_client_message(
+            kind,
+            url,
+            uploads=uploads,
+            brand=brand,
+            client_name=client_name,
+            expires_at=expires_at,
         )
     if kind == "welcome":
-        return (
-            "Welcome — complete your intake",
-            f"Please review and sign your fee agreement and complete your questionnaire in your secure client portal: {url}",
+        has_fee_agreement = "fee_agreement" in packet.requirements
+        # The fee agreement is listed whenever it is part of the packet, not
+        # only when the portal waits on signing, so a checkbox never hides a
+        # document the client still has to sign.
+        labels = [
+            *(["Fee agreement"] if has_fee_agreement else []),
+            *[item["label"] for item in packet.config.get("selected_documents", [])],
+        ]
+        return render_client_message(
+            kind,
+            url,
+            labels=labels,
+            uploads=requested_upload_labels(packet),
+            has_fee_agreement=has_fee_agreement,
+            portal_after_signing=bool(packet.config.get("portal_after_signing")),
+            brand=brand,
+            client_name=client_name,
+            expires_at=expires_at,
         )
     if kind == "reminder":
         missing = [
@@ -947,18 +1218,20 @@ def message(packet, kind, url):
             for key, item in packet.requirements.items()
             if item.get("required", True) and not item["completed"]
         ]
-        return (
-            "Your intake needs attention",
-            f"Please complete your {' and '.join(missing)} in your secure portal: {url}",
+        return render_client_message(
+            kind,
+            url,
+            missing=missing,
+            brand=brand,
+            client_name=client_name,
+            expires_at=expires_at,
         )
-    if kind == "meeting":
-        return (
-            "Initial meeting confirmed",
-            f"Your initial meeting details are available in your secure portal: {url}",
-        )
-    return (
-        "Your intake documents are complete",
-        f"Thank you. Your legal team will contact you to arrange a conference call or in-person meeting. Your secure portal: {url}",
+    return render_client_message(
+        kind,
+        url,
+        brand=brand,
+        client_name=client_name,
+        expires_at=expires_at,
     )
 
 
@@ -1030,8 +1303,21 @@ async def deliver(db, packet, key):
         actor.id,
         contact.id,
     )
+    # Branding is resolved here so the email identifies the firm the client
+    # actually hired. Imported locally to avoid a service -> router cycle.
+    from app.routers.firm import get_firm_branding
+
+    tenant = await db.get(Tenant, tenant_id)
+    brand = await get_firm_branding(db, tenant) if tenant else {}
     url = f"{get_settings().FRONTEND_URL.rstrip('/')}/portal/client/accept?token={decrypt_token(packet.encrypted_invite)}"
-    subject, body = message(packet, kind, url)
+    rendered = message(
+        packet,
+        kind,
+        url,
+        brand=brand,
+        client_name=contact.display_name,
+        expires_at=invite.expires_at,
+    )
     email = packet.config["email"]
     packet.delivery = {
         **packet.delivery,
@@ -1051,9 +1337,9 @@ async def deliver(db, packet, key):
                 tenant_id=tenant_id,
                 actor_user_id=actor_id,
                 to=[email],
-                subject=subject,
-                html_body=f"<p>{escape(body)}</p>",
-                text_body=body,
+                subject=rendered.subject,
+                html_body=rendered.html,
+                text_body=rendered.text,
                 smtp_service=email_service,
             )
             outcome = {"confirmed_sent": "sent", "not_attempted": "failed"}.get(
@@ -1068,7 +1354,7 @@ async def deliver(db, packet, key):
                 user_id=actor_id,
                 contact_id=contact_id,
                 matter_id=matter_id,
-                body=body,
+                body=rendered.sms,
                 category="intake",
                 idempotency_key=f"intake:{packet_id}:{key}:{state['attempt']}",
             )
@@ -1131,7 +1417,7 @@ async def deliver(db, packet, key):
                     channel="email",
                     direction="outbound",
                     status="sent",
-                    subject=subject,
+                    subject=rendered.subject,
                     body="Secure intake portal notification sent.",
                     external_ref=f"intake:{packet_id}:{key}:{state['attempt']}",
                 )

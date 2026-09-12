@@ -7,14 +7,19 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import get_db, set_tenant_context
+from app.models.contact import Contact
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
+from app.models.tenant import Tenant
 from app.routers.client_portal import portal_matter_dep
+from app.routers.firm import get_firm_branding
 from app.schemas.matter_intake import (
     IntakeAnswers,
     IntakeChangeDecision,
     IntakeMeeting,
+    IntakePreviewResponse,
     IntakeReceipt,
     IntakeRetry,
     IntakeStart,
@@ -69,6 +74,9 @@ async def start(
             422, "Check the email, questions, delivery channels and timezone."
         ) from exc
     matter = await staff_matter(db, user, matter_id)
+    # A fee agreement is optional: a packet may carry only the questionnaire,
+    # the intake form, or requested uploads. Empty bytes mean "none included".
+    filename, content = "", b""
     if body.agreement_document_id:
         from app.services.matter_mail_attachments import reviewed_document
 
@@ -87,11 +95,8 @@ async def start(
             agreement.filename or "Fee agreement.pdf",
             await agreement.read(service.MAX_AGREEMENT_BYTES + 1),
         )
-    else:
-        raise HTTPException(
-            422,
-            "Choose an attorney-reviewed fee agreement from the matter or upload it",
-        )
+        if not content:
+            raise HTTPException(422, "The uploaded fee agreement was empty.")
     packet = await service.start_packet(
         db,
         user,
@@ -113,6 +118,61 @@ async def read(
     await service.reconcile(db, packet)
     await db.commit()
     return service.public_packet(packet)
+
+
+@router.post("/{matter_id}/intake/preview", response_model=IntakePreviewResponse)
+async def preview(
+    matter_id: uuid.UUID,
+    options: IntakeStart,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_capability("manage_matters")),
+):
+    """Render the client message for a draft packet without sending anything.
+
+    Read-only: no packet row, no queued delivery and no provider call. The
+    portal token is only minted at send, so the preview uses a sample link and
+    the drawer labels it as such.
+    """
+    await set_tenant_context(db, str(user.tenant_id))
+    if not await can_access_matter(
+        db,
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        is_admin=user.role == "admin",
+        matter_id=matter_id,
+    ):
+        raise HTTPException(404, "Matter not found")
+    matter = await db.get(Matter, matter_id)
+    contact = (
+        await db.get(Contact, matter.client_contact_id)
+        if matter and matter.client_contact_id
+        else None
+    )
+    tenant = await db.get(Tenant, user.tenant_id)
+    brand = await get_firm_branding(db, tenant) if tenant else {}
+    has_fee_agreement = options.agreement_document_id is not None
+    rendered = service.render_client_message(
+        "welcome",
+        f"{get_settings().FRONTEND_URL.rstrip('/')}/portal/client/accept?token=preview",
+        labels=[
+            *(["Fee agreement"] if has_fee_agreement else []),
+            *[item.label for item in options.selected_documents],
+        ],
+        uploads=[item.label for item in options.upload_requirements],
+        has_fee_agreement=has_fee_agreement,
+        portal_after_signing=(options.portal_after_signing and has_fee_agreement),
+        brand=brand,
+        client_name=contact.display_name if contact else None,
+        # The invite itself lives 30 days; showing that date keeps the preview
+        # honest about what the client will actually read.
+        expires_at=service.now() + service.timedelta(days=30),
+    )
+    return IntakePreviewResponse(
+        subject=rendered.subject,
+        html_body=rendered.html,
+        text_body=rendered.text,
+        sms_body=rendered.sms,
+    )
 
 
 @router.post("/{matter_id}/intake/receipt")
@@ -274,7 +334,11 @@ async def renew_invitation(
     await db.flush()
     packet.invite_id = invitation.id
     packet.encrypted_invite = service.encrypt_token(token)
-    signature = await db.get(service.SignatureRequest, packet.signature_id)
+    signature = (
+        await db.get(service.SignatureRequest, packet.signature_id)
+        if packet.signature_id
+        else None
+    )
     if signature and signature.status in ("sent", "expired"):
         signature.status = "sent"
         signature.expires_at = invitation.expires_at
