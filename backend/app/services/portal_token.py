@@ -15,8 +15,10 @@ from app.config import get_settings
 
 settings = get_settings()
 
-# Portal magic-link sessions are short-lived.
-PORTAL_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+# Portal sessions are capped, not permanent. A 24-hour default keeps a shared
+# machine from staying signed in indefinitely; the client re-enters an emailed
+# code to continue. Configurable via PORTAL_SESSION_TTL_HOURS.
+PORTAL_TOKEN_EXPIRE_MINUTES = max(1, settings.PORTAL_SESSION_TTL_HOURS) * 60
 
 
 def create_portal_token(

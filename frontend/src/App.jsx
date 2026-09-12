@@ -75,6 +75,7 @@ const OnboardingWizard = lazy(() => import('./pages/OnboardingWizard'))
 const PortalAcceptPage = lazy(() => import('./pages/PortalAcceptPage'))
 const PortalCasePage = lazy(() => import('./pages/PortalCasePage'))
 const ClientPortalAcceptPage = lazy(() => import('./pages/ClientPortalAcceptPage'))
+const ClientPortalLoginPage = lazy(() => import('./pages/ClientPortalLoginPage'))
 const ClientPortalMatterPage = lazy(() => import('./pages/ClientPortalMatterPage'))
 
 const TEMPLATE_STUDIO_ROUTES = [
@@ -283,7 +284,9 @@ export default function App() {
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/portal/accept" element={<PortalAcceptPage />} />
         <Route path="/portal/case" element={<PortalCasePage />} />
+        <Route path="/portal/client" element={<Navigate to="/portal/client/login" replace />} />
         <Route path="/portal/client/accept" element={<ClientPortalAcceptPage />} />
+        <Route path="/portal/client/login" element={<ClientPortalLoginPage />} />
         <Route path="/portal/client/matter" element={<ClientPortalMatterPage />} />
 
         {/* Authenticated pages wrapped in AppShell */}

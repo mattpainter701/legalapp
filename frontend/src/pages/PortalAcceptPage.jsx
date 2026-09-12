@@ -7,18 +7,19 @@ export default function PortalAcceptPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const token = searchParams.get('token')
-  const [status, setStatus] = useState('loading')
+  const [status, setStatus] = useState(token ? 'loading' : 'need-token')
   const [errorMsg, setErrorMsg] = useState('')
+  const [manualToken, setManualToken] = useState('')
 
   useEffect(() => {
     if (!token) {
-      setStatus('error')
-      setErrorMsg('No invitation token provided. Please use the link from your invitation email.')
+      setStatus('need-token')
       return
     }
+    setStatus('loading')
     let cancelled = false
     acceptPortalInvite(token)
-      .then((data) => {
+      .then(() => {
         if (cancelled) return
         setStatus('success')
         setTimeout(() => navigate('/portal/case', { replace: true }), 1200)
@@ -58,6 +59,39 @@ export default function PortalAcceptPage() {
             <p className="text-brand-ink-2 font-sans text-sm">Redirecting to your mediation portal…</p>
           </>
         )}
+        {status === 'need-token' && (
+          <>
+            <h1 className="font-serif font-bold text-2xl text-brand-ink mb-2">Enter your invitation</h1>
+            <p className="text-brand-ink-2 font-sans text-sm leading-relaxed mb-6">
+              Paste the invitation code from your email to open the mediation portal.
+            </p>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                const value = manualToken.trim()
+                if (value) navigate(`/portal/accept?token=${encodeURIComponent(value)}`)
+              }}
+              className="space-y-3 text-left"
+            >
+              <label className="block">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Invitation code</span>
+                <input
+                  value={manualToken}
+                  onChange={(event) => setManualToken(event.target.value)}
+                  placeholder="Paste the code from your invitation email"
+                  className="w-full border border-brand-line rounded-xl px-3 py-2.5 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={!manualToken.trim()}
+                className="w-full px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all disabled:opacity-50"
+              >
+                Open mediation portal
+              </button>
+            </form>
+          </>
+        )}
         {status === 'error' && (
           <>
             <div className="w-12 h-12 bg-brand-rose/10 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -65,9 +99,20 @@ export default function PortalAcceptPage() {
             </div>
             <h1 className="font-serif font-bold text-2xl text-brand-ink mb-2">Unable to Join</h1>
             <p className="text-brand-ink-2 font-sans text-sm leading-relaxed mb-6">{errorMsg}</p>
-            <button onClick={() => navigate('/login')} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm">
-              Go to Login
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => { setStatus('need-token'); setManualToken('') }}
+                className="w-full px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all"
+              >
+                Enter a different invitation code
+              </button>
+              <button
+                onClick={() => navigate('/login')}
+                className="w-full px-5 py-2.5 border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-xl hover:border-brand-ink transition-all"
+              >
+                Go to firm login
+              </button>
+            </div>
           </>
         )}
       </div>

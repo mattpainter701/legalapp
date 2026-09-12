@@ -1,6 +1,8 @@
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -221,7 +223,6 @@ def test_portal_signer_matching_requires_same_contact_or_email():
 async def test_paperwork_link_restricts_general_portal_until_fee_signed(
     monkeypatch, path, allowed
 ):
-    from unittest.mock import AsyncMock
     from app.models.matter_intake import MatterIntake
     from app.models.tenant import Tenant
     from app.models.signature import SignatureRequest
@@ -278,3 +279,228 @@ async def test_paperwork_link_restricts_general_portal_until_fee_signed(
     packet.requirements["fee_agreement"]["completed"] = True
     ctx = await client_portal.get_client_portal_context(request, db)
     assert not ctx.paperwork_only
+
+
+# ── Sign-in code lifetime, the matter-list cache, and the chooser ───────────
+
+
+class _FakeRedis:
+    """Records every write so a test can see the TTL each store was given."""
+
+    def __init__(self):
+        self.store: dict[str, tuple[str, int]] = {}
+        self.setex_calls: list[tuple[str, int]] = []
+        self.deleted: list[str] = []
+
+    async def get(self, key):
+        entry = self.store.get(key)
+        return entry[0] if entry else None
+
+    async def setex(self, key, ttl, value):
+        self.setex_calls.append((key, ttl))
+        self.store[key] = (value, ttl)
+
+    async def delete(self, key):
+        self.deleted.append(key)
+        self.store.pop(key, None)
+
+    async def ttl(self, key):
+        entry = self.store.get(key)
+        return entry[1] if entry else -2
+
+    async def exists(self, key):
+        return key in self.store
+
+
+def _redis_request(redis, token=None):
+    request = SimpleNamespace(
+        cookies={"client_portal_token": token} if token else {},
+        headers={},
+        app=SimpleNamespace(state=SimpleNamespace(redis=redis)),
+    )
+    return request
+
+
+async def _stored_code(request, email, code):
+    key = client_portal._signin_code_key(email)
+    await client_portal._store_json(
+        request,
+        key,
+        {"code_hash": client_portal._hash_signin_code(email, code), "attempts": 0},
+        settings.PORTAL_SIGNIN_CODE_TTL_SECONDS,
+        client_portal._signin_codes_fallback,
+    )
+    return key
+
+
+async def _verify(request, email, code):
+    from fastapi import Response
+
+    return await client_portal.verify_portal_signin_code(
+        client_portal.ClientPortalVerifyCodeRequest(email=email, code=code),
+        Response(),
+        request,
+        db=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_wrong_sign_in_attempt_keeps_the_codes_remaining_life():
+    redis = _FakeRedis()
+    request = _redis_request(redis)
+    email = "client@example.com"
+    key = await _stored_code(request, email, "123456")
+    # Time passes: the code has 200 of its 600 seconds left.
+    value, _ttl = redis.store[key]
+    redis.store[key] = (value, 200)
+
+    with pytest.raises(HTTPException) as exc:
+        await _verify(request, email, "000000")
+
+    assert exc.value.status_code == 400
+    key_written, ttl_written = redis.setex_calls[-1]
+    assert key_written == key
+    assert ttl_written == 200
+    assert ttl_written < settings.PORTAL_SIGNIN_CODE_TTL_SECONDS
+    assert json.loads(redis.store[key][0])["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sign_in_code_attempt_cap_is_enforced(monkeypatch):
+    # A verified code with no reachable matter answers 403, which is how the
+    # test tells "accepted" from "refused" (400) without a database.
+    monkeypatch.setattr(
+        client_portal, "_client_portal_matches", AsyncMock(return_value=[])
+    )
+    redis = _FakeRedis()
+    request = _redis_request(redis)
+    cap = settings.PORTAL_SIGNIN_CODE_ATTEMPTS
+
+    spared = "spared@example.com"
+    key = await _stored_code(request, spared, "123456")
+    for _ in range(cap - 1):
+        with pytest.raises(HTTPException) as exc:
+            await _verify(request, spared, "000000")
+        assert exc.value.status_code == 400
+    assert key in redis.store
+    with pytest.raises(HTTPException) as exc:
+        await _verify(request, spared, "123456")
+    assert exc.value.status_code == 403
+
+    capped = "capped@example.com"
+    key = await _stored_code(request, capped, "123456")
+    for _ in range(cap):
+        with pytest.raises(HTTPException) as exc:
+            await _verify(request, capped, "000000")
+        assert exc.value.status_code == 400
+    assert key not in redis.store
+    with pytest.raises(HTTPException) as exc:
+        await _verify(request, capped, "123456")
+    assert exc.value.status_code == 400
+
+
+def _portal_ctx(email="Client@Example.com"):
+    return client_portal.ClientPortalContext(
+        tenant_id=str(uuid.uuid4()),
+        matter_id=str(uuid.uuid4()),
+        contact_id=None,
+        email=email,
+        invite_id=str(uuid.uuid4()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_matter_list_is_served_from_cache_until_sign_out(monkeypatch):
+    from fastapi import Response
+
+    lookup = AsyncMock(return_value=[object()])
+    choice = client_portal.PortalMatterChoice(
+        matter_id=str(uuid.uuid4()), matter_name="Smith v. Jones", firm_name="Firm"
+    )
+    monkeypatch.setattr(client_portal, "_client_portal_matches", lookup)
+    monkeypatch.setattr(client_portal, "_matter_choice", AsyncMock(return_value=choice))
+    redis = _FakeRedis()
+    request = _redis_request(redis)
+    ctx = _portal_ctx()
+    resolved = (ctx, SimpleNamespace(id=ctx.matter_id))
+
+    first = await client_portal.portal_list_matters(request, resolved, db=None)
+    second = await client_portal.portal_list_matters(request, resolved, db=None)
+
+    assert [row.model_dump() for row in first] == [choice.model_dump()]
+    assert [row.model_dump() for row in second] == [choice.model_dump()]
+    # The cross-tenant lookup ran once; the second page load read the cache.
+    assert lookup.await_count == 1
+    cache_key = client_portal._matters_cache_key("client@example.com")
+    assert redis.setex_calls[-1] == (
+        cache_key,
+        client_portal.PORTAL_MATTERS_CACHE_TTL_SECONDS,
+    )
+
+    token = create_matter_portal_token(
+        tenant_id=ctx.tenant_id,
+        matter_id=ctx.matter_id,
+        contact_id=None,
+        email=ctx.email,
+        invite_id=ctx.invite_id,
+    )
+    await client_portal.portal_logout(_redis_request(redis, token), Response())
+    assert cache_key in redis.deleted
+
+    await client_portal.portal_list_matters(request, resolved, db=None)
+    assert lookup.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_switching_matter_forgets_the_cached_list(monkeypatch):
+    from fastapi import Response
+
+    monkeypatch.setattr(
+        client_portal, "_client_portal_matches", AsyncMock(return_value=[])
+    )
+    redis = _FakeRedis()
+    request = _redis_request(redis)
+    ctx = _portal_ctx()
+    cache_key = client_portal._matters_cache_key("client@example.com")
+    redis.store[cache_key] = ('{"matters": []}', 100)
+
+    with pytest.raises(HTTPException) as exc:
+        await client_portal.switch_portal_matter(
+            client_portal.ClientPortalSwitchMatterRequest(matter_id=str(uuid.uuid4())),
+            request,
+            Response(),
+            (ctx, SimpleNamespace(id=ctx.matter_id)),
+            db=None,
+        )
+
+    assert exc.value.status_code == 403
+    assert cache_key in redis.deleted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "branded_name,expected",
+    [("Northline Legal LLP", "Northline Legal LLP"), (None, "Tenant Co")],
+)
+async def test_matter_chooser_names_the_firm_like_the_portal_header(
+    monkeypatch, branded_name, expected
+):
+    tenant = SimpleNamespace(name="Tenant Co")
+    db = SimpleNamespace(get=AsyncMock(return_value=tenant))
+    monkeypatch.setattr(client_portal, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        client_portal,
+        "get_firm_branding",
+        AsyncMock(return_value={"firm_name": branded_name}),
+    )
+    match = SimpleNamespace(
+        tenant_id=str(uuid.uuid4()),
+        matter=SimpleNamespace(
+            id=uuid.uuid4(), matter_name="Smith v. Jones", matter_number="SMI0001"
+        ),
+    )
+
+    choice = await client_portal._matter_choice(db, match)
+
+    assert choice.firm_name == expected
+    assert choice.matter_number == "SMI0001"

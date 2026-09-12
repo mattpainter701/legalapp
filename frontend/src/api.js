@@ -1196,6 +1196,9 @@ export const createPortalProposal = (data, caseId) =>
 export const downloadPortalDocumentUrl = (docId, caseId) =>
   `${BASE_URL}/portal/mediation/documents/${docId}/download${caseId ? `?case_id=${caseId}` : ''}`
 
+export const logoutMediationPortal = () =>
+  portalApi.post('/portal/mediation/logout').then((r) => r.data)
+
 // ── Client Portal (firm client, matter-scoped) ──────────────────────────────
 // Separate axios instance so a portal 401 does not bounce through the firm-app
 // login redirect in the shared interceptor.
@@ -1207,6 +1210,9 @@ const clientPortalApi = axios.create({
 
 export const acceptClientPortalInvite = (token) =>
   clientPortalApi.post('/portal/client/accept', { token }).then((r) => r.data)
+
+export const getClientPortalInviteInfo = (token) =>
+  clientPortalApi.get('/portal/client/invite-info', { params: { token } }).then((r) => r.data)
 
 export const getClientPortalSession = () =>
   clientPortalApi.get('/portal/client/session').then((r) => r.data)
@@ -1241,6 +1247,7 @@ export const listClientPortalDocuments = () =>
   clientPortalApi.get('/portal/client/documents').then((r) => r.data)
 
 export const getClientPortalUploadLink = () => clientPortalApi.get('/portal/client/documents/upload-link').then(r => r.data)
+export const getClientPortalUploadPolicy = () => clientPortalApi.get('/portal/client/documents/upload-policy').then(r => r.data)
 export const getMatterPortalUploadLink = (matterId) => api.get(`/matters/${matterId}/portal/upload-link`).then(r => r.data)
 export const setMatterPortalUploadLink = (matterId, url) => api.put(`/matters/${matterId}/portal/upload-link`, { url }).then(r => r.data)
 
@@ -1268,11 +1275,20 @@ export const listClientPortalInvoices = () =>
 export const createClientPortalInvoicePayment = (invoiceId) =>
   clientPortalApi.post(`/portal/client/invoices/${invoiceId}/pay`).then((r) => r.data)
 
-export const activateClientPortalAccount = (token, password) =>
-  clientPortalApi.post('/portal/client/activate', { token, password }).then((r) => r.data)
+export const requestClientPortalCode = (email) =>
+  clientPortalApi.post('/portal/client/request-code', { email }).then((r) => r.data)
 
-export const loginClientPortalAccount = (email, password, matterId) =>
-  clientPortalApi.post('/portal/client/login', { email, password, matter_id: matterId }).then((r) => r.data)
+export const verifyClientPortalCode = (email, code) =>
+  clientPortalApi.post('/portal/client/verify-code', { email, code }).then((r) => r.data)
+
+export const selectClientPortalMatter = (ticket, matterId) =>
+  clientPortalApi.post('/portal/client/select-matter', { ticket, matter_id: matterId }).then((r) => r.data)
+
+export const listClientPortalMatters = () =>
+  clientPortalApi.get('/portal/client/matters').then((r) => r.data)
+
+export const switchClientPortalMatter = (matterId) =>
+  clientPortalApi.post('/portal/client/switch-matter', { matter_id: matterId }).then((r) => r.data)
 
 export const downloadClientPortalInvoiceUrl = (invoiceId) =>
   `${BASE_URL}/portal/client/invoices/${invoiceId}/download`
