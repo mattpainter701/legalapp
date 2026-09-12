@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import ClientPortalMatterPage, { MessagesTab } from './ClientPortalMatterPage'
+import ClientPortalMatterPage, { MessagesTab, messageDraftKey } from './ClientPortalMatterPage'
 import {
   getClientPortalSession,
   getClientPortalMatter,
@@ -41,8 +41,10 @@ vi.mock('../api', () => ({
   switchClientPortalMatter: vi.fn(),
 }))
 
+const { confirmAction } = vi.hoisted(() => ({ confirmAction: vi.fn() }))
+
 vi.mock('../components/dialog/ConfirmProvider', () => ({
-  useConfirm: () => () => Promise.resolve(true),
+  useConfirm: () => confirmAction,
 }))
 
 const matterView = {
@@ -73,6 +75,7 @@ const sessionExpired = () => Object.assign(new Error('expired'), { response: { s
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
+  confirmAction.mockResolvedValue(true)
   getClientPortalSession.mockResolvedValue({
     matter_id: 'matter-1',
     matter_name: matterView.matter_name,
@@ -315,6 +318,71 @@ describe('ClientPortalMatterPage', () => {
     await user.click(await screen.findByRole('button', { name: /Sign out/ }))
     await waitFor(() => expect(logoutClientPortal).toHaveBeenCalledTimes(1))
     expect(await screen.findByText("You've signed out")).toBeInTheDocument()
+  })
+
+  it('tells the client how to get back in without mentioning a password', async () => {
+    const user = userEvent.setup()
+    render(<ClientPortalMatterPage />)
+
+    await user.click(await screen.findByRole('button', { name: /Sign out/ }))
+    const { message } = confirmAction.mock.calls[0][0]
+    expect(message).toMatch(/enter your email and we will send you a new sign-in code/)
+    expect(message).not.toMatch(/password/i)
+    expect(await screen.findByText("You've signed out")).toBeInTheDocument()
+    expect(screen.getByText(/Sign back in any time with your email and the code we send you/)).toBeInTheDocument()
+    expect(screen.queryByText(/password/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps the client signed in when they cancel the sign-out prompt', async () => {
+    confirmAction.mockResolvedValue(false)
+    const user = userEvent.setup()
+    render(<ClientPortalMatterPage />)
+
+    await user.click(await screen.findByRole('button', { name: /Sign out/ }))
+    expect(logoutClientPortal).not.toHaveBeenCalled()
+    expect(screen.getByText('Rivera v. Northline Freight')).toBeInTheDocument()
+  })
+
+  it('discards every stored message draft on sign-out', async () => {
+    localStorage.setItem(messageDraftKey('matter-1'), 'Draft for the freight case')
+    localStorage.setItem(messageDraftKey('matter-2'), 'Draft for another matter')
+    localStorage.setItem('unrelated-preference', 'keep')
+    const user = userEvent.setup()
+    render(<ClientPortalMatterPage />)
+
+    await user.click(await screen.findByRole('button', { name: /Sign out/ }))
+    expect(await screen.findByText("You've signed out")).toBeInTheDocument()
+    expect(localStorage.getItem(messageDraftKey('matter-1'))).toBeNull()
+    expect(localStorage.getItem(messageDraftKey('matter-2'))).toBeNull()
+    expect(localStorage.getItem('unrelated-preference')).toBe('keep')
+  })
+
+  it('stores a message draft under the matter it was written for', async () => {
+    localStorage.setItem(messageDraftKey('matter-2'), 'Draft for another matter')
+    const user = userEvent.setup()
+    render(<MessagesTab matter={matterView} onSessionError={() => false} onChanged={vi.fn()} />)
+
+    const box = await screen.findByRole('textbox')
+    expect(box).toHaveValue('')
+    await user.type(box, 'Hello from matter one')
+    await waitFor(() => expect(localStorage.getItem(messageDraftKey('matter-1'))).toBe('Hello from matter one'))
+    expect(localStorage.getItem(messageDraftKey('matter-2'))).toBe('Draft for another matter')
+  })
+
+  it('fetches the matter list once per visit, not on every matter load', async () => {
+    listClientPortalMatters.mockResolvedValue([
+      { matter_id: 'matter-1', matter_name: 'Rivera v. Northline Freight', matter_number: 'RIV0001' },
+      { matter_id: 'matter-2', matter_name: 'Alpha v. Beta', matter_number: 'ALP0002' },
+    ])
+    switchClientPortalMatter.mockResolvedValue({ matter_id: 'matter-2', matter_name: 'Alpha v. Beta' })
+    const user = userEvent.setup()
+    render(<ClientPortalMatterPage />)
+
+    const switcher = await screen.findByRole('combobox', { name: /Switch matter/ })
+    getClientPortalMatter.mockResolvedValue({ ...matterView, matter_id: 'matter-2', matter_name: 'Alpha v. Beta' })
+    await user.selectOptions(switcher, 'matter-2')
+    expect(await screen.findByRole('heading', { name: 'Alpha v. Beta' })).toBeInTheDocument()
+    expect(listClientPortalMatters).toHaveBeenCalledTimes(1)
   })
 
   it('still signs the client out when the logout call fails', async () => {

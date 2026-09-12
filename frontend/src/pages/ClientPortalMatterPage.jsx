@@ -42,7 +42,26 @@ const TABS = [
 // useful if a reply from the firm shows up without a manual reload.
 const MESSAGE_POLL_MS = 30_000
 const MAX_MESSAGE_LENGTH = 10_000
-const MESSAGE_DRAFT_KEY = 'client-portal-message-draft'
+// Drafts are stored per matter so a note meant for one case never surfaces in
+// another, and every draft is cleared when the client signs out of this device.
+const MESSAGE_DRAFT_KEY_PREFIX = 'client-portal-message-draft'
+
+export function messageDraftKey(matterId) {
+  return `${MESSAGE_DRAFT_KEY_PREFIX}:${matterId || ''}`
+}
+
+export function clearPortalMessageDrafts() {
+  try {
+    const stale = []
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i)
+      if (key && key.startsWith(MESSAGE_DRAFT_KEY_PREFIX)) stale.push(key)
+    }
+    stale.forEach((key) => localStorage.removeItem(key))
+  } catch {
+    // Storage that cannot be read cannot hold a draft either.
+  }
+}
 
 function fmtBytes(n) {
   if (!n) return ''
@@ -114,6 +133,7 @@ export default function ClientPortalMatterPage() {
   const [signedOut, setSignedOut] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const matterRequestSequence = useRef(0)
+  const mattersLoadedRef = useRef(false)
 
   // Any tab hitting an expired session escalates to the whole-page notice —
   // otherwise a client sits on a screen of "unable to load" panels with no
@@ -179,15 +199,22 @@ export default function ClientPortalMatterPage() {
   }, [matter?.paperwork_only, refreshMatter, tab])
 
   // The client may hold several matters. Keep the list for the header switcher
-  // so it is always obvious which matter a document is being sent to.
+  // so it is always obvious which matter a document is being sent to. The set
+  // of matters does not change while the client is signed in, so it is fetched
+  // once per visit rather than on every load or switch.
   useEffect(() => {
-    if (!matter) return undefined
+    if (!matter || mattersLoadedRef.current) return undefined
+    mattersLoadedRef.current = true
     let active = true
     listClientPortalMatters()
       .then((rows) => { if (active) setMatters(Array.isArray(rows) ? rows : []) })
-      .catch(() => { if (active) setMatters([]) })
+      .catch(() => {
+        // Let a later matter load try again rather than hiding the switcher for good.
+        mattersLoadedRef.current = false
+        if (active) setMatters([])
+      })
     return () => { active = false }
-  }, [matter?.matter_id])
+  }, [matter])
 
   const switchMatter = async (matterId) => {
     if (!matterId || matterId === matter?.matter_id || switching) return
@@ -208,7 +235,7 @@ export default function ClientPortalMatterPage() {
   const signOut = async () => {
     const confirmed = await confirmAction({
       title: 'Sign out of your portal?',
-      message: 'You will need your password, or a new link from your legal team, to get back in. Any message you have not sent yet will be lost.',
+      message: 'To get back in, enter your email and we will send you a new sign-in code. Any message you have started but not sent will be discarded.',
       confirmLabel: 'Sign out',
       destructive: true,
     })
@@ -220,6 +247,7 @@ export default function ClientPortalMatterPage() {
       // Sign-out is best-effort on the wire; the notice below is what the
       // client acts on either way.
     } finally {
+      clearPortalMessageDrafts()
       setSigningOut(false)
       setSignedOut(true)
       setExpired(true)
@@ -233,7 +261,7 @@ export default function ClientPortalMatterPage() {
         tone="accent"
         title={signedOut ? "You've signed out" : 'Your secure session ended'}
         body={signedOut
-          ? 'Your portal is closed on this device. Sign back in any time with your password.'
+          ? 'Your portal is closed on this device. Sign back in any time with your email and the code we send you.'
           : 'For your security we sign you out after a period of inactivity. Sign back in to continue, or use the link from your invitation email.'}
         action={{ label: 'Sign in to the portal', href: '/portal/client/login' }}
       />
@@ -366,7 +394,7 @@ export default function ClientPortalMatterPage() {
           className="py-6"
         >
           {tab === 'overview' && <><ClientIntakeChecklist onSign={() => setTab('signatures')} />{!matter.paperwork_only && <OverviewTab {...tabProps} onNavigate={setTab} />}</>}
-          {tab === 'messages' && <MessagesTab {...tabProps} />}
+          {tab === 'messages' && <MessagesTab key={matter.matter_id} {...tabProps} />}
           {tab === 'documents' && <DocumentsTab {...tabProps} />}
           {tab === 'signatures' && <SignaturesTab {...tabProps} />}
           {tab === 'invoices' && <InvoicesTab {...tabProps} />}
@@ -808,11 +836,12 @@ function Field({ label, value }) {
 
 // ── Messages ────────────────────────────────────────────────────────────────
 
-export function MessagesTab({ onSessionError, onChanged }) {
+export function MessagesTab({ matter, onSessionError, onChanged }) {
+  const draftKey = messageDraftKey(matter?.matter_id)
   const [messages, setMessages] = useState([])
   const [body, setBody] = useState(() => {
     // A long message should survive a session expiry or accidental reload.
-    try { return localStorage.getItem(MESSAGE_DRAFT_KEY) || '' } catch { return '' }
+    try { return localStorage.getItem(draftKey) || '' } catch { return '' }
   })
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -823,12 +852,12 @@ export function MessagesTab({ onSessionError, onChanged }) {
 
   useEffect(() => {
     try {
-      if (body) localStorage.setItem(MESSAGE_DRAFT_KEY, body)
-      else localStorage.removeItem(MESSAGE_DRAFT_KEY)
+      if (body) localStorage.setItem(draftKey, body)
+      else localStorage.removeItem(draftKey)
     } catch {
       // Private-mode or full storage must never block writing a message.
     }
-  }, [body])
+  }, [body, draftKey])
 
   const load = useCallback(
     async ({ quiet = false, force = false } = {}) => {

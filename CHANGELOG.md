@@ -21,6 +21,7 @@
 - Rewrite the client upload panel for clients. It told them to choose "this client's folder from your computer or USB drive" and referred them to New Matter, a firm-only feature; it now states the enforced limits and pre-flags oversized files before the upload starts.
 - Wrap the client tab strip so Signatures and Invoices stay reachable at phone width, and move message send to Ctrl/Cmd+Enter so Enter starts a new line.
 - Add `docs/client-portal-ux-review-2026-09-11.md`, the review these changes close out.
+- Review follow-ups: a wrong sign-in code no longer re-saves the entry with a fresh `PORTAL_SIGNIN_CODE_TTL_SECONDS` (the attempt counter is bumped on the code's remaining life, so spaced wrong guesses cannot keep a code alive); `GET /portal/client/matters` serves a 120-second per-address cache (`PORTAL_MATTERS_CACHE_TTL_SECONDS`, dropped on switch-matter and logout) instead of walking every active tenant on each page load, and the portal fetches it once per visit; the matter chooser names the firm from `get_firm_branding` like the portal header, falling back to the tenant name; the sign-out prompt and signed-out screen no longer mention a password; message drafts are stored per matter and cleared on sign-out.
 
 ## 2026.09.11.8 — 30-day self-serve trials
 

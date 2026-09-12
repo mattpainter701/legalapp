@@ -29,6 +29,8 @@ from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
 from app.models.tenant import TenantSettings
 from app.models.user import User
+from app.config import get_settings
+from app.routers import client_portal as client_portal_router
 from app.routers.client_portal import CLIENT_PORTAL_COOKIE_NAME
 from app.services.email import EmailDeliveryResult
 from app.services.portal_token import create_matter_portal_token
@@ -1141,8 +1143,6 @@ async def test_matter_view_carries_firm_branding_and_currency(
 
 @pytest.mark.asyncio
 async def test_upload_policy_publishes_the_enforced_limits(client, portal_cookie):
-    from app.config import get_settings
-
     resp = await client.get(
         f"{PORTAL}/documents/upload-policy", headers=_portal_headers(portal_cookie)
     )
@@ -1338,6 +1338,38 @@ async def test_sign_in_code_rejects_a_wrong_code(
 
 
 @pytest.mark.asyncio
+async def test_wrong_code_attempts_are_capped_and_never_extend_the_code(
+    client, db_session, test_tenant, test_user, test_redis
+):
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
+    await _seed_client_matter(db_session, test_tenant, test_user, contact)
+    with _captured_signin_code() as sent:
+        code = await _request_signin_code(client, email, sent)
+    wrong = "000000" if code != "000000" else "111111"
+    key = client_portal_router._signin_code_key(email)
+    # Pretend most of the code's life has already passed.
+    await test_redis.expire(key, 30)
+    for _ in range(get_settings().PORTAL_SIGNIN_CODE_ATTEMPTS):
+        resp = await client.post(
+            f"{PORTAL}/verify-code",
+            json={"email": email, "code": wrong},
+            headers={"Authorization": ""},
+        )
+        assert resp.status_code == 400
+        remaining = await test_redis.ttl(key)
+        # -2 once the cap deletes the key; never back up to the full lifetime.
+        assert remaining <= 30
+    assert await test_redis.exists(key) == 0
+    refused = await client.post(
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": code},
+        headers={"Authorization": ""},
+    )
+    assert refused.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_code_sign_in_is_cooldown_limited(
     client, db_session, test_tenant, test_user
 ):
@@ -1419,17 +1451,30 @@ async def test_matter_switcher_lists_and_switches(
         headers={"Authorization": ""},
     )
     assert selected.status_code == 200, selected.text
-    listed = await client.get(f"{PORTAL}/matters")
-    assert listed.status_code == 200, listed.text
-    assert {row["matter_id"] for row in listed.json()} == {
-        str(first.id),
-        str(second.id),
-    }
-    switched = await client.post(
-        f"{PORTAL}/switch-matter", json={"matter_id": str(second.id)}
-    )
-    assert switched.status_code == 200, switched.text
-    assert switched.json()["matter_id"] == str(second.id)
+    lookup = AsyncMock(wraps=client_portal_router._client_portal_matches)
+    with patch.object(client_portal_router, "_client_portal_matches", lookup):
+        listed = await client.get(f"{PORTAL}/matters")
+        assert listed.status_code == 200, listed.text
+        assert {row["matter_id"] for row in listed.json()} == {
+            str(first.id),
+            str(second.id),
+        }
+        assert {row["firm_name"] for row in listed.json()} == {test_tenant.name}
+        # A reload within the cache window does not walk the tenants again.
+        again = await client.get(f"{PORTAL}/matters")
+        assert again.status_code == 200
+        assert again.json() == listed.json()
+        assert lookup.await_count == 1
+        switched = await client.post(
+            f"{PORTAL}/switch-matter", json={"matter_id": str(second.id)}
+        )
+        assert switched.status_code == 200, switched.text
+        assert switched.json()["matter_id"] == str(second.id)
+        # Switching always re-checks access on a live lookup and drops the cache.
+        assert lookup.await_count == 2
+        relisted = await client.get(f"{PORTAL}/matters")
+        assert relisted.status_code == 200
+        assert lookup.await_count == 3
 
 
 @pytest.mark.asyncio

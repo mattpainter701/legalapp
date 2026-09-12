@@ -557,6 +557,10 @@ def _signin_ticket_key(ticket: str) -> str:
     return f"portal:signin:ticket:{hashlib.sha256(ticket.encode()).hexdigest()}"
 
 
+def _matters_cache_key(email: str) -> str:
+    return f"portal:matters:{hashlib.sha256(email.encode()).hexdigest()}"
+
+
 def _hash_signin_code(email: str, code: str) -> str:
     """Keyed digest, so a Redis leak cannot be brute-forced offline to a code."""
     return hmac.new(
@@ -571,6 +575,13 @@ def _hash_signin_code(email: str, code: str) -> str:
 _signin_codes_fallback: dict[str, tuple[dict, float]] = {}
 _signin_tickets_fallback: dict[str, tuple[dict, float]] = {}
 _signin_cooldown_fallback: dict[str, tuple[dict, float]] = {}
+_matters_cache_fallback: dict[str, tuple[dict, float]] = {}
+
+# The in-portal switcher asks for the client's matter list on every page load,
+# and that lookup walks every active tenant. Cache the answer briefly for the
+# signed-in address; sign-in and switch-matter never read it, so a fresh
+# session is always minted from a live lookup.
+PORTAL_MATTERS_CACHE_TTL_SECONDS = 120
 
 
 def _redis(request: Request):
@@ -606,6 +617,24 @@ async def _delete_json(request, key, fallback):
         await redis.delete(key)
     else:
         fallback.pop(key, None)
+
+
+async def _remaining_ttl(request, key, fallback) -> int:
+    """Seconds left on a stored entry, or 0 when it is gone or never expires.
+
+    Re-storing an entry must not hand it a fresh lifetime: a sign-in code that
+    was re-saved with the full TTL on every wrong guess could be kept alive
+    indefinitely by spaced attempts.
+    """
+    redis = _redis(request)
+    if redis:
+        ttl = await redis.ttl(key)
+        return max(0, int(ttl or 0))
+    entry = fallback.get(key)
+    if not entry:
+        return 0
+    _value, expires = entry
+    return max(0, int(expires - _time.time()))
 
 
 async def _load_matter(db: AsyncSession, ctx: ClientPortalContext) -> Matter:
@@ -890,12 +919,19 @@ async def _client_portal_matches(
 async def _matter_choice(
     db: AsyncSession, match: _ClientMatterMatch
 ) -> PortalMatterChoice:
+    """One row of the matter chooser, named the way the portal header names the firm."""
     tenant = await db.get(Tenant, uuid.UUID(match.tenant_id))
+    firm_name = None
+    if tenant is not None:
+        # Firm settings sit behind RLS; read them as the matter's own tenant.
+        await set_tenant_context(db, match.tenant_id)
+        branding = await get_firm_branding(db, tenant)
+        firm_name = branding.get("firm_name") or tenant.name
     return PortalMatterChoice(
         matter_id=str(match.matter.id),
         matter_name=match.matter.matter_name,
         matter_number=match.matter.matter_number,
-        firm_name=tenant.name if tenant else None,
+        firm_name=firm_name,
     )
 
 
@@ -1057,14 +1093,18 @@ async def verify_portal_signin_code(
         str(entry.get("code_hash", "")), _hash_signin_code(email, code)
     ):
         attempts = int(entry.get("attempts", 0)) + 1
-        if attempts >= settings.PORTAL_SIGNIN_CODE_ATTEMPTS:
+        remaining = await _remaining_ttl(
+            request, _signin_code_key(email), _signin_codes_fallback
+        )
+        if attempts >= settings.PORTAL_SIGNIN_CODE_ATTEMPTS or remaining <= 0:
             await _delete_json(request, _signin_code_key(email), _signin_codes_fallback)
         else:
+            # Bump the counter on the code's remaining life, never a new one.
             await _store_json(
                 request,
                 _signin_code_key(email),
                 {"code_hash": entry.get("code_hash"), "attempts": attempts},
-                settings.PORTAL_SIGNIN_CODE_TTL_SECONDS,
+                remaining,
                 _signin_codes_fallback,
             )
         raise generic_error
@@ -1124,26 +1164,57 @@ async def select_portal_matter(
     return await _mint_session_for_match(response, db, match, email)
 
 
+async def _forget_cached_matters(request: Request, email: str | None) -> None:
+    normalized = (email or "").strip().lower()
+    if normalized:
+        await _delete_json(
+            request, _matters_cache_key(normalized), _matters_cache_fallback
+        )
+
+
 @router.get("/matters", response_model=List[PortalMatterChoice])
 async def portal_list_matters(
+    request: Request,
     resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """The signed-in client's portal matters, for the in-portal switcher."""
+    """The signed-in client's portal matters, for the in-portal switcher.
+
+    Served from a short-lived per-address cache: the cross-tenant lookup is too
+    expensive to repeat on every page load, and the list only names matters —
+    switching into one still re-checks access on a live lookup.
+    """
     ctx, _matter = resolved
-    matches = await _client_portal_matches(db, ctx.email or "")
-    return [await _matter_choice(db, m) for m in matches]
+    email = (ctx.email or "").strip().lower()
+    if not email:
+        return []
+    cache_key = _matters_cache_key(email)
+    cached = await _load_json(request, cache_key, _matters_cache_fallback)
+    if isinstance(cached, dict) and isinstance(cached.get("matters"), list):
+        return [PortalMatterChoice(**row) for row in cached["matters"]]
+    matches = await _client_portal_matches(db, email)
+    choices = [await _matter_choice(db, m) for m in matches]
+    await _store_json(
+        request,
+        cache_key,
+        {"matters": [choice.model_dump() for choice in choices]},
+        PORTAL_MATTERS_CACHE_TTL_SECONDS,
+        _matters_cache_fallback,
+    )
+    return choices
 
 
 @router.post("/switch-matter", response_model=ClientPortalSignInResponse)
 async def switch_portal_matter(
     body: ClientPortalSwitchMatterRequest,
+    request: Request,
     response: Response,
     resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Mint a new session for another matter this client can already access."""
     ctx, _matter = resolved
+    await _forget_cached_matters(request, ctx.email)
     matches = await _client_portal_matches(db, ctx.email or "")
     match = next((m for m in matches if str(m.matter.id) == body.matter_id), None)
     if match is None:
@@ -1193,6 +1264,7 @@ async def portal_logout(request: Request, response: Response):
             )
             if payload.get("client_portal") is True:
                 await _revoke_jti(request, payload.get("jti"), payload.get("exp"))
+                await _forget_cached_matters(request, payload.get("email"))
         except JWTError:
             pass
     response.delete_cookie(
