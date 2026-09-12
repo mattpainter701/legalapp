@@ -1,6 +1,11 @@
 from fastapi import Request
 from sqlalchemy import event, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import DeclarativeBase
 from typing import AsyncGenerator
 from uuid import UUID
@@ -18,6 +23,40 @@ engine = create_async_engine(
     max_overflow=settings.DATABASE_MAX_OVERFLOW,
     pool_timeout=settings.DATABASE_POOL_TIMEOUT_SECONDS,
 )
+
+# Conversation generation holds a session-level advisory lock for the whole
+# turn, so its connection cannot be returned to the pool between statements the
+# way an ordinary request's is. Those long checkouts share nothing with
+# request traffic except the pool, and that sharing is the failure: once
+# concurrent chat turns reach the pool ceiling, unrelated reads queue for
+# DATABASE_POOL_TIMEOUT_SECONDS and then error. A separate bounded pool keeps
+# the two workloads in separate failure domains — chat saturating returns a
+# "busy" on chat, and everything else keeps its own slots.
+#
+# ``get_generation_engine()`` is the only supported accessor: tests bind their
+# sessions to a throwaway engine, and the lease must follow the session it was
+# handed rather than reaching for this one (see
+# ``chat._try_conversation_generation_lease``).
+generation_engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=settings.DATABASE_GENERATION_POOL_SIZE,
+    max_overflow=settings.DATABASE_GENERATION_MAX_OVERFLOW,
+    pool_timeout=settings.DATABASE_GENERATION_POOL_TIMEOUT_SECONDS,
+)
+
+
+def get_generation_engine(request_engine: AsyncEngine) -> AsyncEngine:
+    """Return the pool a generation lease should draw its connection from.
+
+    Falls back to ``request_engine`` whenever it is not the application engine.
+    Tests (and any caller that binds a session to its own engine) must keep
+    their lease on that engine, or the lock would be taken on a connection to a
+    different database than the one under test.
+    """
+    return generation_engine if request_engine is engine else request_engine
+
 
 async_session_maker = async_sessionmaker(
     engine,

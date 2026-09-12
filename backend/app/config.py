@@ -17,6 +17,22 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = 5
     DATABASE_MAX_OVERFLOW: int = 5
     DATABASE_POOL_TIMEOUT_SECONDS: float = 15.0
+    # Conversation generation runs under a session-level advisory lock, which
+    # cannot move between connections, so one chat turn pins one connection for
+    # its whole duration — seconds to minutes, not milliseconds. Drawing those
+    # from the request pool lets a burst of chat traffic starve ordinary reads:
+    # a worker with every slot on an in-flight turn makes matter, task and
+    # document requests queue for DATABASE_POOL_TIMEOUT_SECONDS and then fail,
+    # even though nothing is wrong with them. Give generation its own bounded
+    # pool so the two workloads saturate independently. Size these together
+    # with DATABASE_POOL_SIZE and BACKEND_WORKERS; the production example keeps
+    # the combined ceiling below PostgreSQL's 100 clients.
+    DATABASE_GENERATION_POOL_SIZE: int = 3
+    DATABASE_GENERATION_MAX_OVERFLOW: int = 2
+    # Deliberately shorter than the request timeout. A caller waiting on a
+    # generation slot is waiting behind an LLM turn, so a long queue is worse
+    # than a prompt "retry in a moment".
+    DATABASE_GENERATION_POOL_TIMEOUT_SECONDS: float = 5.0
     REDIS_URL: str = "redis://redis:6379"
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
