@@ -17,13 +17,20 @@ merely unusual label would be worse than the problem, so this rejects only
 text that cannot name anything:
 
 * nothing at all, or no letters;
-* only function words, which carry no subject ("And", "of the");
-* a dangling function word at the end, which is the signature of a clause
-  fragment captured mid-sentence ("Shall Pay To", "Payable By").
+* only function words, which carry no subject ("And", "of the", "To").
+
+A label passes as soon as it carries one content word.  Ending on a function
+word is *not* a defect: "Prepared by", "Bill To", "Care Of", "Sworn To" and
+"Admitted In" are how forms actually caption their blanks, and the product's
+own card catalogue labels a field "Prepared by".  An earlier version refused
+every label ending in ``by``/``to``/``of``, which rejected that vocabulary
+along with the fragments it was aimed at.  The cost is that a clause fragment
+with a content word in it ("Shall Pay To") now passes: nothing short of a
+reader can tell it from "Bill To", so it is left to the reviewer.
 
 A trailing index is stripped before judging, because it is how a real label
-distinguishes repeats.  "Witness 2" is a good label; "By 2" is the same
-fragment problem with a number after it.
+distinguishes repeats.  "Witness 2" is a good label; "By 2" is a function
+word with a number after it, and the number does not rescue it.
 """
 
 from __future__ import annotations
@@ -73,34 +80,6 @@ _FUNCTION_WORDS = frozenset(
     }
 )
 
-#: Words a finished label does not end on.  Ending here means the phrase was
-#: cut off before the thing it was about.
-_DANGLING_WORDS = frozenset(
-    {
-        "and",
-        "as",
-        "at",
-        "be",
-        "by",
-        "for",
-        "from",
-        "in",
-        "into",
-        "is",
-        "of",
-        "on",
-        "or",
-        "per",
-        "shall",
-        "that",
-        "the",
-        "to",
-        "upon",
-        "until",
-        "with",
-    }
-)
-
 #: A trailing ordinal: the ordinary way a label distinguishes repeats.
 _TRAILING_INDEX = re.compile(r"[\s\-#]*\d+\s*$")
 
@@ -135,8 +114,6 @@ def label_problem(label: str | None, name: str | None = "") -> str:
         return f"is {kind} {shown!r}, which has no words in it"
     if all(word in _FUNCTION_WORDS for word in words):
         return f"is {kind} {shown!r}, which does not name anything"
-    if words[-1] in _DANGLING_WORDS:
-        return f"is {kind} {shown!r}, which is cut off mid-phrase"
     return ""
 
 

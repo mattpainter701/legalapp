@@ -176,3 +176,69 @@ class TestInstanceAliases:
         for entry in role_cards():
             ref = resolve(f"{entry.key}.full_name")
             assert alias_for_binding(f"party.{entry.key}.name") == alias_for(ref)
+
+
+class TestSemanticBoundary:
+    """What the editor saves has to get through ``validate_semantic_metadata``.
+
+    The Studio editor saves a binding change through ``PATCH /templates/{id}``,
+    which validates the schema here before anything else looks at it. Checking
+    the flat catalogue at this point refused every card path the picker emits
+    with "Unknown data binding", so a card binding could be chosen but never
+    kept.
+    """
+
+    @pytest.mark.parametrize(
+        "binding",
+        [
+            "client.full_name",  # a card path
+            "defendant.full_name",
+            "defendant.2.full_name",  # a role instance
+            "preparer.prepared_by",
+            "party.defendant.name",  # a pre-card path
+            "attorney.name",
+            MANUAL_BINDING,
+        ],
+    )
+    def test_every_binding_a_field_may_declare_is_accepted(self, binding):
+        from app.services.template_semantics import validate_semantic_metadata
+
+        validate_semantic_metadata({"fields": [{"name": "x", "binding": binding}]})
+
+    @pytest.mark.parametrize(
+        "binding", ["matter.secret", "opposing_expert.full_name", "client.middle"]
+    )
+    def test_an_unknown_path_is_still_refused(self, binding):
+        from app.services.template_semantics import (
+            TemplateSemanticsError,
+            validate_semantic_metadata,
+        )
+
+        with pytest.raises(TemplateSemanticsError, match="Unknown data binding"):
+            validate_semantic_metadata({"fields": [{"name": "x", "binding": binding}]})
+
+    def test_a_pushed_template_may_carry_a_card_binding(self):
+        # The MCP push path validates through the same boundary.
+        from app.schemas.workspace_mcp import ProposeDocumentTemplateArgs
+        from app.services.automation_capabilities import CapabilityError
+        from app.services.document_template_push import _validated_schema
+
+        args = ProposeDocumentTemplateArgs(
+            title="Notice",
+            body="Dear {{client_name}}",
+            variable_schema={
+                "fields": [{"name": "client_name", "binding": "client.full_name"}]
+            },
+        )
+        schema = _validated_schema(args, ["client_name"])
+        assert schema["fields"][0]["binding"] == "client.full_name"
+
+        bad = ProposeDocumentTemplateArgs(
+            title="Notice",
+            body="Dear {{client_name}}",
+            variable_schema={
+                "fields": [{"name": "client_name", "binding": "client.middle"}]
+            },
+        )
+        with pytest.raises(CapabilityError):
+            _validated_schema(bad, ["client_name"])

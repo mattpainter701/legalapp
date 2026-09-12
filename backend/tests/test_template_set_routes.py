@@ -203,6 +203,40 @@ class TestResponses:
         assert len(response.items) == 1
 
 
+class TestInterview:
+    async def test_a_malformed_matter_id_is_a_422_not_a_500(self):
+        # The id is the caller's input; a bad one is their mistake to read
+        # about, not a server fault to page someone over.
+        db = AsyncMock()
+        db.scalar = AsyncMock(return_value=_record())
+        with pytest.raises(HTTPException) as caught:
+            await router.set_interview(
+                uuid.uuid4(), matter_id="not-a-uuid", current_user=USER, db=db
+            )
+        assert caught.value.status_code == 422
+        assert "matter_id" in caught.value.detail
+
+    async def test_an_empty_set_with_a_matter_asks_nothing(self, monkeypatch):
+        # No questions, so no Smart Fill pass — but the matter is still echoed.
+        record = _record()
+        db = AsyncMock()
+        db.scalar = AsyncMock(return_value=record)
+        monkeypatch.setattr(
+            router, "_member_snapshots", AsyncMock(return_value=([], [], None))
+        )
+        monkeypatch.setattr(
+            router,
+            "_interview_suggestions",
+            AsyncMock(side_effect=AssertionError("nothing to fill")),
+        )
+        matter_id = uuid.uuid4()
+        response = await router.set_interview(
+            record.id, matter_id=str(matter_id), current_user=USER, db=db
+        )
+        assert response.questions == []
+        assert response.matter_id == matter_id
+
+
 class TestReplace:
     async def test_renaming_onto_another_set_is_a_conflict(self):
         record = _record()

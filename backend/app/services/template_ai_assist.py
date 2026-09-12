@@ -38,7 +38,9 @@ class AiFieldProposal(BaseModel):
     #: One path from the card catalogue, or ``manual``.  The model is told the
     #: catalogue and told to pick from it; anything else is discarded rather
     #: than stored, so a hallucinated data source can never reach a fill.
-    binding: str = Field(default=MANUAL_BINDING, max_length=200)
+    #: Empty means the model said nothing, which is not the same as ``manual``:
+    #: see :func:`proposed_binding_entry`.
+    binding: str = Field(default="", max_length=200)
 
 
 def reviewed_binding(proposal: AiFieldProposal) -> str:
@@ -46,9 +48,10 @@ def reviewed_binding(proposal: AiFieldProposal) -> str:
 
     A proposal naming something the catalogue does not describe is not an
     error worth rejecting the whole field over — the located source text is
-    still useful — so the field lands as manual and the reviewer binds it. The
-    dishonest outcome would be keeping the invented path and letting a fill
-    silently find nothing.
+    still useful — so the path is dropped and the reviewer binds the field.
+    The dishonest outcome would be keeping the invented path and letting a
+    fill silently find nothing.  What a new field is stored with in that case
+    is decided by :func:`proposed_binding_entry`, not here.
 
     A role *instance* is refused the same way even though it is a valid path.
     Which of a matter's defendants a blank means is a decision about that
@@ -64,6 +67,24 @@ def reviewed_binding(proposal: AiFieldProposal) -> str:
     if ref is None or ref.instance is not None:
         return MANUAL_BINDING
     return canonical_path(path)
+
+
+def proposed_binding_entry(proposal: AiFieldProposal) -> dict[str, str]:
+    """Return the ``binding`` key a *new* field takes from a proposal, if any.
+
+    Storing ``manual`` is a decision — "always typed by hand" — and switches
+    Smart Fill's field-name matching off for that field.  The model gets to
+    make that decision only by saying ``manual``.  When it said nothing, or
+    named something the catalogue does not describe, or pointed at a role
+    instance, no binding is stored: the field then Smart Fills by name, exactly
+    as an AI-proposed field did before bindings were part of the proposal.
+    """
+
+    explicit = str(getattr(proposal, "binding", "") or "").strip()
+    reviewed = reviewed_binding(proposal)
+    if reviewed != MANUAL_BINDING or explicit == MANUAL_BINDING:
+        return {"binding": reviewed}
+    return {}
 
 
 class AiTemplateProposal(BaseModel):
@@ -262,7 +283,7 @@ def _docx_proposals(
                 "name": name,
                 "label": proposal.label.strip(),
                 "field_type": proposal.field_type,
-                "binding": reviewed_binding(proposal),
+                **proposed_binding_entry(proposal),
                 "source_text": source_text,
                 "confidence": round(min(0.75, proposal.confidence), 2),
                 "review_required": True,
@@ -382,7 +403,7 @@ def _text_proposals(
                 "name": name,
                 "label": proposal.label.strip(),
                 "field_type": proposal.field_type,
-                "binding": reviewed_binding(proposal),
+                **proposed_binding_entry(proposal),
                 "source_text": source_text,
                 "confidence": round(min(0.75, proposal.confidence), 2),
                 "review_required": True,

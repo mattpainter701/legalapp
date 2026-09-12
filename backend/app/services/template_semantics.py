@@ -18,7 +18,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.services.template_bindings import is_valid_binding
+# The card boundary accepts every binding a field may declare: a card path
+# (``client.full_name``), a role instance (``defendant.2.full_name``), a
+# pre-card path, ``manual``, or a tenant custom field.  Checking the flat
+# catalogue here would refuse exactly the paths the editor now emits.
+from app.services.template_cards import is_valid_path
 
 #: Per-field keys a customer may change without re-deriving the field map.
 SEMANTIC_FIELD_KEYS = frozenset(
@@ -109,7 +113,7 @@ def validate_semantic_metadata(variable_schema: Any) -> None:
         name = str(field.get("name") or "").strip()
         binding = field.get("binding")
         if binding is not None and str(binding).strip():
-            if not is_valid_binding(str(binding).strip()):
+            if not is_valid_path(str(binding).strip()):
                 raise TemplateSemanticsError(
                     f"Unknown data binding for {name!r}: {binding}"
                 )

@@ -15,7 +15,9 @@ from app.services.template_labels import (
 
 
 class TestRejectsWhatTheAuditFound:
-    @pytest.mark.parametrize("label", ["And", "Shall Pay To", "By 2", "of the", "the"])
+    @pytest.mark.parametrize(
+        "label", ["And", "By 2", "of the", "the", "To", "By", "Of", "In", "For"]
+    )
     def test_rejected(self, label):
         assert label_needs_rename(label) is True
 
@@ -23,7 +25,13 @@ class TestRejectsWhatTheAuditFound:
         # A reviewer fixing ten of these needs to know which is which.
         assert "'And'" in label_problem("And")
         assert "does not name anything" in label_problem("And")
-        assert "cut off mid-phrase" in label_problem("Shall Pay To")
+        assert "'By 2'" in label_problem("By 2")
+
+    def test_a_fragment_with_a_content_word_is_left_to_the_reviewer(self):
+        # "Shall Pay To" is a bad label, but nothing short of a reader can tell
+        # it from "Bill To". The gate refuses only what cannot name anything;
+        # a label that ends on a function word is not, by itself, that.
+        assert label_needs_rename("Shall Pay To") is False
 
     @pytest.mark.parametrize("label", ["---", "42"])
     def test_a_wordless_label_is_rejected(self, label):
@@ -61,6 +69,53 @@ class TestAcceptsRealLabels:
         assert label_needs_rename("By 2") is True
 
 
+class TestAcceptsTheProductsOwnVocabulary:
+    """Labels that end on a function word are how forms caption blanks.
+
+    An earlier rule refused every label ending in by/to/of/in/on/for as "cut
+    off mid-phrase", which rejected the card catalogue's own "Prepared by"
+    along with every "Bill To" a customer has ever typed.
+    """
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "Prepared by",
+            "Approved By",
+            "Signed By",
+            "Bill To",
+            "Ship To",
+            "Sworn To",
+            "Care Of",
+            "Admitted In",
+            "Date Filed On",
+            "Payable By",
+            "Attorney for",
+        ],
+    )
+    def test_accepted(self, label):
+        assert label_problem(label) == "", label
+
+    @pytest.mark.parametrize("name", ["prepared_by", "bill_to", "care_of"])
+    def test_the_same_vocabulary_passes_as_a_field_name(self, name):
+        assert label_problem(None, name) == ""
+
+    def test_every_card_field_label_and_suggested_name_passes(self):
+        # The catalogue is what the editor offers; a label the gate refuses
+        # would be a field the product invites you to add and then blocks you
+        # from publishing.
+        from app.services.template_cards import cards
+
+        for entry in cards():
+            assert label_problem(entry.label) == "", entry.key
+            for item in entry.fields:
+                assert label_problem(item.label) == "", (entry.key, item.key)
+                if item.alias:
+                    # The alias is the suggested field name; the card rail
+                    # offers it as the name of the field it creates.
+                    assert label_problem(None, item.alias) == "", (entry.key, item.key)
+
+
 class TestUnlabelledFieldsFallBackToTheName:
     """The common shape: an author who never typed a separate label.
 
@@ -76,7 +131,7 @@ class TestUnlabelledFieldsFallBackToTheName:
         assert label_needs_rename(None, name) is False
         assert label_needs_rename("", name) is False
 
-    @pytest.mark.parametrize("name", ["and", "shall_pay_to", "by_2"])
+    @pytest.mark.parametrize("name", ["and", "of_the", "by_2"])
     def test_an_unusable_name_is_still_refused(self, name):
         assert label_needs_rename(None, name) is True
 
@@ -100,7 +155,7 @@ class TestSchemaSweep:
             "fields": [
                 {"name": "a", "label": "And"},
                 {"name": "b", "label": "Case number"},
-                {"name": "c", "label": "Shall Pay To"},
+                {"name": "c", "label": "By 2"},
             ]
         })
         assert [name for name, _ in problems] == ["a", "c"]

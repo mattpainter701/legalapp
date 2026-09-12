@@ -19,7 +19,7 @@ workstream.
 
 | File | What it is |
 |---|---|
-| `backend/app/services/template_cards.py` | The catalogue, the `card[.instance].field` grammar, legacy translation, and the `is_valid_path` / `alias_for_path` / `label_for_path` boundary the rest of the app calls. |
+| `backend/app/services/template_cards.py` | The catalogue, the `card[.instance].field` grammar, legacy translation, and the `is_valid_path` / `alias_for_path` / `label_for_path` boundary the rest of the app calls. `template_semantics.validate_semantic_metadata` — the check behind `PATCH /templates/{id}` and the MCP push — validates bindings through it, so a card path the picker emits can be saved. |
 | `backend/app/routers/document_templates.py` | `GET /api/templates/cards`; binding validation and resolution routed through the card boundary; `_add_role_instance_candidates` emits an alias per addressable role instance. |
 | `backend/app/schemas/document_template.py` | `DocumentTemplateCard*`, including each field's `legacy_paths`. |
 | `frontend/.../TemplateCardRail.jsx` | The card-grouped field rail, with an instance picker. |
@@ -60,15 +60,22 @@ workstream.
 | `backend/app/routers/document_templates.py` | `_ensure_usable_labels` blocks publish. |
 | `backend/tests/test_template_ai_bindings_unit.py`, `test_template_labels_unit.py` | 13 + 28 tests. |
 
-- A path the catalogue does not describe lands the field **manual**, not with
-  the invention stored. Keeping it would let a fill silently find nothing.
+- A path the catalogue does not describe is **dropped, not stored**. Keeping
+  it would let a fill silently find nothing. The field then carries no
+  `binding` key and Smart Fills by field name, as AI-added fields always did;
+  `manual` ("always typed by hand") is stored only when the model said it,
+  because it switches name matching off and that is a decision, not a default.
 - **A role instance is refused even though the path is valid.** Which of a
   matter's defendants a blank means is a decision about that matter; prose
   saying "Defendant 2" is not evidence for it. Collapsing it to the first
   defendant would be the same guess made quietly.
 - The label gate sits at **publish, not detection** — a draft is allowed to be
-  unfinished — and rejects only three shapes that cannot name anything, so it
-  passes "Witness 2" and rejects "By 2".
+  unfinished — and rejects only text that cannot name anything: no words, or
+  nothing but function words. One content word is enough, so it passes
+  "Witness 2", "Prepared by" and "Bill To" and rejects "And", "To" and "By 2".
+  An earlier version also refused any label ending in by/to/of/in/on/for as
+  "cut off mid-phrase"; that rejected the product's own vocabulary (the card
+  catalogue labels a field "Prepared by") and was removed.
 - **It judges the text a reader sees, not the label column.** A field with no
   label is displayed by its name (`label || name` everywhere in the editor), so
   `{"name": "client_name"}` — the shape almost every existing template uses —

@@ -351,6 +351,13 @@ async def set_interview(
     fills.
     """
 
+    if matter_id:
+        try:
+            uuid.UUID(matter_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail="matter_id must be a valid UUID"
+            ) from exc
     tenant_id = uuid.UUID(str(current_user.tenant_id))
     await set_tenant_context(db, str(tenant_id))
     record = await _load_set(db, tenant_id, set_id)
