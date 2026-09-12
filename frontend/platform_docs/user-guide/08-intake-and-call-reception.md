@@ -33,13 +33,15 @@ Use **Convert to Matter** only after the firm authorizes opening the file. Confi
 
 ## Send the standard client paperwork
 
-Matter initiation opens with the same three pieces of paperwork for every client: the fee agreement, the case-specific questionnaire, and the client intake form.
+Matter initiation offers the same three pieces of paperwork for every client: the fee agreement, the case-specific questionnaire, and the client intake form. A firm may send any subset — the fee agreement is optional.
 
 In **Template Studio**, *Add the standard client paperwork* puts a standard fee agreement and client intake form in the firm library. Both arrive as drafts. Fee, trust-account, and contingency terms are regulated differently in every jurisdiction, so an attorney reviews and approves them for the firm before either is sent, and the placeholders left for jurisdiction-specific language are filled in. A template of the same name that the firm already has is left untouched.
 
-When you open a matter or prepare its intake packet, *Use the standard questions for this matter type* loads a questionnaire and a list of requested client uploads chosen from the matter type or practice area — family, criminal, personal injury, estate, employment, business, real estate, immigration, bankruptcy, litigation, mediation, or general. It replaces whatever is in those boxes, so review and edit the questions before sending.
+In **Start this case**, the fee agreement, the client questionnaire, and the client intake form are listed together. The questionnaire opens with the standard questions and requested uploads for the matter type or practice area — family, criminal, personal injury, estate, employment, business, real estate, immigration, bankruptcy, litigation, mediation, or general — and *Reset to standard questions* restores them after edits. The same questions can be loaded from the matter intake panel with *Use the standard questions for this matter type*.
 
-Sending is unchanged: the packet still requires an attorney-reviewed fee agreement chosen from the matter's documents or uploaded as a PDF.
+When a fee agreement is included, signing it opens the portal and starts the 24-hour follow-up clock; the packet still requires an attorney-reviewed fee agreement chosen from the matter's documents or uploaded as a PDF. With no fee agreement, the portal is open on the first message and the follow-up still runs.
+
+The Send step previews the client message before anything goes out. *Message the client will receive* shows the branded email, with the firm's name and contact details and an **Open Secure Client Portal** button, and a **Text** tab shows the shorter SMS copy. Email and text are separate messages. The preview link is a sample because the real portal token is created only when the packet is sent; signing the fee agreement opens the rest of the portal on that same link rather than sending a second one.
 
 ## Capture a call
 

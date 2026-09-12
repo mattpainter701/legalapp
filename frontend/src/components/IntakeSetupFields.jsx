@@ -13,7 +13,9 @@ export function intakeOptions(setup, clientEmail = '') {
   return {
     email: setup.email || clientEmail, channels: setup.channels, timezone: setup.timezone,
     owner_id: setup.owner_id || null, sms_permission_verified: setup.sms_permission_verified,
-    questions: setup.questions.split('\n').map(s => s.trim()).filter(Boolean).map((label, i) => ({ key: `question_${i + 1}`, label, required: true })),
+    questions: setup.include_questionnaire !== false
+      ? setup.questions.split('\n').map(s => s.trim()).filter(Boolean).map((label, i) => ({ key: `question_${i + 1}`, label, required: true }))
+      : [],
     agreement_document_id: setup.agreement_document_id || null,
     agreement_due_at: dueDateToIso(setup.agreement_due, setup.timezone),
     questionnaire_due_at: setup.include_questionnaire !== false ? dueDateToIso(setup.questionnaire_due, setup.timezone) : null,
@@ -60,9 +62,11 @@ export default function IntakeSetupFields({ value, onChange, onFile, clientEmail
     <div className="space-y-1"><button type="button" className="underline" onClick={loadStarterPack}>Use the standard questions for this matter type</button>
       {packNote && <p role="status" className="text-sm">{packNote}</p>}</div>
     <label className="block">Requested uploads due from client<input className={input} type="date" value={value.uploads_due || ''} onChange={e => field('uploads_due', e.target.value)} /></label>
-    <label className="block">Requested client uploads — one per line<textarea className={input} rows={3} value={value.upload_requirements || ''} onChange={event => field('upload_requirements', event.target.value)} placeholder="Marriage certificate&#10;Recent bank statements" /></label>
-    {value.include_questionnaire !== false && <label className="block">Questionnaire due from client<input className={input} type="date" value={value.questionnaire_due || ''} onChange={e => field('questionnaire_due', e.target.value)} /></label>}
-    <label className="block">Questionnaire — one required question per line<textarea className={input} rows={5} value={value.questions} onChange={e => field('questions', e.target.value)} /></label>
+    <label className="block">Requested client uploads — one per line<textarea className={input} rows={3} value={value.upload_requirements || ''} onChange={event => field('upload_requirements', event.target.value)} placeholder={'The client intake form\nRecent statements'} /></label>
+    {value.include_questionnaire !== false && <>
+      <label className="block">Questionnaire due from client<input className={input} type="date" value={value.questionnaire_due || ''} onChange={e => field('questionnaire_due', e.target.value)} /></label>
+      <label className="block">Questionnaire — one required question per line<textarea className={input} rows={5} value={value.questions} onChange={e => field('questions', e.target.value)} /></label>
+    </>}
     <p className="text-sm">A due date creates an assigned follow-up task, due at 5pm in the client&rsquo;s timezone. Fee agreement signing triggers portal delivery and a staff follow-up due within 24 hours. Outstanding paperwork is followed up after 7 days. Completing required paperwork creates the separate meeting-scheduling task. SMS uses recorded permission and quiet hours; email uses the connected Microsoft or Google mailbox when available.</p>
   </fieldset>
 }

@@ -142,6 +142,17 @@ _BASE_HTML = """\
 """
 
 
+def render_branded_email(content_html: str, *, timestamp: str | None = None) -> str:
+    """Wrap pre-escaped body HTML in the shared branded client-email shell.
+
+    Callers own their own copy and escaping; this only supplies the header /
+    wrapper / footer chrome so every client-facing message looks like the same
+    firm wrote it. ``content_html`` must already be safe markup.
+    """
+    stamp = timestamp or datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
+    return _BASE_HTML.format(content=content_html, timestamp=stamp)
+
+
 def _urgency_class(days_until: int) -> str:
     if days_until <= 13:
         return "critical"

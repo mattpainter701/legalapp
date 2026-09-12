@@ -68,7 +68,7 @@ test('Jane Doe: create matter, review fee, send paperwork, sign, unlock portal, 
   await expect.poll(() => messages().length).toBe(1)
   const initial = messages()[0]
   expect(initial.body).toContain('General intake form')
-  const link = initial.body.match(/https?:[^ ]+token=[A-Za-z0-9_-]+/)[0]
+  const link = initial.body.match(/https?:\/\/\S*token=[A-Za-z0-9_-]+/)[0]
   const clientContext = await browser.newContext({ baseURL: new URL(page.url()).origin })
   const clientPage = await clientContext.newPage()
   try {

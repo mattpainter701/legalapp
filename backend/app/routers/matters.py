@@ -585,6 +585,7 @@ async def list_matters(
             selectinload(Matter.assignments).selectinload(MatterAssignment.user),
             selectinload(Matter.client),
             selectinload(Matter.attorney_of_record),
+            selectinload(Matter.partner_attorney),
         )
         .where(and_(*conditions))
         .order_by(sort_col)
@@ -640,6 +641,11 @@ async def list_matters(
             if m.attorney_of_record
             else None
         )
+        partner_attorney_name = (
+            getattr(m.partner_attorney, "full_name", None)
+            if m.partner_attorney
+            else None
+        )
         assigned_to = [
             a.user.full_name for a in m.assignments if a.user and a.user.full_name
         ]
@@ -684,6 +690,8 @@ async def list_matters(
                 primary_plugin=m.primary_plugin,
                 client_name=client_name,
                 attorney_of_record_name=attorney_name,
+                partner_attorney_name=partner_attorney_name,
+                stage=m.stage,
                 assigned_to=assigned_to,
                 budget_amount=m.budget_amount,
                 total_billed=total_billed,
@@ -692,6 +700,7 @@ async def list_matters(
                 next_deadline=next_deadline,
                 cloud_folder=m.cloud_folder,
                 created_at=m.created_at or datetime.now(timezone.utc),
+                updated_at=m.updated_at,
             )
         )
 
@@ -959,6 +968,7 @@ async def get_my_matters(
             selectinload(Matter.assignments).selectinload(MatterAssignment.user),
             selectinload(Matter.client),
             selectinload(Matter.attorney_of_record),
+            selectinload(Matter.partner_attorney),
         )
         .where(
             Matter.tenant_id == tenant_id,
@@ -1020,6 +1030,11 @@ async def get_my_matters(
         attorney_name = (
             getattr(m.attorney_of_record, "full_name", None)
             if m.attorney_of_record
+            else None
+        )
+        partner_attorney_name = (
+            getattr(m.partner_attorney, "full_name", None)
+            if m.partner_attorney
             else None
         )
         assigned_to = [
@@ -1084,6 +1099,8 @@ async def get_my_matters(
                 primary_plugin=m.primary_plugin,
                 client_name=client_name,
                 attorney_of_record_name=attorney_name,
+                partner_attorney_name=partner_attorney_name,
+                stage=m.stage,
                 assigned_to=assigned_to,
                 budget_amount=m.budget_amount,
                 total_billed=my_billed_map.get(m.id, Decimal("0")),
@@ -1103,6 +1120,7 @@ async def get_my_matters(
                 next_deadline=next_deadline,
                 cloud_folder=m.cloud_folder,
                 created_at=m.created_at or datetime.now(timezone.utc),
+                updated_at=m.updated_at,
                 my_role=my_role or "associate",
                 my_assignment_id=my_assignment_id,
                 is_active_working=bool(is_active_working),

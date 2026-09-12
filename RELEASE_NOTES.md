@@ -35,6 +35,17 @@ The retainer, its replenishment threshold, the contingency percentage, and the v
 - **Matters record their venue.** The matter record gains a venue field, set the same way as jurisdiction, so every document that names a forum fills from one place.
 - **Half-empty templates can't be approved.** Approving a template now checks that every required placeholder has a record or a default behind it, and jurisdiction terms must name their jurisdiction.
 
+## 2026.09.11.14 — Preview the message before you send it
+
+Released September 11, 2026.
+
+Client paperwork now goes out as a branded email with the firm's name and contact details and a clear portal button, with a separate short text, and the Send step previews both before anything is sent.
+
+- **See the message before you send it.** The Send step shows the exact branded email and short text the client will receive, rendered by the same code that delivers them.
+- **The email looks like your firm.** Paperwork now carries your firm's name and contact details and an Open Secure Client Portal button instead of one plain paragraph.
+- **Email and text are separate messages.** The full checklist stays in the email; the text is a short line with the link, so the message is readable on any phone.
+- **One link, described correctly.** The message no longer promises a second portal link: the invitation link is the portal, and signing the fee agreement unlocks the rest.
+
 ## 2026.09.11.13 — Intake answers apply to the matter after review
 
 Released September 11, 2026.
@@ -44,6 +55,16 @@ Questionnaire answers propose updates to the contact and matter record (address,
 - **Review questionnaire updates instead of retyping them.** Answers that map to the client contact or the matter — address, phone, case number, court, jurisdiction — become changes staff accept or reject, nothing retyped.
 - **Conflicts of interest checked automatically.** Names from the conflict section are checked against the firm's contacts and matters when the form is submitted, and the result is attached to the review task.
 - **Nothing changes without staff approval.** Every proposed update waits for a staff member's decision, and a change is refused for re-review if the record moved after the proposal was made.
+
+## 2026.09.11.16 — Send any of the three standard pieces
+
+Released September 11, 2026.
+
+Start this case now lists the fee agreement, questionnaire, and client intake form together, fills the questionnaire with the matter type's own questions, and can send any subset.
+
+- **The three common pieces, side by side.** The fee agreement, client questionnaire, and client intake form are each listed and selectable, so a firm can send one, two, or all three.
+- **A fee agreement is now optional.** Send only the questionnaire or requested uploads when no agreement is needed. Signing still opens the portal when an agreement goes out.
+- **Questions match the matter type.** The questionnaire starts with the standard questions for the matter type, and the upload hint shows examples for that practice instead of one generic list.
 
 ## 2026.09.11.11 — Declined signatures and resilient signing
 
