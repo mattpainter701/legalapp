@@ -1044,7 +1044,10 @@ def render_client_message(
             else "Please review and complete your paperwork"
         )
         if labels:
-            intro = f"{firm} has prepared the following for you to review and complete:"
+            intro = (
+                f"{firm} has prepared the following paperwork for you to "
+                "review and complete:"
+            )
         elif uploads:
             intro = f"{firm} has asked you to provide the following:"
         else:
