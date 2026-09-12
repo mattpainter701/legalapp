@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.12.3",
+      "version": "2026.09.12.3",
+      "title": "Sessions that end when you end them",
+      "published_at": "2026-09-12",
+      "summary": "Resetting your password now signs out everyone using your account, anywhere. You can also sign out your other devices yourself. Sessions left unused sign out after 12 hours.",
+      "highlights": [
+        {
+          "title": "A password reset signs out everyone",
+          "description": "Resetting your password now ends every session on your account, on every device. Before, it changed the password and left anyone already signed in where they were."
+        },
+        {
+          "title": "Sign out your other devices",
+          "description": "A new control on your profile ends every other session on your account. The device you are using stays signed in."
+        },
+        {
+          "title": "Unused sessions end on their own",
+          "description": "A session left alone for 12 hours signs out, and none stays signed in beyond 30 days. You will be asked to sign in more often than before."
+        }
+      ]
+    },
+    {
       "id": "2026.09.12.2",
       "version": "2026.09.12.2",
       "title": "Bills you can correct, send, and settle from trust",

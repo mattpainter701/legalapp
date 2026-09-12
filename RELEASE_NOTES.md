@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.12.3 — Sessions that end when you end them
+
+Released September 12, 2026.
+
+Resetting your password now signs out everyone using your account, anywhere. You can also sign out your other devices yourself. Sessions left unused sign out after 12 hours.
+
+- **A password reset signs out everyone.** Resetting your password now ends every session on your account, on every device. Before, it changed the password and left anyone already signed in where they were.
+- **Sign out your other devices.** A new control on your profile ends every other session on your account. The device you are using stays signed in.
+- **Unused sessions end on their own.** A session left alone for 12 hours signs out, and none stays signed in beyond 30 days. You will be asked to sign in more often than before.
+
 ## 2026.09.12.2 — Bills you can correct, send, and settle from trust
 
 Released September 12, 2026.

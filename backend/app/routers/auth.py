@@ -27,6 +27,7 @@ from app.services.navigation import resolve_navigation
 from app.services.module_visibility import resolve_enabled_modules, resolve_plan_meta
 from app.services.plugin_entitlements import active_plugin_names
 from app.services.rbac_service import get_user_capabilities
+from app.services import session_policy
 from app.services.llm_routing import resolve_llm_route, route_matter_context_allowed
 from app.services.office_access import (
     require_office_globally_enabled,
@@ -489,7 +490,20 @@ def _refresh_family_revoked_key(family: str) -> str:
     return f"refresh_family_revoked:{family}"
 
 
-_REFRESH_TTL = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+# The idle bound: a rotating token's TTL, restarted by every rotation. The
+# absolute bound cannot be a TTL for exactly that reason, so it is carried on
+# the chain itself and checked in :func:`refresh` — see session_policy.
+_REFRESH_TTL = session_policy.idle_ttl_seconds()
+
+# What the person sees. The reason is logged for an operator; the response says
+# only that the session ended, since the distinction between "you signed out
+# everywhere", "this session hit its maximum age" and "this chain predates the
+# policy" changes nothing about what they must now do.
+_REFRESH_REFUSAL_DETAIL = {
+    session_policy.SESSION_REVOKED: "Session ended; sign in again",
+    session_policy.ABSOLUTE_LIFETIME_EXCEEDED: "Session expired; sign in again",
+    session_policy.ORIGIN_UNKNOWN: "Session expired; sign in again",
+}
 
 # Consuming a token and writing its family tombstone must be one Redis operation.
 # Otherwise two simultaneous refreshes can both observe the token as live before
@@ -578,7 +592,10 @@ async def _consume_refresh_token(request: Request, token: str) -> tuple[str, str
 
 
 async def _create_refresh_token(
-    request: Request, user: User, family: str | None = None
+    request: Request,
+    user: User,
+    family: str | None = None,
+    family_issued_at: float | None = None,
 ) -> str:
     """Mint a new opaque refresh token, persisted in Redis and tracked by family.
 
@@ -588,7 +605,8 @@ async def _create_refresh_token(
     us revoke the whole chain on token-reuse detection.
 
     Redis layout:
-      ``refresh:{token}``         -> JSON {"user_id", "family"}, TTL = REFRESH_TTL
+      ``refresh:{token}``         -> JSON {"user_id", "family", "family_issued_at"},
+                                     TTL = REFRESH_TTL
       ``refresh_family:{family}`` -> SET of live tokens in the chain, TTL = REFRESH_TTL
       ``refresh_used:{token}``    -> family id, TTL = consumed token's remaining TTL
       ``refresh_family_revoked:*`` prevents a revoked chain from being reissued
@@ -600,6 +618,11 @@ async def _create_refresh_token(
     token = secrets.token_urlsafe(48)
     if family is None:
         family = str(uuid.uuid4())
+    if family_issued_at is None:
+        # A new chain starts now; a rotation passes its predecessor's origin
+        # through unchanged, which is what makes the absolute bound survive
+        # rotation instead of being renewed by it.
+        family_issued_at = _time.time()
 
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
@@ -609,7 +632,13 @@ async def _create_refresh_token(
         )
         return token
 
-    payload = _json.dumps({"user_id": str(user.id), "family": family})
+    payload = _json.dumps(
+        {
+            "user_id": str(user.id),
+            "family": family,
+            "family_issued_at": family_issued_at,
+        }
+    )
     issued = await redis.eval(
         _ISSUE_REFRESH_SCRIPT,
         3,
@@ -1804,7 +1833,15 @@ async def reset_password(
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
     user.password_hash = _hash_password(body.password)
+    # A reset is the action people take when they believe someone else is in
+    # their account. Changing the hash alone left that someone's rotating chain
+    # renewing itself for its full idle window, so stamp the epoch that voids
+    # every credential minted before now: access tokens by ``iat``, refresh
+    # chains by their origin. Rotation and request authorisation both consult
+    # it, so this holds across every worker without needing to find the keys.
+    user.sessions_valid_after = session_policy.session_epoch_now()
     await db.commit()
+    logger.info("Password reset ended all sessions for user_id=%s", user.id)
 
     return {"message": "Password reset successfully"}
 
@@ -1881,6 +1918,69 @@ async def logout(request: Request, response: Response):
     return {"message": "Logged out successfully"}
 
 
+@router.post("/sessions/revoke-all", response_model=TokenResponse)
+async def revoke_all_sessions(
+    request: Request, response: Response, db: AsyncSession = Depends(get_db)
+):
+    """End every session this user holds, then re-establish the calling one.
+
+    This is the self-service counterpart to the epoch a password reset stamps:
+    the answer to "I left myself signed in somewhere". Every access token and
+    rotation chain minted before now is void, on every device and every worker,
+    without having to enumerate credentials that live in Redis under keys only
+    the holder's token can name.
+
+    The caller is deliberately re-issued rather than signed out with everyone
+    else — being logged out of the device you are asking from is a surprising
+    way to answer "sign out my other devices", and makes the control something
+    people avoid using.
+    """
+    user = await get_current_user(request, db)
+
+    user.sessions_valid_after = session_policy.session_epoch_now()
+    await db.commit()
+
+    # The caller's own chain is revoked outright as well as voided by the epoch,
+    # so the token in the cookie about to be replaced is dead immediately rather
+    # than at its next rotation attempt.
+    presented = request.cookies.get("refresh_token")
+    if presented:
+        redis = getattr(request.app.state, "redis", None)
+        if redis:
+            try:
+                raw = await redis.get(_refresh_key(presented))
+                if raw:
+                    data = _json.loads(
+                        raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                    )
+                    family = data.get("family")
+                    if family:
+                        await _revoke_refresh_family(request, family)
+            except Exception:
+                # The epoch has already been committed, which is what actually
+                # ends the sessions. Failing to also tidy Redis must not fail
+                # the request and leave the user thinking nothing happened.
+                logger.exception(
+                    "Could not revoke the calling refresh family for user_id=%s",
+                    user.id,
+                )
+
+    await set_tenant_context(db, str(user.tenant_id))
+    tenant = user.tenant
+    access_token = await _issue_access_token(db, user, tenant)
+    new_refresh = await _create_refresh_token(request, user)
+    _set_auth_cookies(response, access_token, new_refresh)
+    logger.info("User user_id=%s ended all other sessions", user.id)
+
+    return TokenResponse(
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        role=user.role,
+        email=user.email,
+        full_name=user.full_name,
+    )
+
+
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(
     request: Request, response: Response, db: AsyncSession = Depends(get_db)
@@ -1896,6 +1996,11 @@ async def refresh(
     atomically revokes the live family. Once the original credential would have
     expired, its tombstone also expires and later submissions are simply invalid.
     Redis is required; without it refresh is disabled.
+
+    Rotation is also where the two bounds a renewable TTL cannot express are
+    enforced: the chain's absolute lifetime, and the user's session epoch. A
+    chain refused for either reason is revoked outright rather than merely
+    declined, so its live successor cannot be rotated from another device.
     """
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
@@ -1933,6 +2038,17 @@ async def refresh(
             await _revoke_refresh_family(request, family)
         raise HTTPException(status_code=401, detail="User not found or inactive")
 
+    family_issued_at = data.get("family_issued_at")
+    refusal = session_policy.rotation_refusal_reason(
+        family_issued_at=family_issued_at,
+        sessions_valid_after=user.sessions_valid_after,
+    )
+    if refusal:
+        if family:
+            await _revoke_refresh_family(request, family)
+        logger.info("Refresh refused for user_id=%s reason=%s", user.id, refusal)
+        raise HTTPException(status_code=401, detail=_REFRESH_REFUSAL_DETAIL[refusal])
+
     tenant = user.tenant
     try:
         require_active_tenant(tenant)
@@ -1941,7 +2057,9 @@ async def refresh(
             await _revoke_refresh_family(request, family)
         raise
     access_token = await _issue_access_token(db, user, tenant)
-    new_refresh = await _create_refresh_token(request, user, family=family)
+    new_refresh = await _create_refresh_token(
+        request, user, family=family, family_issued_at=family_issued_at
+    )
     _set_auth_cookies(response, access_token, new_refresh)
 
     return TokenResponse(

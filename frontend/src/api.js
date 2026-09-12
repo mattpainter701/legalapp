@@ -234,9 +234,13 @@ const clearAuthState = () => {
   }
 }
 
+// Sessions now end on their own — an idle window, an absolute maximum age, or
+// the user having signed out everywhere — so a bounce to /login is routine
+// rather than a failure. Carry the reason so the login page can say what
+// happened instead of leaving people wondering whether something broke.
 const redirectToLogin = () => {
   if (window.location.pathname !== '/login') {
-    window.location.href = '/login'
+    window.location.href = '/login?reason=session_expired'
   }
 }
 
@@ -309,6 +313,11 @@ export const createDemoSession = (data) => api.post('/demo/session', data).then(
 // Professional context is deliberately kept with the authenticated user. It is
 // used to tailor assistance across conversations, not stored in the browser.
 export const updateMe = (data) => api.patch('/auth/me', data).then((r) => r.data)
+
+// Ends every session this user holds, on every device, and re-establishes the
+// calling one so the person is not signed out of the device they asked from.
+export const revokeAllSessions = () =>
+  api.post('/auth/sessions/revoke-all').then((r) => r.data)
 
 export const register = (data) =>
   api.post('/auth/register', data).then((r) => r.data)
