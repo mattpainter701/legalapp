@@ -78,8 +78,11 @@ async def test_saturated_generation_pool_does_not_starve_ordinary_requests(
     the lease behaves exactly as it does in production.
     """
     pool_size, overflow = 1, 0
+    # Pass the URL object, never str(url): SQLAlchemy renders the password as
+    # "***" in the string form, which authenticates only against a trust-auth
+    # cluster and fails wherever passwords are actually checked.
     tiny_engine = create_async_engine(
-        str(test_engine.url),
+        test_engine.url,
         pool_size=pool_size,
         max_overflow=overflow,
         pool_timeout=0.5,
@@ -135,7 +138,7 @@ async def test_exhausted_generation_pool_leaks_no_connection(
 ):
     """A refused lease must not strand the slot it failed to acquire."""
     tiny_engine = create_async_engine(
-        str(test_engine.url), pool_size=1, max_overflow=0, pool_timeout=0.5
+        test_engine.url, pool_size=1, max_overflow=0, pool_timeout=0.5
     )
     monkeypatch.setattr(
         chat_router, "get_generation_engine", lambda _request_engine: tiny_engine
@@ -176,7 +179,7 @@ async def test_streaming_turn_consumes_a_generation_slot_not_a_request_slot(
 ):
     """The lease a real turn takes comes from the generation pool."""
     tiny_engine = create_async_engine(
-        str(test_engine.url), pool_size=2, max_overflow=0, pool_timeout=0.5
+        test_engine.url, pool_size=2, max_overflow=0, pool_timeout=0.5
     )
     monkeypatch.setattr(
         chat_router, "get_generation_engine", lambda _request_engine: tiny_engine
@@ -214,7 +217,7 @@ async def test_lease_conflict_still_returns_busy_not_capacity(
     different problems and the caller should be told which one it hit.
     """
     roomy_engine = create_async_engine(
-        str(test_engine.url), pool_size=5, max_overflow=0, pool_timeout=0.5
+        test_engine.url, pool_size=5, max_overflow=0, pool_timeout=0.5
     )
     monkeypatch.setattr(
         chat_router, "get_generation_engine", lambda _request_engine: roomy_engine
