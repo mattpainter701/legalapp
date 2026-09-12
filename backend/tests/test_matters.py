@@ -205,3 +205,39 @@ async def test_matter_response_carries_client_email_and_contact_type(
     assert payload["client_name"] == "Jane Doe"
     assert payload["client_email"] == "jane.doe@example.com"
     assert payload["client_contact_type"] == "client"
+
+
+@pytest.mark.asyncio
+async def test_matter_response_includes_the_resolved_practice(client):
+    created = await client.post(
+        "/api/matters",
+        json={
+            "matter_name": "Resolved Practice Matter",
+            "matter_type": "general",
+            "practice_area": "Family Law",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["resolved_practice"] == {
+        "slug": "family",
+        "label": "Family and domestic relations",
+    }
+
+    fetched = await client.get(f"/api/matters/{created.json()['id']}")
+
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["resolved_practice"]["slug"] == "family"
+
+
+@pytest.mark.asyncio
+async def test_matter_response_resolved_practice_is_null_when_unrecognised(client):
+    created = await client.post(
+        "/api/matters",
+        json={
+            "matter_name": "Unrecognised Practice Matter",
+            "matter_type": "general",
+            "practice_area": "Intergalactic treaty",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["resolved_practice"] is None

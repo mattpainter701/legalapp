@@ -42,6 +42,7 @@ from app.services.configurable_workflows import (
     build_preview,
     digest_payload,
 )
+from app.services.practice_resolution import practice_key
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,17 @@ def _normalized(value: str | None) -> str | None:
         return None
     clean = value.strip().lower()
     return clean or None
+
+
+def _canonical(value: str | None) -> str | None:
+    """Reduce a free-text practice label to a stable comparison key.
+
+    A label the shared alias table recognises compares by its practice slug,
+    so "Dissolution of Marriage" and "Family Law" are the same practice; a
+    label the table does not know keeps the historical normalized string.
+    """
+
+    return practice_key(value) or _normalized(value)
 
 
 def rule_definition_payload(rule: MatterWorkflowAutomationRule) -> dict[str, Any]:
@@ -80,13 +92,13 @@ def rule_matches(
     if trigger_event == "matter_stage_changed":
         if _normalized(matter.stage) != _normalized(rule.trigger_stage):
             return False
-    if rule.match_matter_type is not None and _normalized(
+    if rule.match_matter_type is not None and _canonical(
         matter.matter_type
-    ) != _normalized(rule.match_matter_type):
+    ) != _canonical(rule.match_matter_type):
         return False
-    if rule.match_practice_area is not None and _normalized(
+    if rule.match_practice_area is not None and _canonical(
         matter.practice_area
-    ) != _normalized(rule.match_practice_area):
+    ) != _canonical(rule.match_practice_area):
         return False
     return True
 

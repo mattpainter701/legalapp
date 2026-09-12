@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.11.12",
+      "version": "2026.09.11.12",
+      "title": "One practice resolver behind routing",
+      "published_at": "2026-09-11",
+      "summary": "Plugin suggestions and workflow automations resolve matter labels through one shared alias-aware resolver, so “Dissolution of Marriage” routes to family everywhere. Matters show the resolved practice so staff can correct mis-resolved ones.",
+      "highlights": [
+        {
+          "title": "One resolver behind routing",
+          "description": "Plugin suggestions and workflow automations resolve matter labels through the same alias table the intake pack uses, so “Dissolution of Marriage” is family everywhere."
+        },
+        {
+          "title": "Plugin suggestions understand practice aliases",
+          "description": "A matter whose text never mentions a plugin's keywords still gets the right add-on when its practice resolves; existing substring matches keep working, so tenants do not regress."
+        },
+        {
+          "title": "The matter record shows its resolved practice",
+          "description": "Matter detail now carries the resolved practice slug and label, so staff can see how a matter was read and correct one that resolved wrong."
+        }
+      ]
+    },
+    {
       "id": "2026.09.11.15",
       "version": "2026.09.11.15",
       "title": "Fee agreements fill themselves — drafts can't be approved half-empty",
@@ -69,8 +90,8 @@
       ]
     },
     {
-      "id": "2026.09.11.12",
-      "version": "2026.09.11.12",
+      "id": "2026.09.11.16",
+      "version": "2026.09.11.16",
       "title": "Send any of the three standard pieces",
       "published_at": "2026-09-11",
       "summary": "Start this case now lists the fee agreement, questionnaire, and client intake form together, fills the questionnaire with the matter type's own questions, and can send any subset.",
