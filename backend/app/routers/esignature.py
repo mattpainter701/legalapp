@@ -40,6 +40,7 @@ from app.schemas.signature import (
 )
 from app.services.esign import (
     complete_request_if_done,
+    decline_event,
     get_provider,
     mark_request_expired_if_needed,
     record_portal_decline,
@@ -66,6 +67,7 @@ from app.services.matter_file_store import (
     MatterFileMetadataError,
     MatterFileNotFound,
     MatterFileReadError,
+    MatterFileStoragePolicyError,
     MatterFileStore,
     MatterFileTooLarge,
 )
@@ -261,6 +263,27 @@ def _matching_portal_signer(
         key=lambda s: s.sign_order,
     )
     return pending[0] if pending else None
+
+
+def _signed_portal_signer(
+    req: SignatureRequest,
+    ctx: ClientPortalContext,
+    signer_id: str | None,
+) -> SignatureSigner | None:
+    """A signer for this portal identity that already signed.
+
+    Used to retry completion after a downstream storage outage without asking
+    the client to sign a second time (their typed consent is unchanged).
+    """
+    candidates = [
+        s
+        for s in req.signers
+        if s.status == "signed"
+        and _portal_signer_matches_context(s, ctx)
+        and (signer_id is None or str(s.id) == signer_id)
+    ]
+    candidates.sort(key=lambda s: s.sign_order)
+    return candidates[0] if candidates else None
 
 
 # ── Firm side ───────────────────────────────────────────────────────────────
@@ -799,30 +822,45 @@ async def portal_sign(
         )
 
     # Resolve the signer: explicit signer_id, else the next pending in order.
+    # A portal identity that already signed may retry: completion can fail on a
+    # downstream storage outage after the signature is durable, and the client
+    # must not have to sign again to finish.
     signer = _matching_portal_signer(req, ctx, body.signer_id)
+    already_signed = False
+    if signer is None:
+        signer = _signed_portal_signer(req, ctx, body.signer_id)
+        already_signed = signer is not None
     if signer is None:
         raise HTTPException(
             status_code=403,
             detail="No pending signer is currently available for this portal session",
         )
-    if signer.status != "pending":
-        raise HTTPException(status_code=409, detail="Signer already actioned")
-    if not signer_can_act_now(req, signer):
-        raise HTTPException(
-            status_code=409, detail="An earlier signer must complete first"
+    if not already_signed:
+        if signer.status != "pending":
+            raise HTTPException(status_code=409, detail="Signer already actioned")
+        if not signer_can_act_now(req, signer):
+            raise HTTPException(
+                status_code=409, detail="An earlier signer must complete first"
+            )
+        ip = request.client.host if request.client else None
+        await record_portal_signature(
+            signer,
+            typed_signature=body.typed_signature.strip(),
+            ip=ip,
+            consent_text_version=body.consent_text_version,
+            user_agent=request.headers.get("user-agent"),
         )
 
-    ip = request.client.host if request.client else None
-    await record_portal_signature(
-        signer,
-        typed_signature=body.typed_signature.strip(),
-        ip=ip,
-        consent_text_version=body.consent_text_version,
-        user_agent=request.headers.get("user-agent"),
-    )
-
     matter = await db.get(Matter, req.matter_id)
-    await complete_request_if_done(db, req, matter)
+    try:
+        await complete_request_if_done(db, req, matter)
+    except (HTTPException, MatterFileStoragePolicyError):
+        # The client's own typed signature and consent are already captured on
+        # this session. Commit that act so a storage outage cannot silently
+        # discard a signature the client gave; the request stays open and a
+        # retry re-attempts evidence storage without re-signing.
+        await db.commit()
+        raise
     # Evidence and onboarding milestone commit together; provider delivery is
     # handled by the durable worker after this transaction succeeds.
     if req.status == "completed":
@@ -891,6 +929,20 @@ async def portal_decline(
 
     ip = request.client.host if request.client else None
     await record_portal_decline(req, signer, reason=body.reason, ip=ip)
+    # A decline is terminal, so the firm must see it on the matter and stop
+    # chasing the signature. Mirror the completed path: close the follow-up
+    # task, put the reason on the matter timeline, and reconcile the intake
+    # packet so the paperwork drawer reflects the declined request.
+    matter = await db.get(Matter, req.matter_id)
+    if matter is not None:
+        db.add(decline_event(req, matter))
+    await close_signature_followup(db, req, "Signer declined")
+    from app.services import matter_intake
+
+    await db.flush()
+    packet = await matter_intake.get_packet(db, req.tenant_id, req.matter_id, lock=True)
+    if packet is not None:
+        await matter_intake.reconcile(db, packet)
     await db.commit()
 
     result = await db.execute(

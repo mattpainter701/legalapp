@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.11.12 — Preview the message before you send it
+## 2026.09.11.13 — Preview the message before you send it
 
 Released September 11, 2026.
 
@@ -16,7 +16,7 @@ Client paperwork now goes out as a branded email with the firm's name and contac
 - **Email and text are separate messages.** The full checklist stays in the email; the text is a short line with the link, so the message is readable on any phone.
 - **One link, described correctly.** The message no longer promises a second portal link: the invitation link is the portal, and signing the fee agreement unlocks the rest.
 
-## 2026.09.11.11 — Send any of the three standard pieces
+## 2026.09.11.12 — Send any of the three standard pieces
 
 Released September 11, 2026.
 
@@ -25,6 +25,16 @@ Start this case now lists the fee agreement, questionnaire, and client intake fo
 - **The three common pieces, side by side.** The fee agreement, client questionnaire, and client intake form are each listed and selectable, so a firm can send one, two, or all three.
 - **A fee agreement is now optional.** Send only the questionnaire or requested uploads when no agreement is needed. Signing still opens the portal when an agreement goes out.
 - **Questions match the matter type.** The questionnaire starts with the standard questions for the matter type, and the upload hint shows examples for that practice instead of one generic list.
+
+## 2026.09.11.11 — Declined signatures and resilient signing
+
+Released September 11, 2026.
+
+When a client declines to sign, the matter shows it and the follow-up stops. A signature is not lost if file storage is briefly unavailable, and moving around a matter no longer hits the rate limit.
+
+- **Declines reach the matter.** The decline and the client's reason appear on the matter timeline, the chase task closes, and the paperwork drawer marks the form declined.
+- **Signatures survive a storage outage.** If cloud storage is briefly unavailable, the client's typed signature is kept and the request finishes on retry without asking them to sign again.
+- **Smoother matter navigation.** Opening and moving around a matter no longer trips the rate limit that briefly blocked dashboard, documents, messages and tasks.
 
 ## 2026.09.11.10 — Prepare paperwork from a firm template
 

@@ -12,6 +12,7 @@ from app.routers.esignature import _source_document_is_unchanged
 from app.schemas.signature import PortalSignRequest
 from app.services.esign.service import (
     complete_request_if_done,
+    decline_event,
     mark_request_expired_if_needed,
     next_pending_signers,
     record_portal_decline,
@@ -267,6 +268,10 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
     assert first_request.status == "partially_signed"
     assert first_request.completed_at is None
     assert first_request.provider_envelope_id is None
+    # A failed upload must not bind evidence hashes to a certificate that was
+    # never stored; the request is re-attempted byte-for-byte on retry.
+    assert first_request.evidence_sha256 is None
+    assert first_request.completion_artifact_sha256 is None
     assert db.added == []
     monkeypatch.setattr(
         esign_service._file_store, "store_matter_file_result", fake_store
@@ -313,3 +318,42 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
 def test_portal_signature_consent_is_fail_closed_by_default():
     body = PortalSignRequest(typed_signature="Signer")
     assert body.consent_to_electronic_signature is False
+
+
+def test_decline_event_names_reason_and_attributes_to_requester():
+    requester_id = uuid.uuid4()
+    matter = SimpleNamespace(
+        tenant_id=uuid.uuid4(),
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+    )
+    req = _request()
+    req.source_document_filename = "Fee agreement.pdf"
+    req.created_by_user_id = requester_id
+    req.decline_reason = "Wants a fixed fee"
+
+    event = decline_event(req, matter)
+
+    assert event.event_type == "signature"
+    assert event.tenant_id == matter.tenant_id
+    assert event.matter_id == matter.id
+    assert event.created_by == requester_id
+    assert "Fee agreement.pdf" in event.title
+    assert "Wants a fixed fee" in event.content
+    assert "revise" in event.content.lower()
+
+
+def test_decline_event_falls_back_to_responsible_user_and_nameless_document():
+    owner_id = uuid.uuid4()
+    matter = SimpleNamespace(
+        tenant_id=uuid.uuid4(), id=uuid.uuid4(), user_id=owner_id
+    )
+    req = _request()
+    req.source_document_filename = None
+    req.created_by_user_id = None
+    req.decline_reason = "   "
+
+    event = decline_event(req, matter)
+
+    assert event.created_by == owner_id
+    assert "document" in event.title

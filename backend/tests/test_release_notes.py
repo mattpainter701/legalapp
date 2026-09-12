@@ -6,7 +6,7 @@ from app.release_notes import RECENT_RELEASE_DAYS, build_release_catalog
 from app.main import app_version
 
 
-LATEST_RELEASE_ID = "2026.09.11.12"
+LATEST_RELEASE_ID = "2026.09.11.13"
 LATEST_RELEASE_DATE = date(2026, 9, 11)
 
 

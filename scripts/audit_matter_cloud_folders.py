@@ -11,12 +11,19 @@ BACKEND = Path(__file__).resolve().parents[1] / "backend"
 sys.path.insert(0, str(BACKEND))
 
 from app.database import async_session_maker  # noqa: E402
-from app.services.cloud_folder_audit import audit_matter_cloud_folders  # noqa: E402
+from app.services.cloud_folder_audit import (  # noqa: E402
+    audit_matter_cloud_folders,
+    bound_storage_readiness,
+)
 
 
 async def _run(tenant_id: str) -> dict:
     async with async_session_maker() as db:
-        return await audit_matter_cloud_folders(db, tenant_id)
+        report = await audit_matter_cloud_folders(db, tenant_id)
+        # Pair the raw folder inventory with the credential/binding explanation
+        # an operator needs when a signing or intake upload fails closed.
+        report["storage_policy"] = await bound_storage_readiness(db, tenant_id)
+        return report
 
 
 def main(argv: list[str] | None = None) -> int:

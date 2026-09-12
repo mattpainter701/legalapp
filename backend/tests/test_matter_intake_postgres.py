@@ -397,3 +397,103 @@ async def test_jane_doe_selected_packet_fee_milestone_and_client_upload(
         )
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_declined_agreement_reconciles_timeline_task_and_requirement(
+    db_session, test_user
+):
+    from app.models.client_portal import ClientPortalInvite
+    from app.models.signature import SignatureRequest
+
+    tenant_id = test_user.tenant_id
+    contact = Contact(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        first_name="Jane",
+        last_name="Doe",
+        email="jane@example.com",
+    )
+    db_session.add(contact)
+    await db_session.flush()
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        user_id=test_user.id,
+        slug=f"declined-{uuid.uuid4().hex[:8]}",
+        matter_name="Jane Doe divorce",
+        client_contact_id=contact.id,
+        status="open",
+    )
+    db_session.add(matter)
+    await db_session.flush()
+    request = SignatureRequest(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        matter_id=matter.id,
+        status="declined",
+        provider="internal",
+        source_document_filename="Fee agreement.pdf",
+        created_by_user_id=test_user.id,
+        declined_at=service.now(),
+        decline_reason="Wants a different fee structure",
+    )
+    invite = ClientPortalInvite(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        matter_id=matter.id,
+        contact_id=contact.id,
+        token_hash="a" * 64,
+        email=contact.email,
+        expires_at=service.now() + timedelta(days=14),
+    )
+    db_session.add_all([request, invite])
+    await db_session.flush()
+    packet = MatterIntake(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        matter_id=matter.id,
+        contact_id=contact.id,
+        owner_id=test_user.id,
+        created_by=test_user.id,
+        signature_id=request.id,
+        invite_id=invite.id,
+        encrypted_invite="encrypted",
+        status="awaiting_documents",
+        config={"timezone": "America/Chicago"},
+        requirements={"fee_agreement": {"completed": False, "due_at": None}},
+        answers={},
+        delivery={},
+    )
+    db_session.add(packet)
+    await db_session.commit()
+
+    await service.reconcile(db_session, packet)
+    await db_session.commit()
+
+    requirement = packet.requirements["fee_agreement"]
+    assert requirement["declined"] is True
+    assert requirement["decline_reason"] == "Wants a different fee structure"
+    events = (
+        await db_session.scalars(
+            select(MatterEvent).where(
+                MatterEvent.matter_id == matter.id,
+                MatterEvent.title == "Fee agreement declined",
+            )
+        )
+    ).all()
+    assert len(events) == 1
+    assert events[0].event_type == "signature"
+    task = await db_session.get(Task, uuid.uuid5(packet.id, "declined:fee_agreement"))
+    assert task is not None and task.status == "pending"
+
+    # A reconcile pass runs on every packet touch, so the branch must not
+    # duplicate the timeline entry or the rework task.
+    await service.reconcile(db_session, packet)
+    await db_session.commit()
+    events = (
+        await db_session.scalars(
+            select(MatterEvent).where(MatterEvent.title == "Fee agreement declined")
+        )
+    ).all()
+    assert len(events) == 1
