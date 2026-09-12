@@ -79,7 +79,7 @@ workstream.
 | `backend/migrations/versions/174_document_template_sets.py` | Both tables, RLS enabled and forced, `tenant_isolation` in the NULLIF form 173 established. |
 | `backend/app/routers/template_sets.py` | CRUD plus `GET /api/template-sets/{id}/interview`. |
 | `frontend/src/api.js` | The six client functions. |
-| `backend/tests/test_template_sets_unit.py`, `test_template_set_interview.py` | 17 + 9 tests. |
+| `backend/tests/test_template_sets_unit.py`, `test_template_set_interview.py`, `test_template_set_routes.py` | 17 + 9 + 14 tests. |
 
 - **Bound fields merge on canonical binding path; unbound fields never merge.**
   Two hand-typed blanks sharing a label are not evidence they are the same
@@ -113,8 +113,12 @@ workstream.
 
 - `ruff check backend/app` (CI-pinned 0.8.4) clean; `npm run lint` 0 errors
   (2 pre-existing `no-alert` warnings in files this branch does not touch).
-- **Backend: 490 passed, 0 failed** across every `tests/test_template*.py` plus
+- **Backend: 504 passed, 0 failed** across every `tests/test_template*.py` plus
   the migration tests, run against the real router and service code.
+- Coverage on the new modules, measured locally: `template_sets.py` (service)
+  100%, `template_labels.py` 100%, `document_template_set.py` 100%,
+  `template_cards.py` 97%, `template_sets.py` (router) 92% — all clear of the
+  80% diff-coverage gate.
 - **Frontend: 1054 passed across 166 files** — the entire suite.
 - Migration graph resolves with `174_document_template_sets` as the single
   head; `test_migrations.py` and `test_studio_render_migration.py` updated to
@@ -133,9 +137,11 @@ workstream.
   could not import: this sandbox's `mcp` package is a broken mix of versions.
   **These two matter** — they import `app.main`, which this branch edits to
   register the sets router. CI must confirm them.
-- **No DB-backed test exercises the sets endpoints or RLS.** The interview
-  helpers are tested with fakes. A tenant-isolation test over
-  `document_template_sets` is the first gap to close.
+- **No DB-backed test exercises the sets endpoints against live RLS.** The
+  handlers are covered through a mocked session (the pattern
+  `test_sample_template_routes.py` uses), which exercises the branches but not
+  the policies. A tenant-isolation test over `document_template_sets` is the
+  first gap to close.
 
 ---
 
@@ -143,9 +149,9 @@ workstream.
 
 ### W3 — finish Sets
 
-1. **DB-backed tests**: tenant isolation on both tables; a set whose member is
-   deleted; `PUT` reordering; the unique (set_id, position) path through
-   `_replace_items`.
+1. **DB-backed tests**: tenant isolation on both tables under live RLS. The
+   handler branches — duplicate name, template outside the library, reordering,
+   flush-before-insert — are already covered with a mocked session.
 2. **Render fan-out** through `durable_job`, per-member failure reporting, and
    a single "save all to matter" that writes one matter event per document
    naming the exact published version used.
