@@ -58,7 +58,7 @@ test('Jane Doe: create matter, review fee, send paperwork, sign, unlock portal, 
   // deadlines, then delivery.
   await page.getByRole('button', { name: 'Overview', exact: true }).click()
   await page.getByRole('button', { name: 'Send client paperwork', exact: true }).click()
-  await page.getByRole('combobox', { name: 'From matter documents' }).selectOption(fee.id)
+  await page.getByRole('combobox', { name: 'Choose the fee agreement' }).selectOption(fee.id)
   await labelled(page, 'General intake form.pdf').check()
   // Records the client already has are opt-in now, so nothing is requested by
   // accident. The questionnaire is a firm-supplied PDF, not a typed question
