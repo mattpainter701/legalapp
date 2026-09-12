@@ -139,6 +139,13 @@ class BudgetUtilization(BaseModel):
     billable_expense_amount: Decimal = Decimal("0")
 
 
+class ResolvedPractice(BaseModel):
+    """The shared practice resolver's reading of a matter's free-text labels."""
+
+    slug: str
+    label: str
+
+
 class MatterResponse(BaseModel):
     """Full matter detail."""
 
@@ -151,6 +158,7 @@ class MatterResponse(BaseModel):
     description: str | None
     matter_type: str | None
     practice_area: str | None
+    resolved_practice: ResolvedPractice | None = None
     role: str | None
     counterparty: str | None
     jurisdiction: str | None

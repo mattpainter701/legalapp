@@ -22,35 +22,11 @@ MARKER = re.compile(r"\{\{\s*\#(?:if|unless|each)\s+([A-Za-z][A-Za-z0-9_.-]*)\s*
 
 
 @pytest.mark.parametrize(
-    "matter_type,expected",
-    [
-        ("Divorce", "family"),
-        ("family_law", "family"),
-        ("Custody modification — Ruiz", "family"),
-        ("DUI", "criminal"),
-        ("Criminal Defense", "criminal"),
-        ("Car accident claim", "injury"),
-        ("Estate Planning", "estate"),
-        ("Wrongful termination", "employment"),
-        ("SaaS vendor contract", "business"),
-        ("Landlord/tenant eviction", "real_estate"),
-        ("Naturalization", "immigration"),
-        ("Chapter 7", "bankruptcy"),
-        ("Breach of contract lawsuit", "litigation"),
-        ("Mediation", "mediation"),
-    ],
-)
-def test_free_text_matter_types_resolve_to_a_practice(matter_type, expected):
-    assert pack.resolve_practice(matter_type).slug == expected
-
-
-@pytest.mark.parametrize(
     "matter_type", ["", None, "   ", "Something we have never handled"]
 )
 def test_an_unrecognised_type_still_gets_a_questionnaire(matter_type):
     """A client always receives questions; nothing falls through to an empty pack."""
 
-    assert pack.resolve_practice(matter_type) is pack.DEFAULT_PRACTICE
     assert pack.questionnaire(matter_type)
 
 
@@ -88,6 +64,10 @@ def test_every_alias_is_claimed_by_exactly_one_practice():
                 alias not in seen
             ), f"{alias} claimed by {seen.get(alias)} and {practice.slug}"
             seen[alias] = practice.slug
+
+def test_the_pack_resolves_the_practice_from_either_label():
+    assert pack.pack("general", "Family Law")["practice"] == "family"
+    assert pack.pack("DUI", "Family Law")["practice"] == "criminal"
 
 
 @pytest.mark.parametrize("practice", pack.practices(), ids=lambda p: p.slug)

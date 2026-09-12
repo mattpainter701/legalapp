@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.12 — One practice resolver behind routing
+
+Released September 11, 2026.
+
+Plugin suggestions and workflow automations resolve matter labels through one shared alias-aware resolver, so “Dissolution of Marriage” routes to family everywhere. Matters show the resolved practice so staff can correct mis-resolved ones.
+
+- **One resolver behind routing.** Plugin suggestions and workflow automations resolve matter labels through the same alias table the intake pack uses, so “Dissolution of Marriage” is family everywhere.
+- **Plugin suggestions understand practice aliases.** A matter whose text never mentions a plugin's keywords still gets the right add-on when its practice resolves; existing substring matches keep working, so tenants do not regress.
+- **The matter record shows its resolved practice.** Matter detail now carries the resolved practice slug and label, so staff can see how a matter was read and correct one that resolved wrong.
+
 ## 2026.09.11.15 — Fee agreements fill themselves — drafts can't be approved half-empty
 
 Released September 11, 2026.
