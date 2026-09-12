@@ -2349,6 +2349,36 @@ export const copyTemplate = (id, data) =>
 export const getTemplateBindings = () =>
   api.get('/templates/bindings').then(r => r.data)
 
+// Cards: the owner of a template field. Passing a matter resolves how many
+// instances each role card has on it, so the editor offers "Defendant 2" only
+// where a second defendant exists. Served alongside getTemplateBindings, not
+// instead of it — a template published before cards still resolves through the
+// exact paths it was reviewed with.
+export const getTemplateCards = (matterId) =>
+  api.get('/templates/cards', { params: matterId ? { matter_id: matterId } : {} }).then(r => r.data)
+
+// Sets: the templates a firm drafts together. The interview collapses every
+// member's fields into the questions that actually need asking, so a packet
+// asks for the caption once rather than once per document. Naming a matter
+// runs Smart Fill across the merged interview.
+export const listTemplateSets = (params) =>
+  api.get('/template-sets', { params }).then(r => r.data)
+
+export const getTemplateSet = (id) =>
+  api.get(`/template-sets/${id}`).then(r => r.data)
+
+export const createTemplateSet = (data) =>
+  api.post('/template-sets', data).then(r => r.data)
+
+export const replaceTemplateSet = (id, data) =>
+  api.put(`/template-sets/${id}`, data).then(r => r.data)
+
+export const deleteTemplateSet = (id) =>
+  api.delete(`/template-sets/${id}`).then(r => r.data)
+
+export const getTemplateSetInterview = (id, matterId) =>
+  api.get(`/template-sets/${id}/interview`, { params: matterId ? { matter_id: matterId } : {} }).then(r => r.data)
+
 export const getTemplateFieldLibrary = () =>
   api.get('/templates/field-library').then(r => r.data)
 

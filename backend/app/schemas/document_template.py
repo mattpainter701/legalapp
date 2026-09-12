@@ -311,6 +311,51 @@ class DocumentTemplateFieldUsage(BaseModel):
     has_more: bool
 
 
+class DocumentTemplateCardField(BaseModel):
+    """One field on a card, as the editor rail presents it."""
+
+    key: str
+    label: str
+    path: str
+    value_kind: str = "text"
+    #: The candidate alias, offered as a starting automation key so a customer
+    #: does not have to invent a name that happens to make Smart Fill fire.
+    suggested_name: Optional[str] = None
+    #: Whether this field has an "every instance, joined" form.
+    supports_all_instances: bool = False
+    #: The pre-card paths that resolve to this field. Sent so a client can map
+    #: a stored binding — which may be either spelling — back to its card
+    #: without keeping a second copy of the legacy table and letting it drift.
+    legacy_paths: list[str] = Field(default_factory=list)
+
+
+class DocumentTemplateCard(BaseModel):
+    """One addressable subject and the fields that belong to it."""
+
+    key: str
+    label: str
+    kind: str
+    group: str
+    max_instances: int
+    #: How many instances exist on the requested matter. ``None`` when no
+    #: matter was named — which is not the same as zero, and the editor must
+    #: not render it as "no defendants on this matter".
+    instance_count: Optional[int] = None
+    fields: list[DocumentTemplateCardField]
+
+
+class DocumentTemplateCardCatalogue(BaseModel):
+    """The card vocabulary a template author may draw on.
+
+    Served alongside the flat binding catalogue rather than replacing it: the
+    editor migrates to cards surface by surface, and a template published
+    before cards keeps resolving through exactly the paths it was reviewed with.
+    """
+
+    cards: list[DocumentTemplateCard]
+    operators: list[str]
+
+
 class DocumentTemplateBindingCatalogue(BaseModel):
     """The closed vocabulary a template author may draw on.
 

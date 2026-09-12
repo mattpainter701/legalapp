@@ -85,6 +85,7 @@ from app.routers.matters_correspondence import (
 from app.routers.reports import router as reports_router
 from app.routers.calendar import router as calendar_router
 from app.routers.document_templates import router as document_templates_router
+from app.routers.template_sets import router as template_sets_router
 from app.routers.sample_templates import router as sample_templates_router
 from app.routers.template_intake_preview import router as template_intake_preview_router
 from app.routers.matters import matter_context_cache_manager, router as matters_router
@@ -447,6 +448,7 @@ app.include_router(workspace_mcp_oauth_router)
 app.include_router(workspace_mcp_activity_router)
 app.include_router(research_mcp_oauth_router)
 app.include_router(auth_router, prefix="/api")
+app.include_router(template_sets_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(chat_artifacts_router, prefix="/api")

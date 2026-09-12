@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from 'react'
 import { placeholderBoxes, placeholderRange, wordPlaceholderMatches } from './wordPlaceholderMatches'
 import './wordPlaceholderLayer.css'
 import DocumentFieldEditor from './DocumentFieldEditor'
+import { cardKeyForBinding, cardStyle } from './cardColor'
 
 const EMPTY_FIELDS = []
 
-export default function WordPlaceholderLayer({ document: pdf, pageNumber, viewport, fields = EMPTY_FIELDS, paragraphs = EMPTY_FIELDS, selectedIdentity, onSelectField, onCreateField, onUpdateField, selectionNote }) {
+export default function WordPlaceholderLayer({ document: pdf, pageNumber, viewport, fields = EMPTY_FIELDS, paragraphs = EMPTY_FIELDS, cards = EMPTY_FIELDS, selectedIdentity, onSelectField, onCreateField, onUpdateField, selectionNote }) {
   const container = useRef(null)
   const [result, setResult] = useState(null)
   const [editor, setEditor] = useState(null)
@@ -79,13 +80,22 @@ export default function WordPlaceholderLayer({ document: pdf, pageNumber, viewpo
 
   return <>
     <div ref={container} onMouseUp={pickText} onKeyUp={pickText} className={`${onCreateField ? 'select-text' : 'pointer-events-none'} absolute inset-0 overflow-hidden`} aria-label="Select text on document" />
-    {marks.map(mark => <button key={mark.key} type="button"
-      aria-label={`Select ${mark.field.label || mark.field.name} placeholder`}
-      aria-pressed={selectedIdentity === mark.identity}
-      onClick={() => { onSelectField?.(mark.identity); if (onUpdateField) setEditor(mark) }}
-      title={`${mark.field.label || mark.field.name} · {{${mark.field.name}}} · Click to edit`}
-      className="group absolute rounded-sm border border-amber-600 bg-amber-100/70 text-left text-xs font-semibold leading-tight text-amber-950 hover:bg-amber-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-accent aria-pressed:border-blue-600 aria-pressed:bg-blue-100 aria-pressed:text-blue-950"
-      style={{ ...mark.box, minHeight: 18 }}><span className="absolute bottom-full left-[-1px] max-w-[220px] whitespace-nowrap rounded-t border border-b-0 border-amber-600 bg-amber-100 px-1 py-0.5 group-aria-pressed:border-blue-600 group-aria-pressed:bg-blue-100">{mark.field.label || mark.field.name}</span></button>)}
+    {marks.map(mark => {
+      // A bound placeholder wears its card's colour, so the subject a blank
+      // belongs to is legible from the document itself rather than only from
+      // the properties panel. An unbound one keeps the neutral amber, which is
+      // the honest signal: nothing yet says where its value comes from.
+      const cardKey = cardKeyForBinding(mark.field.binding, cards)
+      const carded = Boolean(cardKey)
+      return <button key={mark.key} type="button"
+        aria-label={`Select ${mark.field.label || mark.field.name} placeholder`}
+        aria-pressed={selectedIdentity === mark.identity}
+        data-card={cardKey || undefined}
+        onClick={() => { onSelectField?.(mark.identity); if (onUpdateField) setEditor(mark) }}
+        title={`${mark.field.label || mark.field.name} · {{${mark.field.name}}} · Click to edit`}
+        className={`group absolute rounded-sm text-left text-xs font-semibold leading-tight focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-accent aria-pressed:border-blue-600 aria-pressed:bg-blue-100 aria-pressed:text-blue-950 ${carded ? 'word-placeholder-carded' : 'border border-amber-600 bg-amber-100/70 text-amber-950 hover:bg-amber-200'}`}
+        style={{ ...mark.box, minHeight: 18, ...(carded ? cardStyle(cardKey) : {}) }}><span className={`absolute bottom-full left-[-1px] max-w-[220px] whitespace-nowrap rounded-t px-1 py-0.5 group-aria-pressed:border-blue-600 group-aria-pressed:bg-blue-100 ${carded ? 'word-placeholder-carded-tab' : 'border border-b-0 border-amber-600 bg-amber-100'}`}>{mark.field.label || mark.field.name}</span></button>
+    })}
     {selectionError && <p role="status" className="sticky top-0 z-20 rounded border border-brand-line bg-brand-surface-2 p-3 text-sm">{selectionError}</p>}
     {editor && <div className="absolute z-30 w-[280px] max-w-full" style={{ left: Math.max(0, Math.min(editor.box.left, (viewport?.width || 612) - 280)), top: Math.max(0, Math.min(editor.box.top + editor.box.height + 8, (viewport?.height || 792) - 340)) }}>
       <DocumentFieldEditor key={editor.identity || editor.text} field={editor.field} text={editor.text} onSave={save} onCancel={close} note={editor.field ? undefined : selectionNote} />
