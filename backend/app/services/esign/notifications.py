@@ -24,14 +24,21 @@ def _audit(signer: SignatureSigner) -> dict:
 async def notify_signer(signer, request, *, kind="invitation"):
     document_name = request.source_document_filename or "a document"
     url = f"{get_settings().FRONTEND_URL.rstrip('/')}/client-portal"
-    action = (
-        "Reminder: signature requested" if kind == "reminder" else "Signature requested"
+    action = {
+        "reminder": "Reminder: signature requested",
+        # The firm returned an uploaded signed copy; the client signs again.
+        "resubmit": "Please sign again",
+    }.get(kind, "Signature requested")
+    instruction = (
+        "Your legal team could not accept the signed copy you uploaded. Please sign"
+        if kind == "resubmit"
+        else "Please review and sign"
     )
     result = await email_service.send_email(
         [signer.email],
         f"{action}: {document_name}",
-        f'<p>Hello {escape(signer.name)},</p><p>Please review and sign <strong>{escape(document_name)}</strong> in the secure client portal.</p><p><a href="{escape(url)}">Open the client portal</a></p>',
-        f"Hello {signer.name},\n\nPlease review and sign {document_name}:\n{url}\n",
+        f'<p>Hello {escape(signer.name)},</p><p>{instruction} <strong>{escape(document_name)}</strong> in the secure client portal.</p><p><a href="{escape(url)}">Open the client portal</a></p>',
+        f"Hello {signer.name},\n\n{instruction} {document_name}:\n{url}\n",
     )
     audit = _audit(signer)
     stamp = datetime.now(timezone.utc).isoformat()

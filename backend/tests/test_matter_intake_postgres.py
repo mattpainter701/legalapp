@@ -77,6 +77,7 @@ async def test_concurrent_receipt_creates_one_scheduling_task(
     options = IntakeStart(
         email=contact.email,
         channels=["email"],
+        include_questionnaire=True,
         questions=[dict(key="summary", label="Summary")],
         confirm_send=True,
     )

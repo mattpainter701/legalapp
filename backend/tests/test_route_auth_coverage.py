@@ -275,10 +275,6 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
     ): "verifies Stripe-Signature header",
     (
         frozenset({"POST"}),
-        "/api/matters/esign/webhooks/{provider}",
-    ): "verifies provider HMAC signature and tenant binding",
-    (
-        frozenset({"POST"}),
         "/api/sms/webhooks/{tenant_id}/inbound",
     ): "verifies Twilio signature plus exact account and tenant-owned destination",
     (

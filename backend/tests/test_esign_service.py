@@ -19,7 +19,11 @@ from app.services.esign.service import (
     signer_can_act_now,
     record_portal_signature,
 )
-from app.services.matter_file_store import MatterFileIntegrityError, StorageResult
+from app.services.matter_file_store import (
+    MatterFileIntegrityError,
+    MatterFileNotFound,
+    StorageResult,
+)
 import app.services.esign.service as esign_service
 
 
@@ -178,14 +182,18 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
 
     def completed_request(request_id):
         signer = SimpleNamespace(
+            id=uuid.uuid4(),
             status="signed",
             sign_order=0,
-            audit={"method": "portal_typed", "request": str(request_id)},
+            role="client",
+            audit={"method": "portal_inline", "request": str(request_id)},
             name="Client Signer",
             email="client@example.com",
             typed_signature="Client Signer",
             signed_at=datetime.now(timezone.utc),
             signed_ip="203.0.113.10",
+            field_values={},
+            method="portal_inline",
         )
         return SimpleNamespace(
             id=request_id,
@@ -196,10 +204,16 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
             signers=[signer],
             source_document_sha256=hashlib.sha256(b"source").hexdigest(),
             source_document_size=len(b"source"),
+            source_document_filename="Client Agreement.pdf",
+            positioned_fields=None,
             evidence_sha256=None,
             completion_artifact_sha256=None,
             provider_envelope_id=None,
+            executed_document_id=None,
+            submitted_document_id=None,
             completed_at=None,
+            completion_error=None,
+            completion_attempted_at=None,
             created_by_user_id=requester_id,
         )
 
@@ -226,6 +240,13 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
 
     monkeypatch.setattr(esign_service, "async_session_maker", storage_session)
     monkeypatch.setattr(esign_service, "set_tenant_context", AsyncMock())
+    # The source bytes are read to render the executed copy; this test covers
+    # the certificate lifecycle, so the source row carries no readable bytes.
+    monkeypatch.setattr(
+        esign_service._file_store,
+        "read_matter_file_bytes",
+        AsyncMock(side_effect=MatterFileNotFound("no bytes in this fixture")),
+    )
     uploads = []
 
     async def fake_store(**kwargs):
@@ -250,32 +271,30 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
     first_request = completed_request(uuid.uuid4())
     second_request = completed_request(uuid.uuid4())
 
-    from fastapi import HTTPException
-    from unittest.mock import AsyncMock
+    from app.models.plugin import MatterEvent
 
-    monkeypatch.setattr(
-        esign_service._file_store,
-        "store_matter_file_result",
-        AsyncMock(
-            return_value=StorageResult(
-                provider="google", backend="google_drive", error="unavailable"
-            )
-        ),
-    )
-    with pytest.raises(HTTPException) as failure:
-        await complete_request_if_done(db, first_request, matter)
-    assert failure.value.status_code == 503
+    # A read failure is a storage outage too: the signature stays recorded,
+    # the failure is noted for staff once, and nothing is raised.
+    assert await complete_request_if_done(db, first_request, matter) is None
     assert first_request.status == "partially_signed"
     assert first_request.completed_at is None
     assert first_request.provider_envelope_id is None
+    assert "no bytes in this fixture" in first_request.completion_error
+    assert first_request.completion_attempted_at is not None
     # A failed upload must not bind evidence hashes to a certificate that was
     # never stored; the request is re-attempted byte-for-byte on retry.
     assert first_request.evidence_sha256 is None
     assert first_request.completion_artifact_sha256 is None
-    assert db.added == []
-    monkeypatch.setattr(
-        esign_service._file_store, "store_matter_file_result", fake_store
-    )
+    failures = [row for row in db.added if isinstance(row, MatterEvent)]
+    assert len(failures) == 1
+    assert "storage unavailable" in failures[0].title
+    assert await complete_request_if_done(db, first_request, matter) is None
+    assert len([row for row in db.added if isinstance(row, MatterEvent)]) == 1
+    db.added.clear()
+    # No source row at all: the certificate still completes the request.
+    for request in (first_request, second_request):
+        request.document_id = None
+        request.completion_error = None
 
     first = await complete_request_if_done(db, first_request, matter)
     second = await complete_request_if_done(db, second_request, matter)
@@ -308,6 +327,7 @@ async def test_two_completions_create_distinct_immutable_evidence_with_full_meta
     events = [row for row in db.added if isinstance(row, MatterEvent)]
     assert len(events) == 2
     assert {event.created_by for event in events} == {requester_id}
+    assert all("Signing completed" in event.title for event in events)
 
     # A retry of an already completed request returns the original artifact and
     # cannot upload or overwrite evidence again.
@@ -345,9 +365,7 @@ def test_decline_event_names_reason_and_attributes_to_requester():
 
 def test_decline_event_falls_back_to_responsible_user_and_nameless_document():
     owner_id = uuid.uuid4()
-    matter = SimpleNamespace(
-        tenant_id=uuid.uuid4(), id=uuid.uuid4(), user_id=owner_id
-    )
+    matter = SimpleNamespace(tenant_id=uuid.uuid4(), id=uuid.uuid4(), user_id=owner_id)
     req = _request()
     req.source_document_filename = None
     req.created_by_user_id = None

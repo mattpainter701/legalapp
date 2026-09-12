@@ -228,7 +228,6 @@ async def test_generated_pdf_persists_positioned_signing_descriptor_and_lists_it
     import hashlib
     from unittest.mock import AsyncMock
     import app.routers.esignature as esign
-    import app.services.esign.dropbox_sign as dropbox
     from app.models.document_template import DocumentTemplate
     from app.models.matter_document import MatterDocument
     from sqlalchemy import select
@@ -331,34 +330,7 @@ async def test_generated_pdf_persists_positioned_signing_descriptor_and_lists_it
     )["positioned_fields"]
     assert manifest == document.positioned_fields
 
-    settings = SimpleNamespace(
-        DROPBOX_SIGN_API_KEY="synthetic",
-        ESIGN_WEBHOOK_SECRET="synthetic",
-        ESIGN_PROVIDER_BASE_URL="https://sign.test",
-        DEV_MODE=True,
-    )
-    monkeypatch.setattr(esign, "get_settings", lambda: settings)
-    monkeypatch.setattr(dropbox, "get_settings", lambda: settings)
     monkeypatch.setattr(esign, "notify_actionable_signers", AsyncMock())
-    sent_payloads = []
-
-    class ProviderClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            pass
-
-        async def post(self, url, **kwargs):
-            sent_payloads.append(kwargs)
-            return SimpleNamespace(
-                raise_for_status=lambda: None,
-                json=lambda: {
-                    "signature_request": {"signature_request_id": "synthetic-envelope"}
-                },
-            )
-
-    monkeypatch.setattr(dropbox.httpx, "AsyncClient", lambda **kwargs: ProviderClient())
     body = {
         "document_id": str(document.id),
         "signers": [
@@ -366,27 +338,36 @@ async def test_generated_pdf_persists_positioned_signing_descriptor_and_lists_it
             {"name": "Attorney", "email": "attorney@example.test", "role": "attorney"},
         ],
     }
-    internal = await client.post(f"/api/matters/{matter.id}/signatures", json=body)
-    assert internal.status_code == 422
-    # Omitting client-supplied placements cannot discard the server descriptor.
-    created = await client.post(
+    # Only the portal provider exists; the reviewed placements are first-class
+    # for it, and omitting client-supplied placements cannot discard the
+    # server descriptor.
+    external = await client.post(
         f"/api/matters/{matter.id}/signatures",
         json={**body, "provider": "dropbox_sign"},
     )
+    assert external.status_code == 422
+    created = await client.post(f"/api/matters/{matter.id}/signatures", json=body)
     assert created.status_code == 201, created.text
-    assert created.json()["positioned_fields"] == manifest
+    persisted = created.json()["positioned_fields"]
+    assert [item["field_id"] for item in persisted] == [
+        item["field_id"] for item in manifest
+    ]
+    assert [item["role"] for item in persisted] == ["client", "client", "attorney"]
+    assert all(item["source"] == "placed" for item in persisted)
+    assert all(item["source_sha256"] == document.document_sha256 for item in persisted)
+    assert created.json()["signature_fields_count"] == 3
+    assert created.json()["placement_source"] == "placed"
     sent = await client.post(
         f"/api/matters/{matter.id}/signatures/{created.json()['id']}/send"
     )
     assert sent.status_code == 200, sent.text
     assert sent.json()["status"] == "sent"
-    tabs = json.loads(sent_payloads[0]["data"]["form_fields_per_document"])
-    assert [tab["signer"] for tab in tabs] == [0, 0, 1]
-    assert all(tab["y"] == 656 and tab["page"] == 1 for tab in tabs)
-    assert (
-        hashlib.sha256(sent_payloads[0]["files"]["files[]"][1]).hexdigest()
-        == document.document_sha256
+    fields = await client.get(
+        f"/api/matters/{matter.id}/signatures/{created.json()['id']}/fields"
     )
+    assert fields.status_code == 200, fields.text
+    placed = [item for item in fields.json()["fields"] if item["source"] == "placed"]
+    assert [item["role"] for item in placed] == ["client", "client", "attorney"]
 
 
 def test_render_template_preserves_unknown_variables():
