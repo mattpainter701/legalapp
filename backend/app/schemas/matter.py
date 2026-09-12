@@ -249,6 +249,10 @@ class MatterSummary(BaseModel):
     primary_plugin: str | None
     client_name: str | None
     attorney_of_record_name: str | None
+    # The originating (partner) attorney. Surfaced so the portfolio list can
+    # match the columns firms expect from legacy matter tables.
+    partner_attorney_name: str | None = None
+    stage: str | None = None
     assigned_to: list[str] = []
     budget_amount: Decimal | None
     total_billed: Decimal
@@ -257,6 +261,7 @@ class MatterSummary(BaseModel):
     next_deadline: datetime | None
     cloud_folder: dict | None = None
     created_at: datetime
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

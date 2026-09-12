@@ -241,3 +241,43 @@ async def test_matter_response_resolved_practice_is_null_when_unrecognised(clien
     )
     assert created.status_code == 201, created.text
     assert created.json()["resolved_practice"] is None
+
+
+@pytest.mark.asyncio
+async def test_matter_summaries_carry_originating_attorney_stage_and_updated_at(
+    client, test_user
+):
+    """The portfolio list needs the columns a firm reads first.
+
+    Matter number, client, responsible attorney and open date already travel
+    with the summary. Originating attorney (partner), stage and the last-updated
+    timestamp are what a legacy matter table shows and were missing.
+    """
+    created = await client.post(
+        "/api/matters",
+        json={"matter_name": "Summary Fields Matter"},
+    )
+    assert created.status_code == 201, created.text
+    matter_id = created.json()["id"]
+
+    patched = await client.patch(
+        f"/api/matters/{matter_id}",
+        json={"partner_attorney_id": str(test_user.id), "stage": "Pre-trial"},
+    )
+    assert patched.status_code == 200, patched.text
+
+    listing = await client.get("/api/matters")
+    assert listing.status_code == 200, listing.text
+    summary = next(
+        item for item in listing.json()["items"] if item["id"] == matter_id
+    )
+    assert summary["partner_attorney_name"] == test_user.full_name
+    assert summary["stage"] == "Pre-trial"
+    assert summary["updated_at"] is not None
+
+    mine = await client.get("/api/matters/my")
+    assert mine.status_code == 200, mine.text
+    my_summary = next(item for item in mine.json() if item["id"] == matter_id)
+    assert my_summary["partner_attorney_name"] == test_user.full_name
+    assert my_summary["stage"] == "Pre-trial"
+    assert my_summary["updated_at"] is not None
