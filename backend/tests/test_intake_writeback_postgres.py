@@ -79,6 +79,7 @@ async def make_packet(db_session, test_user, monkeypatch, **contact_overrides):
     options = IntakeStart(
         email=contact.email,
         channels=["email"],
+        include_questionnaire=True,
         questions=QUESTIONS,
         confirm_send=True,
     )

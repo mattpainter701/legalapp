@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, Clock, Send } from 'lucide-react'
 import { getAdminUsers, getContacts, getMatterDocuments, getMatterPaperwork, matterPaperworkAction } from '../../api'
 import PaperworkDrawer from './PaperworkDrawer'
@@ -74,21 +74,33 @@ export default function CaseSetupCard({ matterId, matter, onPacketChange }) {
     return () => clearInterval(timer)
   }, [load])
 
-  // Matter documents back both the drawer's pickers and the verification of
-  // paperwork that arrived outside the portal, so they load with the card
-  // itself rather than only when the drawer opens. The poll above does not
-  // refetch them.
-  useEffect(() => {
-    let active = true
+  // Matter documents back the drawer's pickers and the verification of
+  // paperwork that arrived outside the portal. Neither exists on a matter with
+  // no packet, so a page whose only paperwork state is "Start this case" no
+  // longer pays for a two-hundred-row document list before it can paint. The
+  // poll above never refetches them.
+  const documentsRequested = useRef(false)
+  const loadDocuments = useCallback(() => {
+    if (documentsRequested.current) return
+    documentsRequested.current = true
     getMatterDocuments(matterId, { limit: 200 })
-      .then(value => { if (active) setDocuments(Array.isArray(value) ? value : value?.items || []) })
-      .catch(() => {})
-    return () => { active = false }
+      .then(value => setDocuments(Array.isArray(value) ? value : value?.items || []))
+      .catch(() => { documentsRequested.current = false })
   }, [matterId])
+
+  useEffect(() => {
+    documentsRequested.current = false
+    setDocuments([])
+  }, [matterId])
+
+  useEffect(() => {
+    if (packet && packet.status !== 'cancelled') loadDocuments()
+  }, [packet, loadDocuments])
 
   // Staff and the client's email are only needed to compose a packet.
   async function openDrawer() {
     setDrawerOpen(true)
+    loadDocuments()
     try {
       const value = await getAdminUsers()
       setUsers(Array.isArray(value) ? value : value?.users || [])
@@ -128,7 +140,7 @@ export default function CaseSetupCard({ matterId, matter, onPacketChange }) {
               <p className="mt-0.5 text-[13px] text-brand-muted">
                 {packet
                   ? 'Follow-ups were cancelled for this matter. Send a new packet to restart the engagement.'
-                  : 'Send the fee agreement, intake forms, and questionnaire in one message, then track each signature here.'}
+                  : 'Send the fee agreement, intake form, questionnaire, and any other forms in one message, then track each signature here.'}
               </p>
             </div>
             <button
@@ -182,7 +194,7 @@ export default function CaseSetupCard({ matterId, matter, onPacketChange }) {
 
       <ul className="mt-4 divide-y divide-brand-line/70 border-y border-brand-line/70">
         {rows.map(({ key, requirement }) => {
-          const state = requirementState(requirement)
+          const state = requirementState(requirement, key)
           const tone = dueTone(requirement.due_at, requirement.completed)
           return (
             <li key={key} className="flex flex-wrap items-center gap-3 py-3">
@@ -197,7 +209,7 @@ export default function CaseSetupCard({ matterId, matter, onPacketChange }) {
               )}
               <span className={`flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[12px] font-semibold ${TONE[state.tone]}`}>
                 {state.tone === 'done' && <Check size={12} />}
-                {requirement.completed && requirement.kind !== 'signature' && key !== 'fee_agreement' ? 'Complete' : state.label}
+                {state.label}
               </span>
             </li>
           )

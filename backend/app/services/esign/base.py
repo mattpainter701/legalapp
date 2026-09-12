@@ -1,9 +1,9 @@
 """E-signature provider interface + factory.
 
-Providers abstract *dispatch* of a signature request. The ``internal`` provider
-collects typed signatures inside the client portal (no external dispatch). Real
-providers (Dropbox Sign / DocuSign) implement the same interface and would push
-an envelope to the third party and reconcile via webhook.
+Only one provider exists: the ``internal`` provider, which collects signatures
+inside the client portal and needs no external dispatch. The interface stays
+so the router does not have to know that, and so a future provider would slot
+in behind the same ``send`` contract.
 """
 
 from abc import ABC, abstractmethod
@@ -27,13 +27,9 @@ class ESignProvider(ABC):
 
 
 def get_provider(name: str) -> ESignProvider:
-    """Resolve a provider by name. Defaults to the internal provider."""
+    """Resolve a provider by name. Only the internal portal provider exists."""
     if name in (None, "", "internal"):
         from app.services.esign.internal import InternalProvider
 
         return InternalProvider()
-    if name in ("dropbox_sign", "docusign"):
-        from app.services.esign.dropbox_sign import DropboxSignProvider
-
-        return DropboxSignProvider()
     raise ValueError(f"Unknown e-signature provider: {name}")

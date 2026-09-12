@@ -21,10 +21,12 @@ import {
   getActiveTimer,
   getMattersV2,
   getTimeEntries,
+  getTimeEntrySettings,
   startTimer,
   stopTimer,
   updateTimeEntry,
 } from '../api'
+import { parseDuration, roundToIncrement, todayLocal } from '../utils/duration'
 
 const FILTERS = [
   { value: 'all', label: 'All' },
@@ -78,13 +80,18 @@ export default function TimeTrackingPage() {
   const [dateTo, setDateTo] = useState('')
   const [activeTimer, setActiveTimer] = useState(null)
   const [timerBusy, setTimerBusy] = useState(false)
+  const [timerNote, setTimerNote] = useState('')
+  const [timerError, setTimerError] = useState(null)
+  const [roundingMinutes, setRoundingMinutes] = useState(6)
+  const [mineOnly, setMineOnly] = useState(false)
+  const [totals, setTotals] = useState(null)
   const [, setTick] = useState(0)
   const [form, setForm] = useState({
     matter_id: preselectedMatterId,
     description: '',
     hours: '',
-    hourly_rate: user?.default_billing_rate || '',
-    date: new Date().toISOString().slice(0, 10),
+    hourly_rate: '',
+    date: todayLocal(),
     is_billable: true,
   })
   const [formError, setFormError] = useState(null)
@@ -108,12 +115,18 @@ export default function TimeTrackingPage() {
       if (matterFilter) params.matter_id = matterFilter
       if (dateFrom) params.date_from = dateFrom
       if (dateTo) params.date_to = dateTo
+      if (mineOnly && user?.id) params.user_id = user.id
       const [entryData, matterData, timerData] = await Promise.all([
         getTimeEntries(params),
         getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' }),
         getActiveTimer(),
       ])
       setEntries(entryData.items || entryData || [])
+      setTotals({
+        hours: Number(entryData?.total_hours ?? 0),
+        amount: Number(entryData?.total_amount ?? 0),
+        count: Number(entryData?.total ?? (entryData?.items || entryData || []).length),
+      })
       setMatters(matterData.items || matterData || [])
       setActiveTimer(timerData || null)
     } catch (error) {
@@ -121,11 +134,32 @@ export default function TimeTrackingPage() {
     } finally {
       setLoading(false)
     }
-  }, [filter, matterFilter, dateFrom, dateTo])
+  }, [filter, matterFilter, dateFrom, dateTo, mineOnly, user?.id])
 
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // The firm's billing increment decides what counts as a valid entry, so the
+  // form accepts exactly the units the timer produces.
+  useEffect(() => {
+    let cancelled = false
+    getTimeEntrySettings()
+      .then((settings) => {
+        if (!cancelled && settings?.time_rounding_minutes) {
+          setRoundingMinutes(Number(settings.time_rounding_minutes))
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  // Keep the running timer's narrative in sync when a timer is picked up on load.
+  useEffect(() => {
+    setTimerNote(activeTimer?.description && activeTimer.description !== 'Timer session'
+      ? activeTimer.description
+      : '')
+  }, [activeTimer?.id])
 
   useEffect(() => {
     if (!activeTimer) return undefined
@@ -144,11 +178,13 @@ export default function TimeTrackingPage() {
     try {
       const timer = await startTimer({
         matter_id: form.matter_id,
-        description: form.description.trim() || 'Timer session',
+        description: form.description.trim(),
         is_billable: form.is_billable,
+        date: todayLocal(),
         ...(form.is_billable && form.hourly_rate ? { hourly_rate: Number.parseFloat(form.hourly_rate) } : {}),
       })
       setActiveTimer(timer)
+      setTimerNote(form.description.trim())
       setForm((current) => ({ ...current, description: '' }))
     } catch (error) {
       const detail = error?.response?.data?.detail
@@ -160,10 +196,19 @@ export default function TimeTrackingPage() {
   }
 
   const handleStopTimer = async () => {
+    // A bill needs a narrative. Stopping without one would log "Timer session"
+    // and force a second edit pass before the entry could ever be invoiced.
+    const narrative = timerNote.trim()
+    if (!narrative) {
+      setTimerError('Describe the work before logging this time.')
+      return
+    }
+    setTimerError(null)
     setTimerBusy(true)
     try {
-      await stopTimer({})
+      await stopTimer({ description: narrative })
       setActiveTimer(null)
+      setTimerNote('')
       await loadData()
     } catch (error) {
       toast.error('Timer was not stopped', {
@@ -203,11 +248,13 @@ export default function TimeTrackingPage() {
       setFormError('Select a matter.')
       return
     }
-    const hours = Number.parseFloat(form.hours)
-    if (!form.hours || Number.isNaN(hours) || hours < 0.25) {
-      setFormError('Enter a valid number of hours (minimum 0.25).')
+    const parsed = parseDuration(form.hours)
+    if (parsed === null || parsed <= 0) {
+      setFormError(`Enter time as hours, h:mm, or minutes — for example 1.5, 1:30, or 90m.`)
       return
     }
+    // Bill in the firm's own increment, the same rounding the timer applies.
+    const hours = roundToIncrement(parsed, roundingMinutes)
     if (!form.description.trim()) {
       setFormError('Enter a description.')
       return
@@ -232,8 +279,8 @@ export default function TimeTrackingPage() {
         matter_id: preselectedMatterId,
         description: '',
         hours: '',
-        hourly_rate: user?.default_billing_rate || '',
-        date: new Date().toISOString().slice(0, 10),
+        hourly_rate: '',
+        date: todayLocal(),
         is_billable: true,
       })
       await loadData()
@@ -252,9 +299,12 @@ export default function TimeTrackingPage() {
   const handleEditSubmit = async (event) => {
     event.preventDefault()
     setEditError(null)
-    const hours = Number.parseFloat(editForm.hours)
+    const parsedEdit = parseDuration(editForm.hours)
     if (!editForm.description.trim()) return setEditError('Enter a description.')
-    if (Number.isNaN(hours) || hours < 0.25) return setEditError('Enter a valid number of hours (minimum 0.25).')
+    if (parsedEdit === null || parsedEdit <= 0) {
+      return setEditError('Enter time as hours, h:mm, or minutes — for example 1.5, 1:30, or 90m.')
+    }
+    const hours = roundToIncrement(parsedEdit, roundingMinutes)
     const hourlyRate = Number.parseFloat(editForm.hourly_rate)
     if (editForm.is_billable && (!Number.isFinite(hourlyRate) || hourlyRate <= 0)) {
       return setEditError('Enter a billing rate greater than zero.')
@@ -297,8 +347,14 @@ export default function TimeTrackingPage() {
   }
 
   const visibleEntries = entries.filter((entry) => entry.status !== 'running')
-  const totalHours = visibleEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
-  const totalAmount = visibleEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+  // Totals come from the server so they cover the whole filtered set, not just
+  // the rows this page happened to load.
+  const totalHours = totals ? totals.hours : visibleEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
+  const totalAmount = totals ? totals.amount : visibleEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+  const loadedCount = visibleEntries.length
+  const totalCount = totals ? totals.count : loadedCount
+  const canManageOthers = (user?.capabilities || []).includes('manage_billing')
+  const canModify = (entry) => entry.status !== 'invoiced' && (canManageOthers || !entry.user_id || entry.user_id === user?.id)
   const unbilledAmount = visibleEntries
     .filter((entry) => entry.is_billable && (entry.status === 'draft' || !entry.invoice_id))
     .reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
@@ -311,7 +367,7 @@ export default function TimeTrackingPage() {
         icon={Clock}
         title="Time tracking"
         description="Capture work as it happens, then keep unbilled and invoiced activity easy to distinguish."
-        meta={<span>{visibleEntries.length} entr{visibleEntries.length === 1 ? 'y' : 'ies'} in this view</span>}
+        meta={<span>{totalCount > loadedCount ? `${loadedCount} of ${totalCount}` : totalCount} entr{totalCount === 1 ? 'y' : 'ies'} in this view</span>}
         actions={
           <>
             {!activeTimer && (
@@ -363,10 +419,20 @@ export default function TimeTrackingPage() {
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand-green">Timer running</p>
-            <p className="mt-1 font-mono text-2xl font-bold text-brand-ink">{formatElapsed(activeTimer.timer_started_at)}</p>
-            <p className="mt-1 truncate text-sm text-brand-ink-2">
-              {matterNames[activeTimer.matter_id] || 'Matter'} · {activeTimer.description}
-            </p>
+            <p className="mt-1 font-mono text-2xl font-bold text-brand-ink" role="status">{formatElapsed(activeTimer.timer_started_at)}</p>
+            <p className="mt-1 truncate text-sm text-brand-ink-2">{matterNames[activeTimer.matter_id] || 'Matter'}</p>
+            <label htmlFor="running-timer-description" className="mt-2 block text-xs font-semibold text-brand-ink">
+              What are you working on?
+            </label>
+            <input
+              id="running-timer-description"
+              value={timerNote}
+              onChange={(event) => { setTimerNote(event.target.value); if (timerError) setTimerError(null) }}
+              placeholder="Describe the work for the bill"
+              aria-invalid={timerError ? 'true' : undefined}
+              className="mt-1 min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent"
+            />
+            {timerError && <p className="mt-1 text-xs text-brand-rose">{timerError}</p>}
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -431,17 +497,21 @@ export default function TimeTrackingPage() {
               />
             </div>
             <div>
-              <label htmlFor="timetrackingpage-hours" className="mb-1.5 block text-xs font-semibold text-brand-ink">Hours</label>
+              <label htmlFor="timetrackingpage-hours" className="mb-1.5 block text-xs font-semibold text-brand-ink">Time</label>
               <input
                 id="timetrackingpage-hours"
-                type="number"
-                step="0.25"
-                min="0.25"
+                type="text"
+                inputMode="decimal"
                 value={form.hours}
                 onChange={(event) => setForm({ ...form, hours: event.target.value })}
                 required
+                placeholder="1.5, 1:30, or 90m"
+                aria-describedby="timetrackingpage-hours-hint"
                 className={fieldClass}
               />
+              <p id="timetrackingpage-hours-hint" className="mt-1 text-[11px] text-brand-muted">
+                Billed in {roundingMinutes}-minute units
+              </p>
             </div>
             <div>
               <label htmlFor="timetrackingpage-date" className="mb-1.5 block text-xs font-semibold text-brand-ink">Date</label>
@@ -463,9 +533,13 @@ export default function TimeTrackingPage() {
                 min="0"
                 value={form.hourly_rate}
                 onChange={(event) => setForm({ ...form, hourly_rate: event.target.value })}
-                placeholder={user?.default_billing_rate ? String(user.default_billing_rate) : '0'}
+                placeholder="Matter or profile rate"
+                aria-describedby="timetrackingpage-rate-hint"
                 className={fieldClass}
               />
+              <p id="timetrackingpage-rate-hint" className="mt-1 text-[11px] text-brand-muted">
+                Leave blank to use the matter rate
+              </p>
             </div>
             <label className="flex min-h-11 items-center gap-2 text-sm text-brand-ink">
               <input type="checkbox" checked={form.is_billable} onChange={(event) => setForm({ ...form, is_billable: event.target.checked })} />
@@ -495,6 +569,16 @@ export default function TimeTrackingPage() {
           <option value="">All matters</option>
           {matters.map((matter) => <option key={matter.id} value={matter.id}>{matter.matter_name}</option>)}
         </select>
+        <button
+          type="button"
+          aria-pressed={mineOnly}
+          onClick={() => setMineOnly((value) => !value)}
+          className={`min-h-9 rounded-xl border px-3 text-xs font-semibold transition-colors ${
+            mineOnly ? 'border-brand-accent text-brand-accent' : 'border-brand-line text-brand-muted hover:text-brand-ink'
+          }`}
+        >
+          {mineOnly ? 'My entries' : 'All timekeepers'}
+        </button>
         <input aria-label="Entries from" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="min-h-9 rounded-xl border border-brand-line bg-brand-surface px-3 text-xs text-brand-ink" />
         <input aria-label="Entries through" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="min-h-9 rounded-xl border border-brand-line bg-brand-surface px-3 text-xs text-brand-ink" />
       </FilterToolbar>
@@ -508,7 +592,7 @@ export default function TimeTrackingPage() {
           {editError && <AlertBanner type="error" title="Time was not updated" className="mt-4">{editError}</AlertBanner>}
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <div className="sm:col-span-2 lg:col-span-2"><label htmlFor="edit-time-description" className="mb-1.5 block text-xs font-semibold text-brand-ink">Description</label><input id="edit-time-description" className={fieldClass} value={editForm.description} onChange={(event) => setEditForm({ ...editForm, description: event.target.value })} /></div>
-            <div><label htmlFor="edit-time-hours" className="mb-1.5 block text-xs font-semibold text-brand-ink">Hours</label><input id="edit-time-hours" className={fieldClass} type="number" min="0.25" step="0.25" value={editForm.hours} onChange={(event) => setEditForm({ ...editForm, hours: event.target.value })} /></div>
+            <div><label htmlFor="edit-time-hours" className="mb-1.5 block text-xs font-semibold text-brand-ink">Time</label><input id="edit-time-hours" className={fieldClass} type="text" inputMode="decimal" placeholder="1.5, 1:30, or 90m" value={editForm.hours} onChange={(event) => setEditForm({ ...editForm, hours: event.target.value })} /></div>
             <div><label htmlFor="edit-time-date" className="mb-1.5 block text-xs font-semibold text-brand-ink">Date</label><input id="edit-time-date" className={fieldClass} type="date" value={editForm.date} onChange={(event) => setEditForm({ ...editForm, date: event.target.value })} /></div>
             <div><label htmlFor="edit-time-rate" className="mb-1.5 block text-xs font-semibold text-brand-ink">Rate</label><input id="edit-time-rate" className={fieldClass} type="number" min="0.01" step="0.01" value={editForm.hourly_rate} onChange={(event) => setEditForm({ ...editForm, hourly_rate: event.target.value })} disabled={!editForm.is_billable} /></div>
             <label className="flex min-h-11 items-center gap-2 text-sm text-brand-ink"><input type="checkbox" checked={editForm.is_billable} onChange={(event) => setEditForm({ ...editForm, is_billable: event.target.checked })} /> Billable time</label>
@@ -549,7 +633,10 @@ export default function TimeTrackingPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-brand-ink">{entry.description}</p>
-                    <p className="mt-1 truncate text-xs text-brand-muted">{matterNames[entry.matter_id] || 'Matter unavailable'}</p>
+                    <p className="mt-1 truncate text-xs text-brand-muted">
+                      {matterNames[entry.matter_id] || 'Matter unavailable'}
+                      {entry.user_name ? ` · ${entry.user_name}` : ''}
+                    </p>
                   </div>
                   <EntryStatus status={entry.status} isBillable={entry.is_billable} />
                 </div>
@@ -567,7 +654,7 @@ export default function TimeTrackingPage() {
                     <dd className="mt-1 text-xs font-semibold text-brand-ink">{money.format(Number(entry.amount || 0))}</dd>
                   </div>
                 </dl>
-                {entry.status !== 'invoiced' && (
+                {canModify(entry) && (
                   <div className="mt-3 flex gap-2"><button
                     type="button"
                     onClick={() => { setEditingEntry(entry); setEditForm({ matter_id: entry.matter_id, description: entry.description || '', hours: String(entry.hours || ''), hourly_rate: String(entry.hourly_rate || ''), date: entry.date, is_billable: entry.is_billable !== false }); setEditError(null) }}
@@ -589,7 +676,7 @@ export default function TimeTrackingPage() {
               <table className="min-w-[760px] w-full border-collapse text-left text-sm">
                 <thead className="border-b border-brand-line bg-brand-bg-soft/60">
                   <tr>
-                    {['Date', 'Matter', 'Description', 'Hours', 'Value', 'Status', ''].map((heading) => (
+                    {['Date', 'Matter', 'Timekeeper', 'Description', 'Hours', 'Value', 'Status', ''].map((heading) => (
                       <th key={heading} scope="col" className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-muted">
                         {heading}
                       </th>
@@ -603,6 +690,9 @@ export default function TimeTrackingPage() {
                       <td className="max-w-56 truncate px-4 py-3 text-brand-muted" title={matterNames[entry.matter_id] || ''}>
                         {matterNames[entry.matter_id] || '—'}
                       </td>
+                      <td className="max-w-40 truncate px-4 py-3 text-brand-muted" title={entry.user_name || ''}>
+                        {entry.user_name || '—'}
+                      </td>
                       <td className="max-w-80 truncate px-4 py-3 font-medium text-brand-ink" title={entry.description}>
                         {entry.description}
                       </td>
@@ -612,7 +702,7 @@ export default function TimeTrackingPage() {
                       </td>
                        <td className="px-4 py-3"><EntryStatus status={entry.status} isBillable={entry.is_billable} /></td>
                       <td className="px-4 py-3 text-right">
-                        {entry.status !== 'invoiced' && (
+                        {canModify(entry) && (
                           <div className="flex justify-end gap-1"><button
                             type="button"
                             onClick={() => { setEditingEntry(entry); setEditForm({ matter_id: entry.matter_id, description: entry.description || '', hours: String(entry.hours || ''), hourly_rate: String(entry.hourly_rate || ''), date: entry.date, is_billable: entry.is_billable !== false }); setEditError(null) }}

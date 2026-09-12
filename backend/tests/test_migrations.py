@@ -12,19 +12,40 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["179_mediation_asset_recipient"]
+    assert heads == ["180_mediation_asset_recipient"]
 
 
-def test_matter_venue_migration_adds_and_drops_the_column():
+def test_intake_optional_agreement_migration_widens_and_restores_the_column():
     backend_dir = Path(__file__).resolve().parents[1]
     source = (
-        backend_dir / "migrations" / "versions" / "177_matter_venue.py"
+        backend_dir / "migrations" / "versions" / "178_intake_optional_agreement.py"
     ).read_text(encoding="utf-8")
 
-    assert 'revision = "177_matter_venue"' in source
-    assert 'down_revision = "176_intake_writeback"' in source
-    assert "ADD COLUMN venue varchar(300)" in source
-    assert "DROP COLUMN venue" in source
+    assert 'revision = "178_intake_optional_agreement"' in source
+    assert 'down_revision = "177_matter_venue"' in source
+    assert "nullable=True" in source
+    assert "nullable=False" in source
+
+
+def test_native_signing_migration_adds_and_drops_every_column():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "179_native_signing.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "179_native_signing"' in source
+    assert 'down_revision = "178_intake_optional_agreement"' in source
+    for column in (
+        "executed_document_id",
+        "submitted_document_id",
+        "submitted_at",
+        "completion_error",
+        "completion_attempted_at",
+        "signing_plan",
+        "field_values",
+        "method",
+    ):
+        assert source.count(f'"{column}"') >= 2, column
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():

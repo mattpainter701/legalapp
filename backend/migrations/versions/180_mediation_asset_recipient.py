@@ -8,8 +8,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "179_mediation_asset_recipient"
-down_revision = "178_intake_optional_agreement"
+revision = "180_mediation_asset_recipient"
+down_revision = "179_native_signing"
 branch_labels = None
 depends_on = None
 

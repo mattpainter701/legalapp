@@ -30,6 +30,7 @@ import IntegrationsHub, { LEGACY_INTEGRATION_TABS } from '../components/Integrat
 import FirmBrandingPanel from '../components/FirmBrandingPanel'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import BillingPage from './BillingPage'
+import BillingDefaultsPanel from '../components/BillingDefaultsPanel'
 import GuideViewer from '../components/GuideViewer'
 import CompliancePanel from '../components/CompliancePanel'
 import { ADMINISTRATIVE_GUIDE } from '../platformDocs'
@@ -1401,7 +1402,12 @@ export default function AdminPage() {
           {activeTab === 'users' && <UsersTab billingTier={billingTier} onNavigateMcp={() => selectIntegrationSection('mcp')} />}
           {activeTab === 'roles' && <RolesTab />}
           {activeTab === 'licensing' && <LicensingPanel />}
-          {activeTab === 'billing' && <BillingPage embedded />}
+          {activeTab === 'billing' && (
+            <div className="space-y-6">
+              <BillingPage embedded />
+              <BillingDefaultsPanel />
+            </div>
+          )}
           {activeTab === 'usage' && <UsageTab />}
           {activeTab === 'tenant' && <TenantTab />}
           {activeTab === 'settings' && <SettingsTab />}

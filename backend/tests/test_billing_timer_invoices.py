@@ -2,9 +2,12 @@
 sequential numbering, status transitions, and void-release behavior."""
 
 import uuid
+from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.plugin import Matter
@@ -496,3 +499,521 @@ class TestBillingSettings:
         )
         stop = await client.post("/api/billing/time-entries/timer/stop", json={})
         assert Decimal(stop.json()["hours"]) == Decimal("0.25")
+
+
+@pytest.mark.asyncio
+async def test_timer_start_accepts_the_timekeepers_local_date(client, test_matter):
+    """An evening entry must not be stamped with tomorrow's UTC date."""
+    matter = test_matter
+
+    local_day = (date.today() - timedelta(days=1)).isoformat()
+    r = await client.post(
+        "/api/billing/time-entries/timer/start",
+        json={
+            "matter_id": str(matter.id),
+            "description": "Evening call",
+            "date": local_day,
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["date"] == local_day
+
+    await client.delete("/api/billing/time-entries/timer")
+
+
+@pytest.mark.asyncio
+async def test_timer_stop_records_the_narrative(client, test_matter):
+    """The description given at stop is what lands on the bill."""
+    matter = test_matter
+
+    start = await client.post(
+        "/api/billing/time-entries/timer/start",
+        json={"matter_id": str(matter.id)},
+    )
+    assert start.status_code == 201, start.text
+
+    stop = await client.post(
+        "/api/billing/time-entries/timer/stop",
+        json={"description": "Call with opposing counsel"},
+    )
+    assert stop.status_code == 200, stop.text
+    assert stop.json()["description"] == "Call with opposing counsel"
+    assert stop.json()["status"] == "draft"
+
+
+@pytest.mark.asyncio
+async def test_time_entry_list_names_the_timekeeper(client, test_matter, test_user):
+    """A firm-wide list is unreadable without who recorded each entry."""
+    matter = test_matter
+
+    created = await client.post(
+        "/api/billing/time-entries",
+        json={
+            "matter_id": str(matter.id),
+            "description": "Drafted motion",
+            "hours": "1.5",
+            "hourly_rate": "200.00",
+            "date": date.today().isoformat(),
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    listing = await client.get(f"/api/billing/time-entries?matter_id={matter.id}")
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+    assert items
+    assert items[0]["user_name"] == test_user.full_name
+
+
+@pytest.mark.asyncio
+async def test_time_entry_settings_readable_without_finance_access(
+    db_session, test_tenant, test_redis
+):
+    """Every timekeeper needs the increment; only finance sees firm rates."""
+    from datetime import datetime, timezone
+
+    from httpx import ASGITransport, AsyncClient
+    from jose import jwt as jose_jwt
+
+    from app.config import get_settings
+    from app.database import get_db
+    from app.main import app
+    from app.models.user import User
+
+    settings = get_settings()
+    timekeeper = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="paralegal@testfirm.com",
+        full_name="Pat Paralegal",
+        role="user",
+        oauth_provider="google",
+        oauth_subject="google-sub-paralegal",
+        is_active=True,
+    )
+    db_session.add(timekeeper)
+    await db_session.commit()
+
+    token = jose_jwt.encode(
+        {
+            "sub": str(timekeeper.id),
+            "tenant_id": str(test_tenant.id),
+            "role": timekeeper.role,
+            "email": timekeeper.email,
+            "billing_tier": test_tenant.billing_tier,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    previous_redis = getattr(app.state, "redis", None)
+    app.state.redis = test_redis
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as ac:
+            allowed = await ac.get("/api/billing/time-entry-settings")
+            assert allowed.status_code == 200
+            assert allowed.json()["time_rounding_minutes"] == 6
+
+            # The firm's rates stay behind the finance gate.
+            refused = await ac.get("/api/billing/settings")
+            assert refused.status_code == 403
+    finally:
+        app.state.redis = previous_redis
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_time_entry_date_can_be_corrected(client, test_matter):
+    """Editing an entry's date must work: the edit form sends it on every save."""
+    created = await client.post(
+        "/api/billing/time-entries",
+        json={
+            "matter_id": str(test_matter.id),
+            "description": "Drafted motion",
+            "hours": "1.0",
+            "date": "2026-07-01",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    corrected = await client.patch(
+        f"/api/billing/time-entries/{created.json()['id']}",
+        json={"description": "Drafted motion", "hours": "1.0", "date": "2026-06-30"},
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["date"] == "2026-06-30"
+
+
+@pytest.mark.asyncio
+async def test_expense_date_can_be_corrected(client, test_matter):
+    """Same for expenses: a mis-dated receipt has to be fixable."""
+    created = await client.post(
+        "/api/billing/expenses",
+        json={
+            "matter_id": str(test_matter.id),
+            "description": "Filing fee",
+            "amount": "125.00",
+            "date": "2026-07-01",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    corrected = await client.patch(
+        f"/api/billing/expenses/{created.json()['id']}",
+        json={"date": "2026-06-30"},
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["date"] == "2026-06-30"
+
+
+class TestDraftLineItemEditing:
+    """The bill review loop: adjust a generated draft before the client sees it."""
+
+    async def test_reword_and_write_down_a_line(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="4.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+        line = invoice["line_items"][0]
+        assert Decimal(invoice["total"]) == Decimal("1000.00")
+
+        edited = await client.patch(
+            f"/api/billing/invoices/{invoice['id']}/line-items/{line['id']}",
+            json={"description": "Drafted and revised motion", "unit_price": "200.00"},
+        )
+        assert edited.status_code == 200, edited.text
+        body = edited.json()
+        assert body["line_items"][0]["description"] == "Drafted and revised motion"
+        # 4 hours written down from $250 to $200 an hour.
+        assert Decimal(body["line_items"][0]["amount"]) == Decimal("800.00")
+        assert Decimal(body["subtotal"]) == Decimal("800.00")
+        assert Decimal(body["total"]) == Decimal("800.00")
+
+    async def test_add_a_discount_line(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="4.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        discounted = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/line-items",
+            json={
+                "description": "Courtesy discount",
+                "amount": "100.00",
+                "source_type": "discount",
+            },
+        )
+        assert discounted.status_code == 201, discounted.text
+        body = discounted.json()
+        # A discount is stored negative so the subtotal simply sums.
+        assert Decimal(body["line_items"][-1]["amount"]) == Decimal("-100.00")
+        assert Decimal(body["total"]) == Decimal("900.00")
+
+    async def test_add_a_flat_fee_line(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        added = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/line-items",
+            json={
+                "description": "Filing package",
+                "amount": "500.00",
+                "source_type": "flat_fee",
+            },
+        )
+        assert added.status_code == 201, added.text
+        assert Decimal(added.json()["total"]) == Decimal("750.00")
+
+    async def test_removing_a_line_releases_the_work(self, client, test_matter):
+        entry = await _log_time(client, test_matter.id, hours="2.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+        line = invoice["line_items"][0]
+
+        removed = await client.delete(
+            f"/api/billing/invoices/{invoice['id']}/line-items/{line['id']}"
+        )
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["line_items"] == []
+        assert Decimal(removed.json()["total"]) == Decimal("0.00")
+
+        # The hours must return to the unbilled pool, not be stranded.
+        released = await client.get(f"/api/billing/time-entries/{entry['id']}")
+        assert released.status_code == 200
+        assert released.json()["invoice_id"] is None
+        assert released.json()["status"] == "draft"
+
+    async def test_sent_invoices_are_not_editable(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+        sent = await client.patch(
+            f"/api/billing/invoices/{invoice['id']}", json={"status": "sent"}
+        )
+        assert sent.status_code == 200, sent.text
+
+        refused = await client.patch(
+            f"/api/billing/invoices/{invoice['id']}/line-items/{invoice['line_items'][0]['id']}",
+            json={"description": "Too late"},
+        )
+        assert refused.status_code == 400
+        assert "draft" in refused.json()["detail"].lower()
+
+    async def test_a_zero_amount_adjustment_is_refused(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+        refused = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/line-items",
+            json={"description": "Nothing", "amount": "0"},
+        )
+        assert refused.status_code == 422
+
+
+class TestInvoiceDelivery:
+    async def test_send_reports_unconfigured_email_without_marking_sent(
+        self, client, test_matter, db_session, test_tenant
+    ):
+        """A bill that never left the building must not become outstanding A/R."""
+        from app.models.contact import Contact
+
+        client_contact = Contact(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            first_name="Client",
+            last_name="Contact",
+            email="client@example.com",
+        )
+        db_session.add(client_contact)
+        await db_session.commit()
+
+        matter_result = await db_session.execute(
+            select(Matter).where(Matter.id == test_matter.id)
+        )
+        matter = matter_result.scalar_one()
+        matter.client_contact_id = client_contact.id
+        await db_session.commit()
+
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        sent = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/send", json={}
+        )
+        assert sent.status_code == 200, sent.text
+        body = sent.json()
+        # Email is not configured in tests, so delivery must report failure
+        # and the invoice must stay a draft.
+        assert body["delivered"] is False
+        assert body["recipients"] == ["client@example.com"]
+        assert body["invoice"]["status"] == "draft"
+        assert body["invoice"]["sent_at"] is None
+
+    async def test_send_requires_a_recipient(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        refused = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/send", json={}
+        )
+        assert refused.status_code == 400
+        assert "recipient" in refused.json()["detail"].lower()
+
+
+class TestTrustApplication:
+    """Applying client funds already held is the defining legal-billing move."""
+
+    async def _retainer(self, db_session, tenant_id, matter_id, user_id, amount):
+        from app.models.contact import Contact
+        from app.models.retainer import Retainer
+
+        contact = Contact(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            first_name="Trust",
+            last_name="Client",
+            email="trust@example.com",
+        )
+        db_session.add(contact)
+        await db_session.commit()
+
+        retainer = Retainer(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            contact_id=contact.id,
+            retainer_type="evergreen",
+            amount=Decimal(amount),
+            current_balance=Decimal(amount),
+            minimum_balance=Decimal("500.00"),
+            status="active",
+        )
+        db_session.add(retainer)
+        await db_session.commit()
+        await db_session.refresh(retainer)
+        return retainer
+
+    async def _sent_invoice(self, client, matter_id, hours="4.0"):
+        await _log_time(client, matter_id, hours=hours)
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate", json={"matter_id": str(matter_id)}
+            )
+        ).json()
+        await client.patch(
+            f"/api/billing/invoices/{invoice['id']}", json={"status": "sent"}
+        )
+        return invoice
+
+    async def test_applying_trust_moves_both_ledgers_together(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        from app.models.retainer import Retainer
+
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "2000.00"
+        )
+        invoice = await self._sent_invoice(client, test_matter.id)
+
+        # Snapshot the id: the session is expired below, and touching an
+        # expired ORM attribute afterwards triggers a sync refresh.
+        retainer_id = retainer.id
+
+        applied = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer_id), "amount": "400.00"},
+        )
+        assert applied.status_code == 201, applied.text
+        body = applied.json()
+
+        # The invoice records the payment...
+        assert Decimal(body["amount_paid"]) == Decimal("400.00")
+        assert body["status"] == "partially_paid"
+        assert body["payments"][0]["method"] == "trust"
+
+        # ...and the retainer balance actually moved. Without this the two
+        # ledgers drift: the old drawdown route never wrote a payment, and the
+        # payment route never touched the retainer.
+        db_session.expire_all()
+        balance = await db_session.scalar(
+            select(Retainer.current_balance).where(Retainer.id == retainer_id)
+        )
+        assert balance == Decimal("1600.00")
+
+    async def test_applying_trust_defaults_to_settling_the_bill(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "5000.00"
+        )
+        invoice = await self._sent_invoice(client, test_matter.id)
+
+        applied = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer.id)},
+        )
+        assert applied.status_code == 201, applied.text
+        assert applied.json()["status"] == "paid"
+        assert Decimal(applied.json()["balance_due"]) == Decimal("0.00")
+
+    async def test_cannot_overdraw_the_retainer(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "100.00"
+        )
+        invoice = await self._sent_invoice(client, test_matter.id)
+
+        refused = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer.id), "amount": "500.00"},
+        )
+        assert refused.status_code == 400
+        assert "insufficient" in refused.json()["detail"].lower()
+
+    async def test_cannot_apply_trust_to_a_draft(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "2000.00"
+        )
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        refused = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer.id)},
+        )
+        assert refused.status_code == 400
+
+    async def test_available_trust_flags_an_evergreen_shortfall(
+        self, client, db_session, test_tenant, test_user, test_matter
+    ):
+        retainer = await self._retainer(
+            db_session, test_tenant.id, test_matter.id, test_user.id, "2000.00"
+        )
+        retainer_id = retainer.id
+        invoice = await self._sent_invoice(client, test_matter.id, hours="8.0")
+
+        # Draw the balance under its evergreen floor of $500.
+        drawn = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/apply-trust",
+            json={"retainer_id": str(retainer_id), "amount": "1600.00"},
+        )
+        assert drawn.status_code == 201, drawn.text
+        db_session.expire_all()
+
+        available = await client.get(
+            f"/api/billing/invoices/{invoice['id']}/available-trust"
+        )
+        assert available.status_code == 200, available.text
+        row = next(r for r in available.json() if r["retainer_id"] == str(retainer_id))
+        assert Decimal(row["current_balance"]) == Decimal("400.00")
+        assert row["needs_replenishment"] is True

@@ -2,6 +2,12 @@
 
 import uuid as _uuid
 from datetime import date, datetime
+
+# A field literally named "date" cannot annotate itself as ``Optional[date]``.
+# In a class body the value is bound before the annotation is evaluated, so
+# ``date`` already means ``None`` and the field silently becomes NoneType,
+# rejecting every real date. These fields use the alias instead.
+from datetime import date as _date
 from decimal import Decimal
 from typing import Optional
 
@@ -26,7 +32,7 @@ class TimeEntryUpdate(BaseModel):
     description: Optional[str] = None
     hours: Optional[Decimal] = Field(default=None, gt=0)
     hourly_rate: Optional[Decimal] = Field(default=None, gt=0)
-    date: Optional[date] = None
+    date: Optional[_date] = None
     is_billable: Optional[bool] = None
     utbms_task_code: Optional[str] = None
     utbms_activity_code: Optional[str] = None
@@ -38,6 +44,8 @@ class TimeEntryResponse(BaseModel):
     tenant_id: str
     matter_id: str
     user_id: str
+    # Who recorded the time. A firm-wide list is unreadable without it.
+    user_name: Optional[str] = None
     description: str
     hours: Decimal
     hourly_rate: Decimal
@@ -79,6 +87,9 @@ class TimerStartRequest(BaseModel):
     description: str = Field(default="", max_length=4000)
     is_billable: bool = True
     hourly_rate: Optional[Decimal] = Field(default=None, gt=0)
+    # The timekeeper's local calendar date. Without it an entry started in the
+    # US evening is stamped with tomorrow's UTC date and bills on the wrong day.
+    date: Optional[_date] = None
 
 
 class TimerStopRequest(BaseModel):
@@ -125,7 +136,7 @@ class ExpenseCreate(BaseModel):
 class ExpenseUpdate(BaseModel):
     description: Optional[str] = Field(default=None, min_length=1)
     amount: Optional[Decimal] = Field(default=None, gt=0)
-    date: Optional[date] = None
+    date: Optional[_date] = None
     due_date: Optional[date] = None
     category: Optional[str] = Field(default=None, min_length=1, max_length=100)
     vendor: Optional[str] = Field(default=None, max_length=300)
@@ -287,6 +298,59 @@ class InvoiceCreate(BaseModel):
     line_items: list[InvoiceLineItemCreate] = []
 
 
+EDITABLE_LINE_SOURCE_TYPES = ("flat_fee", "adjustment", "discount")
+
+
+class InvoiceLineItemCreateRequest(BaseModel):
+    """A charge a reviewer adds by hand while the bill is still a draft."""
+
+    description: str = Field(..., min_length=1, max_length=4000)
+    # A discount is a negative amount, so the sign is not constrained here.
+    amount: Decimal
+    quantity: Decimal = Field(default=Decimal("1"), gt=0)
+    source_type: str = Field(default="adjustment")
+
+    @field_validator("source_type")
+    @classmethod
+    def _known_source_type(cls, value: str) -> str:
+        if value not in EDITABLE_LINE_SOURCE_TYPES:
+            raise ValueError(
+                f"source_type must be one of {', '.join(EDITABLE_LINE_SOURCE_TYPES)}"
+            )
+        return value
+
+    @field_validator("amount")
+    @classmethod
+    def _non_zero(cls, value: Decimal) -> Decimal:
+        if value == 0:
+            raise ValueError("amount must not be zero")
+        return value
+
+
+class InvoiceLineItemUpdateRequest(BaseModel):
+    """Edit a line on a draft: reword it, or write it down."""
+
+    description: Optional[str] = Field(default=None, min_length=1, max_length=4000)
+    quantity: Optional[Decimal] = Field(default=None, gt=0)
+    unit_price: Optional[Decimal] = None
+
+
+class InvoiceSendRequest(BaseModel):
+    """Deliver a bill to the client by email, with the PDF attached."""
+
+    # Defaults to the matter's client contact when omitted.
+    to: Optional[list[str]] = None
+    subject: Optional[str] = Field(default=None, max_length=300)
+    message: Optional[str] = Field(default=None, max_length=8000)
+
+
+class InvoiceSendResponse(BaseModel):
+    delivered: bool
+    recipients: list[str]
+    detail: str
+    invoice: "InvoiceResponse"
+
+
 class InvoiceUpdate(BaseModel):
     issue_date: Optional[date] = None
     due_date: Optional[date] = None
@@ -365,6 +429,29 @@ class GenerateInvoiceRequest(BaseModel):
 # ── Payments ─────────────────────────────────────────────────────────────────
 
 
+class ApplyTrustRequest(BaseModel):
+    """Apply retainer or trust funds held for the client to an invoice."""
+
+    retainer_id: str
+    # Omit to apply the lesser of the balance due and the funds available.
+    amount: Optional[Decimal] = Field(default=None, gt=0)
+    payment_date: Optional[_date] = None
+    notes: Optional[str] = Field(default=None, max_length=4000)
+
+
+class RetainerAvailability(BaseModel):
+    """A retainer the matter holds, and what it can cover on this bill."""
+
+    retainer_id: str
+    contact_name: Optional[str] = None
+    retainer_type: Optional[str] = None
+    current_balance: Decimal
+    minimum_balance: Optional[Decimal] = None
+    status: str
+    # True when the balance has fallen under the evergreen floor.
+    needs_replenishment: bool = False
+
+
 class PaymentCreate(BaseModel):
     invoice_id: str
     amount: Decimal = Field(..., gt=0)
@@ -418,6 +505,16 @@ class InvoiceExportRequest(BaseModel):
 # ── Billing Settings ─────────────────────────────────────────────────────────
 
 
+class TimeEntrySettingsResponse(BaseModel):
+    """Non-financial entry rules every timekeeper needs to record time.
+
+    Deliberately excludes the firm's default rate: the increment governs what a
+    valid entry looks like, while rates are finance data behind /billing/settings.
+    """
+
+    time_rounding_minutes: int
+
+
 class BillingSettingsResponse(BaseModel):
     default_hourly_rate: Optional[Decimal] = None
     time_rounding_minutes: int = 6
@@ -426,3 +523,7 @@ class BillingSettingsResponse(BaseModel):
 class BillingSettingsUpdate(BaseModel):
     default_hourly_rate: Optional[Decimal] = Field(default=None, gt=0)
     time_rounding_minutes: Optional[int] = Field(default=None, ge=1, le=60)
+
+
+# InvoiceSendResponse embeds InvoiceResponse, defined further down this module.
+InvoiceSendResponse.model_rebuild()

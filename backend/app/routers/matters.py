@@ -14,6 +14,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import get_settings
 from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user, require_admin
 from app.models.billing import TimeEntry, Expense, Invoice, Payment
@@ -91,6 +92,7 @@ from app.services.matter_number import (
     normalize_matter_number,
 )
 
+settings = get_settings()
 _cloud_search = CloudSearchService()
 _cloud_sync = CloudSyncService()
 matter_context_cache_manager = ExpertiseCacheManager()
@@ -243,6 +245,9 @@ async def _build_matter_cloud_files_response(
             tenant_id=tenant_id_str,
             user_id=str(user_id),
             matter_cloud_folder=matter.cloud_folder,
+            # The matter page waits on this panel, so a partial list now beats
+            # a complete one after the whole page has stalled behind it.
+            budget_seconds=settings.CLOUD_SEARCH_UI_BUDGET_SECONDS,
         )
     except Exception:
         logger.warning(
@@ -2321,15 +2326,25 @@ async def get_matter_time_entries(
     result = await db.execute(q)
     entries = result.scalars().all()
 
+    # Resolve timekeepers in one query so the matter table can name who worked.
+    user_ids = {e.user_id for e in entries if e.user_id}
+    names: dict[uuid.UUID, str] = {}
+    if user_ids:
+        name_rows = await db.execute(
+            select(User.id, User.full_name).where(User.id.in_(user_ids))
+        )
+        names = {uid: full_name for uid, full_name in name_rows.all()}
+
     return [
         {
             "id": str(e.id),
             "matter_id": str(e.matter_id),
             "user_id": str(e.user_id),
+            "user_name": names.get(e.user_id),
             "description": e.description,
-            "hours": float(e.hours),
-            "hourly_rate": float(e.hourly_rate),
-            "amount": float(e.amount),
+            "hours": str(e.hours),
+            "hourly_rate": str(e.hourly_rate),
+            "amount": str(e.amount),
             "date": str(e.date),
             "is_billable": e.is_billable,
             "status": e.status,
@@ -2378,9 +2393,10 @@ async def get_matter_invoices(
             "status": i.status,
             "issue_date": str(i.issue_date),
             "due_date": str(i.due_date),
-            "subtotal": float(i.subtotal),
-            "tax_amount": float(i.tax_amount),
-            "total": float(i.total),
+            # Money stays Decimal-as-string, matching every other billing route.
+            "subtotal": str(i.subtotal),
+            "tax_amount": str(i.tax_amount),
+            "total": str(i.total),
             "retainer_id": str(i.retainer_id) if i.retainer_id else None,
             "billing_period_start": (
                 str(i.billing_period_start) if i.billing_period_start else None
@@ -2393,16 +2409,16 @@ async def get_matter_invoices(
                     "id": str(li.id),
                     "source_type": li.source_type,
                     "description": li.description,
-                    "quantity": float(li.quantity),
-                    "unit_price": float(li.unit_price),
-                    "amount": float(li.amount),
+                    "quantity": str(li.quantity),
+                    "unit_price": str(li.unit_price),
+                    "amount": str(li.amount),
                 }
                 for li in i.line_items
             ],
             "payments": [
                 {
                     "id": str(p.id),
-                    "amount": float(p.amount),
+                    "amount": str(p.amount),
                     "payment_date": str(p.payment_date),
                     "method": p.method,
                 }

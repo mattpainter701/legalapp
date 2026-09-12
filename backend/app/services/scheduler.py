@@ -712,6 +712,17 @@ class LegalScheduler:
             replace_existing=True,
         )
 
+        # esign-complete-pending: every 5 minutes. Files executed copies whose
+        # storage write failed when the last signer signed.
+        self.scheduler.add_job(
+            self._guarded("esign-complete-pending", self._complete_pending_esign),
+            "interval",
+            minutes=5,
+            id="esign-complete-pending",
+            name="E-Sign Complete Pending",
+            replace_existing=True,
+        )
+
         from app.services.demo_purge import purge_expired_demo_tenants
 
         self.scheduler.add_job(
@@ -1421,6 +1432,19 @@ class LegalScheduler:
             await _apply_scheduler_tenant_context(session)
             sent = await process_due_reminders(session)
             logger.info("[esign-reminder] Sent %s reminder(s)", sent)
+
+    @tenant_scoped_job
+    async def _complete_pending_esign(self) -> None:
+        """Retry filing signed documents that storage refused earlier."""
+        from app.services.esign.service import retry_pending_completions
+
+        async with async_session_maker() as session:
+            await _apply_scheduler_tenant_context(session)
+            completed = await retry_pending_completions(session)
+            if completed:
+                logger.info(
+                    "[esign-complete-pending] Completed %s request(s)", completed
+                )
 
     @tenant_scoped_job
     async def _check_task_reminders(self) -> None:

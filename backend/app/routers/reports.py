@@ -15,6 +15,7 @@ import csv
 import io
 import uuid
 from datetime import date, datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -34,6 +35,7 @@ from app.schemas.reports import (
     MatterStatusReport,
     OverdueTasksReport,
 )
+from app.services.access_control import require_finance_admin
 from app.services.matter_budget import (
     expense_client_amount_expression,
     load_matter_billable_totals,
@@ -43,14 +45,55 @@ from app.services.task_visibility import sms_task_visibility_predicate
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
-# Invoice statuses that do NOT represent outstanding receivables
-_NON_RECEIVABLE_STATUSES = {"draft", "paid", "cancelled", "void"}
+# Invoice statuses that do NOT represent outstanding receivables.
+# "written_off" is forgiven debt: it is no longer collectible and must never
+# inflate the aging report a firm runs its collections from.
+_NON_RECEIVABLE_STATUSES = {"draft", "paid", "cancelled", "void", "written_off"}
 
 # Lead statuses that represent a converted / matter-opened lead
 _CONVERTED_STATUSES = {"matter_opened"}
 
 # Task statuses that count as done (not overdue)
 _DONE_STATUSES = {"completed", "cancelled", "done"}
+
+# Explicit column order per billing report. Declaring them keeps an empty
+# export a valid CSV (header only) instead of a zero-byte file.
+REALIZATION_COLUMNS = [
+    "matter_id",
+    "matter_name",
+    "billable_hours",
+    "billable_amount",
+    "billable_time_amount",
+    "billable_expense_amount",
+    "invoiced_amount",
+    "collected_amount",
+    "billing_realization_pct",
+    "collection_pct",
+    "realization_pct",
+]
+
+WIP_COLUMNS = ["matter_id", "matter_name", "wip_hours", "wip_value"]
+
+AGING_COLUMNS = [
+    "matter_id",
+    "matter_name",
+    "current",
+    "days_1_30",
+    "days_31_60",
+    "days_61_90",
+    "days_90_plus",
+    "total",
+]
+
+
+def _date_window(column, start: date | None, end: date | None) -> list:
+    """Inclusive [start, end] filter clauses, omitting whichever bound is unset."""
+    clauses = []
+    if start is not None:
+        clauses.append(column >= start)
+    if end is not None:
+        clauses.append(column <= end)
+    return clauses
 
 
 async def _matter_status_report(
@@ -175,8 +218,13 @@ async def _overdue_tasks_report(
     return OverdueTasksReport(total_overdue=len(tasks), tasks=tasks)
 
 
-async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
-    """Per-matter billable hours/amount vs. amount collected via payments."""
+async def _realization_report(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[dict]:
+    """Per-matter worked, invoiced, and collected value over a period."""
     time_rows = await db.execute(
         select(
             TimeEntry.matter_id,
@@ -189,6 +237,7 @@ async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[di
             TimeEntry.tenant_id == tenant_id,
             Matter.tenant_id == tenant_id,
             TimeEntry.is_billable.is_(True),
+            *_date_window(TimeEntry.date, start, end),
         )
         .group_by(TimeEntry.matter_id, Matter.matter_name)
     )
@@ -202,6 +251,7 @@ async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[di
             "billable_amount": time_value,
             "billable_time_amount": time_value,
             "billable_expense_amount": 0.0,
+            "invoiced_amount": 0.0,
             "collected_amount": 0.0,
         }
 
@@ -216,6 +266,7 @@ async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[di
             Expense.tenant_id == tenant_id,
             Matter.tenant_id == tenant_id,
             Expense.is_billable.is_(True),
+            *_date_window(Expense.date, start, end),
         )
         .group_by(Expense.matter_id, Matter.matter_name)
     )
@@ -230,6 +281,7 @@ async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[di
                 "billable_amount": 0.0,
                 "billable_time_amount": 0.0,
                 "billable_expense_amount": 0.0,
+                "invoiced_amount": 0.0,
                 "collected_amount": 0.0,
             },
         )
@@ -238,6 +290,25 @@ async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[di
 
     if not results:
         return []
+
+    # Amount invoiced per matter. Draft and voided bills are not receivables and
+    # written-off bills were forgiven, so none of them count as billed work.
+    invoice_rows = await db.execute(
+        select(
+            Invoice.matter_id,
+            func.sum(Invoice.total),
+        )
+        .where(
+            Invoice.tenant_id == tenant_id,
+            Invoice.matter_id.in_(results.keys()),
+            Invoice.status.not_in(["draft", "void", "cancelled", "written_off"]),
+            *_date_window(Invoice.issue_date, start, end),
+        )
+        .group_by(Invoice.matter_id)
+    )
+    for matter_id, invoiced in invoice_rows.all():
+        if matter_id in results:
+            results[matter_id]["invoiced_amount"] = float(invoiced or 0)
 
     # Amount collected per matter via Payment -> Invoice -> matter_id
     payment_rows = await db.execute(
@@ -249,6 +320,7 @@ async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[di
         .where(
             Invoice.tenant_id == tenant_id,
             Invoice.matter_id.in_(results.keys()),
+            *_date_window(Payment.payment_date, start, end),
         )
         .group_by(Invoice.matter_id)
     )
@@ -259,18 +331,44 @@ async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[di
     rows = []
     for row in results.values():
         billable_amount = row["billable_amount"]
+        invoiced_amount = row["invoiced_amount"]
         collected_amount = row["collected_amount"]
+        # Billing realization: what share of the work performed was billed.
+        billing_realization_pct = (
+            round(invoiced_amount / billable_amount * 100, 1)
+            if billable_amount > 0
+            else 0.0
+        )
+        # Collection rate: what share of the billed work was actually paid.
+        collection_pct = (
+            round(collected_amount / invoiced_amount * 100, 1)
+            if invoiced_amount > 0
+            else 0.0
+        )
+        # Kept for existing consumers: collected over worked.
         realization_pct = (
             round(collected_amount / billable_amount * 100, 1)
             if billable_amount > 0
             else 0.0
         )
-        rows.append({**row, "realization_pct": realization_pct})
+        rows.append(
+            {
+                **row,
+                "billing_realization_pct": billing_realization_pct,
+                "collection_pct": collection_pct,
+                "realization_pct": realization_pct,
+            }
+        )
 
     return rows
 
 
-async def _wip_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
+async def _wip_report(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[dict]:
     """Per-matter uninvoiced billable time and client expenses."""
     time_rows = await db.execute(
         select(
@@ -285,6 +383,7 @@ async def _wip_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
             Matter.tenant_id == tenant_id,
             TimeEntry.is_billable.is_(True),
             TimeEntry.invoice_id.is_(None),
+            *_date_window(TimeEntry.date, start, end),
         )
         .group_by(TimeEntry.matter_id, Matter.matter_name)
     )
@@ -309,6 +408,7 @@ async def _wip_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
             Matter.tenant_id == tenant_id,
             Expense.is_billable.is_(True),
             Expense.invoice_id.is_(None),
+            *_date_window(Expense.date, start, end),
         )
         .group_by(Expense.matter_id, Matter.matter_name)
     )
@@ -384,32 +484,52 @@ async def _aging_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
             {
                 "matter_id": str(row.matter_id),
                 "matter_name": row.matter_name,
-                "days_0_30": 0.0,
+                "current": 0.0,
+                "days_1_30": 0.0,
                 "days_31_60": 0.0,
                 "days_61_90": 0.0,
                 "days_90_plus": 0.0,
+                "total": 0.0,
             },
         )
 
+        # An invoice that is not yet due is outstanding but not late. Firms read
+        # the late columns as collections work, so it gets its own bucket.
         days_overdue = (today - row.due_date).days
-        if days_overdue <= 30:
-            bucket["days_0_30"] += balance
+        if days_overdue <= 0:
+            bucket["current"] += balance
+        elif days_overdue <= 30:
+            bucket["days_1_30"] += balance
         elif days_overdue <= 60:
             bucket["days_31_60"] += balance
         elif days_overdue <= 90:
             bucket["days_61_90"] += balance
         else:
             bucket["days_90_plus"] += balance
+        bucket["total"] += balance
 
-    return list(buckets.values())
+    return [
+        {
+            key: round(value, 2) if isinstance(value, float) else value
+            for key, value in bucket.items()
+        }
+        for bucket in buckets.values()
+    ]
 
 
-def _csv_response(rows: list[dict], filename: str) -> StreamingResponse:
-    """Build a StreamingResponse rendering ``rows`` as a CSV download."""
+def _csv_response(
+    rows: list[dict], filename: str, columns: list[str] | None = None
+) -> StreamingResponse:
+    """Build a StreamingResponse rendering ``rows`` as a CSV download.
 
+    The header is always written, so an empty report downloads as a readable
+    CSV with column names rather than a zero-byte file.
+    """
+
+    fieldnames = columns or (list(rows[0].keys()) if rows else [])
     buffer = io.StringIO()
-    if rows:
-        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+    if fieldnames:
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
     buffer.seek(0)
@@ -419,6 +539,23 @@ def _csv_response(rows: list[dict], filename: str) -> StreamingResponse:
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+def _validate_range(start: date | None, end: date | None) -> None:
+    """Reject an inverted window instead of silently returning nothing."""
+    if start and end and start > end:
+        raise HTTPException(status_code=400, detail="start must be on or before end")
+
+
+def _dated_filename(stem: str, start: date | None, end: date | None) -> str:
+    """Name the download after the period it covers, so saved files stay distinct."""
+    if start and end:
+        return f"{stem}-{start.isoformat()}-to-{end.isoformat()}.csv"
+    if start:
+        return f"{stem}-from-{start.isoformat()}.csv"
+    if end:
+        return f"{stem}-through-{end.isoformat()}.csv"
+    return f"{stem}-{date.today().isoformat()}.csv"
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -477,7 +614,7 @@ async def get_reports_bundle(
 @router.get("/matters/{matter_id}/budget", response_model=MatterBudgetReport)
 async def get_matter_budget_report(
     matter_id: str,
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_finance_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Return budget utilization for a single matter."""
@@ -520,40 +657,48 @@ async def get_matter_budget_report(
 
 @router.get("/billing/realization")
 async def get_realization_report(
-    format: str = Query("json"),
-    current_user=Depends(get_current_user),
+    format: Literal["json", "csv"] = Query("json"),
+    start: date | None = Query(None, description="Include work on or after this date"),
+    end: date | None = Query(None, description="Include work on or before this date"),
+    current_user=Depends(require_finance_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Per-matter billable hours/amount vs. amount collected."""
+    """Per-matter worked, invoiced, and collected value over a period."""
     tenant_id = current_user.tenant_id
+    _validate_range(start, end)
     await set_tenant_context(db, str(tenant_id))
-    rows = await _realization_report(db, tenant_id)
+    rows = await _realization_report(db, tenant_id, start, end)
 
     if format == "csv":
-        return _csv_response(rows, "realization.csv")
+        return _csv_response(
+            rows, _dated_filename("realization", start, end), REALIZATION_COLUMNS
+        )
     return rows
 
 
 @router.get("/billing/wip")
 async def get_wip_report(
-    format: str = Query("json"),
-    current_user=Depends(get_current_user),
+    format: Literal["json", "csv"] = Query("json"),
+    start: date | None = Query(None, description="Include work on or after this date"),
+    end: date | None = Query(None, description="Include work on or before this date"),
+    current_user=Depends(require_finance_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Per-matter uninvoiced billable time (work-in-progress)."""
     tenant_id = current_user.tenant_id
+    _validate_range(start, end)
     await set_tenant_context(db, str(tenant_id))
-    rows = await _wip_report(db, tenant_id)
+    rows = await _wip_report(db, tenant_id, start, end)
 
     if format == "csv":
-        return _csv_response(rows, "wip.csv")
+        return _csv_response(rows, _dated_filename("wip", start, end), WIP_COLUMNS)
     return rows
 
 
 @router.get("/billing/aging")
 async def get_aging_report(
-    format: str = Query("json"),
-    current_user=Depends(get_current_user),
+    format: Literal["json", "csv"] = Query("json"),
+    current_user=Depends(require_finance_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Per-matter outstanding A/R balance bucketed by days overdue."""
@@ -562,5 +707,5 @@ async def get_aging_report(
     rows = await _aging_report(db, tenant_id)
 
     if format == "csv":
-        return _csv_response(rows, "aging.csv")
+        return _csv_response(rows, _dated_filename("aging", None, None), AGING_COLUMNS)
     return rows

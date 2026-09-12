@@ -316,15 +316,19 @@ async def test_aging_buckets(client, db_session, test_tenant, test_user):
 
     row_a = by_matter[str(matter_a.id)]
     assert row_a["days_31_60"] == 1000.0
-    assert row_a["days_0_30"] == 0.0
+    assert row_a["current"] == 0.0
+    assert row_a["days_1_30"] == 0.0
     assert row_a["days_61_90"] == 0.0
     assert row_a["days_90_plus"] == 0.0
+    assert row_a["total"] == 1000.0
 
     row_b = by_matter[str(matter_b.id)]
     assert row_b["days_61_90"] == 2000.0
-    assert row_b["days_0_30"] == 0.0
+    assert row_b["current"] == 0.0
+    assert row_b["days_1_30"] == 0.0
     assert row_b["days_31_60"] == 0.0
     assert row_b["days_90_plus"] == 0.0
+    assert row_b["total"] == 2000.0
 
 
 @pytest.mark.asyncio
@@ -389,3 +393,220 @@ async def test_realization_tenant_isolation(client, db_session, test_tenant, tes
     matter_ids = {row["matter_id"] for row in data}
     assert str(own_matter.id) in matter_ids
     assert str(other_matter.id) not in matter_ids
+
+
+@pytest.mark.asyncio
+async def test_aging_excludes_written_off_invoices(
+    client, db_session, test_tenant, test_user
+):
+    """A forgiven bill is not a receivable and must not inflate collections."""
+    today = date.today()
+    matter = _make_matter(test_tenant.id, test_user.id, name="Written Off Case")
+    db_session.add(matter)
+    await db_session.commit()
+
+    written_off = _make_invoice(
+        test_tenant.id,
+        matter.id,
+        test_user.id,
+        "INV-4001",
+        total="900.00",
+        status="written_off",
+        issue_date=today - timedelta(days=80),
+        due_date=today - timedelta(days=50),
+    )
+    db_session.add(written_off)
+    await db_session.commit()
+
+    r = await client.get("/api/reports/billing/aging")
+    assert r.status_code == 200
+    assert str(matter.id) not in {row["matter_id"] for row in r.json()}
+
+
+@pytest.mark.asyncio
+async def test_aging_separates_current_from_overdue(
+    client, db_session, test_tenant, test_user
+):
+    """An invoice that is not yet due is outstanding, not late."""
+    today = date.today()
+    matter = _make_matter(test_tenant.id, test_user.id, name="Not Yet Due Case")
+    db_session.add(matter)
+    await db_session.commit()
+
+    not_yet_due = _make_invoice(
+        test_tenant.id,
+        matter.id,
+        test_user.id,
+        "INV-4002",
+        total="750.00",
+        status="sent",
+        issue_date=today,
+        due_date=today + timedelta(days=20),
+    )
+    db_session.add(not_yet_due)
+    await db_session.commit()
+
+    r = await client.get("/api/reports/billing/aging")
+    assert r.status_code == 200
+    row = {r_["matter_id"]: r_ for r_ in r.json()}[str(matter.id)]
+    assert row["current"] == 750.0
+    assert row["days_1_30"] == 0.0
+    assert row["total"] == 750.0
+
+
+@pytest.mark.asyncio
+async def test_realization_reports_invoiced_and_collection_rate(
+    client, db_session, test_tenant, test_user
+):
+    """Billing realization is invoiced/worked; collection rate is collected/invoiced."""
+    matter = _make_matter(test_tenant.id, test_user.id, name="Ratio Case")
+    db_session.add(matter)
+    await db_session.commit()
+
+    # 10h @ $100 = $1,000 worked.
+    entry = _make_time_entry(
+        test_tenant.id, matter.id, test_user.id, hours="10.00", rate="100.00"
+    )
+    db_session.add(entry)
+
+    # $800 invoiced of that work.
+    invoice = _make_invoice(
+        test_tenant.id, matter.id, test_user.id, "INV-4003", total="800.00"
+    )
+    db_session.add(invoice)
+    await db_session.commit()
+
+    # $400 collected against the bill.
+    db_session.add(_make_payment(test_tenant.id, invoice.id, amount="400.00"))
+    await db_session.commit()
+
+    r = await client.get("/api/reports/billing/realization")
+    assert r.status_code == 200
+    row = {row_["matter_id"]: row_ for row_ in r.json()}[str(matter.id)]
+    assert row["invoiced_amount"] == 800.0
+    assert row["billing_realization_pct"] == 80.0
+    assert row["collection_pct"] == 50.0
+    assert row["realization_pct"] == 40.0
+
+
+@pytest.mark.asyncio
+async def test_realization_honours_date_window(
+    client, db_session, test_tenant, test_user
+):
+    """Work outside the requested period is excluded from the report."""
+    today = date.today()
+    matter = _make_matter(test_tenant.id, test_user.id, name="Windowed Case")
+    db_session.add(matter)
+    await db_session.commit()
+
+    db_session.add(
+        _make_time_entry(
+            test_tenant.id,
+            matter.id,
+            test_user.id,
+            hours="3.00",
+            rate="100.00",
+            entry_date=today - timedelta(days=200),
+        )
+    )
+    db_session.add(
+        _make_time_entry(
+            test_tenant.id,
+            matter.id,
+            test_user.id,
+            hours="2.00",
+            rate="100.00",
+            entry_date=today,
+        )
+    )
+    await db_session.commit()
+
+    start = (today - timedelta(days=30)).isoformat()
+    r = await client.get(f"/api/reports/billing/realization?start={start}")
+    assert r.status_code == 200
+    row = {row_["matter_id"]: row_ for row_ in r.json()}[str(matter.id)]
+    assert row["billable_hours"] == 2.0
+    assert row["billable_amount"] == 200.0
+
+
+@pytest.mark.asyncio
+async def test_realization_rejects_inverted_date_window(client):
+    """An impossible window is an error, not a silently empty report."""
+    r = await client.get(
+        "/api/reports/billing/realization?start=2026-06-01&end=2026-01-01"
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_billing_report_csv_always_has_header(client):
+    """An empty export is still a readable CSV, not a zero-byte file."""
+    r = await client.get("/api/reports/billing/wip?format=csv")
+    assert r.status_code == 200
+    first_line = r.text.splitlines()[0]
+    assert first_line.startswith("matter_id,matter_name,wip_hours,wip_value")
+
+
+@pytest.mark.asyncio
+async def test_billing_reports_reject_non_finance_users(
+    db_session, test_tenant, test_redis
+):
+    """Firm-wide financials are partner/finance data, not open to every login."""
+    from datetime import datetime, timezone
+
+    from httpx import ASGITransport, AsyncClient
+    from jose import jwt as jose_jwt
+
+    from app.config import get_settings
+    from app.database import get_db
+    from app.main import app
+
+    settings = get_settings()
+    plain_user = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="reception@testfirm.com",
+        full_name="Front Desk",
+        role="user",
+        oauth_provider="google",
+        oauth_subject="google-sub-reception",
+        is_active=True,
+    )
+    db_session.add(plain_user)
+    await db_session.commit()
+
+    token = jose_jwt.encode(
+        {
+            "sub": str(plain_user.id),
+            "tenant_id": str(test_tenant.id),
+            "role": plain_user.role,
+            "email": plain_user.email,
+            "billing_tier": test_tenant.billing_tier,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    previous_redis = getattr(app.state, "redis", None)
+    app.state.redis = test_redis
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as ac:
+            for path in (
+                "/api/reports/billing/realization",
+                "/api/reports/billing/wip",
+                "/api/reports/billing/aging",
+            ):
+                r = await ac.get(path)
+                assert r.status_code == 403, path
+    finally:
+        app.state.redis = previous_redis
+        app.dependency_overrides.clear()

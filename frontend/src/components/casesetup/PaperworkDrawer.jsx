@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { FileText, LibraryBig, X } from 'lucide-react'
 import { getIntakeStarterPack, getMatterDocuments, previewMatterPaperwork, uploadMatterDocument } from '../../api'
 import { startMatterIntake } from '../MatterIntakePanel'
@@ -15,7 +15,9 @@ const linkButton = 'inline-flex items-center gap-1.5 text-[13px] font-semibold t
 // A neutral fallback when the matter type is unknown; the real examples come
 // from the matter's own starter pack so a criminal or bankruptcy matter never
 // sees family-law records as the hint.
-const FALLBACK_UPLOAD_HINT = 'The client intake form\nRecent statements'
+const FALLBACK_UPLOAD_HINT = 'Recent statements\nCopies of any existing court orders'
+
+const fileInput = 'w-full text-[13px] text-brand-ink file:mr-3 file:rounded-lg file:border file:border-brand-line file:bg-brand-surface file:px-3 file:py-1.5 file:text-[13px] disabled:opacity-50'
 
 function isPdf(document) {
   return document.content_type === 'application/pdf' || document.filename?.toLowerCase().endsWith('.pdf')
@@ -63,6 +65,45 @@ function DueDate({ id, value, onChange, hint }) {
   )
 }
 
+// The client intake form and the client questionnaire are supplied the same
+// three ways as the fee agreement: an existing matter PDF, an upload, or a
+// firm template. Both are signed inside the portal unless the firm says not.
+function SuppliedFormCard({
+  title, description, chooseLabel, noneLabel, prepareLabel, uploadLabel,
+  documents, value, onChoose, onPrepare, onUpload, uploading,
+  requiresSignature, onRequiresSignature,
+}) {
+  return (
+    <div className={card}>
+      <h3 className="mb-1 font-semibold text-brand-ink">{title} <span className="font-normal text-brand-muted">(optional)</span></h3>
+      <p className="mb-3 text-[12px] text-brand-muted">{description}</p>
+      {documents.length > 0 && (
+        <label className="mb-3 block">
+          <span className={label}>{chooseLabel}</span>
+          <select className={field} value={value} onChange={event => onChoose(event.target.value)}>
+            <option value="">{noneLabel}</option>
+            {documents.map(document => <option key={document.id} value={document.id}>{document.filename}</option>)}
+          </select>
+        </label>
+      )}
+      <button type="button" onClick={onPrepare} className={linkButton}>
+        <LibraryBig size={14} aria-hidden="true" /> {prepareLabel}
+      </button>
+      <label className="mt-3 block">
+        <span className={label}>{uploadLabel}</span>
+        <input type="file" accept=".pdf,.docx,application/pdf" onChange={onUpload} disabled={uploading} className={fileInput} />
+        {uploading && <span role="status" className="mt-1 block text-[12px] text-brand-muted">Uploading…</span>}
+      </label>
+      {value && (
+        <label className="mt-3 flex items-center gap-2 text-[13px] text-brand-ink">
+          <input type="checkbox" checked={requiresSignature} onChange={event => onRequiresSignature(event.target.checked)} />
+          Client signs this form
+        </label>
+      )}
+    </div>
+  )
+}
+
 export default function PaperworkDrawer({
   matterId, documents = [], users = [], clientEmail = '',
   timeZone = 'America/Chicago', matterType = '', practiceArea = '',
@@ -74,7 +115,7 @@ export default function PaperworkDrawer({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [pack, setPack] = useState(null)
-  const [packNote, setPackNote] = useState('')
+  const [packError, setPackError] = useState('')
   const [attachedDocuments, setAttachedDocuments] = useState([])
   // The exact message the client would receive for the current draft. Rendered
   // server-side so it matches delivery byte for byte, with a sample token.
@@ -83,18 +124,14 @@ export default function PaperworkDrawer({
   const [previewError, setPreviewError] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
   // Which card opened the firm-template picker: the document it saves becomes
-  // the fee agreement, the intake form, or an additional signing form.
+  // the fee agreement, the intake form, the questionnaire, or an additional
+  // signing form.
   const [pickerTarget, setPickerTarget] = useState(null)
   const [uploadingForm, setUploadingForm] = useState(false)
   const [uploadingIntake, setUploadingIntake] = useState(false)
-  // The standard pack is seeded once, and only while the firm has not touched
-  // the questions or uploads: an in-flight load must never overwrite a reply.
-  const touched = useRef(false)
+  const [uploadingQuestionnaire, setUploadingQuestionnaire] = useState(false)
 
-  const set = (key, value) => {
-    touched.current = true
-    setDraft(previous => ({ ...previous, [key]: value }))
-  }
+  const set = (key, value) => setDraft(previous => ({ ...previous, [key]: value }))
 
   // Documents prepared from a firm template or uploaded here are saved to the
   // matter and land in this list; merge them with the ones the matter already
@@ -116,9 +153,10 @@ export default function PaperworkDrawer({
     setDraft(previous => (previous.email ? previous : { ...previous, email: clientEmail }))
   }, [clientEmail])
 
-  // The three common pieces are the fee agreement, the questionnaire, and the
-  // intake form. The questionnaire starts on the matter type's own questions
-  // rather than the generic default, so "Start this case" is not generic.
+  // The starter pack names the practice area and suggests the records a
+  // client of this matter type usually has to hand. It is only ever offered:
+  // the records section starts empty and off so nothing is requested by
+  // accident.
   useEffect(() => {
     let active = true
     async function loadPack() {
@@ -126,17 +164,9 @@ export default function PaperworkDrawer({
         const value = await getIntakeStarterPack(
           matterId ? { matter_id: matterId } : { matter_type: matterType, practice_area: practiceArea },
         )
-        if (!active || !value) return
-        setPack(value)
-        if (touched.current) return
-        setDraft(previous => ({
-          ...previous,
-          questions: value.questions.map(question => question.label).join('\n') || previous.questions,
-          uploads: value.upload_requirements.map(upload => upload.label).join('\n'),
-        }))
-        setPackNote(`Loaded the ${value.practice_label} questions and requested uploads. Review them before sending.`)
+        if (active && value) setPack(value)
       } catch {
-        // Keep the generic defaults; the firm can still type its own.
+        // The firm can still type its own list.
       }
     }
     loadPack()
@@ -149,9 +179,12 @@ export default function PaperworkDrawer({
     () => allDocuments.filter(document => isPdf(document) || document.id === draft.agreementDocumentId),
     [allDocuments, draft.agreementDocumentId],
   )
+  // Whatever became the fee agreement, intake form, or questionnaire is not
+  // offered again as an additional form.
+  const { agreementDocumentId, intakeFormDocumentId, questionnaireDocumentId } = draft
   const selectable = useMemo(
-    () => allDocuments.filter(document => document.id !== draft.agreementDocumentId && document.id !== draft.intakeFormDocumentId),
-    [allDocuments, draft.agreementDocumentId, draft.intakeFormDocumentId],
+    () => allDocuments.filter(document => ![agreementDocumentId, intakeFormDocumentId, questionnaireDocumentId].includes(document.id)),
+    [allDocuments, agreementDocumentId, intakeFormDocumentId, questionnaireDocumentId],
   )
   const uploadHint = useMemo(() => {
     const labels = (pack?.upload_requirements || []).map(upload => upload.label).filter(Boolean)
@@ -172,7 +205,10 @@ export default function PaperworkDrawer({
         }
       }
       if (target === 'intake') {
-        return { ...previous, intakeFormDocumentId: document.id, intakeFormLabel: document.filename }
+        return { ...previous, intakeFormDocumentId: document.id, intakeFormLabel: document.filename, forms: previous.forms.filter(form => form.documentId !== document.id) }
+      }
+      if (target === 'questionnaire') {
+        return { ...previous, questionnaireDocumentId: document.id, questionnaireLabel: document.filename, forms: previous.forms.filter(form => form.documentId !== document.id) }
       }
       return {
         ...previous,
@@ -212,9 +248,11 @@ export default function PaperworkDrawer({
 
   const hasAgreement = Boolean(draft.agreementDocumentId || agreementFile)
   const hasIntakeForm = Boolean(draft.intakeFormDocumentId)
-  const hasUploads = Boolean(draft.uploads.trim())
+  const hasQuestionnaire = Boolean(draft.questionnaireDocumentId)
+  const hasUploads = draft.requestUploads && Boolean(draft.uploads.trim())
+  const uploadCount = hasUploads ? draft.uploads.trim().split('\n').filter(line => line.trim()).length : 0
   // Any subset is allowed; a packet just has to carry at least one item.
-  const hasItem = hasAgreement || draft.includeQuestionnaire || draft.forms.length > 0 || hasIntakeForm || hasUploads
+  const hasItem = hasAgreement || hasIntakeForm || hasQuestionnaire || draft.forms.length > 0 || hasUploads
   const canSend = Boolean(draft.email) && draft.channels.length > 0
     && (!draft.channels.includes('sms') || draft.smsPermissionVerified) && hasItem
 
@@ -228,24 +266,34 @@ export default function PaperworkDrawer({
     set('forms', draft.forms.map(form => (form.documentId === documentId ? { ...form, ...patch } : form)))
   }
 
-  function setIntakeForm(documentId) {
+  // Choosing an existing matter document as the intake form or questionnaire
+  // also takes it out of the additional forms so it is never sent twice.
+  function chooseSupplied(target, documentId) {
     const document = allDocuments.find(item => item.id === documentId)
-    set('intakeFormDocumentId', documentId)
-    set('intakeFormLabel', document?.filename || '')
+    const idKey = target === 'intake' ? 'intakeFormDocumentId' : 'questionnaireDocumentId'
+    const labelKey = target === 'intake' ? 'intakeFormLabel' : 'questionnaireLabel'
+    setDraft(previous => ({
+      ...previous,
+      [idKey]: documentId,
+      [labelKey]: document?.filename || '',
+      forms: documentId ? previous.forms.filter(form => form.documentId !== documentId) : previous.forms,
+    }))
   }
 
-  async function loadStarterPack() {
-    setPackNote('Loading the standard questions…')
+  const practiceLabel = pack?.practice_label || 'this matter type'
+
+  async function useSuggestedRecords() {
+    setPackError('')
     try {
       const value = pack || await getIntakeStarterPack(
         matterId ? { matter_id: matterId } : { matter_type: matterType, practice_area: practiceArea },
       )
       setPack(value)
-      set('questions', value.questions.map(question => question.label).join('\n'))
-      set('uploads', value.upload_requirements.map(upload => upload.label).join('\n'))
-      setPackNote(`Loaded the ${value.practice_label} questions and requested uploads. Review them before sending.`)
+      const labels = (value?.upload_requirements || []).map(upload => upload.label).filter(Boolean)
+      if (!labels.length) { setPackError('There is no suggested list for this matter type yet. Type the records to request.'); return }
+      set('uploads', labels.join('\n'))
     } catch {
-      setPackNote('Could not load the standard questions. Enter them below.')
+      setPackError('Could not load the suggested list. Type the records to request.')
     }
   }
 
@@ -299,7 +347,7 @@ export default function PaperworkDrawer({
         <header className="flex items-start justify-between border-b border-brand-line px-6 py-5">
           <div>
             <h2 className="font-serif text-xl font-bold text-brand-ink">Send client paperwork</h2>
-            <p className="mt-0.5 text-[13px] text-brand-muted">Choose what the client should sign or complete. Any of the three standard pieces can go on its own.</p>
+            <p className="mt-0.5 text-[13px] text-brand-muted">Choose the forms the client signs in their portal and any records they should send. Any piece can go on its own.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="min-h-11 min-w-11 text-brand-muted hover:text-brand-ink">
             <X size={18} />
@@ -325,7 +373,7 @@ export default function PaperworkDrawer({
             <>
               <div className={card}>
                 <h3 className="mb-1 font-semibold text-brand-ink">Fee agreement <span className="font-normal text-brand-muted">(optional)</span></h3>
-                <p className="mb-3 text-[12px] text-brand-muted">When included, signing it opens the portal and starts the follow-up clock. Skip it to send only the questionnaire, intake form, or requested uploads.</p>
+                <p className="mb-3 text-[12px] text-brand-muted">When included, signing it opens the portal and starts the follow-up clock. The client always signs it. Skip it to send only the other forms or requested records.</p>
                 {agreementChoices.length > 0 && (
                   <label className="mb-3 block">
                     <span className={label}>From matter documents</span>
@@ -345,7 +393,7 @@ export default function PaperworkDrawer({
                 {!draft.agreementDocumentId && (
                   <label className="block">
                     <span className={label}>Attorney-reviewed PDF</span>
-                    <input type="file" accept=".pdf,application/pdf" onChange={event => setAgreementFile(event.target.files?.[0] || null)} className="w-full text-[13px] text-brand-ink file:mr-3 file:rounded-lg file:border file:border-brand-line file:bg-brand-surface file:px-3 file:py-1.5 file:text-[13px]" />
+                    <input type="file" accept=".pdf,application/pdf" onChange={event => setAgreementFile(event.target.files?.[0] || null)} className={fileInput} />
                   </label>
                 )}
                 <button
@@ -357,62 +405,43 @@ export default function PaperworkDrawer({
                 </button>
               </div>
 
-              <div className={card}>
-                <label className="flex items-center gap-2 font-semibold text-brand-ink">
-                  <input type="checkbox" checked={draft.includeQuestionnaire} onChange={event => set('includeQuestionnaire', event.target.checked)} />
-                  Client questionnaire
-                </label>
-                <button type="button" onClick={loadStarterPack} className={`mt-2 ${linkButton}`}>
-                  Reset to standard questions for this matter type
-                </button>
-                {packNote && <p role="status" className="mt-1 text-[12px] text-brand-muted">{packNote}</p>}
-                {draft.includeQuestionnaire && (
-                  <label className="mt-3 block">
-                    <span className={label}>One question per line</span>
-                    <textarea rows={4} className={field} value={draft.questions} onChange={event => set('questions', event.target.value)} />
-                  </label>
-                )}
-                <label className="mt-3 block">
-                  <span className={label}>Requested client uploads — one per line</span>
-                  <textarea rows={3} className={field} value={draft.uploads} onChange={event => set('uploads', event.target.value)} placeholder={uploadHint} />
-                </label>
-              </div>
+              <SuppliedFormCard
+                title="Client intake form"
+                description="The client's own details, filled in and signed inside the form in their portal."
+                chooseLabel="Choose the client intake form"
+                noneLabel="Do not include an intake form"
+                prepareLabel="Prepare the client intake form from a firm template"
+                uploadLabel="Or upload a prepared form"
+                documents={allDocuments.filter(document => document.id !== draft.agreementDocumentId && document.id !== draft.questionnaireDocumentId)}
+                value={draft.intakeFormDocumentId}
+                onChoose={value => chooseSupplied('intake', value)}
+                onPrepare={() => setPickerTarget('intake')}
+                onUpload={event => uploadFile(event, 'intake', setUploadingIntake)}
+                uploading={uploadingIntake}
+                requiresSignature={draft.intakeFormRequiresSignature}
+                onRequiresSignature={value => set('intakeFormRequiresSignature', value)}
+              />
 
-              <div className={card}>
-                <h3 className="mb-1 font-semibold text-brand-ink">Client intake form</h3>
-                <p className="mb-3 text-[12px] text-brand-muted">The client&apos;s own details, answered once and reused. Optional, and never a signature.</p>
-                {allDocuments.length > 0 && (
-                  <label className="mb-3 block">
-                    <span className={label}>Choose the client intake form</span>
-                    <select className={field} value={draft.intakeFormDocumentId} onChange={event => setIntakeForm(event.target.value)}>
-                      <option value="">Do not include an intake form</option>
-                      {allDocuments.map(document => <option key={document.id} value={document.id}>{document.filename}</option>)}
-                    </select>
-                  </label>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setPickerTarget('intake')}
-                  className={linkButton}
-                >
-                  <LibraryBig size={14} aria-hidden="true" /> Prepare the client intake form from a firm template
-                </button>
-                <label className="mt-3 block">
-                  <span className={label}>Or upload a prepared form</span>
-                  <input
-                    type="file"
-                    accept=".pdf,.docx,application/pdf"
-                    onChange={event => uploadFile(event, 'intake', setUploadingIntake)}
-                    disabled={uploadingIntake}
-                    className="w-full text-[13px] text-brand-ink file:mr-3 file:rounded-lg file:border file:border-brand-line file:bg-brand-surface file:px-3 file:py-1.5 file:text-[13px] disabled:opacity-50"
-                  />
-                  {uploadingIntake && <span role="status" className="mt-1 block text-[12px] text-brand-muted">Uploading…</span>}
-                </label>
-              </div>
+              <SuppliedFormCard
+                title="Client questionnaire"
+                description="Your matter-type questions as a PDF form. The client answers and signs it inside the document, exactly like the intake form."
+                chooseLabel="Choose the client questionnaire"
+                noneLabel="Do not include a questionnaire"
+                prepareLabel="Prepare the client questionnaire from a firm template"
+                uploadLabel="Or upload a prepared questionnaire"
+                documents={allDocuments.filter(document => document.id !== draft.agreementDocumentId && document.id !== draft.intakeFormDocumentId)}
+                value={draft.questionnaireDocumentId}
+                onChoose={value => chooseSupplied('questionnaire', value)}
+                onPrepare={() => setPickerTarget('questionnaire')}
+                onUpload={event => uploadFile(event, 'questionnaire', setUploadingQuestionnaire)}
+                uploading={uploadingQuestionnaire}
+                requiresSignature={draft.questionnaireRequiresSignature}
+                onRequiresSignature={value => set('questionnaireRequiresSignature', value)}
+              />
 
               <div className={card}>
                 <h3 className="mb-1 font-semibold text-brand-ink">Additional forms</h3>
-                <p className="mb-3 text-[12px] text-brand-muted">Each signing form gets its own signature request and status.</p>
+                <p className="mb-3 text-[12px] text-brand-muted">Each signed form gets its own signature request and status.</p>
                 <label className="mb-3 block">
                   <span className={label}>Choose a file</span>
                   <input
@@ -420,7 +449,7 @@ export default function PaperworkDrawer({
                     accept=".pdf,.docx,application/pdf"
                     onChange={event => uploadFile(event, 'form', setUploadingForm)}
                     disabled={uploadingForm}
-                    className="w-full text-[13px] text-brand-ink file:mr-3 file:rounded-lg file:border file:border-brand-line file:bg-brand-surface file:px-3 file:py-1.5 file:text-[13px] disabled:opacity-50"
+                    className={fileInput}
                   />
                   {uploadingForm && <span role="status" className="mt-1 block text-[12px] text-brand-muted">Uploading…</span>}
                 </label>
@@ -447,13 +476,33 @@ export default function PaperworkDrawer({
                           {chosen && (
                             <label className="mt-2 ml-6 flex items-center gap-2 text-[12px] text-brand-muted">
                               <input type="checkbox" checked={chosen.requiresSignature} onChange={event => updateForm(document.id, { requiresSignature: event.target.checked })} />
-                              Track signature (PDF)
+                              Client signs this form
                             </label>
                           )}
                         </li>
                       )
                     })}
                   </ul>
+                )}
+              </div>
+
+              <div className={card}>
+                <label className="flex items-center gap-2 font-semibold text-brand-ink">
+                  <input type="checkbox" checked={draft.requestUploads} onChange={event => set('requestUploads', event.target.checked)} />
+                  Records to request from the client <span className="font-normal text-brand-muted">(optional)</span>
+                </label>
+                <p className="mt-1 text-[12px] text-brand-muted">Documents the client already has, such as statements or existing orders. They appear in the client&apos;s portal as &ldquo;Records to send us&rdquo; and are uploaded, not signed.</p>
+                {draft.requestUploads && (
+                  <>
+                    <label className="mt-3 block">
+                      <span className={label}>One record per line</span>
+                      <textarea rows={4} className={field} value={draft.uploads} onChange={event => set('uploads', event.target.value)} placeholder={uploadHint} />
+                    </label>
+                    <button type="button" onClick={useSuggestedRecords} className={`mt-2 ${linkButton}`}>
+                      Use the suggested list for {practiceLabel}
+                    </button>
+                    {packError && <p role="status" className="mt-1 text-[12px] text-brand-muted">{packError}</p>}
+                  </>
                 )}
               </div>
             </>
@@ -472,21 +521,27 @@ export default function PaperworkDrawer({
                     <DueDate id="due-fee-agreement" value={draft.agreementDue} onChange={value => set('agreementDue', value)} />
                   </li>
                 )}
+                {hasIntakeForm && (
+                  <li className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-line bg-brand-surface px-3 py-2.5">
+                    <span className="min-w-0 truncate text-[13px] text-brand-ink">{draft.intakeFormLabel || 'Client intake form'}</span>
+                    <DueDate id="due-intake-form" value={draft.intakeFormDue} onChange={value => set('intakeFormDue', value)} />
+                  </li>
+                )}
+                {hasQuestionnaire && (
+                  <li className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-line bg-brand-surface px-3 py-2.5">
+                    <span className="min-w-0 truncate text-[13px] text-brand-ink">{draft.questionnaireLabel || 'Client questionnaire'}</span>
+                    <DueDate id="due-questionnaire" value={draft.questionnaireDue} onChange={value => set('questionnaireDue', value)} />
+                  </li>
+                )}
                 {draft.forms.map(form => (
                   <li key={form.documentId} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-line bg-brand-surface px-3 py-2.5">
                     <span className="min-w-0 truncate text-[13px] text-brand-ink">{form.label}</span>
                     <DueDate id={`due-${form.documentId}`} value={form.due} onChange={value => updateForm(form.documentId, { due: value })} />
                   </li>
                 ))}
-                {draft.includeQuestionnaire && (
+                {hasUploads && (
                   <li className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-line bg-brand-surface px-3 py-2.5">
-                    <span className="text-[13px] text-brand-ink">Client questionnaire</span>
-                    <DueDate id="due-questionnaire" value={draft.questionnaireDue} onChange={value => set('questionnaireDue', value)} />
-                  </li>
-                )}
-                {draft.uploads.trim() && (
-                  <li className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-line bg-brand-surface px-3 py-2.5">
-                    <span className="text-[13px] text-brand-ink">Requested uploads</span>
+                    <span className="text-[13px] text-brand-ink">Requested records</span>
                     <DueDate id="due-uploads" value={draft.uploadsDue} onChange={value => set('uploadsDue', value)} />
                   </li>
                 )}
@@ -541,15 +596,15 @@ export default function PaperworkDrawer({
               <div className={card}>
                 <h3 className="mb-2 font-semibold text-brand-ink">Going out now</h3>
                 <ul className="space-y-1 text-[13px] text-brand-ink-2">
-                  {hasAgreement && <li>Fee agreement{draft.agreementDue ? ` — due ${draft.agreementDue}` : ''}</li>}
+                  {hasAgreement && <li>Fee agreement (signature){draft.agreementDue ? ` — due ${draft.agreementDue}` : ''}</li>}
+                  {hasIntakeForm && <li>{draft.intakeFormLabel || 'Client intake form'}{draft.intakeFormRequiresSignature ? ' (signature)' : ''}{draft.intakeFormDue ? ` — due ${draft.intakeFormDue}` : ''}</li>}
+                  {hasQuestionnaire && <li>{draft.questionnaireLabel || 'Client questionnaire'}{draft.questionnaireRequiresSignature ? ' (signature)' : ''}{draft.questionnaireDue ? ` — due ${draft.questionnaireDue}` : ''}</li>}
                   {draft.forms.map(form => (
                     <li key={form.documentId}>
                       {form.label}{form.requiresSignature ? ' (signature)' : ''}{form.due ? ` — due ${form.due}` : ''}
                     </li>
                   ))}
-                  {hasIntakeForm && <li>{draft.intakeFormLabel || 'Client intake form'}</li>}
-                  {draft.includeQuestionnaire && <li>Client questionnaire{draft.questionnaireDue ? ` — due ${draft.questionnaireDue}` : ''}</li>}
-                  {draft.uploads.trim() && <li>{draft.uploads.trim().split('\n').length} requested upload(s){draft.uploadsDue ? ` — due ${draft.uploadsDue}` : ''}</li>}
+                  {hasUploads && <li>{uploadCount} requested record{uploadCount === 1 ? '' : 's'}{draft.uploadsDue ? ` — due ${draft.uploadsDue}` : ''}</li>}
                 </ul>
                 <p className="mt-3 text-[12px] text-brand-muted">
                   Signing a fee agreement opens the client portal and creates a follow-up due within 24 hours.
@@ -601,7 +656,7 @@ export default function PaperworkDrawer({
                 )}
               </div>
 
-              {!hasItem && <p role="alert" className="text-[13px] text-brand-rose">Add at least one document, the questionnaire, or a requested upload before sending.</p>}
+              {!hasItem && <p role="alert" className="text-[13px] text-brand-rose">Add at least one form or a requested record before sending.</p>}
             </>
           )}
 

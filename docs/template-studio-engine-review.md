@@ -225,8 +225,8 @@ this review missed:
 - **There is no DOCX→PDF conversion anywhere in the shipping pipeline.** `document_export.py`
   converts markdown to PDF and markdown to DOCX; nothing turns a *filled Word document* into a
   PDF.
-- **E-signature requires PDF.** `app/services/esign/dropbox_sign.py:44` submits
-  `application/pdf`. So a document generated from a Word template — the format firms actually
+- **E-signature requires PDF.** The portal signing flow (`app/services/esign/plan.py`)
+  reads the source as a PDF. So a document generated from a Word template — the format firms actually
   author in — cannot currently be sent for signature, filed, or delivered as a client-ready PDF
   at all.
 - **The Phase 3 isolation profile already declares the fix.**

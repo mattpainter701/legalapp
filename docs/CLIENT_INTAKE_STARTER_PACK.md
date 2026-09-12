@@ -10,7 +10,7 @@ reaches a client.
 | Piece | What it is | Where it lives |
 |---|---|---|
 | Fee agreement | Standard terms of legal representation: scope, exclusions, fees, trust deposit, costs, billing, client responsibilities, termination, file retention. | A `document_templates` row, category `engagement_letter`, installed as a **draft**. |
-| Client questionnaire | The case-specific questions. Eight shared questions plus a set chosen by the matter's practice. | Resolved per matter and sent as the intake packet's questions. |
+| Client questionnaire | The case-specific questions. Eight shared questions plus a set chosen by the matter's practice. | Printed as a fillable AcroForm PDF per practice (see below); the firm sends its own copy through **Send client paperwork** like the other two pieces. The question list itself is no longer typed into the paperwork drawer. |
 | Client intake form | The client's own data — identity, contact, entity, conflict-check, billing, referral. Answered once and reused. | A `document_templates` row, category `other`, installed as a **draft**. |
 
 All three are defined in `backend/app/services/intake_starter_pack.py`. Nothing
@@ -63,8 +63,10 @@ at all.
 | `mediation` | mediation, arbitration, settlement conference, collaborative |
 | `general` | anything else |
 
-Each practice also names the documents the client is asked to send back, which
-become the intake packet's upload requirements.
+Each practice also names the documents the client is asked to send back. They
+are offered as a suggested list in the drawer's optional **Records to request
+from the client** section and only become upload requirements when staff
+switch that section on.
 
 ## Field bindings and document automation
 
@@ -114,8 +116,10 @@ form and the template stop agreeing.
 Two differences from the rendered markdown are deliberate. The fee agreement's
 conditional fee sections (`{{#if hourly_rate}}` and the rest) all print, since a
 paper form has no renderer to choose between them — strike the arrangements that
-do not apply. And signature lines stay hand-signed: the portal signature flow is
-separate.
+do not apply. And signature lines are printed as ruled lines with a
+"Signature" (or "Client signature") and "Date" label, exactly the shape the
+portal's signature-line detection looks for, so the client's electronic
+signature lands on the printed line when the form is sent for signature.
 
 ## A completed sample for review
 
@@ -133,14 +137,12 @@ override them.
 
 * **Template Studio home** — "Standard client paperwork" adds the fee agreement
   and the intake form as drafts for review.
-* **Start this case** — the drawer lists the fee agreement, the client
-  questionnaire, and the client intake form as the three common pieces and
-  seeds the questionnaire and requested uploads from the matter's practice when
-  it opens. "Reset to standard questions" restores them after edits.
-* **The matter intake panel** — "Use the standard questions for this matter
-  type" fills the questionnaire and requested uploads. It replaces what is in
-  those boxes, so it is a deliberate action, never automatic; staff edit the
-  questions before sending.
+* **Start this case** — the drawer lists the fee agreement, the client intake
+  form, and the client questionnaire as the three common pieces, each a PDF the
+  firm supplies with a "Client signs this form" toggle, followed by additional
+  forms and an optional **Records to request from the client** section whose
+  "Use the suggested list" button fills it from the matter's practice pack. It
+  is a deliberate action, never automatic.
 
 Any subset may be sent. A fee agreement is optional: when one is included,
 signing it opens the portal and starts the 24-hour follow-up clock; when none is

@@ -480,10 +480,14 @@ async def get_client_portal_context(
             path == f"/api/portal/client/documents/{key}/download"
             for key in document_ids
         )
+        # Signing happens inside the document, so the field manifest and the
+        # signed-copy upload are part of signing the fee agreement itself.
         allowed = allowed or any(
             path
             in {
+                f"/api/portal/client/signatures/{key}/fields",
                 f"/api/portal/client/signatures/{key}/sign",
+                f"/api/portal/client/signatures/{key}/upload",
                 f"/api/portal/client/signatures/{key}/decline",
             }
             for key in signature_ids

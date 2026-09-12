@@ -7,6 +7,7 @@ snippets + metadata.
 
 import base64
 import asyncio
+from contextlib import asynccontextmanager
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
@@ -45,6 +46,33 @@ GOOGLE_DRIVE_BASE = "https://www.googleapis.com/drive/v3"
 GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1"
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 MAX_CLOUD_SEARCH_DOWNLOAD_BYTES = 10 * 1024 * 1024
+
+
+@asynccontextmanager
+async def _client_or(client: httpx.AsyncClient | None, **kwargs):
+    """Yield the caller's HTTP client, or a short-lived one when none is given.
+
+    Per-hit metadata calls reuse the client that ran the search so a fan-out
+    costs one TLS handshake instead of one per file.
+    """
+    if client is not None:
+        yield client
+        return
+    async with httpx.AsyncClient(**kwargs) as owned:
+        yield owned
+
+
+async def _bounded_gather(factories, limit: int | None = None):
+    """Await coroutine factories concurrently, a bounded number at a time."""
+    if not factories:
+        return []
+    semaphore = asyncio.Semaphore(limit or settings.CLOUD_SEARCH_FANOUT_LIMIT)
+
+    async def run(factory):
+        async with semaphore:
+            return await factory()
+
+    return await asyncio.gather(*(run(factory) for factory in factories))
 
 
 # ── Data model ────────────────────────────────────────────────────────────
@@ -92,11 +120,14 @@ class CloudSearchService:
         user_id: str | None = None,
         matter_cloud_folder: dict | None = None,
         matter_id: str | None = None,
+        budget_seconds: float | None = None,
     ) -> list[CloudHit]:
         """Execute search plan across all connected providers.
 
-        Returns merged, de-duplicated, relevance-ranked hits. Each provider
-        is called independently; failures are logged and swallowed per source.
+        Returns merged, de-duplicated, relevance-ranked hits. Providers run
+        concurrently under a wall-clock budget; failures are logged and
+        swallowed per source, and a source that overruns the budget is dropped
+        from this response rather than stalling every other one behind it.
 
         When matter_cloud_folder is provided, Drive/OneDrive searches are scoped
         to the matter's provisioned folders and durable uploaded-document references.
@@ -125,49 +156,87 @@ class CloudSearchService:
         google_sources = {"drive", "gmail"}
         microsoft_sources = {"onedrive", "sharepoint", "outlook"}
 
-        if (
+        wants_google = (
             sources is None
             or "google" in sources
-            or google_sources.intersection(sources)
-        ):
+            or bool(google_sources.intersection(sources))
+        )
+        wants_microsoft = (
+            sources is None
+            or "microsoft" in sources
+            or bool(microsoft_sources.intersection(sources))
+        )
+
+        # Tokens are resolved here, once, before anything fans out, and the
+        # provider searches are then handed no session at all: they run
+        # concurrently below, and an AsyncSession cannot serve overlapping
+        # coroutines. That leaves the local index task as the only one still
+        # holding it.
+        fanout_db = None
+        prefetched = db is not None
+        google_token = (
+            await self._prefetch_token(self._get_google_token, db, tenant_id, user_id)
+            if wants_google and prefetched
+            else None
+        )
+        microsoft_token = (
+            await self._prefetch_token(
+                self._get_microsoft_token, db, tenant_id, user_id
+            )
+            if wants_microsoft and prefetched
+            else None
+        )
+        # A tenant with no stored credential has nothing live to search, so the
+        # provider is skipped rather than scheduled only to look the same token
+        # up again from a session it is not allowed to touch.
+        run_google = wants_google and (google_token is not None or not prefetched)
+        run_microsoft = wants_microsoft and (
+            microsoft_token is not None or not prefetched
+        )
+
+        if run_google:
             if _source_enabled(sources, "drive"):
                 if gd_folder_ids:
                     for folder_id in gd_folder_ids:
                         tasks.append(
                             self._search_google_drive(
-                                db,
+                                fanout_db,
                                 keywords,
                                 date_after,
                                 max_hits,
                                 tenant_id,
                                 user_id,
                                 folder_id=folder_id,
+                                token=google_token,
                             )
                         )
                 else:
                     tasks.append(
                         self._search_google_drive(
-                            db,
+                            fanout_db,
                             keywords,
                             date_after,
                             max_hits,
                             tenant_id,
                             user_id,
                             folder_id=None,
+                            token=google_token,
                         )
                     )
             if _source_enabled(sources, "gmail"):
                 tasks.append(
                     self._search_gmail(
-                        db, keywords, date_after, max_hits, tenant_id, user_id
+                        fanout_db,
+                        keywords,
+                        date_after,
+                        max_hits,
+                        tenant_id,
+                        user_id,
+                        token=google_token,
                     )
                 )
 
-        if (
-            sources is None
-            or "microsoft" in sources
-            or microsoft_sources.intersection(sources)
-        ):
+        if run_microsoft:
             use_folder_scoped_onedrive = bool(od_folder_ids) and _source_enabled(
                 sources, "onedrive"
             )
@@ -178,7 +247,7 @@ class CloudSearchService:
                 for folder_id in od_folder_ids:
                     tasks.append(
                         self._search_graph(
-                            db,
+                            fanout_db,
                             keywords,
                             date_after,
                             max_hits,
@@ -186,19 +255,21 @@ class CloudSearchService:
                             user_id,
                             ["onedrive"],
                             folder_id=folder_id,
+                            token=microsoft_token,
                         )
                     )
             if use_folder_scoped_sharepoint:
                 for ref in sp_folder_refs:
                     tasks.append(
                         self._search_sharepoint_folder(
-                            db,
+                            fanout_db,
                             keywords,
                             max_hits,
                             tenant_id,
                             user_id,
                             drive_id=ref["drive_id"],
                             folder_id=ref["folder_id"],
+                            token=microsoft_token,
                         )
                     )
 
@@ -220,7 +291,7 @@ class CloudSearchService:
             ):
                 tasks.append(
                     self._search_graph(
-                        db,
+                        fanout_db,
                         keywords,
                         date_after,
                         max_hits,
@@ -228,6 +299,7 @@ class CloudSearchService:
                         user_id,
                         graph_sources,
                         folder_id=None,
+                        token=microsoft_token,
                     )
                 )
 
@@ -244,12 +316,7 @@ class CloudSearchService:
             )
         )
 
-        for batch in tasks:
-            try:
-                hits = await batch
-                results.extend(hits)
-            except Exception:
-                logger.exception("Cloud search task failed unexpectedly")
+        results.extend(await self._collect_within_budget(tasks, budget_seconds))
 
         # Deduplicate by (provider, object_id), keep highest score
         seen: set[tuple[str, str]] = set()
@@ -263,6 +330,71 @@ class CloudSearchService:
         # Re-sort by relevance
         deduped.sort(key=lambda x: x.relevance_score, reverse=True)
         return deduped[:max_hits]
+
+    @staticmethod
+    async def _prefetch_token(getter, db, tenant_id: str, user_id: str | None):
+        """Resolve a provider token up front, before any source is scheduled.
+
+        A lookup failure reads as "this provider is not connected" rather than
+        failing the whole search, which is what the per-source behaviour was
+        before the fan-out.
+        """
+        try:
+            return await getter(db, tenant_id, user_id)
+        except Exception:
+            logger.warning(
+                "Cloud token lookup failed for tenant %s", tenant_id, exc_info=True
+            )
+            return None
+
+    @staticmethod
+    async def _collect_within_budget(
+        coros, budget_seconds: float | None
+    ) -> list[CloudHit]:
+        """Run provider searches concurrently and keep whatever finishes in time.
+
+        Sources used to be awaited one after another, so every connected
+        provider added its own latency to the total and one slow mailbox could
+        hold a page load open for a quarter of a minute. They now overlap, and
+        a source that overruns the budget is cancelled rather than allowed to
+        delay the results that are already in hand.
+        """
+        if not coros:
+            return []
+        budget = (
+            budget_seconds
+            if budget_seconds is not None
+            else settings.CLOUD_SEARCH_BUDGET_SECONDS
+        )
+        pending = [asyncio.ensure_future(coro) for coro in coros]
+        try:
+            done, unfinished = await asyncio.wait(
+                pending, timeout=budget if budget and budget > 0 else None
+            )
+        except BaseException:
+            # A cancelled request must not leave provider calls in flight.
+            for task in pending:
+                task.cancel()
+            raise
+        if unfinished:
+            for task in unfinished:
+                task.cancel()
+            await asyncio.gather(*unfinished, return_exceptions=True)
+            logger.warning(
+                "Cloud search dropped %d source(s) that exceeded the %.1fs budget",
+                len(unfinished),
+                budget,
+            )
+        hits: list[CloudHit] = []
+        # Iterate the original order so results stay stable run to run.
+        for task in pending:
+            if task not in done:
+                continue
+            try:
+                hits.extend(task.result())
+            except Exception:
+                logger.exception("Cloud search task failed unexpectedly")
+        return hits
 
     async def search_index(
         self,
@@ -486,8 +618,9 @@ class CloudSearchService:
         tenant_id: str,
         user_id: str | None,
         folder_id: str | None = None,
+        token: str | None = None,
     ) -> list[CloudHit]:
-        token = await self._get_google_token(db, tenant_id, user_id)
+        token = token or await self._get_google_token(db, tenant_id, user_id)
         if not token:
             return []
 
@@ -535,9 +668,19 @@ class CloudSearchService:
                 logger.warning("Google Drive search request error: %s", exc)
                 return []
 
+            files = data.get("files", [])
+            # One description fetch per file, in series and on a fresh
+            # connection each time, used to cost more than the search itself.
+            # They now share this client and overlap.
+            snippets = await _bounded_gather(
+                [
+                    lambda f=f: self._get_drive_snippet(token, f["id"], client=client)
+                    for f in files
+                ]
+            )
+
         hits: list[CloudHit] = []
-        for f in data.get("files", []):
-            snippet = await self._get_drive_snippet(token, f["id"])
+        for f, snippet in zip(files, snippets):
             owners = f.get("owners", [])
             participants = [
                 o.get("emailAddress", "") for o in owners if o.get("emailAddress")
@@ -559,11 +702,13 @@ class CloudSearchService:
 
         return hits
 
-    async def _get_drive_snippet(self, token: str, file_id: str) -> str:
+    async def _get_drive_snippet(
+        self, token: str, file_id: str, client: httpx.AsyncClient | None = None
+    ) -> str:
         """Return first 500 characters of the file description as snippet."""
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with _client_or(client, timeout=15) as session:
             try:
-                resp = await client.get(
+                resp = await session.get(
                     f"{GOOGLE_DRIVE_BASE}/files/{file_id}",
                     headers={"Authorization": f"Bearer {token}"},
                     params={"fields": "description", "supportsAllDrives": True},
@@ -585,8 +730,9 @@ class CloudSearchService:
         max_hits: int,
         tenant_id: str,
         user_id: str | None,
+        token: str | None = None,
     ) -> list[CloudHit]:
-        token = await self._get_google_token(db, tenant_id, user_id)
+        token = token or await self._get_google_token(db, tenant_id, user_id)
         if not token:
             return []
 
@@ -625,12 +771,22 @@ class CloudSearchService:
                 logger.warning("Gmail search request error: %s", exc)
                 return []
 
+            # Metadata for up to fifty messages, one round trip each. Serially
+            # that is the whole response time; concurrently it is one.
+            details = await _bounded_gather(
+                [
+                    lambda msg_id=msg_id: self._get_gmail_metadata(
+                        token, msg_id, client=client
+                    )
+                    for msg_id in msg_ids
+                ]
+            )
+
         # Reverse-chronological scoring: first in list gets highest score
         total = len(msg_ids)
         hits: list[CloudHit] = []
-        for idx, msg_id in enumerate(msg_ids):
+        for idx, (msg_id, detail) in enumerate(zip(msg_ids, details)):
             try:
-                detail = await self._get_gmail_metadata(token, msg_id)
                 if detail is None:
                     continue
 
@@ -659,16 +815,18 @@ class CloudSearchService:
                 )
             except Exception:
                 logger.debug(
-                    "Failed to fetch Gmail metadata for %s", msg_id, exc_info=True
+                    "Failed to read Gmail metadata for %s", msg_id, exc_info=True
                 )
 
         return hits
 
-    async def _get_gmail_metadata(self, token: str, msg_id: str) -> dict | None:
+    async def _get_gmail_metadata(
+        self, token: str, msg_id: str, client: httpx.AsyncClient | None = None
+    ) -> dict | None:
         """Fetch message metadata and headers."""
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with _client_or(client, timeout=15) as session:
             try:
-                resp = await client.get(
+                resp = await session.get(
                     f"{GMAIL_BASE}/users/me/messages/{msg_id}",
                     headers={"Authorization": f"Bearer {token}"},
                     params={
@@ -707,8 +865,9 @@ class CloudSearchService:
         user_id: str | None,
         sources: list[str] | None = None,
         folder_id: str | None = None,
+        token: str | None = None,
     ) -> list[CloudHit]:
-        token = await self._get_microsoft_token(db, tenant_id, user_id)
+        token = token or await self._get_microsoft_token(db, tenant_id, user_id)
         if not token:
             return []
 
@@ -1221,9 +1380,10 @@ class CloudSearchService:
         *,
         drive_id: str,
         folder_id: str,
+        token: str | None = None,
     ) -> list[CloudHit]:
         """Search inside a specific SharePoint document-library folder."""
-        token = await self._get_microsoft_token(db, tenant_id, user_id)
+        token = token or await self._get_microsoft_token(db, tenant_id, user_id)
         if not token:
             return []
         query_string = " ".join(keywords) if keywords else "*"

@@ -5,6 +5,32 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.12.2 — Bills you can correct, send, and settle from trust
+
+Released September 12, 2026.
+
+Draft invoices can be corrected, discounted and emailed to the client, and client funds on retainer settle a bill in one step. Timers ask what you worked on, and firm financial reports are now partner-only.
+
+- **Correct a bill before the client sees it.** Reword, re-price or remove a charge on a draft, and add a discount or flat fee. Removing a charge returns the work to your unbilled queue.
+- **Email an invoice with its PDF.** Send the bill to your client from the invoice screen. If delivery fails the invoice stays a draft, so it is never recorded as sent.
+- **Settle a bill from client funds.** Apply a retainer to an invoice in one step: the retainer is drawn down and the payment recorded together, with a low balance flagged.
+- **Timers that produce a billable entry.** Describe the work on the running timer and it lands ready to bill. Enter time as 1.5, 1:30 or 90m, in your firm's own billing increment.
+- **Financial reports are partner-only.** Receivables, realization and work in progress now need billing access. Aging separates invoices not yet due from those overdue.
+- **Editing a time entry or expense date works again.** Saving an edited time entry or expense failed whenever the date was included, which was every save. It now saves.
+
+## 2026.09.12.1 — Sign and fill inside the document
+
+Released September 12, 2026.
+
+Clients fill form fields and sign on the document's own signature line in the portal, or upload a signed copy for your review. Paperwork sends your own fee agreement, intake form and questionnaire PDFs. Dropbox Sign is retired.
+
+- **Sign on the signature line.** The portal renders your PDF, places inputs on its form fields, and puts the client's adopted signature on the signature line. PDF fields and printed signature lines are detected.
+- **Or download, sign and upload.** A client who prefers paper downloads the form, completes it, and uploads the signed copy. It waits in the E-Signature queue for you to accept or send back.
+- **A filed signed copy, not just a certificate.** Every completed request files the filled, signed, flattened PDF to the matter beside the evidence certificate.
+- **Paperwork uses your own forms.** Send client paperwork lists the fee agreement, intake form and questionnaire as PDFs you supply, each with a client-signs toggle; requested records are an optional section.
+- **Storage outages no longer fail signing.** If the firm's cloud storage is down when a client signs, the signature is kept, the client sees a confirmation, and filing retries automatically while staff see the problem.
+- **One signing provider.** The Dropbox Sign option is removed. LawHand's own portal signing is the only provider, so there is nothing to pick or configure.
+
 ## 2026.09.11.12 — One practice resolver behind routing
 
 Released September 11, 2026.
