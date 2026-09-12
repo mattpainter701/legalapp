@@ -81,10 +81,21 @@ export function requirementLabel(key, requirement) {
   return key.replaceAll('_', ' ')
 }
 
-export function requirementState(requirement) {
-  if (requirement.completed) return { label: 'Signed', tone: 'done' }
+// Fee agreements and `kind: signature` forms are signed inside the portal;
+// records (`kind: upload`) and unsigned forms (`kind: document`) are received.
+// The fee agreement and the legacy questionnaire carry no kind at all.
+function isSigned(requirement, key) {
+  return requirement.kind === 'signature' || key === 'fee_agreement' || (!requirement.kind && key !== 'questionnaire')
+}
+
+export function requirementState(requirement, key = '') {
+  const signed = isSigned(requirement, key)
+  if (requirement.completed) {
+    if (signed) return { label: 'Signed', tone: 'done' }
+    return { label: requirement.kind ? 'Received' : 'Complete', tone: 'done' }
+  }
   if (requirement.submitted_document_id) return { label: 'Awaiting review', tone: 'review' }
-  return { label: 'Outstanding', tone: 'waiting' }
+  return { label: signed ? 'Needs signature' : 'Outstanding', tone: 'waiting' }
 }
 
 // The fee agreement leads: it opens the portal and starts the follow-up clock,
@@ -93,6 +104,9 @@ export function orderedRequirements(packet) {
   if (!packet?.requirements) return []
   const rank = key => (key === 'fee_agreement' ? 0 : key === 'questionnaire' ? 2 : 1)
   return Object.entries(packet.requirements)
+    // A packet sent without the legacy questionnaire still carries its row,
+    // pre-completed and not required; the firm never needs to see it.
+    .filter(([key, requirement]) => !(key === 'questionnaire' && requirement.required === false && requirement.completed))
     .map(([key, requirement]) => ({ key, requirement }))
     .sort((a, b) => rank(a.key) - rank(b.key) || requirementLabel(a.key, a.requirement).localeCompare(requirementLabel(b.key, b.requirement)))
 }
@@ -121,8 +135,13 @@ export function deliveryRows(packet) {
 
 // Build the request the intake endpoint expects, carrying a due date for each
 // dated item so the server can raise its own assigned follow-up task.
+//
+// The intake form and questionnaire are PDFs the firm supplies, so they travel
+// as `selected_documents` alongside the additional forms; the server's own
+// free-text questionnaire is never requested any more.
 export function paperworkOptions(draft, timeZone) {
   const lines = value => (value || '').split('\n').map(line => line.trim()).filter(Boolean)
+  const forms = draft.forms || []
   return {
     email: draft.email,
     channels: draft.channels,
@@ -132,34 +151,40 @@ export function paperworkOptions(draft, timeZone) {
     sms_case_updates_verified: Boolean(draft.smsCaseUpdatesVerified),
     agreement_document_id: draft.agreementDocumentId || null,
     agreement_due_at: dueDateToIso(draft.agreementDue, timeZone),
-    questionnaire_due_at: draft.includeQuestionnaire ? dueDateToIso(draft.questionnaireDue, timeZone) : null,
-    include_questionnaire: draft.includeQuestionnaire,
+    questionnaire_due_at: null,
+    include_questionnaire: false,
     portal_after_signing: draft.portalAfterSigning !== false,
-    questions: draft.includeQuestionnaire
-      ? lines(draft.questions).map((label, index) => ({ key: `question_${index + 1}`, label, required: true }))
-      : [],
+    questions: [],
     selected_documents: [
-      ...draft.forms.map(form => ({
+      ...(draft.intakeFormDocumentId ? [{
+        document_id: draft.intakeFormDocumentId,
+        label: draft.intakeFormLabel || 'Client intake form',
+        requires_signature: draft.intakeFormRequiresSignature !== false,
+        due_at: dueDateToIso(draft.intakeFormDue, timeZone),
+      }] : []),
+      ...(draft.questionnaireDocumentId ? [{
+        document_id: draft.questionnaireDocumentId,
+        label: draft.questionnaireLabel || 'Client questionnaire',
+        requires_signature: draft.questionnaireRequiresSignature !== false,
+        due_at: dueDateToIso(draft.questionnaireDue, timeZone),
+      }] : []),
+      ...forms.map(form => ({
         document_id: form.documentId,
         label: form.label,
         requires_signature: form.requiresSignature,
         due_at: dueDateToIso(form.due, timeZone),
       })),
-      // The client intake form is one of the three common pieces and is not a
-      // signature document: the client fills it in, so it travels unsigned.
-      ...(draft.intakeFormDocumentId ? [{
-        document_id: draft.intakeFormDocumentId,
-        label: draft.intakeFormLabel || 'Client intake form',
-        requires_signature: false,
-        due_at: null,
-      }] : []),
     ],
-    upload_requirements: lines(draft.uploads).map((label, index) => ({
-      key: `upload_${index + 1}`,
-      label,
-      required: true,
-      due_at: dueDateToIso(draft.uploadsDue, timeZone),
-    })),
+    // Records are an explicit opt-in; an unticked section sends nothing even
+    // if the textarea still holds a suggested list.
+    upload_requirements: draft.requestUploads
+      ? lines(draft.uploads).map((label, index) => ({
+        key: `upload_${index + 1}`,
+        label,
+        required: true,
+        due_at: dueDateToIso(draft.uploadsDue, timeZone),
+      }))
+      : [],
     confirm_send: true,
   }
 }
@@ -167,14 +192,18 @@ export function paperworkOptions(draft, timeZone) {
 export const emptyDraft = {
   agreementDocumentId: '',
   agreementDue: '',
-  forms: [],
-  includeQuestionnaire: true,
-  questionnaireDue: '',
-  questions: 'Please describe your legal matter.\nWho are the other people or organizations involved?\nWhat important dates should your legal team know about? Enter none if unknown.',
-  uploads: '',
-  uploadsDue: '',
   intakeFormDocumentId: '',
   intakeFormLabel: '',
+  intakeFormRequiresSignature: true,
+  intakeFormDue: '',
+  questionnaireDocumentId: '',
+  questionnaireLabel: '',
+  questionnaireRequiresSignature: true,
+  questionnaireDue: '',
+  forms: [],
+  requestUploads: false,
+  uploads: '',
+  uploadsDue: '',
   email: '',
   channels: ['email'],
   smsPermissionVerified: false,

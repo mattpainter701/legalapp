@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getSampleTemplates, getSampleTemplateSource } from '../../api'
 import SampleLibraryCard from './SampleLibraryCard'
@@ -25,7 +25,35 @@ const samples = [
     field_count: 42,
     variable_schema: { version: 1, fields: [] },
   },
+  {
+    id: 'will-2',
+    title: 'Alaska Last Will and Testament',
+    category: 'will',
+    jurisdictions: ['Alaska'],
+    field_count: 57,
+    variable_schema: { version: 1, fields: [] },
+  },
+  {
+    id: 'lease-1',
+    title: 'Alabama Residential Lease Agreement',
+    category: 'lease',
+    jurisdictions: ['Alabama'],
+    field_count: 42,
+    variable_schema: { version: 1, fields: [] },
+  },
+  {
+    id: 'contract-1',
+    title: 'Independent Contractor Agreement',
+    category: 'contract',
+    jurisdictions: [],
+    field_count: 18,
+    variable_schema: { version: 1, fields: [] },
+  },
 ]
+
+function rowFor(title) {
+  return screen.getByText(title).closest('li')
+}
 
 describe('SampleLibraryCard', () => {
   beforeEach(() => {
@@ -36,12 +64,18 @@ describe('SampleLibraryCard', () => {
     vi.clearAllMocks()
   })
 
-  it('loads and lists samples with category and jurisdiction', async () => {
+  it('loads samples grouped by type and ordered by jurisdiction', async () => {
     render(<SampleLibraryCard />)
     await waitFor(() => expect(getSampleTemplates).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('Last Will and Testament')).toBeInTheDocument()
-    expect(screen.getByText('Durable Power of Attorney')).toBeInTheDocument()
-    expect(screen.getByText('will · North Dakota · 26 fields')).toBeInTheDocument()
+    const headings = screen.getAllByRole('heading', { level: 3 }).map((node) => node.textContent)
+    expect(headings).toEqual(['Contract', 'Lease', 'Power of Attorney', 'Will'])
+    const willSection = screen.getByRole('heading', { name: 'Will' }).closest('section')
+    const willRows = within(willSection).getAllByRole('listitem')
+    expect(willRows[0]).toHaveTextContent('Alaska Last Will and Testament')
+    expect(willRows[1]).toHaveTextContent('North Dakota · 26 fields')
+    expect(screen.getByText('Alabama · 42 fields')).toBeInTheDocument()
+    expect(rowFor('Independent Contractor Agreement')).toHaveTextContent('General')
   })
 
   it('filters the list by category and jurisdiction', async () => {
@@ -64,7 +98,7 @@ describe('SampleLibraryCard', () => {
     getSampleTemplateSource.mockResolvedValue(new Blob(['%PDF-1.4'], { type: 'application/pdf' }))
     render(<SampleLibraryCard />)
     await screen.findByText('Durable Power of Attorney')
-    fireEvent.click(screen.getAllByRole('button', { name: 'Preview' })[0])
+    fireEvent.click(within(rowFor('Last Will and Testament')).getByRole('button', { name: 'Preview' }))
     await waitFor(() => expect(getSampleTemplateSource).toHaveBeenCalledWith('will-1'))
     await waitFor(() => expect(openSpy).toHaveBeenCalledWith('blob:preview', '_blank', 'noopener'))
     openSpy.mockRestore()
@@ -75,14 +109,14 @@ describe('SampleLibraryCard', () => {
     getSampleTemplateSource.mockRejectedValue(new Error('offline'))
     render(<SampleLibraryCard />)
     await screen.findByText('Durable Power of Attorney')
-    fireEvent.click(screen.getAllByRole('button', { name: 'Preview' })[0])
+    fireEvent.click(within(rowFor('Last Will and Testament')).getByRole('button', { name: 'Preview' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('could not be opened')
   })
 
   it('opens the fill dialog and closes it again', async () => {
     render(<SampleLibraryCard />)
     await screen.findByText('Durable Power of Attorney')
-    fireEvent.click(screen.getAllByRole('button', { name: 'Fill' })[0])
+    fireEvent.click(within(rowFor('Last Will and Testament')).getByRole('button', { name: 'Fill' }))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Fill “Last Will and Testament”' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))

@@ -12,6 +12,7 @@ import {
   listClientPortalDocuments,
   listClientPortalInvoices,
   listClientPortalSignatures,
+  declineClientPortalSignature,
   listClientPortalMatters,
   switchClientPortalMatter,
   logoutClientPortal,
@@ -46,6 +47,30 @@ const { confirmAction } = vi.hoisted(() => ({ confirmAction: vi.fn() }))
 vi.mock('../components/dialog/ConfirmProvider', () => ({
   useConfirm: () => confirmAction,
 }))
+
+// The in-document form has its own tests; here it is a stub that reports the
+// outcomes the tab has to relay.
+vi.mock('../components/ClientSignatureDocument', () => ({
+  default: ({ request, onChanged }) => (
+    <div>
+      <p>Signing form for {request.document_name}</p>
+      <button type="button" onClick={() => onChanged({ id: request.id, status: 'completed', completion_pending: false })}>Stub sign</button>
+      <button type="button" onClick={() => onChanged({ id: request.id, status: 'partially_signed', completion_pending: true })}>Stub sign pending</button>
+      <button type="button" onClick={() => onChanged({ id: request.id, status: 'partially_signed', submitted_document_id: 'doc-9' })}>Stub upload</button>
+    </div>
+  ),
+}))
+
+const signatureRequest = (overrides = {}) => ({
+  id: 'req-1',
+  document_id: 'doc-1',
+  document_name: 'Fee agreement',
+  status: 'sent',
+  sent_at: '2026-09-01T12:00:00Z',
+  expires_at: '2026-10-01T12:00:00Z',
+  signers: [{ id: 'signer-1', name: 'Rosa Rivera', email: 'client@example.com', role: 'client', status: 'pending' }],
+  ...overrides,
+})
 
 const matterView = {
   matter_id: 'matter-1',
@@ -425,5 +450,68 @@ describe('ClientPortalMatterPage', () => {
     render(<ClientPortalMatterPage />)
     expect(await screen.findByText('Unread messages')).toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: /Switch matter/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('SignaturesTab', () => {
+  it('hosts the in-document form and keeps the outcome after the request reloads', async () => {
+    const user = userEvent.setup()
+    listClientPortalSignatures
+      .mockResolvedValueOnce([signatureRequest()])
+      .mockResolvedValueOnce([signatureRequest({ status: 'completed' })])
+    render(<ClientPortalMatterPage />)
+    await user.click(await screen.findByRole('tab', { name: /Signatures/ }))
+    expect(await screen.findByText('Signing form for Fee agreement')).toBeInTheDocument()
+    expect(screen.getByText('Action required')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Stub sign' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Signed. Your legal team has the signed copy and an evidence certificate.')
+    expect(screen.getByText('Signed')).toBeInTheDocument()
+    expect(screen.queryByText('Signing form for Fee agreement')).not.toBeInTheDocument()
+    expect(listClientPortalSignatures).toHaveBeenCalledTimes(2)
+  })
+
+  it('reassures the client when the signed copy is still being filed', async () => {
+    const user = userEvent.setup()
+    listClientPortalSignatures
+      .mockResolvedValueOnce([signatureRequest()])
+      .mockResolvedValueOnce([signatureRequest({ status: 'partially_signed', completion_pending: true })])
+    render(<ClientPortalMatterPage />)
+    await user.click(await screen.findByRole('tab', { name: /Signatures/ }))
+    await user.click(await screen.findByRole('button', { name: 'Stub sign pending' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Your signature is recorded. Your signed copy is being filed and your legal team will be notified.')
+    expect(screen.getByText('Signed — filing')).toBeInTheDocument()
+    // Nothing is left to decline once the signature is on record.
+    expect(screen.queryByText('Not signing?')).not.toBeInTheDocument()
+  })
+
+  it('shows an uploaded copy as awaiting review', async () => {
+    const user = userEvent.setup()
+    listClientPortalSignatures
+      .mockResolvedValueOnce([signatureRequest()])
+      .mockResolvedValueOnce([signatureRequest({ status: 'partially_signed', submitted_document_id: 'doc-9' })])
+    render(<ClientPortalMatterPage />)
+    await user.click(await screen.findByRole('tab', { name: /Signatures/ }))
+    await user.click(await screen.findByRole('button', { name: 'Stub upload' }))
+    expect(await screen.findByRole('status')).toHaveTextContent(/Signed copy received/)
+    expect(screen.getByText('Awaiting review')).toBeInTheDocument()
+  })
+
+  it('keeps declining behind the confirmation in a quieter disclosure', async () => {
+    const user = userEvent.setup()
+    listClientPortalSignatures
+      .mockResolvedValueOnce([signatureRequest()])
+      .mockResolvedValueOnce([signatureRequest({ status: 'declined', decline_reason: 'Wrong fee schedule' })])
+    declineClientPortalSignature.mockResolvedValue({})
+    render(<ClientPortalMatterPage />)
+    await user.click(await screen.findByRole('tab', { name: /Signatures/ }))
+    await user.click(await screen.findByText('Not signing?'))
+    await user.type(screen.getByLabelText('Tell your legal team why (optional)'), 'Wrong fee schedule')
+    confirmAction.mockResolvedValueOnce(false)
+    await user.click(screen.getByRole('button', { name: 'Decline to sign' }))
+    expect(declineClientPortalSignature).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Decline to sign' }))
+    await waitFor(() => expect(declineClientPortalSignature).toHaveBeenCalledWith('req-1', { reason: 'Wrong fee schedule' }))
+    expect(await screen.findByText('Declined')).toBeInTheDocument()
+    expect(screen.getByText('Wrong fee schedule')).toBeInTheDocument()
   })
 })

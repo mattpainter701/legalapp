@@ -284,12 +284,6 @@ class Settings(BaseSettings):
     STRIPE_SUCCESS_URL: str = ""  # e.g. https://yourdomain.com/billing?success=1
     STRIPE_CANCEL_URL: str = ""  # e.g. https://yourdomain.com/billing?cancel=1
 
-    # Certified e-sign provider. Empty means external signing is unavailable;
-    # the API must fail closed instead of silently using the internal flow.
-    DROPBOX_SIGN_API_KEY: str = ""
-    ESIGN_WEBHOOK_SECRET: str = ""
-    ESIGN_PROVIDER_BASE_URL: str = "https://api.hellosign.com/v3"
-
     # Super-admin platform key — set a long random token; never commit
     # Leave unset on new deployments; this only backs the time-boxed legacy
     # bootstrap bridge when explicitly enabled below.
@@ -482,6 +476,15 @@ class Settings(BaseSettings):
     CLOUD_SEARCH_MAX_HITS: int = 10  # Cap results per source
     CLOUD_SEARCH_HIT_CONTENT_CHARS: int = 2000  # Max chars per fetched hit
     CLOUD_SEARCH_CACHE_TTL: int = 300  # 5 min for search results
+    # Wall-clock budget for one fan-out across every connected provider. A
+    # source that blows it is dropped from that response instead of holding
+    # the whole search open behind the slowest mailbox.
+    CLOUD_SEARCH_BUDGET_SECONDS: float = 20.0
+    # Interactive callers (the matter page's Cloud Files panel) get a tighter
+    # budget: a partial list now beats a complete list after a page-load stall.
+    CLOUD_SEARCH_UI_BUDGET_SECONDS: float = 6.0
+    # Cap on simultaneous per-hit metadata fetches within one provider search.
+    CLOUD_SEARCH_FANOUT_LIMIT: int = 8
     CLOUD_RETRIEVAL_PLANNER_TIMEOUT_SECONDS: float = 3.0
     CLOUD_METADATA_SYNC_INTERVAL_MIN: int = 15  # Cron interval
 

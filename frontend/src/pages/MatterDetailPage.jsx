@@ -16,6 +16,7 @@ import {
   createMatterPortalInvite, listMatterPortalInvites, revokeMatterPortalInvite,
   getMatterDocuments, createSignatureRequest, listSignatureRequests,
   sendSignatureRequest, resendSignatureRequest, voidSignatureRequest, getMatterDocumentDownloadUrl, getMatterDocumentSigningSource,
+  acceptSignatureSubmission, rejectSignatureSubmission, uploadMatterDocument,
   syncMatterCloudFolder, listTrustAccounts,
   getContacts, getAdminUsers, getMatterByNumber, reopenMatter,
 } from '../api'
@@ -527,14 +528,17 @@ function MatterWorkspace() {
   }, [id])
 
   useEffect(() => {
-    loadMatter()
+    // Cloud files runs a live search across every connected provider and is
+    // by far the slowest request this page makes. It waits until the matter
+    // itself has landed so it never sits ahead of the header, the paperwork
+    // strip, and the task panels in the browser's connection queue.
+    loadMatter().then(loadCloudFiles)
     getMatterBudgetV2(id).then(setBudget).catch(() => {})
     listTrustAccounts({ matter_id: id }).then(data => setTrustAccounts(data.items || [])).catch(() => {})
     getPlugins().then(data => {
       const list = Array.isArray(data) ? data : data.plugins || []
       setPluginOptions(list.filter(p => p.supports_matter_assignment !== false))
     }).catch(() => {})
-    loadCloudFiles()
   }, [id, loadMatter, loadCloudFiles])
 
   useEffect(() => {
@@ -2574,7 +2578,6 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
   const [requests, setRequests] = useState([])
   const [docs, setDocs] = useState([])
   const [docId, setDocId] = useState('')
-  const [provider, setProvider] = useState('internal')
   const [positionedFields, setPositionedFields] = useState(EMPTY_SIGNING_FIELDS)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [signingSource, setSigningSource] = useState(null)
@@ -2584,6 +2587,10 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
   const [reminderDays, setReminderDays] = useState('7,1')
   const [enforceSigningOrder, setEnforceSigningOrder] = useState(true)
   const [voidReasonById, setVoidReasonById] = useState({})
+  const [rejectReasonById, setRejectReasonById] = useState({})
+  const [reviewingId, setReviewingId] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [notice, setNotice] = useState('')
@@ -2615,11 +2622,42 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
     }).catch(() => { if (!cancelled) setErr('The final PDF could not be loaded for placement review.') })
     return () => { cancelled = true }
   }, [reviewOpen, docId, matterId])
-  const chooseDocument = (id) => {
-    const document = docs.find(item => String(item.id) === id)
+  // `list` lets a just-uploaded document be chosen before the state update
+  // that adds it to `docs` has been applied.
+  const chooseDocument = (id, list = docs) => {
+    const document = list.find(item => String(item.id) === id)
     setDocId(id); setReviewOpen(false); setSigningSource(null)
     setPositionedFields(document?.positioned_fields || EMPTY_SIGNING_FIELDS)
-    if (document?.signing_placement_required || document?.positioned_fields?.length) setProvider('dropbox_sign')
+  }
+
+  // A PDF prepared outside the matter (filled in Acrobat, scanned, exported
+  // from Word) is saved to the matter first so the request can hash it, then
+  // becomes the selected document.
+  const uploadPrepared = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setUploading(true)
+    setUploadError('')
+    setErr('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const document = await uploadMatterDocument(matterId, form)
+      let listed = []
+      try {
+        const data = await getMatterDocuments(matterId)
+        listed = Array.isArray(data) ? data : data?.items || []
+      } catch { /* The upload response alone is enough to select it. */ }
+      const merged = document?.id && !listed.some(item => String(item.id) === String(document.id)) ? [document, ...listed] : listed
+      setDocs(merged)
+      if (document?.id) chooseDocument(String(document.id), merged)
+    } catch (e) {
+      const detail = e?.response?.data?.detail
+      setUploadError(typeof detail === 'string' ? detail : 'The PDF could not be uploaded. Please try again.')
+    } finally {
+      setUploading(false)
+    }
   }
 
   const counts = requests.reduce((acc, r) => {
@@ -2656,7 +2694,6 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
       setErr('Review signing positions on the final PDF and add the required fields before sending.'); return
     }
     if (requiredRoles.some(role => !positionedFields.some(field => field.role === role))) { setErr('Add signing fields for every role required by this document.'); return }
-    if (positionedFields.length && provider !== 'dropbox_sign') { setErr('Choose Dropbox Sign for positioned fields.'); return }
     if (positionedFields.some(field => preparedSigners.filter(signer => signer.role === field.role).length !== 1)) {
       setErr('Assign exactly one signer to each role used by a signing field.'); return
     }
@@ -2669,7 +2706,9 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
       const req = await createSignatureRequest(matterId, {
         document_id: docId,
         signers: preparedSigners,
-        provider,
+        // The portal is the only signing provider; the server detects
+        // signature lines itself when none were placed here.
+        provider: 'internal',
         // Generated-PDF placement metadata is attached by the final-PDF
         // generation flow. Never derive this from a DOCX preview here.
         positioned_fields: positionedFields,
@@ -2687,7 +2726,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
       setDueOn('')
       setReminderDays('7,1')
       setEnforceSigningOrder(true)
-      setNotice(provider === 'dropbox_sign' ? 'Signature request sent through Dropbox Sign with the reviewed fields.' : 'Signature request sent. Signers will see it in their client portal Signatures tab when it is their turn.')
+      setNotice('Signature request sent. Signers will see it in their client portal Signatures tab when it is their turn.')
       load()
     } catch (e2) {
       setErr(e2?.response?.data?.detail || 'Failed to create signature request.')
@@ -2722,6 +2761,39 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
     }
   }
 
+  const acceptSubmission = async (id) => {
+    setErr('')
+    setNotice('')
+    setReviewingId(id)
+    try {
+      await acceptSignatureSubmission(matterId, id)
+      setNotice('Signed copy accepted and filed to the matter.')
+      load()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'Failed to accept the signed copy.')
+    } finally {
+      setReviewingId('')
+    }
+  }
+
+  const rejectSubmission = async (id) => {
+    setErr('')
+    setNotice('')
+    const reason = (rejectReasonById[id] || '').trim()
+    if (!reason) { setErr('Tell the client what to redo before rejecting the signed copy.'); return }
+    setReviewingId(id)
+    try {
+      await rejectSignatureSubmission(matterId, id, { reason })
+      setNotice('Signed copy rejected. The client has been asked to sign again.')
+      setRejectReasonById((prev) => ({ ...prev, [id]: '' }))
+      load()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'Failed to reject the signed copy.')
+    } finally {
+      setReviewingId('')
+    }
+  }
+
   const statusBadge = (status) => {
     const styles = {
       completed: 'bg-brand-green/10 text-brand-green border-brand-green/20',
@@ -2735,6 +2807,8 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
     return styles[status] || styles.draft
   }
 
+  const inputClass = 'w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40'
+
   return (
     <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm overflow-hidden">
       <div className="px-6 py-5 border-b border-brand-line bg-gradient-to-r from-brand-bg-soft to-white">
@@ -2744,7 +2818,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
               <Icon d={Icons.edit} size={18} className="text-brand-accent" /> E-Signature
             </h2>
             <p className="text-[13px] text-brand-muted font-sans mt-0.5">
-              Send portal-ready signature requests and track each signer through completion.
+              Clients fill and sign inside the document in their portal, or upload a signed copy for your review.
             </p>
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
@@ -2764,32 +2838,48 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <label className="text-sm text-brand-ink">
               <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Document to sign</span>
-              <select aria-label="Document to sign" value={docId} onChange={(e) => chooseDocument(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
+              <select aria-label="Document to sign" value={docId} onChange={(e) => chooseDocument(e.target.value)} className={inputClass}>
                 <option value="">Select document…</option>
                 {docs.map((d) => <option key={d.id} value={d.id}>{d.filename}</option>)}
               </select>
             </label>
             <label className="text-sm text-brand-ink">
+              <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Upload a prepared PDF</span>
+              <input
+                type="file"
+                accept="application/pdf"
+                aria-label="Upload a prepared PDF"
+                onChange={uploadPrepared}
+                disabled={uploading}
+                className="w-full text-[13px] text-brand-ink file:mr-3 file:rounded-lg file:border file:border-brand-line file:bg-brand-surface file:px-3 file:py-1.5 file:text-[13px] disabled:opacity-50"
+              />
+              {uploading && <span role="status" className="mt-1 block text-[12px] text-brand-muted">Uploading…</span>}
+              {uploadError && <span role="alert" className="mt-1 block text-[12px] text-brand-rose">{uploadError}</span>}
+              {!uploading && !uploadError && <span className="mt-1 block text-[12px] text-brand-muted">Saved to the matter and selected above.</span>}
+            </label>
+            <label className="text-sm text-brand-ink">
               <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Due from client</span>
-              <input type="date" aria-label="Due from client" value={dueOn} onChange={(e) => setDueOn(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+              <input type="date" aria-label="Due from client" value={dueOn} onChange={(e) => setDueOn(e.target.value)} className={inputClass} />
               <span className="mt-1 block text-[12px] text-brand-muted">Creates an assigned follow-up task. Optional.</span>
             </label>
             <label className="text-sm text-brand-ink">
               <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Expires</span>
-              <input type="date" aria-label="Expires" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+              <input type="date" aria-label="Expires" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className={inputClass} />
               <span className="mt-1 block text-[12px] text-brand-muted">After this date the request can no longer be signed.</span>
             </label>
             <label className="text-sm text-brand-ink">
               <span className="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-brand-muted">Reminders</span>
-              <input aria-label="Reminders" value={reminderDays} onChange={(e) => setReminderDays(e.target.value)} placeholder="7,1" className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+              <input aria-label="Reminders" value={reminderDays} onChange={(e) => setReminderDays(e.target.value)} placeholder="7,1" className={inputClass} />
               <span className="mt-1 block text-[12px] text-brand-muted">Days before expiry to remind the signer.</span>
             </label>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="text-sm">Signing provider <select aria-label="Signing provider" value={provider} onChange={event => setProvider(event.target.value)} className="rounded border border-brand-line p-2"><option value="internal">Internal portal</option><option value="dropbox_sign">Dropbox Sign</option></select></label>
-            {selectedDocument && <button type="button" onClick={() => { setProvider('dropbox_sign'); setReviewOpen(true) }} className="rounded border border-brand-line px-3 py-2 text-sm">Review PDF signing positions</button>}
-            {positionedFields.length > 0 && <span className="text-xs">{positionedFields.length} positioned signing fields</span>}
-          </div>
+          {selectedDocument && (
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" onClick={() => setReviewOpen(true)} className="rounded border border-brand-line px-3 py-2 text-sm">Review PDF signing positions</button>
+              <span className="text-xs text-brand-muted">Place signature fields on the PDF (optional — fields in the PDF and printed signature lines are detected automatically)</span>
+              {positionedFields.length > 0 && <span className="text-xs">{positionedFields.length} positioned signing fields</span>}
+            </div>
+          )}
           {reviewOpen && (signingSource ? <GeneratedSigningPlacementReview key={docId} source={signingSource} initialFields={initialFields} signerRoles={placementRoles} onChange={setPositionedFields} /> : <p role="status">Loading final PDF for placement review…</p>)}
           <label className="inline-flex items-center gap-2 text-xs text-brand-muted">
             <input type="checkbox" checked={enforceSigningOrder} onChange={(e) => setEnforceSigningOrder(e.target.checked)} />
@@ -2808,7 +2898,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
             ))}
             <button type="button" onClick={addSigner} className="text-xs font-semibold text-brand-accent hover:text-brand-ink">Add signer</button>
           </div>
-          <button type="submit" disabled={busy} className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50">
+          <button type="submit" disabled={busy || uploading} className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50">
             {busy ? 'Sending…' : 'Send for signature'}
           </button>
         </form>
@@ -2824,7 +2914,12 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
             </div>
           ) : (
             <div className="space-y-3">
-              {requests.map((r) => (
+              {requests.map((r) => {
+                const open = !['completed', 'voided', 'declined', 'expired'].includes(r.status)
+                // Older rows name the filed copy `signed_document_id`.
+                const executedDocumentId = r.executed_document_id || r.signed_document_id
+                const reviewing = reviewingId === r.id
+                return (
                 <div key={r.id} className="border border-brand-line rounded-2xl p-4 bg-white">
                   <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
                     <div>
@@ -2833,8 +2928,9 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
                       <p className="text-xs text-brand-muted mt-1">
                         Expires {formatSignatureDate(r.expires_at)}
                         {r.enforce_signing_order ? ' · Sequential signing' : ''}
+                        {r.signature_fields_count > 0 ? ` · ${r.signature_fields_count} signature field${r.signature_fields_count === 1 ? '' : 's'}` : ''}
                       </p>
-                      {r.due_at && !['completed', 'declined', 'voided', 'expired'].includes(r.status) && (
+                      {r.due_at && open && (
                         <p className={`text-xs mt-1 ${new Date(r.due_at) < new Date() ? 'text-brand-rose font-semibold' : 'text-brand-amber font-semibold'}`}>
                           {new Date(r.due_at) < new Date() ? 'Overdue since' : 'Due'} {formatSignatureDate(r.due_at)}
                         </p>
@@ -2843,16 +2939,45 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
                         <p className="text-xs text-brand-rose mt-1">{r.decline_reason || r.void_reason}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className={`px-2.5 py-1 rounded-full border text-xs font-semibold capitalize ${statusBadge(r.status)}`}>{r.status.replace('_', ' ')}</span>
-                      {r.signed_document_id && (
-                        <a href={getMatterDocumentDownloadUrl(matterId, r.signed_document_id)} className="text-xs font-semibold text-brand-accent hover:text-brand-ink">Download executed copy</a>
+                      {r.submitted_document_id && (
+                        <span className="px-2.5 py-1 rounded-full border text-xs font-semibold bg-brand-amber/10 text-brand-amber border-brand-amber/20">Signed copy uploaded — review</span>
+                      )}
+                      {executedDocumentId && (
+                        <a href={getMatterDocumentDownloadUrl(matterId, executedDocumentId)} className="text-xs font-semibold text-brand-accent hover:text-brand-ink">Signed copy filed</a>
                       )}
                       {['sent', 'partially_signed'].includes(r.status) && <button onClick={() => resendReq(r.id)} className="text-brand-accent hover:underline text-xs font-medium">Resend</button>}
-                      {!['completed', 'voided', 'declined', 'expired'].includes(r.status) && <button onClick={() => voidReq(r.id)} className="text-brand-rose hover:underline text-xs font-medium">Void</button>}
+                      {open && <button onClick={() => voidReq(r.id)} className="text-brand-rose hover:underline text-xs font-medium">Void</button>}
                     </div>
                   </div>
-                  {!['completed', 'voided', 'declined', 'expired'].includes(r.status) && (
+                  {r.submitted_document_id && (
+                    <div className="mt-3 rounded-xl border border-brand-amber/30 bg-brand-amber/5 p-3 space-y-2">
+                      <p className="text-xs text-brand-ink">
+                        The client signed this offline and uploaded the copy. Check it, then accept it as the executed document or send it back.
+                        {' '}
+                        <a href={getMatterDocumentDownloadUrl(matterId, r.submitted_document_id)} className="font-semibold text-brand-accent hover:text-brand-ink">Open uploaded copy</a>
+                      </p>
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <button type="button" onClick={() => acceptSubmission(r.id)} disabled={reviewing} className="px-3 py-1.5 bg-brand-ink text-white text-xs font-semibold rounded-lg disabled:opacity-50">Accept</button>
+                        <input
+                          aria-label="Rejection reason"
+                          value={rejectReasonById[r.id] || ''}
+                          onChange={(e) => setRejectReasonById((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                          placeholder="Reason the client needs to redo it"
+                          className="flex-1 border border-brand-line rounded-lg px-3 py-1.5 text-xs font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+                        />
+                        <button type="button" onClick={() => rejectSubmission(r.id)} disabled={reviewing} className="px-3 py-1.5 border border-brand-rose/40 text-brand-rose text-xs font-semibold rounded-lg disabled:opacity-50">Reject</button>
+                      </div>
+                    </div>
+                  )}
+                  {r.completion_pending && (
+                    <p role="status" className="mt-3 rounded-xl border border-brand-amber/30 bg-brand-amber/5 px-3 py-2 text-xs text-brand-amber">
+                      Filing the signed copy… storage unavailable{r.completion_error ? `: ${r.completion_error}` : ''}.
+                      {' '}Retry filing: the signature is recorded and filing is retried automatically every few minutes.
+                    </p>
+                  )}
+                  {open && (
                     <input
                       value={voidReasonById[r.id] || ''}
                       onChange={(e) => setVoidReasonById((prev) => ({ ...prev, [r.id]: e.target.value }))}
@@ -2873,7 +2998,8 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
                     ))}
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>

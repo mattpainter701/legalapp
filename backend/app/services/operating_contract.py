@@ -161,12 +161,6 @@ _SUBPROCESSORS: tuple[dict[str, Any], ...] = (
         "billing-path-provider",
     ),
     _provider(
-        "Dropbox Sign",
-        "Optional customer-authorized electronic signature workflow.",
-        ["signer identity", "customer-selected documents", "signature evidence"],
-        "customer-enabled-only",
-    ),
-    _provider(
         "Zoom",
         "Optional customer-authorized phone and meeting integrations.",
         ["communications metadata", "customer-authorized call content"],

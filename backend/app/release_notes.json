@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.09.12.1",
-      "version": "2026.09.12.1",
+      "id": "2026.09.12.3",
+      "version": "2026.09.12.3",
       "title": "Matter folders carry the matter number; automations stay in scope",
       "published_at": "2026-09-12",
       "summary": "New matter folders are named with the matter number instead of an internal ID. A workflow rule scoped to one kind of work no longer fires on every matter in its practice. An intake answer too long to store now reaches staff.",
@@ -19,6 +19,72 @@
         {
           "title": "An answer too long to store is reported, not dropped",
           "description": "When a client's answer is longer than the field holds, the review task names it and says how long it is, instead of leaving the field quietly empty."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.12.2",
+      "version": "2026.09.12.2",
+      "title": "Bills you can correct, send, and settle from trust",
+      "published_at": "2026-09-12",
+      "summary": "Draft invoices can be corrected, discounted and emailed to the client, and client funds on retainer settle a bill in one step. Timers ask what you worked on, and firm financial reports are now partner-only.",
+      "highlights": [
+        {
+          "title": "Correct a bill before the client sees it",
+          "description": "Reword, re-price or remove a charge on a draft, and add a discount or flat fee. Removing a charge returns the work to your unbilled queue."
+        },
+        {
+          "title": "Email an invoice with its PDF",
+          "description": "Send the bill to your client from the invoice screen. If delivery fails the invoice stays a draft, so it is never recorded as sent."
+        },
+        {
+          "title": "Settle a bill from client funds",
+          "description": "Apply a retainer to an invoice in one step: the retainer is drawn down and the payment recorded together, with a low balance flagged."
+        },
+        {
+          "title": "Timers that produce a billable entry",
+          "description": "Describe the work on the running timer and it lands ready to bill. Enter time as 1.5, 1:30 or 90m, in your firm's own billing increment."
+        },
+        {
+          "title": "Financial reports are partner-only",
+          "description": "Receivables, realization and work in progress now need billing access. Aging separates invoices not yet due from those overdue."
+        },
+        {
+          "title": "Editing a time entry or expense date works again",
+          "description": "Saving an edited time entry or expense failed whenever the date was included, which was every save. It now saves."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.12.1",
+      "version": "2026.09.12.1",
+      "title": "Sign and fill inside the document",
+      "published_at": "2026-09-12",
+      "summary": "Clients fill form fields and sign on the document's own signature line in the portal, or upload a signed copy for your review. Paperwork sends your own fee agreement, intake form and questionnaire PDFs. Dropbox Sign is retired.",
+      "highlights": [
+        {
+          "title": "Sign on the signature line",
+          "description": "The portal renders your PDF, places inputs on its form fields, and puts the client's adopted signature on the signature line. PDF fields and printed signature lines are detected."
+        },
+        {
+          "title": "Or download, sign and upload",
+          "description": "A client who prefers paper downloads the form, completes it, and uploads the signed copy. It waits in the E-Signature queue for you to accept or send back."
+        },
+        {
+          "title": "A filed signed copy, not just a certificate",
+          "description": "Every completed request files the filled, signed, flattened PDF to the matter beside the evidence certificate."
+        },
+        {
+          "title": "Paperwork uses your own forms",
+          "description": "Send client paperwork lists the fee agreement, intake form and questionnaire as PDFs you supply, each with a client-signs toggle; requested records are an optional section."
+        },
+        {
+          "title": "Storage outages no longer fail signing",
+          "description": "If the firm's cloud storage is down when a client signs, the signature is kept, the client sees a confirmation, and filing retries automatically while staff see the problem."
+        },
+        {
+          "title": "One signing provider",
+          "description": "The Dropbox Sign option is removed. LawHand's own portal signing is the only provider, so there is nothing to pick or configure."
         }
       ]
     },

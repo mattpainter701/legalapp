@@ -1,6 +1,7 @@
 """Extended billing router — time entries, expenses, invoice generation, payments."""
 
 import asyncio
+from html import escape as html_escape
 import logging
 import uuid
 from datetime import date, datetime, timezone, timedelta
@@ -11,6 +12,7 @@ from fastapi.responses import Response
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import noload, selectinload
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context, async_session_maker
@@ -26,6 +28,7 @@ from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Pay
 from app.models.contact import Contact
 from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
+from app.models.user import User
 from app.routers.firm import get_firm_branding
 from app.schemas.billing import (
     TimeEntryCreate,
@@ -49,6 +52,13 @@ from app.schemas.billing import (
     InvoiceExportRequest,
     BillingSettingsResponse,
     BillingSettingsUpdate,
+    TimeEntrySettingsResponse,
+    InvoiceLineItemCreateRequest,
+    InvoiceLineItemUpdateRequest,
+    InvoiceSendRequest,
+    InvoiceSendResponse,
+    ApplyTrustRequest,
+    RetainerAvailability,
 )
 from app.services.billing_workflow import (
     DEFAULT_ROUNDING_MINUTES,
@@ -216,6 +226,11 @@ async def _billing_preview_data(
     times = (await db.execute(time_stmt)).scalars().all()
     expenses = (await db.execute(expense_stmt)).scalars().all()
     return matter, times, expenses
+
+
+def _format_money(amount: Decimal | None) -> str:
+    """Plain currency text for the delivery email."""
+    return f"${Decimal(str(amount or 0)):,.2f}"
 
 
 def _expense_invoice_amount(expense: Expense) -> Decimal:
@@ -428,6 +443,24 @@ def _time_entry_filters(
     return conditions
 
 
+async def _with_user_names(db: AsyncSession, entries: list) -> list[dict]:
+    """Resolve each entry's timekeeper in one query, never one per row."""
+    user_ids = {e.user_id for e in entries if e.user_id}
+    names: dict[uuid.UUID, str] = {}
+    if user_ids:
+        rows = await db.execute(
+            select(User.id, User.full_name).where(User.id.in_(user_ids))
+        )
+        names = {uid: full_name for uid, full_name in rows.all()}
+
+    resolved = []
+    for entry in entries:
+        payload = TimeEntryResponse.model_validate(entry, from_attributes=True)
+        payload.user_name = names.get(entry.user_id)
+        resolved.append(payload)
+    return resolved
+
+
 @router.get("/time-entries")
 async def list_time_entries(
     matter_id: str | None = Query(None),
@@ -481,9 +514,7 @@ async def list_time_entries(
     entries = result.scalars().all()
 
     return TimeEntryListResponse(
-        items=[
-            TimeEntryResponse.model_validate(e, from_attributes=True) for e in entries
-        ],
+        items=await _with_user_names(db, list(entries)),
         total=total_count,
         total_hours=Decimal(str(total_hours)),
         total_amount=Decimal(str(total_amount)),
@@ -542,7 +573,7 @@ async def start_timer(
         hours=Decimal("0"),
         hourly_rate=hourly_rate,
         amount=Decimal("0"),
-        date=now.date(),
+        date=body.date or now.date(),
         is_billable=body.is_billable,
         status="running",
         timer_started_at=now,
@@ -1360,6 +1391,196 @@ async def _trigger_qbo_sync_payment(payment_id: str, tenant_id: str):
         await service.sync_payment_with_retry(payment_id)
 
 
+# ── Draft line items ────────────────────────────────────────────────────────
+# A generated bill is a starting point, not a verdict. Until it is sent, a
+# reviewer can reword a narrative, write a line down, add a flat fee, or
+# discount the bill — the loop every firm runs before a client sees it.
+
+
+async def _load_draft_invoice_for_edit(
+    db: AsyncSession, invoice_id: str, tenant_id: uuid.UUID
+) -> Invoice:
+    """Fetch and lock an invoice, refusing anything that has left draft."""
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
+    result = await db.execute(
+        select(Invoice)
+        .where(Invoice.id == invoice_uuid, Invoice.tenant_id == tenant_id)
+        .with_for_update()
+    )
+    invoice = result.scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="Only draft invoices may be edited. Void this invoice to make changes.",
+        )
+    return invoice
+
+
+async def _recompute_invoice_totals(db: AsyncSession, invoice: Invoice) -> None:
+    """Re-derive subtotal, tax and total from the invoice's current lines.
+
+    The invoice stores a tax amount rather than a rate, so the rate in force
+    when it was generated is recovered from the existing figures and re-applied.
+    """
+    rows = await db.execute(
+        select(func.coalesce(func.sum(InvoiceLineItem.amount), 0)).where(
+            InvoiceLineItem.invoice_id == invoice.id
+        )
+    )
+    subtotal = Decimal(str(rows.scalar() or 0)).quantize(Decimal("0.01"))
+
+    previous_subtotal = invoice.subtotal or Decimal("0")
+    if previous_subtotal > 0:
+        tax_rate = (invoice.tax_amount or Decimal("0")) / previous_subtotal
+    else:
+        tax_rate = Decimal("0")
+
+    invoice.subtotal = subtotal
+    invoice.tax_amount = (subtotal * tax_rate).quantize(Decimal("0.01"))
+    invoice.total = invoice.subtotal + invoice.tax_amount
+
+
+@router.post("/invoices/{invoice_id}/line-items", status_code=201)
+async def add_invoice_line_item(
+    invoice_id: str,
+    body: InvoiceLineItemCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceResponse:
+    """Add a flat fee, adjustment or discount line to a draft invoice."""
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice = await _load_draft_invoice_for_edit(db, invoice_id, user.tenant_id)
+
+    # A discount is stored as a negative amount so the subtotal simply sums.
+    amount = body.amount
+    if body.source_type == "discount" and amount > 0:
+        amount = -amount
+
+    order_result = await db.execute(
+        select(func.coalesce(func.max(InvoiceLineItem.sort_order), -1)).where(
+            InvoiceLineItem.invoice_id == invoice.id
+        )
+    )
+    next_order = int(order_result.scalar() or -1) + 1
+
+    db.add(
+        InvoiceLineItem(
+            invoice_id=invoice.id,
+            source_type=body.source_type,
+            source_id=None,
+            description=body.description.strip(),
+            quantity=body.quantity,
+            unit_price=(amount / body.quantity).quantize(Decimal("0.01")),
+            amount=amount.quantize(Decimal("0.01")),
+            sort_order=next_order,
+        )
+    )
+    await db.flush()
+    await _recompute_invoice_totals(db, invoice)
+    await db.commit()
+    return await _load_invoice_response(db, invoice.id, user.tenant_id)
+
+
+@router.patch("/invoices/{invoice_id}/line-items/{line_item_id}")
+async def update_invoice_line_item(
+    invoice_id: str,
+    line_item_id: str,
+    body: InvoiceLineItemUpdateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceResponse:
+    """Reword or re-price a single line on a draft invoice."""
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice = await _load_draft_invoice_for_edit(db, invoice_id, user.tenant_id)
+
+    line_uuid = _parse_uuid(line_item_id, "line item")
+    line_result = await db.execute(
+        select(InvoiceLineItem).where(
+            InvoiceLineItem.id == line_uuid,
+            InvoiceLineItem.invoice_id == invoice.id,
+        )
+    )
+    line = line_result.scalar_one_or_none()
+    if not line:
+        raise HTTPException(status_code=404, detail="Line item not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No changes supplied")
+
+    if "description" in update_data:
+        line.description = update_data["description"].strip()
+    if "quantity" in update_data:
+        line.quantity = update_data["quantity"]
+    if "unit_price" in update_data:
+        line.unit_price = update_data["unit_price"]
+
+    line.amount = (line.quantity * line.unit_price).quantize(Decimal("0.01"))
+
+    await db.flush()
+    await _recompute_invoice_totals(db, invoice)
+    await db.commit()
+    return await _load_invoice_response(db, invoice.id, user.tenant_id)
+
+
+@router.delete("/invoices/{invoice_id}/line-items/{line_item_id}")
+async def delete_invoice_line_item(
+    invoice_id: str,
+    line_item_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceResponse:
+    """Remove a line from a draft, releasing its source work back to unbilled."""
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice = await _load_draft_invoice_for_edit(db, invoice_id, user.tenant_id)
+
+    line_uuid = _parse_uuid(line_item_id, "line item")
+    line_result = await db.execute(
+        select(InvoiceLineItem).where(
+            InvoiceLineItem.id == line_uuid,
+            InvoiceLineItem.invoice_id == invoice.id,
+        )
+    )
+    line = line_result.scalar_one_or_none()
+    if not line:
+        raise HTTPException(status_code=404, detail="Line item not found")
+
+    # Pulling billed work off a draft must return it to the unbilled pool,
+    # otherwise the hours are stranded and can never be billed again.
+    if line.source_id and line.source_type == "time_entry":
+        entry_result = await db.execute(
+            select(TimeEntry).where(
+                TimeEntry.id == line.source_id,
+                TimeEntry.tenant_id == user.tenant_id,
+            )
+        )
+        entry = entry_result.scalar_one_or_none()
+        if entry:
+            entry.invoice_id = None
+            entry.status = "draft"
+    elif line.source_id and line.source_type == "expense":
+        expense_result = await db.execute(
+            select(Expense).where(
+                Expense.id == line.source_id,
+                Expense.tenant_id == user.tenant_id,
+            )
+        )
+        expense = expense_result.scalar_one_or_none()
+        if expense:
+            expense.invoice_id = None
+
+    await db.delete(line)
+    await db.flush()
+    await _recompute_invoice_totals(db, invoice)
+    await db.commit()
+    return await _load_invoice_response(db, invoice.id, user.tenant_id)
+
+
 @router.patch("/invoices/{invoice_id}")
 async def update_invoice(
     invoice_id: str,
@@ -1440,6 +1661,299 @@ async def update_invoice(
     await db.commit()
 
     return await _load_invoice_response(db, invoice_uuid, user.tenant_id)
+
+
+# ── Delivery ────────────────────────────────────────────────────────────────
+
+
+@router.post("/invoices/{invoice_id}/send")
+async def send_invoice(
+    invoice_id: str,
+    body: InvoiceSendRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceSendResponse:
+    """Email the invoice to the client with its PDF attached.
+
+    Marking a bill as sent is an accounting event; this actually delivers it.
+    The status only moves to "sent" when delivery succeeded, so a firm never
+    believes a client received a bill that never left the building.
+    """
+    from app.services.email import EmailDeliveryResult, email_service
+    from app.services.invoice_pdf import generate_invoice_pdf
+    from app.services.mail_attachment import MailAttachment
+
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
+
+    result = await db.execute(
+        select(Invoice)
+        .where(Invoice.id == invoice_uuid, Invoice.tenant_id == user.tenant_id)
+        .with_for_update()
+    )
+    invoice = result.scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status in ("void", "written_off"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"A '{invoice.status}' invoice cannot be sent.",
+        )
+
+    matter = await _get_matter_or_404(db, str(invoice.matter_id), user.tenant_id)
+    defaults = await _matter_billing_defaults(db, matter, user.tenant_id)
+
+    recipients = [r.strip() for r in (body.to or []) if r and r.strip()]
+    if not recipients and defaults.get("default_recipient"):
+        recipients = [defaults["default_recipient"]]
+    if not recipients:
+        raise HTTPException(
+            status_code=400,
+            detail="No recipient. Add an email address to the matter's client, or supply one.",
+        )
+
+    inv = await _load_invoice_response(db, invoice.id, user.tenant_id)
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == user.tenant_id))
+    branding = await get_firm_branding(db, tenant)
+    firm_name = (branding or {}).get("firm_name") or (tenant.name if tenant else "")
+
+    pdf_bytes = await asyncio.to_thread(generate_invoice_pdf, inv, branding)
+    attachment = MailAttachment(
+        filename=f"invoice_{inv.invoice_number}.pdf",
+        content=pdf_bytes,
+        content_type="application/pdf",
+    )
+
+    subject = body.subject or f"Invoice {inv.invoice_number} from {firm_name}".strip()
+    intro = body.message or (
+        f"Please find invoice {inv.invoice_number} attached for "
+        f"{inv.matter_name or 'your matter'}."
+    )
+    amount_due = _format_money(inv.balance_due)
+    text_body = (
+        f"{intro}\n\n"
+        f"Invoice: {inv.invoice_number}\n"
+        f"Issued: {inv.issue_date}\n"
+        f"Due: {inv.due_date}\n"
+        f"Amount due: {amount_due}\n"
+    )
+    html_body = (
+        f"<p>{html_escape(intro)}</p>"
+        f"<table role='presentation' cellpadding='6'>"
+        f"<tr><td><strong>Invoice</strong></td><td>{html_escape(inv.invoice_number)}</td></tr>"
+        f"<tr><td><strong>Issued</strong></td><td>{inv.issue_date}</td></tr>"
+        f"<tr><td><strong>Due</strong></td><td>{inv.due_date}</td></tr>"
+        f"<tr><td><strong>Amount due</strong></td><td>{html_escape(amount_due)}</td></tr>"
+        f"</table>"
+    )
+
+    delivery = await email_service.send_email(
+        to=recipients,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        attachment=attachment,
+    )
+
+    if delivery != EmailDeliveryResult.SENT:
+        # Leave the status alone: an undelivered bill is not outstanding A/R.
+        return InvoiceSendResponse(
+            delivered=False,
+            recipients=recipients,
+            detail=(
+                "Email delivery is not configured for this firm. "
+                "Download the PDF and send it yourself, or mark the invoice as sent."
+            )
+            if delivery == EmailDeliveryResult.UNCONFIGURED
+            else f"The invoice could not be emailed ({delivery.value}).",
+            invoice=inv,
+        )
+
+    now = datetime.now(timezone.utc)
+    invoice.sent_at = now
+    if invoice.status == "draft":
+        invoice.status = "sent"
+    if getattr(invoice, "billed_at", None) is None:
+        invoice.billed_at = now
+    await db.commit()
+
+    refreshed = await _load_invoice_response(db, invoice.id, user.tenant_id)
+    return InvoiceSendResponse(
+        delivered=True,
+        recipients=recipients,
+        detail=f"Invoice emailed to {', '.join(recipients)}.",
+        invoice=refreshed,
+    )
+
+
+# ── Trust and retainer application ──────────────────────────────────────────
+# Applying client funds already held to a bill is the defining move in legal
+# billing. Drawing the retainer down and recording the payment must happen in
+# one transaction, or the two ledgers drift apart.
+
+
+@router.get("/invoices/{invoice_id}/available-trust")
+async def list_available_trust(
+    invoice_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> list[RetainerAvailability]:
+    """Retainers on this invoice's matter that could be applied to it."""
+    from app.models.retainer import Retainer
+
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
+
+    invoice = (
+        await db.execute(
+            select(Invoice).where(
+                Invoice.id == invoice_uuid, Invoice.tenant_id == user.tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    result = await db.execute(
+        select(Retainer)
+        .options(selectinload(Retainer.contact))
+        .where(
+            Retainer.matter_id == invoice.matter_id,
+            Retainer.tenant_id == user.tenant_id,
+            Retainer.status == "active",
+        )
+    )
+    return [
+        RetainerAvailability(
+            retainer_id=str(r.id),
+            contact_name=r.contact.display_name if r.contact else None,
+            retainer_type=r.retainer_type,
+            current_balance=r.current_balance,
+            minimum_balance=r.minimum_balance,
+            status=r.status,
+            needs_replenishment=bool(
+                r.minimum_balance is not None and r.current_balance < r.minimum_balance
+            ),
+        )
+        for r in result.unique().scalars().all()
+    ]
+
+
+@router.post("/invoices/{invoice_id}/apply-trust", status_code=201)
+async def apply_trust_to_invoice(
+    invoice_id: str,
+    body: ApplyTrustRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceResponse:
+    """Draw retainer funds down and post the matching payment, atomically."""
+    from app.models.retainer import Retainer, RetainerTransaction
+
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
+    retainer_uuid = _parse_uuid(body.retainer_id, "retainer")
+
+    invoice = (
+        await db.execute(
+            select(Invoice)
+            .where(Invoice.id == invoice_uuid, Invoice.tenant_id == user.tenant_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status in ("draft", "void", "written_off"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot apply funds to a '{invoice.status}' invoice. Send it first.",
+        )
+
+    retainer = (
+        await db.execute(
+            select(Retainer)
+            # Retainer.contact eager-loads by default; Postgres refuses to lock
+            # the nullable side of that outer join, so suppress it here.
+            .options(noload(Retainer.contact))
+            .where(
+                Retainer.id == retainer_uuid,
+                Retainer.matter_id == invoice.matter_id,
+                Retainer.tenant_id == user.tenant_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not retainer:
+        raise HTTPException(
+            status_code=404, detail="Retainer not found on this invoice's matter"
+        )
+    if retainer.status != "active":
+        raise HTTPException(status_code=400, detail="Retainer is not active")
+
+    paid_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.invoice_id == invoice.id
+        )
+    )
+    balance_due = invoice.total - Decimal(str(paid_result.scalar() or 0))
+    if balance_due <= 0:
+        raise HTTPException(status_code=400, detail="This invoice is already covered")
+
+    # Default to whatever settles the bill without overdrawing the client.
+    amount = (
+        body.amount
+        if body.amount is not None
+        else min(balance_due, retainer.current_balance)
+    )
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="No retainer funds available")
+    if amount > balance_due:
+        raise HTTPException(
+            status_code=400, detail="Amount exceeds the invoice balance"
+        )
+    if amount > retainer.current_balance:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient retainer balance. Available: {retainer.current_balance}",
+        )
+
+    # 1. Draw the retainer down.
+    retainer.current_balance = retainer.current_balance - amount
+    if retainer.current_balance <= 0:
+        retainer.status = "depleted"
+    db.add(
+        RetainerTransaction(
+            tenant_id=user.tenant_id,
+            retainer_id=retainer.id,
+            transaction_type="drawdown",
+            amount=-amount,
+            invoice_id=invoice.id,
+            description=body.notes or f"Applied to invoice {invoice.invoice_number}",
+            created_by=user.id,
+        )
+    )
+
+    # 2. Record the matching payment, so both ledgers move together.
+    db.add(
+        Payment(
+            tenant_id=user.tenant_id,
+            invoice_id=invoice.id,
+            amount=amount,
+            payment_date=body.payment_date or date.today(),
+            method="trust",
+            reference_number=f"retainer:{retainer.id}",
+            notes=body.notes,
+        )
+    )
+
+    # 3. Move the invoice to match what is now paid.
+    new_paid = invoice.total - balance_due + amount
+    invoice.status = "paid" if new_paid >= invoice.total else "partially_paid"
+
+    await db.commit()
+    return await _load_invoice_response(db, invoice.id, user.tenant_id)
 
 
 # ── Payments ────────────────────────────────────────────────────────────────
@@ -1741,6 +2255,26 @@ async def export_invoice(
 
 
 # ── Billing Settings ────────────────────────────────────────────────────────
+
+
+@router.get("/time-entry-settings")
+async def get_time_entry_settings(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TimeEntrySettingsResponse:
+    """Return the tenant's billing increment.
+
+    Any timekeeper may read this: it defines what a valid entry looks like, so
+    the entry form can accept the same 6-minute units the timer produces. Rates
+    stay behind the finance-gated /billing/settings.
+    """
+    user = await get_current_user(request, db)
+    billing_cfg = await _get_billing_config(db, user.tenant_id)
+    return TimeEntrySettingsResponse(
+        time_rounding_minutes=int(
+            billing_cfg.get("time_rounding_minutes") or DEFAULT_ROUNDING_MINUTES
+        )
+    )
 
 
 @router.get("/settings")

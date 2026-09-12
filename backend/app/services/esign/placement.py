@@ -1,8 +1,10 @@
-"""Provider-neutral positioned e-signature field validation and conversion.
+"""Positioned e-signature field validation.
 
 The canonical coordinate system is the generated PDF: points, origin at the
-bottom-left, and a one-based page number.  Provider adapters must consume the
-validated manifest rather than coordinates from a DOCX preview.
+bottom-left, and a one-based page number. The portal and the executed-copy
+renderer consume the validated manifest rather than coordinates from a DOCX
+preview, so a placement is always bound to the exact PDF digest it was
+reviewed on.
 """
 
 from __future__ import annotations
@@ -12,9 +14,6 @@ import hashlib
 from math import isfinite
 import re
 from typing import Any, Iterable
-
-DROPBOX_DIMENSION_DPI = 80
-DROPBOX_POSITION_DPI = 72
 
 
 class PlacementError(ValueError):
@@ -140,7 +139,7 @@ def generated_signing_metadata(
         try:
             placements = template_positioned_fields(variable_schema, source=source)
         except PlacementError:
-            # Missing roles and provider page restrictions must not block saving
+            # Missing roles and page geometry restrictions must not block saving
             # an unsigned document. The required flag prevents unpositioned send.
             pass
     return placements, roles, bool(fields)
@@ -266,58 +265,8 @@ def validate_pdf_geometry(source: bytes, fields: Iterable[PositionedField]) -> N
             raise PlacementError(
                 "PDF CropBox must match MediaBox for signing placement"
             )
-        if abs(float(box.width) - 612) > 0.5 or abs(float(box.height) - 792) > 0.5:
-            raise PlacementError(
-                "Only US Letter PDF pages are supported for provider placement"
-            )
         if (
             abs(float(box.width) - field.page_width) > 0.5
             or abs(float(box.height) - field.page_height) > 0.5
         ):
             raise PlacementError("Positioned field geometry is stale for this PDF page")
-
-
-def to_dropbox_form_field(
-    field: PositionedField, *, signer_index: int
-) -> dict[str, Any]:
-    """Convert canonical PDF points to Dropbox Sign's form-field coordinates.
-
-    Dropbox uses a top-left origin. Its x/y are 72-DPI values while width and
-    height use 80-DPI values, so the conversion is intentionally asymmetric.
-    """
-    x0, y0, _x1, y1 = field.rect
-    return {
-        "api_id": field.field_id,
-        "document_index": 0,
-        "type": "date_signed" if field.field_type == "date" else field.field_type,
-        "signer": signer_index,
-        "required": True,
-        # Dropbox's PDF examples use one-based page numbers; document_index is
-        # the zero-based file selector.
-        "page": field.page,
-        "x": round(x0),
-        "y": round(field.page_height - y1),
-        # Dropbox documents a +2 width adjustment for the new 72-DPI system.
-        "width": round(field.width * DROPBOX_DIMENSION_DPI / DROPBOX_POSITION_DPI + 2),
-        "height": round(field.height * DROPBOX_DIMENSION_DPI / DROPBOX_POSITION_DPI),
-    }
-
-
-def from_dropbox_coordinates(
-    *,
-    x: float,
-    y: float,
-    width: float,
-    height: float,
-    page_width: float,
-    page_height: float,
-) -> tuple[float, float, float, float]:
-    """Invert Dropbox coordinates into canonical bottom-left PDF points."""
-    canonical_width = (float(width) - 2) * DROPBOX_POSITION_DPI / DROPBOX_DIMENSION_DPI
-    canonical_height = float(height) * DROPBOX_POSITION_DPI / DROPBOX_DIMENSION_DPI
-    return (
-        float(x),
-        page_height - float(y) - canonical_height,
-        float(x) + canonical_width,
-        page_height - float(y),
-    )

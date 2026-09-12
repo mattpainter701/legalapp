@@ -5,13 +5,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import InvoiceDetailPage from './InvoiceDetailPage'
 
 const api = vi.hoisted(() => ({
+  addInvoiceLineItem: vi.fn(),
+  applyTrustToInvoice: vi.fn(),
   createInvoicePaymentLink: vi.fn(),
+  deleteInvoiceLineItem: vi.fn(),
   exportInvoice: vi.fn(),
   getInvoice: vi.fn(),
+  getInvoiceAvailableTrust: vi.fn(() => Promise.resolve([])),
   getQBOStatus: vi.fn(() => Promise.resolve({ connected: true })),
   recordPayment: vi.fn(),
+  sendInvoice: vi.fn(),
   syncInvoiceToQBO: vi.fn(),
   updateInvoice: vi.fn(),
+  updateInvoiceLineItem: vi.fn(),
 }))
 
 const toast = vi.hoisted(() => ({
@@ -91,27 +97,41 @@ describe('InvoiceDetailPage billing operations', () => {
     }))
   })
 
-  it('syncs a draft invoice to QuickBooks as an explicit billing action', async () => {
+  it('refuses to sync an unreviewed draft to QuickBooks', async () => {
+    api.getInvoice.mockResolvedValue(baseInvoice)
+    renderPage()
+
+    // Syncing a draft would make it outstanding A/R in both systems on one
+    // click, before anyone has reviewed the bill.
+    const syncButton = await screen.findByRole('button', { name: 'Sync' })
+    expect(syncButton).toBeDisabled()
+    expect(syncButton).toHaveAttribute(
+      'title',
+      'Send this invoice or mark it as sent before syncing',
+    )
+  })
+
+  it('syncs a sent invoice to QuickBooks as an explicit billing action', async () => {
+    const sentInvoice = { ...baseInvoice, status: 'sent' }
     api.getInvoice
-      .mockResolvedValueOnce(baseInvoice)
+      .mockResolvedValueOnce(sentInvoice)
       .mockResolvedValueOnce({
-        ...baseInvoice,
-        status: "sent",
-        qbo_sync_status: "synced",
-        qbo_invoice_id: "123",
-        billed_at: "2026-08-27T12:00:00Z",
+        ...sentInvoice,
+        qbo_sync_status: 'synced',
+        qbo_invoice_id: '123',
+        billed_at: '2026-08-27T12:00:00Z',
       })
-    api.syncInvoiceToQBO.mockResolvedValue({ status: "synced" })
+    api.syncInvoiceToQBO.mockResolvedValue({ status: 'synced' })
     const user = userEvent.setup()
     renderPage()
 
-    const syncButton = await screen.findByRole("button", { name: "Sync" })
+    const syncButton = await screen.findByRole('button', { name: 'Sync' })
     expect(syncButton).toBeEnabled()
     await user.click(syncButton)
 
-    await waitFor(() => expect(api.syncInvoiceToQBO).toHaveBeenCalledWith("invoice-1"))
+    await waitFor(() => expect(api.syncInvoiceToQBO).toHaveBeenCalledWith('invoice-1'))
     expect(toast.success).toHaveBeenCalledWith(
-      "Invoice synced to QuickBooks and marked billed",
+      'Invoice synced to QuickBooks and marked billed',
     )
   })
   it('blocks an overpayment before it reaches the API', async () => {
@@ -133,5 +153,180 @@ describe('InvoiceDetailPage billing operations', () => {
 
     expect(api.recordPayment).not.toHaveBeenCalled()
     expect(toast.error).toHaveBeenCalledWith('Payment exceeds the balance', expect.any(Object))
+  })
+
+  it('writes a draft line down and recomputes the bill', async () => {
+    api.getInvoice.mockResolvedValue(baseInvoice)
+    api.updateInvoiceLineItem.mockResolvedValue(baseInvoice)
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Edit Contract review' }))
+    const rate = screen.getByLabelText('Rate')
+    await user.clear(rate)
+    await user.type(rate, '200')
+    await user.click(screen.getByRole('button', { name: /Save charge/ }))
+
+    await waitFor(() => expect(api.updateInvoiceLineItem).toHaveBeenCalledWith(
+      'invoice-1',
+      'line-1',
+      { description: 'Contract review', quantity: 2, unit_price: 200 },
+    ))
+  })
+
+  it('adds a courtesy discount to a draft', async () => {
+    api.getInvoice.mockResolvedValue(baseInvoice)
+    api.addInvoiceLineItem.mockResolvedValue(baseInvoice)
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: /Add discount/ }))
+    await user.type(screen.getByLabelText('Description'), 'Courtesy discount')
+    await user.type(screen.getByLabelText('Amount'), '75')
+    await user.click(screen.getByRole('button', { name: 'Add charge' }))
+
+    await waitFor(() => expect(api.addInvoiceLineItem).toHaveBeenCalledWith('invoice-1', {
+      description: 'Courtesy discount',
+      amount: 75,
+      source_type: 'discount',
+    }))
+  })
+
+  it('removes a charge and warns that the work returns to the queue', async () => {
+    api.getInvoice.mockResolvedValue(baseInvoice)
+    api.deleteInvoiceLineItem.mockResolvedValue(baseInvoice)
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Contract review' }))
+    await waitFor(() => expect(api.deleteInvoiceLineItem).toHaveBeenCalledWith('invoice-1', 'line-1'))
+  })
+
+  it('does not offer charge editing once the bill has been sent', async () => {
+    api.getInvoice.mockResolvedValue({ ...baseInvoice, status: 'sent' })
+    renderPage()
+
+    await screen.findByText('Contract review')
+    expect(screen.queryByRole('button', { name: 'Edit Contract review' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Add discount/ })).not.toBeInTheDocument()
+  })
+
+  it('emails the invoice and reports who received it', async () => {
+    api.getInvoice.mockResolvedValue(baseInvoice)
+    api.sendInvoice.mockResolvedValue({
+      delivered: true,
+      recipients: ['client@example.com'],
+      detail: 'Invoice emailed to client@example.com.',
+      invoice: { ...baseInvoice, status: 'sent' },
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: /Email invoice/ }))
+    await waitFor(() => expect(api.sendInvoice).toHaveBeenCalledWith('invoice-1'))
+    expect(toast.success).toHaveBeenCalledWith('Invoice sent to client@example.com')
+  })
+
+  it('surfaces a delivery failure rather than claiming the bill was sent', async () => {
+    api.getInvoice.mockResolvedValue(baseInvoice)
+    api.sendInvoice.mockResolvedValue({
+      delivered: false,
+      recipients: ['client@example.com'],
+      detail: 'Email delivery is not configured for this firm.',
+      invoice: baseInvoice,
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: /Email invoice/ }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Invoice was not emailed', {
+      message: 'Email delivery is not configured for this firm.',
+    }))
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('offers a write-off once a part payment rules out voiding', async () => {
+    api.getInvoice.mockResolvedValue({
+      ...baseInvoice,
+      status: 'partially_paid',
+      amount_paid: 400,
+      balance_due: 100,
+      payments: [{ id: 'payment-1', payment_date: '2026-08-26', method: 'check', amount: 400 }],
+    })
+    api.updateInvoice.mockResolvedValue(baseInvoice)
+    const user = userEvent.setup()
+    renderPage()
+
+    // Voiding is impossible once money has been taken, so a stuck bill needs
+    // the write-off path instead.
+    expect(screen.queryByRole('button', { name: /Void invoice/ })).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: /Write off balance/ }))
+    await waitFor(() => expect(api.updateInvoice).toHaveBeenCalledWith('invoice-1', { status: 'written_off' }))
+  })
+
+  it('applies client funds held on retainer to an outstanding bill', async () => {
+    api.getInvoice.mockResolvedValue({
+      ...baseInvoice,
+      status: 'sent',
+      amount_paid: 0,
+      balance_due: 500,
+    })
+    api.getInvoiceAvailableTrust.mockResolvedValue([{
+      retainer_id: 'retainer-1',
+      contact_name: 'Acme Holdings',
+      retainer_type: 'evergreen',
+      current_balance: 2000,
+      minimum_balance: 500,
+      status: 'active',
+      needs_replenishment: false,
+    }])
+    api.applyTrustToInvoice.mockResolvedValue(baseInvoice)
+    const user = userEvent.setup()
+    renderPage()
+
+    // Only the balance due is drawn, never the whole retainer.
+    await user.click(await screen.findByRole('button', { name: /Apply \$500\.00/ }))
+    await waitFor(() => expect(api.applyTrustToInvoice).toHaveBeenCalledWith('invoice-1', {
+      retainer_id: 'retainer-1',
+    }))
+    expect(toast.success).toHaveBeenCalledWith('$500.00 applied from the retainer')
+  })
+
+  it('flags a retainer that has fallen under its evergreen floor', async () => {
+    api.getInvoice.mockResolvedValue({
+      ...baseInvoice,
+      status: 'sent',
+      amount_paid: 0,
+      balance_due: 500,
+    })
+    api.getInvoiceAvailableTrust.mockResolvedValue([{
+      retainer_id: 'retainer-1',
+      contact_name: 'Acme Holdings',
+      retainer_type: 'evergreen',
+      current_balance: 300,
+      minimum_balance: 500,
+      status: 'active',
+      needs_replenishment: true,
+    }])
+    renderPage()
+
+    expect(await screen.findByText(/Below its \$500\.00 minimum/)).toBeInTheDocument()
+    // Only what is actually there can be applied.
+    expect(screen.getByRole('button', { name: /Apply \$300\.00/ })).toBeEnabled()
+  })
+
+  it('does not offer client funds on a draft', async () => {
+    api.getInvoice.mockResolvedValue(baseInvoice)
+    api.getInvoiceAvailableTrust.mockResolvedValue([{
+      retainer_id: 'retainer-1',
+      contact_name: 'Acme Holdings',
+      current_balance: 2000,
+      status: 'active',
+      needs_replenishment: false,
+    }])
+    renderPage()
+
+    await screen.findByText('Contract review')
+    expect(screen.queryByText('Client funds on hand')).not.toBeInTheDocument()
   })
 })

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { reportError } from '../utils/reportError'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
@@ -18,9 +18,17 @@ import { useAuth } from '../App'
 import NewMatterModal from '../components/NewMatterModal'
 import CloseMatterDialog from '../components/casesetup/CloseMatterDialog'
 import MatterListColumnsMenu, {
+  MATTER_LIST_ACTIONS_WIDTH,
+  MATTER_LIST_COLUMN_BY_KEY,
   MATTER_LIST_COLUMN_DEFS,
+  nextSortState,
+  sortMatters,
   useMatterListColumns,
 } from '../components/matters/MatterListColumns'
+import {
+  MatterListHeaderCell,
+  useHorizontalScrollEdges,
+} from '../components/matters/MatterListTable'
 import { TableSkeleton } from '../components/LoadingSkeleton'
 import { AlertBanner, EmptyState, Spinner } from '../components/ui'
 
@@ -280,51 +288,74 @@ function formatOpenDate(value) {
   }
 }
 
+// Every cell truncates to its column rather than pushing the table wider: the
+// column width is the reader's choice now, and the full value stays available
+// as the cell's tooltip.
+function TextCell({ value, className = 'text-brand-ink-2' }) {
+  if (!value) return <Dash />
+  return <span title={value} className={`block truncate font-sans text-[13px] ${className}`}>{value}</span>
+}
+
 // One renderer per selectable column. Keys match MATTER_LIST_COLUMN_DEFS so the
 // customizer and the table can never drift apart.
 export const MATTER_LIST_CELLS = {
   matter: m => (
-    <div className="min-w-0 max-w-[22rem]">
+    <div className="min-w-0">
       {m.matter_number && (
         <div className="truncate font-mono text-[11px] font-semibold text-brand-muted">{m.matter_number}</div>
       )}
       <Link
         to={`/matters/${m.id}`}
-        className="inline-flex min-h-[44px] min-w-[44px] max-w-full items-center truncate rounded-sm font-sans text-[13.5px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+        title={m.matter_name || undefined}
+        className="flex min-h-[44px] min-w-[44px] max-w-full items-center rounded-sm font-sans text-[13.5px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
       >
-        {m.matter_name || '—'}
+        <span className="truncate">{m.matter_name || '—'}</span>
       </Link>
     </div>
   ),
-  client: m => (m.client_name ? <span className="font-sans text-[13px] text-brand-ink-2">{m.client_name}</span> : <Dash />),
-  responsible_attorney: m => (m.attorney_of_record_name ? <span className="font-sans text-[13px] text-brand-ink-2">{m.attorney_of_record_name}</span> : <Dash />),
-  originating_attorney: m => (m.partner_attorney_name ? <span className="font-sans text-[13px] text-brand-ink-2">{m.partner_attorney_name}</span> : <Dash />),
-  practice_area: m => (m.practice_area ? <span className="font-sans text-[13px] font-medium text-brand-accent">{m.practice_area}</span> : <Dash />),
-  open_date: m => {
-    const value = formatOpenDate(m.created_at)
-    return value ? <span className="whitespace-nowrap font-sans text-[13px] text-brand-ink-2">{value}</span> : <Dash />
-  },
+  client: m => <TextCell value={m.client_name} />,
+  responsible_attorney: m => <TextCell value={m.attorney_of_record_name} />,
+  originating_attorney: m => <TextCell value={m.partner_attorney_name} />,
+  practice_area: m => <TextCell value={m.practice_area} className="font-medium text-brand-accent" />,
+  open_date: m => <TextCell value={formatOpenDate(m.created_at)} />,
   status: m => <StatusBadge status={m.status} />,
   risk: m => <RiskBadge level={m.risk_level} />,
   deadline: m => (m.overdue_deadline_label ? <DeadlineBadge label={m.overdue_deadline_label} /> : <Dash />),
   cloud_folder: m => (hasCloudFolderLinks(m.cloud_folder) ? <CloudFolderLinks cloudFolder={m.cloud_folder} compact /> : <Dash />),
 }
 
+// The matter and actions cells are frozen to the table's edges: on a wide
+// column set the reader must never lose track of which row they are reading or
+// where the row's controls went.
 export function MyMatterRow({
   m,
   columns = MATTER_LIST_COLUMN_DEFS.map(def => def.key),
   onToggleActive,
   togglingId,
+  showStartEdge = false,
+  showEndEdge = false,
 }) {
   const isToggling = togglingId === m.my_assignment_id
+  const frozenCell = 'sticky z-10 bg-brand-surface group-hover:bg-brand-bg-soft'
   return (
-    <tr className="group border-b border-brand-line transition-colors last:border-0 hover:bg-brand-bg-soft">
+    <tr className="group transition-colors hover:bg-brand-bg-soft">
       {columns.map(key => (
-        <td key={key} className={`px-4 py-2 align-top ${key === 'matter' ? 'pl-6' : ''}`}>
+        <td
+          key={key}
+          className={`border-b border-brand-line px-4 py-2 align-top ${
+            key === 'matter'
+              ? `pl-6 ${frozenCell} left-0 ${showStartEdge ? 'shadow-[6px_0_8px_-6px_rgba(22,24,23,0.25)]' : ''}`
+              : ''
+          }`}
+        >
           {MATTER_LIST_CELLS[key] ? MATTER_LIST_CELLS[key](m) : null}
         </td>
       ))}
-      <td className="whitespace-nowrap px-4 py-2 pr-6 text-right align-top">
+      <td
+        className={`border-b border-brand-line px-4 py-2 pr-6 text-right align-top ${frozenCell} right-0 ${
+          showEndEdge ? 'shadow-[-6px_0_8px_-6px_rgba(22,24,23,0.25)]' : ''
+        }`}
+      >
         <div className="flex items-center justify-end gap-2">
           {m.my_assignment_id && (
             <button
@@ -346,6 +377,79 @@ export function MyMatterRow({
         </div>
       </td>
     </tr>
+  )
+}
+
+// ── My Matters list table ─────────────────────────────────────────────────────
+// A fixed layout is what makes the columns resizable: every width comes from
+// the colgroup, so a long client name changes nothing about the grid. The
+// table can therefore be wider than the page, which is fine as long as the
+// reader can tell — hence the frozen matter and actions columns and the
+// shadows that appear on whichever edge still has content behind it.
+export function MyMattersTable({ matters, columns, sort, onSort, onToggleActive, togglingId }) {
+  const scrollRef = useRef(null)
+  const edges = useHorizontalScrollEdges(scrollRef)
+  const visibleKeys = columns.visibleKeys
+  const totalWidth =
+    visibleKeys.reduce((sum, key) => sum + columns.widthOf(key), 0) + MATTER_LIST_ACTIONS_WIDTH
+  const showStartEdge = edges.scrollable && !edges.atStart
+  const showEndEdge = edges.scrollable && !edges.atEnd
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-sm">
+      <div ref={scrollRef} className="overflow-x-auto">
+        <table className="w-full table-fixed border-separate border-spacing-0 text-left" style={{ minWidth: totalWidth }}>
+          <colgroup>
+            {visibleKeys.map(key => (
+              <col key={key} style={{ width: columns.widthOf(key) }} />
+            ))}
+            {/* Deliberately unsized: under a fixed layout the unsized column
+                absorbs whatever slack is left when the chosen columns are
+                narrower than the page, and the table's own minimum width
+                keeps it at least MATTER_LIST_ACTIONS_WIDTH wide. */}
+            <col />
+          </colgroup>
+          <thead>
+            <tr>
+              {visibleKeys.map(key => (
+                <MatterListHeaderCell
+                  key={key}
+                  column={MATTER_LIST_COLUMN_BY_KEY[key]}
+                  sort={sort}
+                  onSort={onSort}
+                  width={columns.widthOf(key)}
+                  onResize={columns.setWidth}
+                  onResetWidth={columns.resetWidth}
+                  frozen={key === 'matter'}
+                  showEdge={showStartEdge}
+                />
+              ))}
+              <th
+                scope="col"
+                className={`sticky right-0 z-30 whitespace-nowrap border-b border-brand-line bg-brand-bg-soft px-4 py-3 pr-6 align-bottom text-right text-[11px] font-bold uppercase tracking-wide text-brand-muted ${
+                  showEndEdge ? 'shadow-[-6px_0_8px_-6px_rgba(22,24,23,0.25)]' : ''
+                }`}
+              >
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {matters.map(m => (
+              <MyMatterRow
+                key={m.id}
+                m={m}
+                columns={visibleKeys}
+                onToggleActive={onToggleActive}
+                togglingId={togglingId}
+                showStartEdge={showStartEdge}
+                showEndEdge={showEndEdge}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }
 
@@ -547,6 +651,27 @@ export default function MatterPortfolioPage() {
   const setMyStatusFilter = value => setParam('mstatus', value, 'all')
   const mySearch = searchParams.get('mq') || ''
   const setMySearch = value => setParam('mq', value, '')
+  // Sort lives in the URL so a partner can send "my matters by next deadline"
+  // to an associate as a link.
+  const sortKeyParam = searchParams.get('msort')
+  const mySort = {
+    key: sortKeyParam && MATTER_LIST_COLUMN_BY_KEY[sortKeyParam]?.sortValue ? sortKeyParam : null,
+    direction: searchParams.get('mdir') === 'desc' ? 'desc' : 'asc',
+  }
+  const toggleMySort = key => {
+    const next = nextSortState(mySort, key)
+    setSearchParams(previous => {
+      const params = new URLSearchParams(previous)
+      if (next.key) {
+        params.set('msort', next.key)
+        params.set('mdir', next.direction)
+      } else {
+        params.delete('msort')
+        params.delete('mdir')
+      }
+      return params
+    }, { replace: true })
+  }
   const [showCreate, setShowCreate] = useState(false)
   const [togglingId, setTogglingId] = useState(null)
   const [movingId, setMovingId] = useState(null)
@@ -615,7 +740,7 @@ export default function MatterPortfolioPage() {
     return counts
   }, [myMatters])
 
-  const myFiltered = useMemo(() => myMatters.filter(m => {
+  const myVisible = useMemo(() => myMatters.filter(m => {
     if (myStatusFilter !== 'all' && matterLifecycleStatus(m) !== myStatusFilter) return false
     if (mySearch) {
       const q = mySearch.toLowerCase()
@@ -630,6 +755,11 @@ export default function MatterPortfolioPage() {
     }
     return true
   }), [myMatters, myStatusFilter, mySearch])
+
+  const myFiltered = useMemo(
+    () => sortMatters(myVisible, mySort.key, mySort.direction),
+    [myVisible, mySort.key, mySort.direction],
+  )
 
   const practiceAreas = useMemo(() => {
     const set = new Set(matters.map(m => m.practice_area).filter(Boolean))
@@ -808,7 +938,12 @@ export default function MatterPortfolioPage() {
                     className="w-full rounded-lg border border-brand-line bg-brand-surface py-2.5 pl-10 pr-4 text-sm font-sans text-brand-ink transition-all placeholder:text-brand-muted focus:border-brand-accent focus:outline-none focus:ring-1 focus:ring-brand-accent"
                   />
                 </div>
-                <MatterListColumnsMenu hidden={matterColumns.hidden} onChange={matterColumns.save} />
+                <MatterListColumnsMenu
+                  hidden={matterColumns.hidden}
+                  onChange={matterColumns.save}
+                  onResetWidths={matterColumns.resetWidth}
+                  widthsChanged={matterColumns.resized}
+                />
               </div>
 
               {myFiltered.length === 0 ? (
@@ -821,42 +956,14 @@ export default function MatterPortfolioPage() {
                   Try a different status or keyword.
                 </EmptyState>
               ) : (
-                <div className="overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-sm">
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full border-collapse text-left">
-                      <thead>
-                        <tr className="border-b border-brand-line bg-brand-bg-soft/50">
-                          {matterColumns.visibleKeys.map(key => {
-                            const def = MATTER_LIST_COLUMN_DEFS.find(column => column.key === key)
-                            return (
-                              <th
-                                key={key}
-                                scope="col"
-                                className={`whitespace-nowrap px-4 py-3 text-[11px] font-bold uppercase tracking-widest text-brand-muted ${key === 'matter' ? 'pl-6' : ''}`}
-                              >
-                                {def?.label}
-                              </th>
-                            )
-                          })}
-                          <th scope="col" className="whitespace-nowrap px-4 py-3 pr-6 text-right text-[11px] font-bold uppercase tracking-widest text-brand-muted">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {myFiltered.map(m => (
-                          <MyMatterRow
-                            key={m.id}
-                            m={m}
-                            columns={matterColumns.visibleKeys}
-                            onToggleActive={handleToggleActive}
-                            togglingId={togglingId}
-                          />
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+                <MyMattersTable
+                  matters={myFiltered}
+                  columns={matterColumns}
+                  sort={mySort}
+                  onSort={toggleMySort}
+                  onToggleActive={handleToggleActive}
+                  togglingId={togglingId}
+                />
               )}
             </>
           )}

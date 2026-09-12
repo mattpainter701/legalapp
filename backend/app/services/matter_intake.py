@@ -94,6 +94,10 @@ def public_packet(packet, *, client=False):
                     "signature_id",
                     "required",
                     "submitted_document_id",
+                    "submitted_at",
+                    "declined",
+                    "declined_at",
+                    "decline_reason",
                     "due_at",
                 )
             }
@@ -137,6 +141,30 @@ async def store_file(tenant_id, matter, filename, content, content_type):
 
 def due_iso(value):
     return value.astimezone(timezone.utc).isoformat() if value else None
+
+
+def plan_signing_placements(signature, content, *, signer_name, placements):
+    """Decide where the client signs, the same way the E-Signature panel does.
+
+    Intake sends every signature request to a single ``signer`` role, so staff
+    placements reviewed on the PDF are adopted when they exist and the plan
+    otherwise finds (or falls back to) a signature line on the document.
+    Invalid staff placements are not fatal here: the plan still guarantees a
+    signature placement, and the reviewer's geometry is simply dropped.
+    """
+    from types import SimpleNamespace
+
+    from app.services.esign.placement import PlacementError
+    from app.services.esign.plan import plan_request_placements
+
+    signers = [SimpleNamespace(name=signer_name, role="signer", sign_order=0)]
+    usable = [
+        {**item, "role": "signer"} for item in placements if isinstance(item, dict)
+    ]
+    try:
+        plan_request_placements(signature, content, signers=signers, placements=usable)
+    except PlacementError:
+        plan_request_placements(signature, content, signers=signers, placements=[])
 
 
 def requirement_label(key, requirement):
@@ -408,11 +436,6 @@ async def start_packet(db, user, matter, body, filename, content):
             )
             if document is None:
                 raise HTTPException(404, "Fee agreement not found")
-            if document.signing_placement_required or document.positioned_fields:
-                raise HTTPException(
-                    422,
-                    "Positioned signing fields require the document signing workflow",
-                )
             # The packet entitles its own recipient to read this agreement. A
             # matter-wide visibility bit would hand it to every other live invite.
         else:
@@ -460,6 +483,12 @@ async def start_packet(db, user, matter, body, filename, content):
             sent_at=now(),
             expires_at=now() + timedelta(days=30),
             reminders={},
+        )
+        plan_signing_placements(
+            signature,
+            content,
+            signer_name=contact.display_name or str(body.email),
+            placements=document.positioned_fields or [],
         )
         db.add(signature)
         await db.flush()
@@ -557,14 +586,6 @@ async def start_packet(db, user, matter, body, filename, content):
             raise HTTPException(404, "Selected document not found")
         signature_id = None
         if selection.requires_signature:
-            if (
-                selected_doc.signing_placement_required
-                or selected_doc.positioned_fields
-            ):
-                raise HTTPException(
-                    422,
-                    "Positioned signing fields require the document signing workflow",
-                )
             if not attachment.content.startswith(b"%PDF-"):
                 raise HTTPException(422, "Signature documents must be reviewed PDFs")
             extra = SignatureRequest(
@@ -581,6 +602,12 @@ async def start_packet(db, user, matter, body, filename, content):
                 sent_at=now(),
                 expires_at=now() + timedelta(days=30),
                 reminders={},
+            )
+            plan_signing_placements(
+                extra,
+                attachment.content,
+                signer_name=contact.display_name or str(body.email),
+                placements=selected_doc.positioned_fields or [],
             )
             db.add(extra)
             await db.flush()
@@ -668,6 +695,56 @@ async def cancel_packet(db, packet, reason):
         else state
         for key, state in packet.delivery.items()
     }
+
+
+async def mirror_submissions(db, packet):
+    """Copy each open request's uploaded-copy state onto its requirement."""
+    targets = []
+    if packet.signature_id and packet.requirements.get("fee_agreement"):
+        targets.append(("fee_agreement", packet.signature_id))
+    for key, requirement in packet.requirements.items():
+        if requirement.get("kind") == "signature" and requirement.get("signature_id"):
+            try:
+                targets.append((key, uuid.UUID(str(requirement["signature_id"]))))
+            except (TypeError, ValueError):
+                continue
+    for key, request_id in targets:
+        requirement = packet.requirements.get(key)
+        if not requirement or requirement.get("completed"):
+            continue
+        request = await db.scalar(
+            select(SignatureRequest).where(
+                SignatureRequest.id == request_id,
+                SignatureRequest.tenant_id == packet.tenant_id,
+                SignatureRequest.matter_id == packet.matter_id,
+            )
+        )
+        if request is None:
+            continue
+        submitted_id = (
+            str(request.submitted_document_id)
+            if request.submitted_document_id and request.status != "completed"
+            else None
+        )
+        submitted_at = (
+            request.submitted_at.isoformat()
+            if submitted_id and request.submitted_at
+            else None
+        )
+        if (
+            requirement.get("submitted_document_id") == submitted_id
+            and requirement.get("submitted_at") == submitted_at
+        ):
+            continue
+        updated = {
+            key_: value
+            for key_, value in requirement.items()
+            if key_ not in ("submitted_document_id", "submitted_at")
+        }
+        if submitted_id:
+            updated["submitted_document_id"] = submitted_id
+            updated["submitted_at"] = submitted_at
+        packet.requirements = {**packet.requirements, key: updated}
 
 
 async def reconcile(db, packet):
@@ -766,6 +843,10 @@ async def reconcile(db, packet):
                     "completed_at": extra.completed_at.isoformat(),
                 },
             }
+    # An uploaded signed copy awaiting staff review shows on the requirement
+    # so both the firm strip and the client checklist can say "Awaiting
+    # review"; it is cleared again when staff return the copy.
+    await mirror_submissions(db, packet)
     # A declined acknowledgment is terminal: surface it on the matter timeline,
     # stop chasing the due date, and raise a staff task to revise and resend.
     # The packet stays open because the required signature is still outstanding,
