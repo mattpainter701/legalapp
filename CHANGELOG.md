@@ -1,3 +1,10 @@
+## Unreleased — Platform-managed shared Twilio sender
+
+- Add `app/services/platform_sms.py`: the operator stores one LawHand-owned Twilio account in `platform_settings` (`platform_sms_provider_v1`), with the Auth Token encrypted by `token_vault` and only a last-4 hint exposed. A partial update keeps the stored token when the field is omitted.
+- Add `/api/platform/sms/provider` (GET/PUT/DELETE) and `/api/platform/sms/test` under the existing platform-operator token, so writes need `platform:write` and reads need `platform:read`. Test send validates E.164, resolves the saved credentials, and posts to Twilio `/Messages.json`.
+- Add an operator SMS tab in `frontend/src/pages/PlatformPage.jsx` to save the sender and send a test message.
+- No migration: configuration uses the existing `platform_settings` table. The separate, firm-owned tenant SMS path (`/api/sms/config`) is unchanged.
+
 ## 2026.09.11.9 — A front door to the client portal
 
 - Add a passwordless `frontend/src/pages/ClientPortalLoginPage.jsx` at `/portal/client/login` (with `/portal/client` redirecting to it). It emails a one-time code, verifies it, and opens the portal. Client `User` rows are created without a password, so `POST /portal/client/request-code` and `/verify-code` replace the unused `/activate` and `/login` endpoints and the `activateClientPortalAccount`/`loginClientPortalAccount` wrappers.

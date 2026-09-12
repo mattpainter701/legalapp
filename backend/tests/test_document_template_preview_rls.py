@@ -117,8 +117,8 @@ async def test_document_template_preview_force_rls_is_fail_closed_and_tenant_sco
                     """
                     CREATE POLICY document_template_previews_tenant_isolation
                     ON document_template_previews
-                    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
-                    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid)
+                    USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
                     """
                 )
             )
