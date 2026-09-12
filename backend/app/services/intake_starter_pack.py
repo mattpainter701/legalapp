@@ -71,8 +71,10 @@ class PackUpload:
 class PackField:
     """One template placeholder and where its value comes from.
 
-    ``binding`` is a path from the closed server catalogue, or ``manual`` for a
-    term only a person can decide — a fee amount is never inferred.
+    ``binding`` is a path from the closed server catalogue, or ``manual`` for
+    a term only a person can decide — a rate schedule or a scope. Terms the
+    matter's records already carry (contingency, retainer, venue) bind to
+    them instead.
     """
 
     name: str
@@ -1282,7 +1284,11 @@ FEE_AGREEMENT = StarterDocument(
         PackField("staff_rate_schedule", "Other timekeeper rates"),
         PackField("flat_fee_amount", "Flat fee amount"),
         PackField("flat_fee_payment_terms", "Flat fee payment terms"),
-        PackField("contingency_percentage", "Contingency percentage"),
+        PackField(
+            "contingency_percentage",
+            "Contingency percentage",
+            "matter.contingency_percentage",
+        ),
         PackField("contingency_terms", "Contingency calculation terms"),
         PackField("advance_deposit_amount", "Advance deposit amount"),
         PackField("deposit_replenishment_terms", "Deposit replenishment terms"),
@@ -1423,9 +1429,11 @@ Fees and costs are billed {{billing_cycle}}. A balance is due
 {{payment_due_days}} from the date of the statement. {{late_charge_terms}} The
 Firm may stop work if a statement is not paid in full when due.
 
-The Firm will tell the Client when additional funds must be deposited in the
-trust account to cover projected fees and costs, and the Client agrees to deposit
-the requested sum promptly. The Firm may stop work if the deposit is not made.
+The Firm will tell the Client when the trust balance falls below
+{{retainer_minimum_balance}} and additional funds must be deposited in the
+trust account to cover projected fees and costs, and the Client agrees to
+deposit the requested sum promptly. The Firm may stop work if the deposit is
+not made.
 
 The Client grants the Firm a lien, to the extent the law allows, against funds
 held for the Client in the Firm's trust account and against any money or property
@@ -1592,7 +1600,7 @@ HOURLY_FEE_AGREEMENT_ND = StarterDocument(
                 "fees apply as described in Section 2."
             ),
         ),
-        PackField("retainer_amount", "Retainer"),
+        PackField("retainer_amount", "Retainer", "matter.retainer_amount"),
         PackField("hourly_rate", "Attorney hourly rate", "matter.hourly_rate"),
         PackField(
             "billing_increment",
@@ -1600,6 +1608,11 @@ HOURLY_FEE_AGREEMENT_ND = StarterDocument(
             default="0.1 hour (six minutes)",
         ),
         PackField("call_minimum", "Telephone call minimum", default="0.25 hour"),
+        PackField(
+            "retainer_minimum_balance",
+            "Retainer replenishment threshold",
+            "matter.retainer_minimum_balance",
+        ),
         PackField("staff_rate_range", "Paralegal and law clerk rates"),
         PackField("attorney_rate_range", "Other attorney rates"),
         PackField("trial_fee_amount", "Trial fee per day"),
@@ -1622,7 +1635,7 @@ HOURLY_FEE_AGREEMENT_ND = StarterDocument(
                 "single cost over the amount the Client sets in writing."
             ),
         ),
-        PackField("venue", "Venue for a fee action"),
+        PackField("venue", "Venue for a fee action", "matter.venue"),
         PackField(
             "confidentiality_rule",
             "Confidentiality rule",

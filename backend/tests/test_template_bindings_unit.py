@@ -50,6 +50,25 @@ class TestCatalogue:
         assert alias_for_binding("matter.case_number") == "case_number"
         assert alias_for_binding("client.address.city") == "client_city"
 
+    def test_fee_term_paths_resolve_to_their_alias(self):
+        # The fee-term bindings the fee agreements declare, so a firm's
+        # contingency, retainer, and venue fill from the matter's records.
+        assert alias_for_binding("matter.contingency_percentage") == (
+            "contingency_percentage"
+        )
+        assert alias_for_binding("matter.retainer_amount") == "retainer_amount"
+        assert alias_for_binding("matter.retainer_minimum_balance") == (
+            "retainer_minimum_balance"
+        )
+        assert alias_for_binding("matter.venue") == "venue"
+
+    def test_junk_paths_stay_out_of_the_catalogue(self):
+        assert not is_valid_binding("matter.retainer_amount.password")
+        assert not is_valid_binding("matter.retainer.__dict__")
+        assert not is_valid_binding("retainer_amount")
+        assert not is_valid_binding("venue.drop_table")
+        assert alias_for_binding("matter.retainer") is None
+
     def test_manual_and_unknown_paths_resolve_to_nothing(self):
         # Resolving either to an alias would reintroduce the accidental
         # name-collision fill that bindings exist to remove.
@@ -78,9 +97,7 @@ class TestCatalogue:
     def test_every_item_binding_names_a_field_a_collection_supplies(self):
         # An item binding naming a key no collection emits would resolve to
         # nothing on every iteration.
-        supplied = {
-            field for entry in collections() for field in entry.item_fields
-        }
+        supplied = {field for entry in collections() for field in entry.item_fields}
         for entry in catalogue():
             if is_item_binding(entry.path):
                 assert item_key(entry.path) in supplied
@@ -168,7 +185,13 @@ class TestSemanticMetadata:
         )
 
     def test_semantic_keys_are_the_documented_set(self):
-        assert SEMANTIC_FIELD_KEYS == {"binding", "label", "description", "logic", "value_from"}
+        assert SEMANTIC_FIELD_KEYS == {
+            "binding",
+            "label",
+            "description",
+            "logic",
+            "value_from",
+        }
 
     def test_unknown_binding_is_rejected(self):
         with pytest.raises(TemplateSemanticsError):
@@ -185,7 +208,14 @@ class TestSemanticMetadata:
     def test_logic_must_reference_a_field_the_template_defines(self):
         with pytest.raises(TemplateLogicError):
             validate_semantic_metadata(
-                {"fields": [{"name": "x", "logic": {"field": "ghost", "operator": "present"}}]}
+                {
+                    "fields": [
+                        {
+                            "name": "x",
+                            "logic": {"field": "ghost", "operator": "present"},
+                        }
+                    ]
+                }
             )
 
     @pytest.mark.parametrize("schema", [None, "text", {}, {"fields": "no"}])
