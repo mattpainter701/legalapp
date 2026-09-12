@@ -1003,6 +1003,144 @@ async def test_overview_ignores_signatures_this_client_already_signed(
     assert body["pending_signature_count"] == 0
 
 
+@pytest.mark.asyncio
+async def test_portal_decline_closes_followup_and_writes_matter_timeline(
+    client, db_session, test_tenant, test_user, portal_matter, portal_cookie
+):
+    from app.models.plugin import MatterEvent
+    from app.models.signature import SignatureRequest, SignatureSigner
+    from app.services.esign.followups import ensure_signature_followup
+
+    request = SignatureRequest(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        matter_id=portal_matter.id,
+        status="sent",
+        provider="internal",
+        created_by_user_id=test_user.id,
+        source_document_filename="Fee agreement.pdf",
+        due_at=datetime.now(timezone.utc) + timedelta(days=7),
+        sent_at=datetime.now(timezone.utc),
+    )
+    request.signers = [
+        SignatureSigner(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            request_id=request.id,
+            name="Client Name",
+            email="client@example.com",
+            role="client",
+            sign_order=0,
+            status="pending",
+        )
+    ]
+    db_session.add(request)
+    await db_session.commit()
+    task = await ensure_signature_followup(db_session, request)
+    await db_session.commit()
+    assert task is not None
+
+    resp = await client.post(
+        f"{PORTAL}/signatures/{request.id}/decline",
+        headers=_portal_headers(portal_cookie),
+        json={"reason": "Needs edits"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "declined"
+
+    await db_session.refresh(task)
+    assert task.status == "cancelled"
+    event = await db_session.scalar(
+        select(MatterEvent).where(
+            MatterEvent.matter_id == portal_matter.id,
+            MatterEvent.event_type == "signature",
+        )
+    )
+    assert event is not None
+    assert "declined" in event.title.lower()
+    assert "Needs edits" in event.content
+
+
+@pytest.mark.asyncio
+async def test_portal_sign_keeps_signature_and_retries_when_storage_fails(
+    client, db_session, test_tenant, test_user, portal_matter, portal_cookie, monkeypatch
+):
+    from sqlalchemy.orm import selectinload
+
+    from app.models.signature import SignatureRequest, SignatureSigner
+    from app.routers import esignature as esignature_router
+    from app.services.esign import service as esign_service
+    from app.services.matter_file_store import StorageResult
+
+    request = SignatureRequest(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        matter_id=portal_matter.id,
+        status="sent",
+        provider="internal",
+        created_by_user_id=test_user.id,
+        source_document_filename="Fee agreement.pdf",
+        sent_at=datetime.now(timezone.utc),
+    )
+    request.signers = [
+        SignatureSigner(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            request_id=request.id,
+            name="Client Name",
+            email="client@example.com",
+            role="client",
+            sign_order=0,
+            status="pending",
+        )
+    ]
+    db_session.add(request)
+    await db_session.commit()
+    # The source-document hash check is covered by the acceptance flow; this
+    # test isolates the storage-failure durability path.
+    monkeypatch.setattr(
+        esignature_router, "_source_document_is_unchanged", AsyncMock(return_value=True)
+    )
+
+    async def failed_store(**_kwargs):
+        return StorageResult(
+            provider="local", backend="local", error="Storage unavailable"
+        )
+
+    monkeypatch.setattr(
+        esign_service._file_store, "store_matter_file_result", failed_store
+    )
+    signing = {
+        "typed_signature": "Client Name",
+        "consent_to_electronic_signature": True,
+    }
+    url = f"{PORTAL}/signatures/{request.id}/sign"
+    failed = await client.post(url, headers=_portal_headers(portal_cookie), json=signing)
+    assert failed.status_code == 503
+
+    durable = await db_session.scalar(
+        select(SignatureRequest)
+        .options(selectinload(SignatureRequest.signers))
+        .where(SignatureRequest.id == request.id)
+    )
+    assert durable.status == "sent"
+    assert durable.signers[0].status == "signed"
+    assert durable.signers[0].typed_signature == "Client Name"
+
+    async def succeeds(**_kwargs):
+        return StorageResult(
+            provider="local",
+            backend="local",
+            storage_path="fixture/evidence.pdf",
+            provider_item_id="evidence-1",
+        )
+
+    monkeypatch.setattr(esign_service._file_store, "store_matter_file_result", succeeds)
+    retry = await client.post(url, headers=_portal_headers(portal_cookie), json=signing)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["status"] == "completed"
+
+
 # ── Firm branding, upload policy, and passwordless sign-in ──────────────────
 
 

@@ -9,6 +9,7 @@ and finalizing a completed request into an executed-copy document) live in
 from app.services.esign.base import ESignProvider, get_provider
 from app.services.esign.service import (
     complete_request_if_done,
+    decline_event,
     mark_request_expired_if_needed,
     next_pending_signers,
     record_portal_decline,
@@ -20,6 +21,7 @@ __all__ = [
     "ESignProvider",
     "get_provider",
     "complete_request_if_done",
+    "decline_event",
     "mark_request_expired_if_needed",
     "next_pending_signers",
     "record_portal_decline",

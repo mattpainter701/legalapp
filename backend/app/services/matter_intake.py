@@ -151,12 +151,12 @@ def queue(packet, kind):
     packet.delivery = delivery
 
 
-def event(db, packet, title, content):
+def event(db, packet, title, content, *, event_type="intake"):
     db.add(
         MatterEvent(
             tenant_id=packet.tenant_id,
             matter_id=packet.matter_id,
-            event_type="intake",
+            event_type=event_type,
             title=title,
             content=content,
             note_type="system",
@@ -737,6 +737,76 @@ async def reconcile(db, packet):
                     "completed_at": extra.completed_at.isoformat(),
                 },
             }
+    # A declined acknowledgment is terminal: surface it on the matter timeline,
+    # stop chasing the due date, and raise a staff task to revise and resend.
+    # The packet stays open because the required signature is still outstanding,
+    # but the firm is no longer waiting on a request the client already refused.
+    declined: list[tuple[str, SignatureRequest]] = []
+    main_request = (
+        await db.scalar(
+            select(SignatureRequest).where(
+                SignatureRequest.id == packet.signature_id,
+                SignatureRequest.tenant_id == packet.tenant_id,
+                SignatureRequest.matter_id == packet.matter_id,
+            )
+        )
+        if packet.signature_id
+        else None
+    )
+    if main_request is not None and main_request.status == "declined":
+        declined.append(("fee_agreement", main_request))
+    for key, requirement in list(packet.requirements.items()):
+        if (
+            requirement.get("kind") != "signature"
+            or not requirement.get("signature_id")
+            or requirement.get("declined")
+        ):
+            continue
+        try:
+            extra_id = uuid.UUID(str(requirement["signature_id"]))
+        except (TypeError, ValueError):
+            continue
+        extra = await db.scalar(
+            select(SignatureRequest).where(
+                SignatureRequest.id == extra_id,
+                SignatureRequest.tenant_id == packet.tenant_id,
+                SignatureRequest.matter_id == packet.matter_id,
+            )
+        )
+        if extra is not None and extra.status == "declined":
+            declined.append((key, extra))
+    for key, request in declined:
+        requirement = packet.requirements[key]
+        if requirement.get("declined"):
+            continue
+        label = requirement_label(key, requirement)
+        declined_at = request.declined_at or now()
+        reason = (request.decline_reason or "").strip()
+        packet.requirements = {
+            **packet.requirements,
+            key: {
+                **requirement,
+                "declined": True,
+                "declined_at": declined_at.isoformat(),
+                "decline_reason": reason or None,
+            },
+        }
+        event(
+            db,
+            packet,
+            f"{label} declined",
+            f"The client declined to sign {label}."
+            + (f" Reason: {reason}." if reason else "")
+            + " Revise the document and resend it for signature.",
+            event_type="signature",
+        )
+        await ensure_task(
+            db,
+            packet,
+            f"declined:{key}",
+            f"{label} declined — revise and resend",
+            now() + timedelta(days=1),
+        )
     agreement = packet.requirements["fee_agreement"]
     if (
         packet.config.get("portal_after_signing")
@@ -766,6 +836,8 @@ async def reconcile(db, packet):
         label = requirement_label(key, requirement)
         if requirement.get("completed"):
             await close_task(db, packet, f"due:{key}", f"{label} received")
+        elif requirement.get("declined"):
+            await close_task(db, packet, f"due:{key}", f"{label} declined")
         else:
             await ensure_task(
                 db,

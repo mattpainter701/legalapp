@@ -11,13 +11,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.plugin import Matter
-from app.models.tenant import Tenant
+from app.models.tenant import Tenant, TenantSettings
+from app.models.tenant_credential import TenantCredential
 from app.services.cloud_init import (
     GOOGLE_DRIVE_BASE,
     GRAPH_BASE,
     canonical_matter_folder_name,
 )
 from app.services.token_vault import get_fresh_token
+
+PROVIDER_LABELS = {
+    "onedrive": "Microsoft OneDrive",
+    "sharepoint": "Microsoft SharePoint",
+    "google_drive": "Google Drive",
+}
+_CLOUD_TOKEN_PROVIDER = {
+    "onedrive": "microsoft",
+    "sharepoint": "microsoft",
+    "google_drive": "google",
+}
 
 
 def classify_matter_folders(
@@ -123,6 +135,107 @@ async def _list_children(
             url = payload.get("@odata.nextLink")
             params = None
     return items
+
+
+async def bound_storage_readiness(db: AsyncSession, tenant_id: str) -> dict[str, Any]:
+    """Explain why the firm's configured cloud storage may be unusable.
+
+    A storage failure during signing or intake returns a deliberately generic
+    503 so a client never sees provider detail. This read-only diagnosis gives
+    an operator the matching explanation: which provider the firm is bound to,
+    whether an active credential exists for it, and which matters still lack a
+    folder binding. It performs no provider I/O and changes nothing.
+    """
+    tenant_uuid = uuid.UUID(str(tenant_id))
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_uuid))
+    if tenant is None:
+        raise ValueError(f"Tenant not found: {tenant_id}")
+    configured = await db.scalar(
+        select(TenantSettings.primary_cloud_provider).where(
+            TenantSettings.tenant_id == tenant_uuid
+        )
+    )
+    provider = str(configured or "").strip().lower().replace("-", "_") or None
+    credential_rows = (
+        await db.execute(
+            select(TenantCredential.provider, TenantCredential.is_active).where(
+                TenantCredential.tenant_id == tenant_uuid
+            )
+        )
+    ).all()
+    active = {
+        str(row_provider).strip().lower()
+        for row_provider, is_active in credential_rows
+        if row_provider and is_active
+    }
+    token_provider = _CLOUD_TOKEN_PROVIDER.get(provider or "")
+    credential_active = bool(token_provider and token_provider in active)
+
+    matters = (
+        (
+            await db.execute(
+                select(Matter)
+                .where(Matter.tenant_id == tenant_uuid)
+                .order_by(Matter.slug)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    unbound: list[dict[str, Any]] = []
+    bound_count = 0
+    if provider:
+        for matter in matters:
+            folder = (
+                matter.cloud_folder if isinstance(matter.cloud_folder, dict) else {}
+            )
+            binding = folder.get(provider) if isinstance(folder, dict) else None
+            if isinstance(binding, dict) and binding.get("matter_folder_id"):
+                bound_count += 1
+            else:
+                unbound.append(
+                    {
+                        "matter_id": str(matter.id),
+                        "matter_name": matter.matter_name,
+                        "matter_slug": matter.slug,
+                    }
+                )
+
+    label = PROVIDER_LABELS.get(provider or "", provider or "the configured provider")
+    if provider is None:
+        status = "unconfigured"
+        reason = (
+            "No primary cloud provider is configured; uploads use Auto/local "
+            "storage and do not fail closed."
+        )
+    elif not credential_active:
+        status = "needs_reauth"
+        reason = (
+            f"The firm is bound to {label} but its credential is not active. "
+            f"Reconnect {label} in Integrations, then retry the upload."
+        )
+    elif unbound:
+        status = "folders_unbound"
+        reason = (
+            f"{label} is connected, but {len(unbound)} matter folder(s) are not "
+            "bound to it. Reprovision those matter folders in File Shares."
+        )
+    else:
+        status = "ok"
+        reason = f"{label} is connected and every matter folder is bound."
+
+    return {
+        "tenant_id": str(tenant_uuid),
+        "configured_provider": provider,
+        "credential_provider": token_provider,
+        "credential_active": credential_active,
+        "status": status,
+        "reason": reason,
+        "matter_count": len(matters),
+        "bound_matter_folders": bound_count,
+        "unbound_matters": unbound,
+        "mutations_performed": False,
+    }
 
 
 async def audit_matter_cloud_folders(

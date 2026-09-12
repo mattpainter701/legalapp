@@ -91,7 +91,13 @@ For a read-only audit of realized matter bindings, an operator can run the repos
 python scripts/audit_matter_cloud_folders.py <tenant-id>
 ```
 
-The report identifies matters with missing, provisioning, or duplicate provider bindings. It does not merge or delete folders.
+The report identifies matters with missing, provisioning, or duplicate provider bindings. It also includes a `storage_policy` section that explains a bound-but-unusable provider without performing provider I/O:
+
+- `needs_reauth` — the firm is bound to a provider but has no active credential for it. A signing or intake upload fails closed with a generic 503; reconnect the provider under [Integrations → Cloud](/admin?tab=integrations&integration=cloud) and retry.
+- `folders_unbound` — the provider is connected but one or more matters have no folder binding for it. The `unbound_matters` list names them; reprovision those folders in File Shares.
+- `ok` — the configured provider is connected and every matter folder is bound.
+
+The report never merges, deletes, or repairs folders, and it does not expose provider error text to clients.
 
 ## Retrieval and calendar checks
 

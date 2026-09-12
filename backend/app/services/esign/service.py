@@ -122,6 +122,31 @@ async def record_portal_decline(
     request.decline_reason = clean_reason
 
 
+def decline_event(request: SignatureRequest, matter: Matter) -> MatterEvent:
+    """Matter timeline entry for a portal decline.
+
+    The client action is attributed the same way a completion is: the staff
+    member who requested the signature, else the matter's responsible user. The
+    reason is included when the signer supplied one so the firm sees *why*
+    without opening the request.
+    """
+    label = request.source_document_filename or "document"
+    reason = (request.decline_reason or "").strip()
+    return MatterEvent(
+        tenant_id=matter.tenant_id,
+        matter_id=matter.id,
+        event_type="signature",
+        title=f"Signature declined: {label}",
+        content=(
+            f"The client declined to sign {label}."
+            + (f" Reason: {reason}." if reason else "")
+            + " The intake packet stays open; revise the document and resend it."
+        ),
+        note_type="system",
+        created_by=request.created_by_user_id or matter.user_id,
+    )
+
+
 async def complete_request_if_done(
     db: AsyncSession,
     request: SignatureRequest,
@@ -171,7 +196,6 @@ async def complete_request_if_done(
     evidence_sha256 = hashlib.sha256(
         json.dumps(evidence_payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    request.evidence_sha256 = evidence_sha256
     content, _suggested_filename, content_type = build_certificate(
         matter_name=matter.matter_name,
         document_name=document_name or "document",
@@ -181,11 +205,11 @@ async def complete_request_if_done(
         evidence_sha256=evidence_sha256,
         positioned_fields=getattr(request, "positioned_fields", None) or [],
     )
-    request.completion_artifact_sha256 = hashlib.sha256(content).hexdigest()
+    artifact_sha256 = hashlib.sha256(content).hexdigest()
     filename = immutable_certificate_filename(
         document_name=document_name or "document",
         request_id=str(request.id),
-        artifact_sha256=request.completion_artifact_sha256,
+        artifact_sha256=artifact_sha256,
         content_type=content_type,
     )
     # Token refresh can commit its session. Keep it separate from uncommitted
@@ -206,6 +230,11 @@ async def complete_request_if_done(
         raise HTTPException(
             503, "Signing evidence could not be stored. Please retry signing."
         )
+    # Bind the evidence hashes only once the bytes are durable. A failed upload
+    # must leave the request byte-for-byte as the client's signature left it so
+    # a retry cannot observe a half-completed certificate.
+    request.evidence_sha256 = evidence_sha256
+    request.completion_artifact_sha256 = artifact_sha256
     signed_doc = MatterDocument(
         id=uuid.uuid4(),
         tenant_id=matter.tenant_id,

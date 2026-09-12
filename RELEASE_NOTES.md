@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.11 — Declined signatures and resilient signing
+
+Released September 11, 2026.
+
+When a client declines to sign, the matter shows it and the follow-up stops. A signature is not lost if file storage is briefly unavailable, and moving around a matter no longer hits the rate limit.
+
+- **Declines reach the matter.** The decline and the client's reason appear on the matter timeline, the chase task closes, and the paperwork drawer marks the form declined.
+- **Signatures survive a storage outage.** If cloud storage is briefly unavailable, the client's typed signature is kept and the request finishes on retry without asking them to sign again.
+- **Smoother matter navigation.** Opening and moving around a matter no longer trips the rate limit that briefly blocked dashboard, documents, messages and tasks.
+
 ## 2026.09.11.10 — Prepare paperwork from a firm template
 
 Released September 11, 2026.

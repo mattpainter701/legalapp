@@ -19,6 +19,18 @@ class _Db:
     async def execute(self, _statement): return _Rows(self.matters)
 
 
+class _QueuedDb:
+    """Answers scalar/execute calls in the order bound_storage_readiness makes them."""
+
+    def __init__(self, tenant, configured, credentials, matters):
+        self._scalars = [tenant, configured]
+        self._executes = [_Rows(credentials), _Rows(matters)]
+
+    async def scalar(self, _statement): return self._scalars.pop(0)
+
+    async def execute(self, _statement): return self._executes.pop(0)
+
+
 def _matter(matter_id="12345678-aaaa-bbbb-cccc-123456789abc"):
     return SimpleNamespace(
         id=matter_id, matter_name="Acme v Beta", slug="acme-v-beta",
@@ -129,3 +141,74 @@ async def test_audit_provider_http_failure_is_not_an_empty_success(monkeypatch, 
 async def test_audit_rejects_missing_roots(provider):
     with pytest.raises(RuntimeError, match='missing|incomplete'):
         await audit._list_children(provider, 'token', {})
+
+
+def _bound_matter(binding=None):
+    return SimpleNamespace(
+        id="12345678-aaaa-bbbb-cccc-123456789abc",
+        matter_name="Acme v Beta",
+        slug="acme-v-beta",
+        cloud_folder=({} if binding is None else {"onedrive": binding}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_a_bound_provider_without_an_active_credential():
+    tenant = SimpleNamespace(id=TENANT_ID)
+    db = _QueuedDb(
+        tenant,
+        "onedrive",
+        [("google", True)],
+        [_bound_matter({"matter_folder_id": "bound"})],
+    )
+
+    result = await audit.bound_storage_readiness(db, TENANT_ID)
+
+    assert result["status"] == "needs_reauth"
+    assert result["credential_active"] is False
+    assert "Reconnect Microsoft OneDrive" in result["reason"]
+    assert result["mutations_performed"] is False
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_matters_missing_the_provider_binding():
+    tenant = SimpleNamespace(id=TENANT_ID)
+    db = _QueuedDb(
+        tenant,
+        "onedrive",
+        [("microsoft", True)],
+        [_bound_matter({"matter_folder_id": "bound"}), _bound_matter()],
+    )
+
+    result = await audit.bound_storage_readiness(db, TENANT_ID)
+
+    assert result["status"] == "folders_unbound"
+    assert result["bound_matter_folders"] == 1
+    assert [row["matter_slug"] for row in result["unbound_matters"]] == ["acme-v-beta"]
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_ok_when_connected_and_every_folder_bound():
+    tenant = SimpleNamespace(id=TENANT_ID)
+    db = _QueuedDb(
+        tenant,
+        "onedrive",
+        [("microsoft", True)],
+        [_bound_matter({"matter_folder_id": "bound"})],
+    )
+
+    result = await audit.bound_storage_readiness(db, TENANT_ID)
+
+    assert result["status"] == "ok"
+    assert result["unbound_matters"] == []
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_an_unconfigured_tenant():
+    tenant = SimpleNamespace(id=TENANT_ID)
+    db = _QueuedDb(tenant, None, [], [_bound_matter()])
+
+    result = await audit.bound_storage_readiness(db, TENANT_ID)
+
+    assert result["status"] == "unconfigured"
+    assert result["configured_provider"] is None

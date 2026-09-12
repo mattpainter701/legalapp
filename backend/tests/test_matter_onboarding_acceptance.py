@@ -13,6 +13,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from reportlab.pdfgen import canvas
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 
 from app.main import app
 from app.models.matter_document import MatterDocument
@@ -209,6 +210,17 @@ async def test_jane_doe_http_onboarding(
         }
         assert (await portal.post(sign_url, json=signing)).status_code == 503
         await db_session.rollback()
+        # The client's typed signature and consent are durable even though the
+        # evidence upload failed. The request stays open so a retry finishes
+        # without asking the client to sign a second time.
+        durable = await db_session.scalar(
+            select(SignatureRequest)
+            .options(selectinload(SignatureRequest.signers))
+            .where(SignatureRequest.id == uuid.UUID(fee["id"]))
+        )
+        assert durable.status == "sent"
+        assert durable.signers[0].status == "signed"
+        assert durable.signers[0].typed_signature == "Jane Doe"
         assert (
             ok(await portal.get("/api/portal/client/matter"))["paperwork_only"] is True
         )
