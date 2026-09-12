@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.12.3 — Answers keep running when you leave the chat
+## 2026.09.12.4 — Answers keep running when you leave the chat
 
 Released September 12, 2026.
 
@@ -13,6 +13,16 @@ A long answer no longer disappears when you open another part of LawHand while i
 
 - **Leave the chat without losing the answer.** Opening matters, invoices or any other screen mid-answer used to cancel it. The answer now finishes and is saved to the conversation.
 - **Pick the answer back up where it got to.** Reopen the conversation while it is still being written and the answer carries on in front of you instead of showing only your question.
+
+## 2026.09.12.3 — Matter folders carry the matter number; automations stay in scope
+
+Released September 12, 2026.
+
+New matter folders are named with the matter number instead of an internal ID. A workflow rule scoped to one kind of work no longer fires on every matter in its practice. An intake answer too long to store now reaches staff.
+
+- **Cloud folders are named with the matter number.** A new matter's folder reads Smith (CYBE0012) rather than an internal ID. Folders made before this keep their names and stay bound, and the audit recognises both.
+- **Automation rules stay inside the scope you set.** A rule scoped to Adoption no longer fires on divorces, or Chapter 7 on Chapter 13. A rule scoped to a whole practice, like Family Law, still covers every matter in it.
+- **An answer too long to store is reported, not dropped.** When a client's answer is longer than the field holds, the review task names it and says how long it is, instead of leaving the field quietly empty.
 
 ## 2026.09.12.2 — Bills you can correct, send, and settle from trust
 

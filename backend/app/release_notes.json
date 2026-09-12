@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.09.12.3",
-      "version": "2026.09.12.3",
+      "id": "2026.09.12.4",
+      "version": "2026.09.12.4",
       "title": "Answers keep running when you leave the chat",
       "published_at": "2026-09-12",
       "summary": "A long answer no longer disappears when you open another part of LawHand while it is being written. It keeps going, and it is there when you come back to the conversation.",
@@ -15,6 +15,27 @@
         {
           "title": "Pick the answer back up where it got to",
           "description": "Reopen the conversation while it is still being written and the answer carries on in front of you instead of showing only your question."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.12.3",
+      "version": "2026.09.12.3",
+      "title": "Matter folders carry the matter number; automations stay in scope",
+      "published_at": "2026-09-12",
+      "summary": "New matter folders are named with the matter number instead of an internal ID. A workflow rule scoped to one kind of work no longer fires on every matter in its practice. An intake answer too long to store now reaches staff.",
+      "highlights": [
+        {
+          "title": "Cloud folders are named with the matter number",
+          "description": "A new matter's folder reads Smith (CYBE0012) rather than an internal ID. Folders made before this keep their names and stay bound, and the audit recognises both."
+        },
+        {
+          "title": "Automation rules stay inside the scope you set",
+          "description": "A rule scoped to Adoption no longer fires on divorces, or Chapter 7 on Chapter 13. A rule scoped to a whole practice, like Family Law, still covers every matter in it."
+        },
+        {
+          "title": "An answer too long to store is reported, not dropped",
+          "description": "When a client's answer is longer than the field holds, the review task names it and says how long it is, instead of leaving the field quietly empty."
         }
       ]
     },
