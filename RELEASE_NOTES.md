@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.12.3 — Answers keep running when you leave the chat
+
+Released September 12, 2026.
+
+A long answer no longer disappears when you open another part of LawHand while it is being written. It keeps going, and it is there when you come back to the conversation.
+
+- **Leave the chat without losing the answer.** Opening matters, invoices or any other screen mid-answer used to cancel it. The answer now finishes and is saved to the conversation.
+- **Pick the answer back up where it got to.** Reopen the conversation while it is still being written and the answer carries on in front of you instead of showing only your question.
+
 ## 2026.09.12.2 — Bills you can correct, send, and settle from trust
 
 Released September 12, 2026.
