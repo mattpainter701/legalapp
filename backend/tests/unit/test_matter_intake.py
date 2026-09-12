@@ -220,6 +220,9 @@ def ctx(monkeypatch):
 
 
 def start_body(c, **overrides):
+    # These tests exercise the legacy question list, which now has to be
+    # switched on explicitly: the questionnaire defaults to a firm-supplied PDF.
+    overrides.setdefault("include_questionnaire", True)
     return IntakeStart(
         email=c.contact.email,
         channels=["email"],
@@ -1039,3 +1042,126 @@ async def test_preview_route_renders_the_exact_message_without_sending(
     assert c.packet.delivery == {}
     s.send_client_email.assert_not_awaited()
     s.send_sms.assert_not_awaited()
+
+
+def test_questionnaire_is_off_by_default_and_questions_stay_supported():
+    body = IntakeStart(
+        email="a@example.com",
+        channels=["email"],
+        confirm_send=True,
+        selected_documents=[{"document_id": uuid.uuid4(), "label": "Questionnaire"}],
+    )
+    assert body.include_questionnaire is False
+    assert body.questions == []
+    legacy = IntakeStart(
+        email="a@example.com",
+        channels=["email"],
+        confirm_send=True,
+        include_questionnaire=True,
+        questions=[{"key": "x", "label": "x"}],
+    )
+    assert legacy.include_questionnaire is True
+
+
+def test_client_packet_view_shows_review_and_decline_state(ctx):
+    c = ctx
+    c.packet.requirements = {
+        **c.packet.requirements,
+        "fee_agreement": {
+            "completed": False,
+            "submitted_document_id": "doc-1",
+            "submitted_at": TIME.isoformat(),
+            "declined": True,
+            "declined_at": TIME.isoformat(),
+            "decline_reason": "Wrong fee",
+            "internal_note": "never shown",
+        },
+    }
+    shown = s.public_packet(c.packet, client=True)["requirements"]["fee_agreement"]
+    assert shown["submitted_document_id"] == "doc-1"
+    assert shown["submitted_at"] == TIME.isoformat()
+    assert shown["declined"] is True
+    assert shown["declined_at"] == TIME.isoformat()
+    assert shown["decline_reason"] == "Wrong fee"
+    assert "internal_note" not in shown
+
+
+@pytest.mark.asyncio
+async def test_reconcile_mirrors_an_uploaded_copy_until_staff_decide(ctx):
+    c = ctx
+    uploaded = uuid.uuid4()
+    c.signature.submitted_document_id = uploaded
+    c.signature.submitted_at = TIME
+    c.signature.status = "partially_signed"
+
+    await s.mirror_submissions(c.db, c.packet)
+    agreement = c.packet.requirements["fee_agreement"]
+    assert agreement["submitted_document_id"] == str(uploaded)
+    assert agreement["submitted_at"] == TIME.isoformat()
+    assert agreement["completed"] is False
+
+    # Rejected: the request no longer carries a submission, so neither does
+    # the requirement.
+    c.signature.submitted_document_id = None
+    c.signature.submitted_at = None
+    await s.mirror_submissions(c.db, c.packet)
+    agreement = c.packet.requirements["fee_agreement"]
+    assert "submitted_document_id" not in agreement
+    assert "submitted_at" not in agreement
+
+
+@pytest.mark.asyncio
+async def test_start_plans_signature_placements_on_the_agreement(ctx, monkeypatch):
+    c = ctx
+    planned = []
+
+    def plan(request, content, *, signers, placements, required_roles=None):
+        planned.append((content, [s_.role for s_ in signers], placements))
+        request.positioned_fields = [{"field_id": "auto:sig:1"}]
+        request.signing_plan = {"signature_fields_count": 1}
+
+    monkeypatch.setattr("app.services.esign.plan.plan_request_placements", plan)
+    c.db.rows[s.MatterIntake] = None
+    await s.start_packet(
+        c.db, c.user, c.matter, start_body(c), "Fee agreement.pdf", b"%PDF-reviewed"
+    )
+    request = c.db.rows[s.SignatureRequest]
+    assert planned == [(b"%PDF-reviewed", ["signer"], [])]
+    assert request.positioned_fields == [{"field_id": "auto:sig:1"}]
+    assert request.signing_plan == {"signature_fields_count": 1}
+
+
+@pytest.mark.asyncio
+async def test_start_keeps_signing_possible_when_staff_placements_are_stale(
+    ctx, monkeypatch
+):
+    from app.services.esign.placement import PlacementError
+
+    c = ctx
+    calls = []
+
+    def plan(request, content, *, signers, placements, required_roles=None):
+        calls.append(placements)
+        if placements:
+            raise PlacementError("stale")
+        request.positioned_fields = None
+        request.signing_plan = {"placement_source": "fallback"}
+
+    monkeypatch.setattr("app.services.esign.plan.plan_request_placements", plan)
+    document = s.MatterDocument(
+        id=uuid.uuid4(),
+        tenant_id=c.user.tenant_id,
+        matter_id=c.matter.id,
+        filename="Agreement.pdf",
+        positioned_fields=[{"field_id": "x", "role": "client"}],
+    )
+    c.db.rows[s.MatterDocument] = document
+    c.db.rows[s.MatterIntake] = None
+    body = start_body(c, agreement_document_id=document.id)
+    await s.start_packet(
+        c.db, c.user, c.matter, body, "Agreement.pdf", b"%PDF-reviewed"
+    )
+    assert calls == [[{"field_id": "x", "role": "signer"}], []]
+    assert c.db.rows[s.SignatureRequest].signing_plan == {
+        "placement_source": "fallback"
+    }

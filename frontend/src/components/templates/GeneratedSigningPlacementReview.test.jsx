@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import GeneratedSigningPlacementReview from './GeneratedSigningPlacementReview'
 
-const state = vi.hoisted(() => ({ rotation: 0 }))
+const state = vi.hoisted(() => ({ rotation: 0, width: 612, height: 792 }))
 vi.mock('./PdfDocumentCanvas', async () => {
   const { useEffect } = await import('react')
   const viewport = { viewBox: [0, 0, 612, 792], width: 550.8, height: 712.8,
@@ -10,7 +10,7 @@ vi.mock('./PdfDocumentCanvas', async () => {
     convertToPdfPoint: (x, y) => [x / .9, 792 - y / .9],
   }
   return {
-    useTemplatePdfDocument: () => ({ document: {}, pages: [{ page: 1, width: 612, height: 792, rotation: state.rotation }], error: '' }),
+    useTemplatePdfDocument: () => ({ document: {}, pages: [{ page: 1, width: state.width, height: state.height, rotation: state.rotation }], error: '' }),
     PdfPageCanvas: ({ onViewport }) => { useEffect(() => { onViewport(viewport) }, [onViewport]); return <div>Final PDF</div> },
   }
 })
@@ -18,6 +18,8 @@ vi.mock('react-rnd', () => ({ Rnd: ({ children, onDragStop, position }) => <div>
 
 beforeEach(() => {
   state.rotation = 0
+  state.width = 612
+  state.height = 792
   vi.stubGlobal('crypto', { subtle: { digest: vi.fn(async () => new Uint8Array(32).fill(10).buffer) }, randomUUID: () => 'field-id' })
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -44,9 +46,20 @@ describe('GeneratedSigningPlacementReview', () => {
     state.rotation = 90
     render(<GeneratedSigningPlacementReview source={source} signerRoles={['client']} initialFields={initial} onChange={onChange} />)
     await screen.findByText(/The final PDF is verified/)
-    expect(screen.getByRole('alert')).toHaveTextContent('unrotated US Letter')
+    expect(screen.getByRole('alert')).toHaveTextContent('Only unrotated PDF pages')
     fireEvent.click(screen.getByRole('button', { name: 'Add signature for client' }))
     expect(onChange.mock.lastCall[0]).toEqual([])
+  })
+
+  it('places fields on a page that is not US Letter', async () => {
+    const onChange = vi.fn()
+    state.width = 595.3
+    state.height = 841.9
+    render(<GeneratedSigningPlacementReview source={source} signerRoles={['client']} onChange={onChange} />)
+    await screen.findByText(/The final PDF is verified/)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Add signature for client' }))
+    expect(onChange.mock.lastCall[0][0]).toMatchObject({ role: 'client', field_type: 'signature', page_width: 595.3, page_height: 841.9 })
   })
 
   it('reports a failed digest instead of leaving stale actionable fields', async () => {

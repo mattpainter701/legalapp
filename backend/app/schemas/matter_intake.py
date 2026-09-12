@@ -34,7 +34,9 @@ class IntakeStart(BaseModel):
     upload_requirements: list[IntakeUploadRequirement] = Field(
         default_factory=list, max_length=30
     )
-    include_questionnaire: bool = True
+    # The questionnaire is now a PDF the firm supplies as a selected document;
+    # the free-text question list stays supported for older clients.
+    include_questionnaire: bool = False
     agreement_due_at: datetime | None = None
     questionnaire_due_at: datetime | None = None
     portal_after_signing: bool = False

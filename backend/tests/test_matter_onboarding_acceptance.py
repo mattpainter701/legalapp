@@ -151,6 +151,9 @@ async def test_jane_doe_http_onboarding(
                 "requires_signature": True,
             }
         ],
+        # This journey walks the legacy free-text questionnaire, which is now
+        # opt-in: a firm normally sends its own questionnaire PDF instead.
+        "include_questionnaire": True,
         "questions": [{"key": "summary", "label": "Describe your matter"}],
         "upload_requirements": [
             {"key": "upload_records", "label": "Marriage certificate"}
@@ -208,7 +211,14 @@ async def test_jane_doe_http_onboarding(
             "typed_signature": "Jane Doe",
             "consent_to_electronic_signature": True,
         }
-        assert (await portal.post(sign_url, json=signing)).status_code == 503
+        # A storage outage is the firm's problem, not the client's: the
+        # signature is accepted and recorded, and the client is told the signed
+        # copy is being filed rather than shown a failure they cannot act on.
+        pending = ok(await portal.post(sign_url, json=signing))
+        assert pending["completion_pending"] is True
+        assert pending["status"] == "partially_signed"
+        # The error names the firm's storage provider, so the portal never sees it.
+        assert pending["completion_error"] is None
         await db_session.rollback()
         # The client's typed signature and consent are durable even though the
         # evidence upload failed. The request stays open so a retry finishes
@@ -218,9 +228,11 @@ async def test_jane_doe_http_onboarding(
             .options(selectinload(SignatureRequest.signers))
             .where(SignatureRequest.id == uuid.UUID(fee["id"]))
         )
-        assert durable.status == "sent"
+        assert durable.status == "partially_signed"
         assert durable.signers[0].status == "signed"
         assert durable.signers[0].typed_signature == "Jane Doe"
+        # Staff see why the signed copy has not landed yet.
+        assert "Storage unavailable" in (durable.completion_error or "")
         assert (
             ok(await portal.get("/api/portal/client/matter"))["paperwork_only"] is True
         )

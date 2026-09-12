@@ -129,8 +129,8 @@ The Phase 2/3 code is not dead weight; it is the delivery half of the product, b
 the template model that could use it.
 
 **Step 5a — DOCX→PDF conversion.** There is none today. `document_export.py` converts markdown
-to PDF and markdown to DOCX, but nothing converts a *filled Word document*. E-signature submits
-`application/pdf` (`esign/dropbox_sign.py:44`), so a document generated from a Word template
+to PDF and markdown to DOCX, but nothing converts a *filled Word document*. E-signature requires
+a PDF source (`routers/esignature.py`), so a document generated from a Word template
 cannot currently be signed, filed, or delivered as a client-ready PDF. The Phase 3 isolation
 profile already declares the `converter`, `rasterizer`, `font_pack`, and `validator` needed, in
 a sandbox with no shell and no network. Wiring it up closes the biggest remaining hole in the
