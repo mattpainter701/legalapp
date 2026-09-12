@@ -14,6 +14,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import get_settings
 from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user, require_admin
 from app.models.billing import TimeEntry, Expense, Invoice, Payment
@@ -91,6 +92,7 @@ from app.services.matter_number import (
     normalize_matter_number,
 )
 
+settings = get_settings()
 _cloud_search = CloudSearchService()
 _cloud_sync = CloudSyncService()
 matter_context_cache_manager = ExpertiseCacheManager()
@@ -243,6 +245,9 @@ async def _build_matter_cloud_files_response(
             tenant_id=tenant_id_str,
             user_id=str(user_id),
             matter_cloud_folder=matter.cloud_folder,
+            # The matter page waits on this panel, so a partial list now beats
+            # a complete one after the whole page has stalled behind it.
+            budget_seconds=settings.CLOUD_SEARCH_UI_BUDGET_SECONDS,
         )
     except Exception:
         logger.warning(
