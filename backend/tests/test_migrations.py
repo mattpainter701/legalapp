@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["175_document_template_sets"]
+    assert heads == ["176_intake_optional_agreement"]
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():

@@ -115,9 +115,11 @@ it('carries deadlines set at matter creation into the intake request', () => {
   expect(options.upload_requirements[0].due_at).toBe('2026-10-09T17:00:00.000Z')
 })
 
-it('drops the questionnaire deadline when no questionnaire is sent', () => {
+it('drops the questionnaire and its deadline when no questionnaire is sent', () => {
   const options = intakeOptions({
     ...defaultIntakeSetup, timezone: 'UTC', include_questionnaire: false, questionnaire_due: '2026-10-05',
   }, 'jane@example.com')
   expect(options.questionnaire_due_at).toBeNull()
+  // The old payload still sent the questions after the box was unchecked.
+  expect(options.questions).toEqual([])
 })

@@ -431,6 +431,7 @@ async def get_client_portal_context(
     paperwork_only = bool(
         packet
         and packet.config.get("portal_after_signing")
+        and "fee_agreement" in packet.requirements
         and not packet.requirements.get("fee_agreement", {}).get("completed")
     )
     # The packet is the grant for its own paperwork. A matter can hold live
@@ -440,7 +441,7 @@ async def get_client_portal_context(
     document_ids = []
     if packet is not None:
         signature_ids = [
-            str(packet.signature_id),
+            *([str(packet.signature_id)] if packet.signature_id else []),
             *[
                 item["signature_id"]
                 for item in packet.requirements.values()
@@ -452,11 +453,15 @@ async def get_client_portal_context(
             for item in packet.requirements.values()
             if item.get("document_id")
         ]
-        fee_document = await db.scalar(
-            select(SignatureRequest.document_id).where(
-                SignatureRequest.id == packet.signature_id,
-                SignatureRequest.tenant_id == tenant_id,
+        fee_document = (
+            await db.scalar(
+                select(SignatureRequest.document_id).where(
+                    SignatureRequest.id == packet.signature_id,
+                    SignatureRequest.tenant_id == tenant_id,
+                )
             )
+            if packet.signature_id
+            else None
         )
         if fee_document:
             document_ids.append(str(fee_document))

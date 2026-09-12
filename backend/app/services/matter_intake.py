@@ -69,7 +69,7 @@ def public_packet(packet, *, client=False):
         if packet.completed_at
         else None,
         "meeting": packet.meeting,
-        "signature_id": str(packet.signature_id),
+        "signature_id": str(packet.signature_id) if packet.signature_id else None,
         "signing_followup_due_at": packet.config.get("signing_followup_due_at"),
         # Deadlines are stated in the client's own timezone on both sides.
         "timezone": packet.config["timezone"],
@@ -322,7 +322,9 @@ async def start_packet(db, user, matter, body, filename, content):
         raise HTTPException(
             422, "Assign intake to an active staff member with matter access."
         )
-    if not content.startswith(b"%PDF-") or len(content) > MAX_AGREEMENT_BYTES:
+    if content and (
+        not content.startswith(b"%PDF-") or len(content) > MAX_AGREEMENT_BYTES
+    ):
         raise HTTPException(
             422, "Upload the reviewed fee agreement as a PDF up to 20 MiB."
         )
@@ -388,82 +390,90 @@ async def start_packet(db, user, matter, body, filename, content):
             )
             contact.sms_opt_in = True
             contact.sms_opt_in_at = consent.consented_at
-    if body.agreement_document_id:
-        document = await db.scalar(
-            select(MatterDocument).where(
-                MatterDocument.id == body.agreement_document_id,
-                MatterDocument.tenant_id == user.tenant_id,
-                MatterDocument.matter_id == matter.id,
+    document = None
+    signature = None
+    # An agreement is optional: a packet may carry only the questionnaire, the
+    # intake form, or requested uploads. The portal invite below is created
+    # either way, so the client can always reach that paperwork.
+    if content:
+        if body.agreement_document_id:
+            document = await db.scalar(
+                select(MatterDocument).where(
+                    MatterDocument.id == body.agreement_document_id,
+                    MatterDocument.tenant_id == user.tenant_id,
+                    MatterDocument.matter_id == matter.id,
+                )
             )
-        )
-        if document is None:
-            raise HTTPException(404, "Fee agreement not found")
-        if document.signing_placement_required or document.positioned_fields:
-            raise HTTPException(
-                422, "Positioned signing fields require the document signing workflow"
+            if document is None:
+                raise HTTPException(404, "Fee agreement not found")
+            if document.signing_placement_required or document.positioned_fields:
+                raise HTTPException(
+                    422,
+                    "Positioned signing fields require the document signing workflow",
+                )
+            # The packet entitles its own recipient to read this agreement. A
+            # matter-wide visibility bit would hand it to every other live invite.
+        else:
+            stored = await store_file(
+                user.tenant_id,
+                matter,
+                f"intake-{packet_id}.pdf",
+                content,
+                "application/pdf",
             )
-        # The packet entitles its own recipient to read this agreement. A
-        # matter-wide visibility bit would hand it to every other live invite.
-    else:
-        stored = await store_file(
-            user.tenant_id,
-            matter,
-            f"intake-{packet_id}.pdf",
-            content,
-            "application/pdf",
-        )
-        if not stored.succeeded:
-            raise HTTPException(
-                503, "Agreement storage is unavailable. Reconnect storage and retry."
+            if not stored.succeeded:
+                raise HTTPException(
+                    503,
+                    "Agreement storage is unavailable. Reconnect storage and retry.",
+                )
+            document = MatterDocument(
+                id=uuid.uuid4(),
+                tenant_id=user.tenant_id,
+                matter_id=matter.id,
+                uploaded_by_user_id=user.id,
+                filename=filename[:250],
+                content_type="application/pdf",
+                file_size=len(content),
+                document_category="contract",
+                storage_path=stored.storage_path,
+                storage_provider=stored.provider,
+                storage_backend=stored.backend,
+                provider_object_id=stored.provider_item_id,
+                provider_drive_id=stored.drive_id,
+                provider_parent_id=stored.parent_id,
             )
-        document = MatterDocument(
+            db.add(document)
+            await db.flush()
+        signature = SignatureRequest(
             id=uuid.uuid4(),
             tenant_id=user.tenant_id,
             matter_id=matter.id,
-            uploaded_by_user_id=user.id,
-            filename=filename[:250],
-            content_type="application/pdf",
-            file_size=len(content),
-            document_category="contract",
-            storage_path=stored.storage_path,
-            storage_provider=stored.provider,
-            storage_backend=stored.backend,
-            provider_object_id=stored.provider_item_id,
-            provider_drive_id=stored.drive_id,
-            provider_parent_id=stored.parent_id,
+            document_id=document.id,
+            status="sent",
+            provider="internal",
+            source_document_sha256=hashlib.sha256(content).hexdigest(),
+            source_document_size=len(content),
+            source_document_filename=document.filename,
+            created_by_user_id=user.id,
+            sent_at=now(),
+            expires_at=now() + timedelta(days=30),
+            reminders={},
         )
-        db.add(document)
+        db.add(signature)
         await db.flush()
-    signature = SignatureRequest(
-        id=uuid.uuid4(),
-        tenant_id=user.tenant_id,
-        matter_id=matter.id,
-        document_id=document.id,
-        status="sent",
-        provider="internal",
-        source_document_sha256=hashlib.sha256(content).hexdigest(),
-        source_document_size=len(content),
-        source_document_filename=document.filename,
-        created_by_user_id=user.id,
-        sent_at=now(),
-        expires_at=now() + timedelta(days=30),
-        reminders={},
-    )
-    db.add(signature)
-    await db.flush()
-    db.add(
-        SignatureSigner(
-            id=uuid.uuid4(),
-            tenant_id=user.tenant_id,
-            request_id=signature.id,
-            contact_id=contact.id,
-            name=contact.display_name or str(body.email),
-            email=str(body.email),
-            role="signer",
-            sign_order=0,
-            status="pending",
+        db.add(
+            SignatureSigner(
+                id=uuid.uuid4(),
+                tenant_id=user.tenant_id,
+                request_id=signature.id,
+                contact_id=contact.id,
+                name=contact.display_name or str(body.email),
+                email=str(body.email),
+                role="signer",
+                sign_order=0,
+                status="pending",
+            )
         )
-    )
     token = secrets.token_urlsafe(32)
     invite = ClientPortalInvite(
         id=uuid.uuid4(),
@@ -484,20 +494,32 @@ async def start_packet(db, user, matter, body, filename, content):
         contact_id=contact.id,
         owner_id=owner_id,
         created_by=user.id,
-        signature_id=signature.id,
+        signature_id=signature.id if signature else None,
         invite_id=invite.id,
         encrypted_invite=encrypt_token(token),
         status="awaiting_documents",
         config={
             **body.model_dump(mode="json"),
             "request_hash": request_hash,
-            "source_sha256": signature.source_document_sha256,
+            # An agreement-confirming signature only exists when one was sent;
+            # without it the client gets full portal access from the first
+            # message instead of waiting on a signing milestone.
+            "portal_after_signing": body.portal_after_signing and signature is not None,
+            **(
+                {"source_sha256": signature.source_document_sha256} if signature else {}
+            ),
         },
         requirements={
-            "fee_agreement": {
-                "completed": False,
-                "due_at": due_iso(body.agreement_due_at),
-            },
+            **(
+                {
+                    "fee_agreement": {
+                        "completed": False,
+                        "due_at": due_iso(body.agreement_due_at),
+                    }
+                }
+                if signature
+                else {}
+            ),
             "questionnaire": {
                 "completed": not body.include_questionnaire,
                 "required": body.include_questionnaire,
@@ -592,7 +614,7 @@ async def start_packet(db, user, matter, body, filename, content):
         db,
         packet,
         "Intake started",
-        "Fee agreement and questionnaire requested; portal delivery queued.",
+        "Client paperwork requested; portal delivery queued.",
     )
     await db.commit()
     return packet
@@ -607,12 +629,14 @@ async def cancel_packet(db, packet, reason):
     ]
     for kind in ("documents", "scheduling", "delivery", "signed", *dated):
         await close_task(db, packet, kind, reason)
-    signature = await db.scalar(
-        select(SignatureRequest).where(
-            SignatureRequest.id == packet.signature_id,
-            SignatureRequest.tenant_id == packet.tenant_id,
+    signature = None
+    if packet.signature_id:
+        signature = await db.scalar(
+            select(SignatureRequest).where(
+                SignatureRequest.id == packet.signature_id,
+                SignatureRequest.tenant_id == packet.tenant_id,
+            )
         )
-    )
     if signature and signature.status not in ("completed", "voided"):
         signature.status = "voided"
         signature.voided_at = now()
@@ -657,18 +681,20 @@ async def reconcile(db, packet):
         return
     if packet.status == "scheduled":
         return
-    signature = await db.scalar(
-        select(SignatureRequest).where(
-            SignatureRequest.id == packet.signature_id,
-            SignatureRequest.tenant_id == packet.tenant_id,
-            SignatureRequest.matter_id == packet.matter_id,
+    signature = None
+    if packet.signature_id:
+        signature = await db.scalar(
+            select(SignatureRequest).where(
+                SignatureRequest.id == packet.signature_id,
+                SignatureRequest.tenant_id == packet.tenant_id,
+                SignatureRequest.matter_id == packet.matter_id,
+            )
         )
-    )
     if (
         signature
         and signature.status == "completed"
         and signature.completed_at
-        and signature.source_document_sha256 == packet.config["source_sha256"]
+        and signature.source_document_sha256 == packet.config.get("source_sha256")
         and signature.completion_artifact_sha256
     ):
         try:
@@ -686,13 +712,14 @@ async def reconcile(db, packet):
             if artifact_id
             else None
         )
-        if artifact and not packet.requirements["fee_agreement"]["completed"]:
+        fee_requirement = packet.requirements.get("fee_agreement")
+        if artifact and fee_requirement and not fee_requirement["completed"]:
             packet.requirements = {
                 **packet.requirements,
                 "fee_agreement": {
                     # Keep the requirement's own fields, its due date among
                     # them, so its follow-up task can be closed on completion.
-                    **packet.requirements["fee_agreement"],
+                    **fee_requirement,
                     "completed": True,
                     "completed_at": signature.completed_at.isoformat(),
                     "evidence": "signature_acknowledgment_certificate",
@@ -737,9 +764,10 @@ async def reconcile(db, packet):
                     "completed_at": extra.completed_at.isoformat(),
                 },
             }
-    agreement = packet.requirements["fee_agreement"]
+    agreement = packet.requirements.get("fee_agreement")
     if (
-        packet.config.get("portal_after_signing")
+        agreement
+        and packet.config.get("portal_after_signing")
         and agreement["completed"]
         and not packet.config.get("signing_followup_due_at")
     ):
@@ -755,6 +783,24 @@ async def reconcile(db, packet):
             packet,
             "Fee agreement signed",
             "Portal delivery queued. Follow up with the client within 24 hours.",
+        )
+    elif (
+        agreement is None
+        and packet.sent_at
+        and not packet.config.get("signing_followup_due_at")
+    ):
+        # No fee agreement to wait on: the clock starts when the first message
+        # goes out, so the firm still follows up with the client within 24 hours.
+        due = packet.sent_at + timedelta(hours=24)
+        await ensure_task(
+            db, packet, "signed", "Paperwork sent — follow up with client", due
+        )
+        packet.config = {**packet.config, "signing_followup_due_at": due.isoformat()}
+        event(
+            db,
+            packet,
+            "Client paperwork sent",
+            "No fee agreement included. Follow up with the client within 24 hours.",
         )
     # Each dated requirement carries its own assigned follow-up. The task is
     # keyed by requirement, so a reconcile pass never duplicates it, and the
@@ -864,9 +910,17 @@ def message(packet, kind, url):
             f"{records} Secure paperwork link: {url}. Your general client portal link will follow after the fee agreement is signed.",
         )
     if kind == "welcome":
+        # No fee agreement to wait on: the portal is open now, so the message
+        # names the records to have ready and nothing about signing.
+        records = requested_upload_labels(packet)
+        records_text = (
+            f" Please have these records ready to upload: {', '.join(records)}."
+            if records
+            else ""
+        )
         return (
             "Welcome — complete your intake",
-            f"Please review and sign your fee agreement and complete your questionnaire in your secure client portal: {url}",
+            f"Please complete your paperwork in your secure client portal: {url}.{records_text}",
         )
     if kind == "reminder":
         missing = [

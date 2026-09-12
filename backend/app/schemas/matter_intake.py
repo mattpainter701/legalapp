@@ -57,6 +57,15 @@ class IntakeStart(BaseModel):
             raise ValueError("Choose a valid client timezone") from exc
         if self.include_questionnaire and not self.questions:
             raise ValueError("Add at least one questionnaire question")
+        if not (
+            self.agreement_document_id
+            or self.include_questionnaire
+            or self.selected_documents
+            or self.upload_requirements
+        ):
+            raise ValueError(
+                "Choose at least one document, the questionnaire, or a requested upload"
+            )
         if len({q.key for q in self.questions}) != len(self.questions):
             raise ValueError("Question keys must be unique")
         if len(set(self.channels)) != len(self.channels):

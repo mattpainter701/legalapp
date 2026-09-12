@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.11.11",
+      "version": "2026.09.11.11",
+      "title": "Send any of the three standard pieces",
+      "published_at": "2026-09-11",
+      "summary": "Start this case now lists the fee agreement, questionnaire, and client intake form together, fills the questionnaire with the matter type's own questions, and can send any subset.",
+      "highlights": [
+        {
+          "title": "The three common pieces, side by side",
+          "description": "The fee agreement, client questionnaire, and client intake form are each listed and selectable, so a firm can send one, two, or all three."
+        },
+        {
+          "title": "A fee agreement is now optional",
+          "description": "Send only the questionnaire or requested uploads when no agreement is needed. Signing still opens the portal when an agreement goes out."
+        },
+        {
+          "title": "Questions match the matter type",
+          "description": "The questionnaire starts with the standard questions for the matter type, and the upload hint shows examples for that practice instead of one generic list."
+        }
+      ]
+    },
+    {
       "id": "2026.09.11.10",
       "version": "2026.09.11.10",
       "title": "Prepare paperwork from a firm template",

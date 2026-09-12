@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FileText, LibraryBig, X } from 'lucide-react'
 import { getIntakeStarterPack, getMatterDocuments, uploadMatterDocument } from '../../api'
 import { startMatterIntake } from '../MatterIntakePanel'
@@ -10,6 +10,12 @@ const STEPS = ['Documents', 'Deadlines', 'Send']
 const field = 'block w-full rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink focus:border-brand-accent focus:outline-none focus:ring-1 focus:ring-brand-accent'
 const label = 'block text-[12px] font-semibold uppercase tracking-wider text-brand-muted mb-1.5'
 const card = 'rounded-xl border border-brand-line bg-brand-bg-soft/40 p-4'
+const linkButton = 'inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-accent underline'
+
+// A neutral fallback when the matter type is unknown; the real examples come
+// from the matter's own starter pack so a criminal or bankruptcy matter never
+// sees family-law records as the hint.
+const FALLBACK_UPLOAD_HINT = 'The client intake form\nRecent statements'
 
 function isPdf(document) {
   return document.content_type === 'application/pdf' || document.filename?.toLowerCase().endsWith('.pdf')
@@ -67,14 +73,22 @@ export default function PaperworkDrawer({
   const [agreementFile, setAgreementFile] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [pack, setPack] = useState(null)
   const [packNote, setPackNote] = useState('')
   const [attachedDocuments, setAttachedDocuments] = useState([])
   // Which card opened the firm-template picker: the document it saves becomes
-  // the fee agreement or an additional signing form accordingly.
+  // the fee agreement, the intake form, or an additional signing form.
   const [pickerTarget, setPickerTarget] = useState(null)
   const [uploadingForm, setUploadingForm] = useState(false)
+  const [uploadingIntake, setUploadingIntake] = useState(false)
+  // The standard pack is seeded once, and only while the firm has not touched
+  // the questions or uploads: an in-flight load must never overwrite a reply.
+  const touched = useRef(false)
 
-  const set = (key, value) => setDraft(previous => ({ ...previous, [key]: value }))
+  const set = (key, value) => {
+    touched.current = true
+    setDraft(previous => ({ ...previous, [key]: value }))
+  }
 
   // Documents prepared from a firm template or uploaded here are saved to the
   // matter and land in this list; merge them with the ones the matter already
@@ -95,6 +109,34 @@ export default function PaperworkDrawer({
     if (!clientEmail) return
     setDraft(previous => (previous.email ? previous : { ...previous, email: clientEmail }))
   }, [clientEmail])
+
+  // The three common pieces are the fee agreement, the questionnaire, and the
+  // intake form. The questionnaire starts on the matter type's own questions
+  // rather than the generic default, so "Start this case" is not generic.
+  useEffect(() => {
+    let active = true
+    async function loadPack() {
+      try {
+        const value = await getIntakeStarterPack(
+          matterId ? { matter_id: matterId } : { matter_type: matterType, practice_area: practiceArea },
+        )
+        if (!active || !value) return
+        setPack(value)
+        if (touched.current) return
+        setDraft(previous => ({
+          ...previous,
+          questions: value.questions.map(question => question.label).join('\n') || previous.questions,
+          uploads: value.upload_requirements.map(upload => upload.label).join('\n'),
+        }))
+        setPackNote(`Loaded the ${value.practice_label} questions and requested uploads. Review them before sending.`)
+      } catch {
+        // Keep the generic defaults; the firm can still type its own.
+      }
+    }
+    loadPack()
+    return () => { active = false }
+  }, [matterId, matterType, practiceArea])
+
   // The agreement select lists PDFs, plus whatever is currently chosen so a
   // template that rendered as Word is still visible as the fee agreement.
   const agreementChoices = useMemo(
@@ -102,12 +144,16 @@ export default function PaperworkDrawer({
     [allDocuments, draft.agreementDocumentId],
   )
   const selectable = useMemo(
-    () => allDocuments.filter(document => document.id !== draft.agreementDocumentId),
-    [allDocuments, draft.agreementDocumentId],
+    () => allDocuments.filter(document => document.id !== draft.agreementDocumentId && document.id !== draft.intakeFormDocumentId),
+    [allDocuments, draft.agreementDocumentId, draft.intakeFormDocumentId],
   )
+  const uploadHint = useMemo(() => {
+    const labels = (pack?.upload_requirements || []).map(upload => upload.label).filter(Boolean)
+    return labels.length ? labels.slice(0, 2).join('\n') : FALLBACK_UPLOAD_HINT
+  }, [pack])
 
   // A document saved to the matter from this drawer joins the list and is
-  // pre-selected: as the fee agreement, or as an additional signing form.
+  // pre-selected in the card that opened the picker.
   function attachDocument(document, target) {
     if (!document?.id) return
     setAttachedDocuments(current => [document, ...current.filter(item => item.id !== document.id)])
@@ -118,6 +164,9 @@ export default function PaperworkDrawer({
           agreementDocumentId: document.id,
           forms: previous.forms.filter(form => form.documentId !== document.id),
         }
+      }
+      if (target === 'intake') {
+        return { ...previous, intakeFormDocumentId: document.id, intakeFormLabel: document.filename }
       }
       return {
         ...previous,
@@ -137,27 +186,31 @@ export default function PaperworkDrawer({
     if (document) attachDocument(document, target)
   }
 
-  async function uploadFormFile(event) {
+  async function uploadFile(event, target, setUploading) {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
-    setUploadingForm(true)
+    setUploading(true)
     setError('')
     try {
       const form = new FormData()
       form.append('file', file)
-      attachDocument(await uploadMatterDocument(matterId, form), 'form')
+      attachDocument(await uploadMatterDocument(matterId, form), target)
     } catch (caught) {
       const detail = caught?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : 'The form could not be uploaded. Please try again.')
+      setError(typeof detail === 'string' ? detail : 'The document could not be uploaded. Please try again.')
     } finally {
-      setUploadingForm(false)
+      setUploading(false)
     }
   }
 
   const hasAgreement = Boolean(draft.agreementDocumentId || agreementFile)
-  const canSend = hasAgreement && draft.email && draft.channels.length > 0
-    && (!draft.channels.includes('sms') || draft.smsPermissionVerified)
+  const hasIntakeForm = Boolean(draft.intakeFormDocumentId)
+  const hasUploads = Boolean(draft.uploads.trim())
+  // Any subset is allowed; a packet just has to carry at least one item.
+  const hasItem = hasAgreement || draft.includeQuestionnaire || draft.forms.length > 0 || hasIntakeForm || hasUploads
+  const canSend = Boolean(draft.email) && draft.channels.length > 0
+    && (!draft.channels.includes('sms') || draft.smsPermissionVerified) && hasItem
 
   function toggleForm(document, checked) {
     set('forms', checked
@@ -169,16 +222,22 @@ export default function PaperworkDrawer({
     set('forms', draft.forms.map(form => (form.documentId === documentId ? { ...form, ...patch } : form)))
   }
 
+  function setIntakeForm(documentId) {
+    const document = allDocuments.find(item => item.id === documentId)
+    set('intakeFormDocumentId', documentId)
+    set('intakeFormLabel', document?.filename || '')
+  }
+
   async function loadStarterPack() {
     setPackNote('Loading the standard questions…')
     try {
-      const pack = await getIntakeStarterPack(matterId ? { matter_id: matterId } : { matter_type: matterType, practice_area: practiceArea })
-      setDraft(previous => ({
-        ...previous,
-        questions: pack.questions.map(question => question.label).join('\n'),
-        uploads: pack.upload_requirements.map(upload => upload.label).join('\n'),
-      }))
-      setPackNote(`Loaded the ${pack.practice_label} questions and requested uploads. Review them before sending.`)
+      const value = pack || await getIntakeStarterPack(
+        matterId ? { matter_id: matterId } : { matter_type: matterType, practice_area: practiceArea },
+      )
+      setPack(value)
+      set('questions', value.questions.map(question => question.label).join('\n'))
+      set('uploads', value.upload_requirements.map(upload => upload.label).join('\n'))
+      setPackNote(`Loaded the ${value.practice_label} questions and requested uploads. Review them before sending.`)
     } catch {
       setPackNote('Could not load the standard questions. Enter them below.')
     }
@@ -205,7 +264,7 @@ export default function PaperworkDrawer({
         <header className="flex items-start justify-between border-b border-brand-line px-6 py-5">
           <div>
             <h2 className="font-serif text-xl font-bold text-brand-ink">Send client paperwork</h2>
-            <p className="mt-0.5 text-[13px] text-brand-muted">The fee agreement opens the portal and starts the follow-up clock.</p>
+            <p className="mt-0.5 text-[13px] text-brand-muted">Choose what the client should sign or complete. Any of the three standard pieces can go on its own.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="min-h-11 min-w-11 text-brand-muted hover:text-brand-ink">
             <X size={18} />
@@ -230,7 +289,8 @@ export default function PaperworkDrawer({
           {step === 0 && (
             <>
               <div className={card}>
-                <h3 className="mb-3 font-semibold text-brand-ink">Fee agreement</h3>
+                <h3 className="mb-1 font-semibold text-brand-ink">Fee agreement <span className="font-normal text-brand-muted">(optional)</span></h3>
+                <p className="mb-3 text-[12px] text-brand-muted">When included, signing it opens the portal and starts the follow-up clock. Skip it to send only the questionnaire, intake form, or requested uploads.</p>
                 {agreementChoices.length > 0 && (
                   <label className="mb-3 block">
                     <span className={label}>From matter documents</span>
@@ -242,7 +302,7 @@ export default function PaperworkDrawer({
                         set('forms', draft.forms.filter(form => form.documentId !== event.target.value))
                       }}
                     >
-                      <option value="">Upload a reviewed PDF instead</option>
+                      <option value="">Do not include a fee agreement</option>
                       {agreementChoices.map(document => <option key={document.id} value={document.id}>{document.filename}</option>)}
                     </select>
                   </label>
@@ -256,10 +316,63 @@ export default function PaperworkDrawer({
                 <button
                   type="button"
                   onClick={() => setPickerTarget('agreement')}
-                  className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-accent underline"
+                  className={`mt-3 ${linkButton}`}
                 >
-                  <LibraryBig size={14} aria-hidden="true" /> Prepare from a firm template
+                  <LibraryBig size={14} aria-hidden="true" /> Prepare the fee agreement from a firm template
                 </button>
+              </div>
+
+              <div className={card}>
+                <label className="flex items-center gap-2 font-semibold text-brand-ink">
+                  <input type="checkbox" checked={draft.includeQuestionnaire} onChange={event => set('includeQuestionnaire', event.target.checked)} />
+                  Client questionnaire
+                </label>
+                <button type="button" onClick={loadStarterPack} className={`mt-2 ${linkButton}`}>
+                  Reset to standard questions for this matter type
+                </button>
+                {packNote && <p role="status" className="mt-1 text-[12px] text-brand-muted">{packNote}</p>}
+                {draft.includeQuestionnaire && (
+                  <label className="mt-3 block">
+                    <span className={label}>One question per line</span>
+                    <textarea rows={4} className={field} value={draft.questions} onChange={event => set('questions', event.target.value)} />
+                  </label>
+                )}
+                <label className="mt-3 block">
+                  <span className={label}>Requested client uploads — one per line</span>
+                  <textarea rows={3} className={field} value={draft.uploads} onChange={event => set('uploads', event.target.value)} placeholder={uploadHint} />
+                </label>
+              </div>
+
+              <div className={card}>
+                <h3 className="mb-1 font-semibold text-brand-ink">Client intake form</h3>
+                <p className="mb-3 text-[12px] text-brand-muted">The client&apos;s own details, answered once and reused. Optional, and never a signature.</p>
+                {allDocuments.length > 0 && (
+                  <label className="mb-3 block">
+                    <span className={label}>Choose the client intake form</span>
+                    <select className={field} value={draft.intakeFormDocumentId} onChange={event => setIntakeForm(event.target.value)}>
+                      <option value="">Do not include an intake form</option>
+                      {allDocuments.map(document => <option key={document.id} value={document.id}>{document.filename}</option>)}
+                    </select>
+                  </label>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPickerTarget('intake')}
+                  className={linkButton}
+                >
+                  <LibraryBig size={14} aria-hidden="true" /> Prepare the client intake form from a firm template
+                </button>
+                <label className="mt-3 block">
+                  <span className={label}>Or upload a prepared form</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.docx,application/pdf"
+                    onChange={event => uploadFile(event, 'intake', setUploadingIntake)}
+                    disabled={uploadingIntake}
+                    className="w-full text-[13px] text-brand-ink file:mr-3 file:rounded-lg file:border file:border-brand-line file:bg-brand-surface file:px-3 file:py-1.5 file:text-[13px] disabled:opacity-50"
+                  />
+                  {uploadingIntake && <span role="status" className="mt-1 block text-[12px] text-brand-muted">Uploading…</span>}
+                </label>
               </div>
 
               <div className={card}>
@@ -270,7 +383,7 @@ export default function PaperworkDrawer({
                   <input
                     type="file"
                     accept=".pdf,.docx,application/pdf"
-                    onChange={uploadFormFile}
+                    onChange={event => uploadFile(event, 'form', setUploadingForm)}
                     disabled={uploadingForm}
                     className="w-full text-[13px] text-brand-ink file:mr-3 file:rounded-lg file:border file:border-brand-line file:bg-brand-surface file:px-3 file:py-1.5 file:text-[13px] disabled:opacity-50"
                   />
@@ -279,9 +392,9 @@ export default function PaperworkDrawer({
                 <button
                   type="button"
                   onClick={() => setPickerTarget('form')}
-                  className="mb-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-accent underline"
+                  className={`mb-3 ${linkButton}`}
                 >
-                  <LibraryBig size={14} aria-hidden="true" /> Prepare from a firm template
+                  <LibraryBig size={14} aria-hidden="true" /> Prepare an additional form from a firm template
                 </button>
                 {selectable.length === 0 ? (
                   <p className="text-[13px] text-brand-muted">Attach templates in Documents to include them here.</p>
@@ -308,27 +421,6 @@ export default function PaperworkDrawer({
                   </ul>
                 )}
               </div>
-
-              <div className={card}>
-                <label className="flex items-center gap-2 font-semibold text-brand-ink">
-                  <input type="checkbox" checked={draft.includeQuestionnaire} onChange={event => set('includeQuestionnaire', event.target.checked)} />
-                  Include client questionnaire
-                </label>
-                <button type="button" onClick={loadStarterPack} className="mt-2 text-[13px] font-semibold text-brand-accent underline">
-                  Use the standard questions for this matter type
-                </button>
-                {packNote && <p role="status" className="mt-1 text-[12px] text-brand-muted">{packNote}</p>}
-                {draft.includeQuestionnaire && (
-                  <label className="mt-3 block">
-                    <span className={label}>One question per line</span>
-                    <textarea rows={4} className={field} value={draft.questions} onChange={event => set('questions', event.target.value)} />
-                  </label>
-                )}
-                <label className="mt-3 block">
-                  <span className={label}>Requested client uploads — one per line</span>
-                  <textarea rows={3} className={field} value={draft.uploads} onChange={event => set('uploads', event.target.value)} placeholder="Marriage certificate&#10;Recent bank statements" />
-                </label>
-              </div>
             </>
           )}
 
@@ -339,10 +431,12 @@ export default function PaperworkDrawer({
                 Leave a date blank to rely on the standard reminders.
               </p>
               <ul className="space-y-2">
-                <li className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-line bg-brand-surface px-3 py-2.5">
-                  <span className="text-[13px] font-semibold text-brand-ink">Fee agreement</span>
-                  <DueDate id="due-fee-agreement" value={draft.agreementDue} onChange={value => set('agreementDue', value)} />
-                </li>
+                {hasAgreement && (
+                  <li className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-line bg-brand-surface px-3 py-2.5">
+                    <span className="text-[13px] font-semibold text-brand-ink">Fee agreement</span>
+                    <DueDate id="due-fee-agreement" value={draft.agreementDue} onChange={value => set('agreementDue', value)} />
+                  </li>
+                )}
                 {draft.forms.map(form => (
                   <li key={form.documentId} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-line bg-brand-surface px-3 py-2.5">
                     <span className="min-w-0 truncate text-[13px] text-brand-ink">{form.label}</span>
@@ -412,22 +506,23 @@ export default function PaperworkDrawer({
               <div className={card}>
                 <h3 className="mb-2 font-semibold text-brand-ink">Going out now</h3>
                 <ul className="space-y-1 text-[13px] text-brand-ink-2">
-                  <li>Fee agreement{draft.agreementDue ? ` — due ${draft.agreementDue}` : ''}</li>
+                  {hasAgreement && <li>Fee agreement{draft.agreementDue ? ` — due ${draft.agreementDue}` : ''}</li>}
                   {draft.forms.map(form => (
                     <li key={form.documentId}>
                       {form.label}{form.requiresSignature ? ' (signature)' : ''}{form.due ? ` — due ${form.due}` : ''}
                     </li>
                   ))}
+                  {hasIntakeForm && <li>{draft.intakeFormLabel || 'Client intake form'}</li>}
                   {draft.includeQuestionnaire && <li>Client questionnaire{draft.questionnaireDue ? ` — due ${draft.questionnaireDue}` : ''}</li>}
                   {draft.uploads.trim() && <li>{draft.uploads.trim().split('\n').length} requested upload(s){draft.uploadsDue ? ` — due ${draft.uploadsDue}` : ''}</li>}
                 </ul>
                 <p className="mt-3 text-[12px] text-brand-muted">
-                  Signing the fee agreement opens the client portal and creates a follow-up due within 24 hours.
-                  SMS respects recorded permission and quiet hours.
+                  Signing a fee agreement opens the client portal and creates a follow-up due within 24 hours.
+                  Without one, the portal opens on the first message. SMS respects recorded permission and quiet hours.
                 </p>
               </div>
 
-              {!hasAgreement && <p role="alert" className="text-[13px] text-brand-rose">Choose or upload the reviewed fee agreement before sending.</p>}
+              {!hasItem && <p role="alert" className="text-[13px] text-brand-rose">Add at least one document, the questionnaire, or a requested upload before sending.</p>}
             </>
           )}
 

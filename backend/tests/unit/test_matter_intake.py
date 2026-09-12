@@ -539,6 +539,36 @@ async def test_start_creates_packet_and_signature_once(ctx):
 
 
 @pytest.mark.asyncio
+async def test_start_without_a_fee_agreement_opens_the_portal(ctx):
+    c = ctx
+    body = start_body(c)
+    c.db.rows[s.MatterIntake] = None
+    packet = await s.start_packet(c.db, c.user, c.matter, body, "", b"")
+    # No signing milestone: the packet still gets an invite, the questionnaire
+    # is required, and the client is not held behind the fee-agreement gate.
+    assert packet.signature_id is None
+    assert "fee_agreement" not in packet.requirements
+    assert packet.requirements["questionnaire"]["required"] is True
+    assert packet.config["portal_after_signing"] is False
+    assert "source_sha256" not in packet.config
+    assert c.matter.portal_enabled
+    assert packet.delivery["welcome:email"]["state"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_creates_followup_when_no_fee_agreement(ctx):
+    c = ctx
+    c.packet.signature_id = None
+    c.packet.requirements = {"questionnaire": {"completed": False, "required": True}}
+    c.packet.config = {**c.packet.config, "portal_after_signing": False}
+    c.packet.sent_at = TIME
+    await s.reconcile(c.db, c.packet)
+    task = c.db.tasks[uuid.uuid5(c.packet.id, "signed")]
+    assert task.due_date.isoformat() == "2026-09-07"
+    assert c.packet.config["signing_followup_due_at"] == "2026-09-07T14:00:00+00:00"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "invalid",
     [
@@ -607,6 +637,7 @@ async def test_read_and_start_endpoints_reject_invalid_input(ctx, monkeypatch):
         {"timezone": "bad/zone"},
         {"channels": ["email", "email"]},
         {"questions": [{"key": "x", "label": "x"}, {"key": "x", "label": "y"}]},
+        {"include_questionnaire": False, "questions": []},
     ],
 )
 def test_schema_rejects_invalid_configuration(changes):
@@ -863,10 +894,12 @@ async def test_start_route_accepts_existing_reviewed_agreement(ctx, monkeypatch)
     # Intake links the agreement behind a secure portal link, so it reads to the
     # direct-upload ceiling rather than the smaller mail-attachment one.
     assert read.call_args.args[-1] == s.MAX_AGREEMENT_BYTES
+    # No agreement is a supported packet: the route hands empty bytes through
+    # rather than refusing, and never reads a reviewed document.
     body.agreement_document_id = None
-    with pytest.raises(HTTPException) as error:
-        await r.start(c.matter.id, body.model_dump_json(), None, c.db, c.user)
-    assert error.value.status_code == 422
+    await r.start(c.matter.id, body.model_dump_json(), None, c.db, c.user)
+    assert start.call_args.args[-2:] == ("", b"")
+    assert read.call_count == 1
 
 
 def test_followup_task_description_is_human_readable():

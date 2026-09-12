@@ -68,6 +68,9 @@ async def start(
             422, "Check the email, questions, delivery channels and timezone."
         ) from exc
     matter = await staff_matter(db, user, matter_id)
+    # A fee agreement is optional: a packet may carry only the questionnaire,
+    # the intake form, or requested uploads. Empty bytes mean "none included".
+    filename, content = "", b""
     if body.agreement_document_id:
         from app.services.matter_mail_attachments import reviewed_document
 
@@ -86,11 +89,8 @@ async def start(
             agreement.filename or "Fee agreement.pdf",
             await agreement.read(service.MAX_AGREEMENT_BYTES + 1),
         )
-    else:
-        raise HTTPException(
-            422,
-            "Choose an attorney-reviewed fee agreement from the matter or upload it",
-        )
+        if not content:
+            raise HTTPException(422, "The uploaded fee agreement was empty.")
     packet = await service.start_packet(
         db,
         user,
@@ -273,7 +273,11 @@ async def renew_invitation(
     await db.flush()
     packet.invite_id = invitation.id
     packet.encrypted_invite = service.encrypt_token(token)
-    signature = await db.get(service.SignatureRequest, packet.signature_id)
+    signature = (
+        await db.get(service.SignatureRequest, packet.signature_id)
+        if packet.signature_id
+        else None
+    )
     if signature and signature.status in ("sent", "expired"):
         signature.status = "sent"
         signature.expires_at = invitation.expires_at

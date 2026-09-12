@@ -129,10 +129,15 @@ override them.
 
 * **Template Studio home** — "Standard client paperwork" adds the fee agreement
   and the intake form as drafts for review.
-* **New matter and the matter intake panel** — "Use the standard questions for
-  this matter type" fills the questionnaire and requested uploads. It replaces
-  what is in those boxes, so it is a deliberate action, never automatic; staff
-  edit the questions before sending.
+* **Start this case** — the drawer lists the fee agreement, the client
+  questionnaire, and the client intake form as the three common pieces and
+  seeds the questionnaire and requested uploads from the matter's practice when
+  it opens. "Reset to standard questions" restores them after edits.
+* **The matter intake panel** — "Use the standard questions for this matter
+  type" fills the questionnaire and requested uploads. It replaces what is in
+  those boxes, so it is a deliberate action, never automatic; staff edit the
+  questions before sending.
 
-Sending remains unchanged: the intake packet still requires an
-attorney-reviewed fee agreement PDF chosen from matter documents or uploaded.
+Any subset may be sent. A fee agreement is optional: when one is included,
+signing it opens the portal and starts the 24-hour follow-up clock; when none is
+included, the portal opens on the first message and the follow-up still runs.

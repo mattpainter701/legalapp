@@ -5,6 +5,14 @@
 - Add an operator SMS tab in `frontend/src/pages/PlatformPage.jsx` to save the sender and send a test message.
 - No migration: configuration uses the existing `platform_settings` table. The separate, firm-owned tenant SMS path (`/api/sms/config`) is unchanged.
 
+## 2026.09.11.11 — Optional fee agreement and matter-type questionnaire
+
+- `PaperworkDrawer` now lists the three common pieces as selectable cards — fee agreement, client questionnaire, client intake form — and allows any subset. `canSend` no longer requires a fee agreement; the Send step warns only when nothing at all is included. The router previously raised 422 when no agreement was passed (`routers/matter_intake.py`); it now hands empty bytes through.
+- The questionnaire seeds from `GET /api/intake-starter-pack` on open, so "Start this case" carries the matter type's own questions and requested uploads instead of the generic three-question default, and the upload placeholder shows that practice's records rather than family-law examples. The button reads "Reset to standard questions".
+- Optional-agreement backend: `start_packet` builds the signature, its `fee_agreement` requirement, and `config.source_sha256` only when an agreement is supplied, while always creating the `ClientPortalInvite`. A packet with no agreement stores `portal_after_signing=false`, so the client reaches the questionnaire and uploads immediately, and `reconcile` starts the 24-hour follow-up from `sent_at` when there is no signing milestone. `MatterIntake.signature_id` becomes nullable (migration `176_intake_optional_agreement`, down_revision `175_document_template_sets`).
+- Harden the portal paperwork gate: `paperwork_only` now requires a `fee_agreement` requirement, and a null signature id no longer leaks the string "None" into `signature_ids`.
+- `IntakeSetupFields.intakeOptions` drops questions when `include_questionnaire` is false and hides the questionnaire due date and editor, matching the drawer.
+
 ## 2026.09.11.10 — Matter-aware template flow for paperwork forms
 
 - Replace the in-app fill form in the paperwork drawer with the matter-aware template flow that Case Documents already uses. `PaperworkDrawer` opens `MatterTemplatePicker` pinned to the matter, so a fee agreement or additional form is completed in `RenderModal` with Smart Fills from the matter, previewed, and saved to the matter by the template render endpoint. The previous renderer exposed each sample's raw `variable_schema` (detected text placeholders, duplicate and blank field names) as an unusable form — the Nevada Living Will showed "undefined" and dozens of stray fields.

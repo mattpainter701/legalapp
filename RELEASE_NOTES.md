@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.11 — Send any of the three standard pieces
+
+Released September 11, 2026.
+
+Start this case now lists the fee agreement, questionnaire, and client intake form together, fills the questionnaire with the matter type's own questions, and can send any subset.
+
+- **The three common pieces, side by side.** The fee agreement, client questionnaire, and client intake form are each listed and selectable, so a firm can send one, two, or all three.
+- **A fee agreement is now optional.** Send only the questionnaire or requested uploads when no agreement is needed. Signing still opens the portal when an agreement goes out.
+- **Questions match the matter type.** The questionnaire starts with the standard questions for the matter type, and the upload hint shows examples for that practice instead of one generic list.
+
 ## 2026.09.11.10 — Prepare paperwork from a firm template
 
 Released September 11, 2026.

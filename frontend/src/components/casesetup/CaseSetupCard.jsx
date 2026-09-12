@@ -207,7 +207,9 @@ export default function CaseSetupCard({ matterId, matter, onPacketChange }) {
       {(packet.signing_followup_due_at || packet.scheduling_due_at) && (
         <div className="mt-4 space-y-1 rounded-xl border border-brand-green/20 bg-brand-green/5 px-4 py-3 text-[13px] text-brand-ink">
           {packet.signing_followup_due_at && (
-            <p className="font-semibold">Fee agreement signed — follow up by {new Date(packet.signing_followup_due_at).toLocaleString()}</p>
+            <p className="font-semibold">
+              {packet.requirements?.fee_agreement ? 'Fee agreement signed' : 'Paperwork sent'} — follow up by {new Date(packet.signing_followup_due_at).toLocaleString()}
+            </p>
           )}
           {packet.scheduling_due_at && (
             <p>Contact the client to schedule by {new Date(packet.scheduling_due_at).toLocaleString()}</p>
