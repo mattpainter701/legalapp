@@ -6,9 +6,15 @@ it looks reviewed.  Someone filling the template sees a box called "And" and
 has no way to know what belongs in it, and someone auditing the finished
 document cannot tell what the value was supposed to be.
 
-The checks here are deliberately narrow.  A publish-time block that fires on a
+What gets judged is the text a person actually reads.  A field with no label
+is displayed by its name — every editor surface does ``label || name`` — so
+``{"name": "client_name"}`` is an ordinary, identifiable field and must stay
+publishable.  Refusing it would block templates that have been published for
+years and whose authors never typed a separate label.
+
+The checks are deliberately narrow.  A publish-time block that fires on a
 merely unusual label would be worse than the problem, so this rejects only
-labels that cannot name anything:
+text that cannot name anything:
 
 * nothing at all, or no letters;
 * only function words, which carry no subject ("And", "of the");
@@ -101,39 +107,51 @@ _TRAILING_INDEX = re.compile(r"[\s\-#]*\d+\s*$")
 _WORD = re.compile(r"[A-Za-z']+")
 
 
-def label_problem(label: str | None) -> str:
-    """Return why ``label`` cannot identify a field, or ``""`` if it can.
+def _readable(name: str) -> str:
+    """Render a field name the way a reader sees it: ``client_name`` → ``client name``."""
+
+    return re.sub(r"[_\-]+", " ", name).strip()
+
+
+def label_problem(label: str | None, name: str | None = "") -> str:
+    """Return why a field's displayed text cannot identify it, or ``""``.
+
+    ``label`` is judged when the author supplied one; otherwise the field's
+    ``name`` is, because that is what every surface falls back to showing. Only
+    when neither can name anything is the field refused.
 
     The string is customer-facing and says what to do, not merely what is
     wrong: a reviewer reading it should know the next action.
     """
 
     text = str(label or "").strip()
-    if not text:
-        return "has no label"
+    shown, kind = (text, "labelled") if text else (_readable(str(name or "")), "named")
+    if not shown:
+        return "has no label or name"
 
-    stem = _TRAILING_INDEX.sub("", text).strip()
+    stem = _TRAILING_INDEX.sub("", shown).strip()
     words = [word.casefold() for word in _WORD.findall(stem)]
     if not words:
-        return "has a label with no words in it"
+        return f"is {kind} {shown!r}, which has no words in it"
     if all(word in _FUNCTION_WORDS for word in words):
-        return f"is labelled {text!r}, which does not name anything"
+        return f"is {kind} {shown!r}, which does not name anything"
     if words[-1] in _DANGLING_WORDS:
-        return f"is labelled {text!r}, which is cut off mid-phrase"
+        return f"is {kind} {shown!r}, which is cut off mid-phrase"
     return ""
 
 
-def label_needs_rename(label: str | None) -> bool:
-    """Return whether ``label`` must be rewritten before it is usable."""
+def label_needs_rename(label: str | None, name: str | None = "") -> bool:
+    """Return whether a field's displayed text must be rewritten to be usable."""
 
-    return bool(label_problem(label))
+    return bool(label_problem(label, name))
 
 
 def unusable_labels(variable_schema: dict | None) -> list[tuple[str, str]]:
     """Return ``(field name, problem)`` for every included field that needs one.
 
     Excluded fields are skipped: the author already said they are not part of
-    the document, so their labels cannot mislead anyone.  Signing fields are
+    the document, so their labels cannot mislead anyone.  A field with no
+    label is judged on its name, which is what a reader is shown.  Signing fields are
     skipped too — their role, not their label, is what identifies them at
     signature time.
 
@@ -156,7 +174,7 @@ def unusable_labels(variable_schema: dict | None) -> list[tuple[str, str]]:
             continue
         if str(field.get("signer_role") or "").strip():
             continue
-        problem = label_problem(field.get("label"))
+        problem = label_problem(field.get("label"), name)
         if problem:
             problems.append((name, problem))
     return problems

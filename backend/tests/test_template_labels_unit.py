@@ -25,9 +25,13 @@ class TestRejectsWhatTheAuditFound:
         assert "does not name anything" in label_problem("And")
         assert "cut off mid-phrase" in label_problem("Shall Pay To")
 
-    @pytest.mark.parametrize("label", ["", "   ", None, "---", "42"])
-    def test_an_empty_or_wordless_label_is_rejected(self, label):
+    @pytest.mark.parametrize("label", ["---", "42"])
+    def test_a_wordless_label_is_rejected(self, label):
         assert label_needs_rename(label) is True
+
+    @pytest.mark.parametrize("label", ["", "   ", None])
+    def test_a_field_with_neither_label_nor_name_is_rejected(self, label):
+        assert label_needs_rename(label, "") is True
 
 
 class TestAcceptsRealLabels:
@@ -57,6 +61,39 @@ class TestAcceptsRealLabels:
         assert label_needs_rename("By 2") is True
 
 
+class TestUnlabelledFieldsFallBackToTheName:
+    """The common shape: an author who never typed a separate label.
+
+    Every editor surface renders ``label || name``, so the name is what a
+    reader sees — and refusing a field for having no label would block
+    templates that have been published for years.
+    """
+
+    @pytest.mark.parametrize(
+        "name", ["client_name", "case_number", "defendant-full-name", "Court"]
+    )
+    def test_a_usable_name_publishes_without_a_label(self, name):
+        assert label_needs_rename(None, name) is False
+        assert label_needs_rename("", name) is False
+
+    @pytest.mark.parametrize("name", ["and", "shall_pay_to", "by_2"])
+    def test_an_unusable_name_is_still_refused(self, name):
+        assert label_needs_rename(None, name) is True
+
+    def test_the_reason_says_the_field_is_named_not_labelled(self):
+        # A reviewer needs to know which text to change.
+        assert "named" in label_problem(None, "and")
+        assert "labelled" in label_problem("And", "and")
+
+    def test_a_label_is_judged_even_when_the_name_would_pass(self):
+        # The label is what a reader sees when one exists.
+        assert label_needs_rename("And", "defendant_full_name") is True
+
+    def test_a_name_is_read_the_way_it_is_displayed(self):
+        # client_name reads as two words, not one unknown token.
+        assert label_problem(None, "client_name") == ""
+
+
 class TestSchemaSweep:
     def test_reports_every_included_field_that_needs_a_rename(self):
         problems = unusable_labels({
@@ -67,6 +104,10 @@ class TestSchemaSweep:
             ]
         })
         assert [name for name, _ in problems] == ["a", "c"]
+
+    def test_the_ordinary_unlabelled_field_publishes(self):
+        # The shape almost every existing template uses.
+        assert unusable_labels({"fields": [{"name": "client_name"}]}) == []
 
     def test_skips_fields_the_author_switched_off(self):
         # They are not part of the document, so their labels cannot mislead.

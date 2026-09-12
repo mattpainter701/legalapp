@@ -69,6 +69,17 @@ workstream.
 - The label gate sits at **publish, not detection** — a draft is allowed to be
   unfinished — and rejects only three shapes that cannot name anything, so it
   passes "Witness 2" and rejects "By 2".
+- **It judges the text a reader sees, not the label column.** A field with no
+  label is displayed by its name (`label || name` everywhere in the editor), so
+  `{"name": "client_name"}` — the shape almost every existing template uses —
+  publishes unchanged. CI caught this: the first version refused it, which
+  would have blocked templates published years ago.
+- **Residual risk, accepted and worth watching:** this is a hard publish block,
+  so a firm whose existing template carries a genuinely unusable label (say
+  "Paid To") is refused at its next publish until someone renames the field.
+  That is the intent — the audit found such labels shipping — but it is the one
+  place this work can interrupt an existing customer, and the error names every
+  field so the fix is one pass through the editor.
 
 ### W3 — Sets — **backend complete, UI not built**
 
