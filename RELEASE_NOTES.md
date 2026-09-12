@@ -9,11 +9,11 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 Released September 11, 2026.
 
-Clients can now set a password and sign back in to the portal at any time, the portal carries the firm's own name and contact details, and the signature, upload, phone, and screen-reader rough edges are fixed.
+Clients sign in with the email their firm has and a one-time code, the portal carries the firm's own name and contact details, and clients with more than one matter can switch between them.
 
-- **Sign in without hunting for the email.** A client portal sign-in page now exists. Setting a password from the invitation keeps the portal reachable even after the original link expires.
-- **The portal looks like your firm, not like software.** Your firm's name, logo, phone, email and website now appear on the portal and in the invitation email, with a "Need help?" footer close at hand.
-- **Smoother, safer portal details.** Declining a signature now asks for confirmation, mediation uploads work, phone layouts no longer hide key tabs, and outcomes reach screen readers.
+- **Sign in with a code, not a password.** Enter your email and type the one-time code we send. Sessions last 24 hours, then a fresh code gets you back in, even after the invitation link expires.
+- **The portal looks like your firm, not like software.** Your firm's name, logo, phone, email and website now appear on the portal and in the sign-in email, with a "Need help?" footer close at hand.
+- **Always clear which matter you are in.** If you have more than one matter, choose one at sign-in and switch any time. Every upload names the matter so documents land in the right place.
 
 ## 2026.09.11.8 — Start with a 30-day trial
 

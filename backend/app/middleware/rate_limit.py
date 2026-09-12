@@ -43,6 +43,12 @@ AUTH_LIMITS = {
     # lookup. Keep them behind the existing source-IP auth limiter.
     "/api/portal/mediation/accept": (10, 600),
     "/api/portal/client/accept": (10, 600),
+    # Passwordless client sign-in: code requests and verification are keyed by
+    # source IP here; the endpoint also enforces a per-address cooldown and an
+    # attempt cap, so a shared egress cannot lock a client out or brute a code.
+    "/api/portal/client/request-code": (5, 900),
+    "/api/portal/client/verify-code": (15, 600),
+    "/api/portal/client/select-matter": (15, 600),
     # SMB agent registration is unauthenticated; rate-limit by IP to slow
     # brute-force of active pairing codes.
     "/api/v1/smb/agents/register": (5, 300),

@@ -6,19 +6,19 @@
       "version": "2026.09.11.9",
       "title": "A front door to your client portal",
       "published_at": "2026-09-11",
-      "summary": "Clients can now set a password and sign back in to the portal at any time, the portal carries the firm's own name and contact details, and the signature, upload, phone, and screen-reader rough edges are fixed.",
+      "summary": "Clients sign in with the email their firm has and a one-time code, the portal carries the firm's own name and contact details, and clients with more than one matter can switch between them.",
       "highlights": [
         {
-          "title": "Sign in without hunting for the email",
-          "description": "A client portal sign-in page now exists. Setting a password from the invitation keeps the portal reachable even after the original link expires."
+          "title": "Sign in with a code, not a password",
+          "description": "Enter your email and type the one-time code we send. Sessions last 24 hours, then a fresh code gets you back in, even after the invitation link expires."
         },
         {
           "title": "The portal looks like your firm, not like software",
-          "description": "Your firm's name, logo, phone, email and website now appear on the portal and in the invitation email, with a \"Need help?\" footer close at hand."
+          "description": "Your firm's name, logo, phone, email and website now appear on the portal and in the sign-in email, with a \"Need help?\" footer close at hand."
         },
         {
-          "title": "Smoother, safer portal details",
-          "description": "Declining a signature now asks for confirmation, mediation uploads work, phone layouts no longer hide key tabs, and outcomes reach screen readers."
+          "title": "Always clear which matter you are in",
+          "description": "If you have more than one matter, choose one at sign-in and switch any time. Every upload names the matter so documents land in the right place."
         }
       ]
     },

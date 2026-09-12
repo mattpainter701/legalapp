@@ -911,6 +911,66 @@ async def send_client_portal_invite(
     )
 
 
+async def send_client_portal_signin_code(
+    to_email: str,
+    code: str,
+    *,
+    firm_name: str | None = None,
+    firm_phone: str | None = None,
+    firm_email: str | None = None,
+    ttl_minutes: int = 10,
+) -> EmailDeliveryResult:
+    """Email a one-time client-portal sign-in code.
+
+    A code rather than a link: nothing in the message is clickable into a
+    session, and the client can type it on whichever device they are using. The
+    firm is named so a cautious recipient recognizes who is asking.
+    """
+    now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
+    safe_code = escape(str(code))
+    display_firm = (firm_name or "").strip()
+    safe_firm_name = escape(display_firm) if display_firm else "Your legal team"
+    header_title = escape(display_firm) if display_firm else "Client Portal"
+    contact_line = ""
+    contact_bits = []
+    if firm_phone:
+        contact_bits.append(f"call {escape(firm_phone)}")
+    if firm_email:
+        contact_bits.append(f"email {escape(firm_email)}")
+    if contact_bits:
+        contact_line = (
+            "<p>If you didn't request this, ignore this message, or "
+            + " or ".join(contact_bits)
+            + " if you need help.</p>"
+        )
+    content = f"""
+    <div class="header">
+      <h1>{header_title}</h1>
+      <p>Your secure sign-in code</p>
+    </div>
+    <div class="body">
+      <p>Enter this code in the client portal to sign in:</p>
+      <p style="font-size:32px;font-weight:bold;letter-spacing:6px;margin:24px 0;color:#0f2d5e;">{safe_code}</p>
+      <p>This code expires in {ttl_minutes} minutes and can be used once.</p>
+      <p style="font-size:12px;color:#888;">{safe_firm_name} will never ask you for this code by phone or email.</p>
+      {contact_line}
+    </div>
+    """
+    html_body = _BASE_HTML.format(content=content, timestamp=now_str)
+    subject_firm = f"{display_firm}: " if display_firm else ""
+    text_body = (
+        f"Your client portal sign-in code is {code}.\n\n"
+        f"It expires in {ttl_minutes} minutes and can be used once.\n"
+        "If you did not request this, you can ignore this message.\n"
+    )
+    return await email_service.send_email(
+        to=[to_email],
+        subject=f"{subject_firm}Your client portal sign-in code",
+        html_body=html_body,
+        text_body=text_body,
+    )
+
+
 async def send_client_portal_message_alert(
     to_emails: List[str],
     matter_name: str,

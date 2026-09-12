@@ -18,6 +18,7 @@ from app.services.email import (
     EmailDeliveryResult,
     send_client_portal_invite,
     send_client_portal_message_alert,
+    send_client_portal_signin_code,
     send_portal_invite,
 )
 
@@ -86,6 +87,45 @@ async def test_client_invite_firm_name_is_escaped():
             to_email="client@example.com",
             matter_name="Matter",
             invite_url="https://app.example.com/portal/client/accept?token=abc",
+            firm_name='<script>alert("firm")</script>',
+        )
+    html, _text = _sent_bodies(mock)
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+@pytest.mark.asyncio
+async def test_signin_code_email_names_the_firm_and_the_code():
+    with patch(
+        "app.services.email.email_service.send_email",
+        new_callable=AsyncMock,
+        return_value=EmailDeliveryResult.SENT,
+    ) as mock:
+        await send_client_portal_signin_code(
+            to_email="client@example.com",
+            code="042917",
+            firm_name="Northline & Associates",
+            firm_phone="+1-312-555-0100",
+            ttl_minutes=10,
+        )
+    html, text = _sent_bodies(mock)
+    assert "Northline &amp; Associates" in html
+    assert "042917" in html
+    assert "10 minutes" in html
+    assert "+1-312-555-0100" in html
+    assert "042917" in text
+
+
+@pytest.mark.asyncio
+async def test_signin_code_email_escapes_the_firm_name():
+    with patch(
+        "app.services.email.email_service.send_email",
+        new_callable=AsyncMock,
+        return_value=EmailDeliveryResult.SENT,
+    ) as mock:
+        await send_client_portal_signin_code(
+            to_email="client@example.com",
+            code="123456",
             firm_name='<script>alert("firm")</script>',
         )
     html, _text = _sent_bodies(mock)
@@ -189,9 +229,7 @@ async def test_revocation_is_skipped_for_a_token_with_no_jti():
 
 @pytest.mark.asyncio
 async def test_revocation_uses_redis_when_it_is_available():
-    redis = SimpleNamespace(
-        setex=AsyncMock(), exists=AsyncMock(return_value=1)
-    )
+    redis = SimpleNamespace(setex=AsyncMock(), exists=AsyncMock(return_value=1))
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=redis)))
     jti = str(uuid.uuid4())
     await _revoke_jti(request, jti, int(time.time()) + 600)

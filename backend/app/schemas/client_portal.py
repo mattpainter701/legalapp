@@ -20,25 +20,33 @@ class ClientPortalAcceptRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
 
 
-class ClientPortalActivateRequest(ClientPortalAcceptRequest):
-    password: str = Field(min_length=12, max_length=128)
-
-
-class ClientPortalLoginRequest(BaseModel):
+class ClientPortalRequestCodeRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=1, max_length=128)
-    # A returning client authenticates without knowing an internal UUID. When
-    # omitted the server resolves the account's portal matters: one logs
-    # straight in, several return a picker, none is a 403.
-    matter_id: str | None = None
+
+
+class ClientPortalVerifyCodeRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    # A short numeric code, not a password. Bound at the edge so a malformed or
+    # oversized value never reaches the constant-time comparison.
+    code: str = Field(min_length=4, max_length=10)
+
+
+class ClientPortalSelectMatterRequest(BaseModel):
+    ticket: str = Field(min_length=1, max_length=512)
+    matter_id: str = Field(min_length=1, max_length=64)
+
+
+class ClientPortalSwitchMatterRequest(BaseModel):
+    matter_id: str = Field(min_length=1, max_length=64)
 
 
 class PortalMatterChoice(BaseModel):
-    """One matter a password-backed client account can open."""
+    """One matter a client account can open, with enough to disambiguate."""
 
     matter_id: str
     matter_name: str
     matter_number: str | None = None
+    firm_name: str | None = None
 
 
 class PortalFirmBranding(BaseModel):
@@ -66,7 +74,7 @@ class ClientPortalAcceptResponse(BaseModel):
     matter_name: str
 
 
-class ClientPortalLoginResponse(ClientPortalAcceptResponse):
+class ClientPortalSignInResponse(ClientPortalAcceptResponse):
     email: str
 
 

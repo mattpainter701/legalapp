@@ -13,14 +13,16 @@ Two routers are exported:
 """
 
 import hashlib
+import hmac
+import json
 import logging
 import os
 import re
 import secrets
 import time as _time
 import uuid
-import bcrypt
 from datetime import date, datetime, timedelta, timezone
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import List
 from urllib.parse import quote
@@ -57,7 +59,7 @@ from app.config import get_settings
 from app.services.upload_guard import reject_oversized_request
 from app.database import (
     bind_tenant_context,
-    enable_rls_bypass,
+    clear_tenant_context,
     get_db,
     set_tenant_context,
 )
@@ -84,10 +86,12 @@ from app.models.user import User
 from app.schemas.client_portal import (
     MAX_DOCUMENT_DESCRIPTION,
     ClientPortalAcceptRequest,
-    ClientPortalActivateRequest,
     ClientPortalAcceptResponse,
-    ClientPortalLoginRequest,
-    ClientPortalLoginResponse,
+    ClientPortalRequestCodeRequest,
+    ClientPortalSelectMatterRequest,
+    ClientPortalSignInResponse,
+    ClientPortalSwitchMatterRequest,
+    ClientPortalVerifyCodeRequest,
     FirmInviteCreate,
     FirmInviteResponse,
     PortalAttorney,
@@ -135,6 +139,7 @@ from app.services.email import (
     email_delivery_http_error,
     send_client_portal_invite,
     send_client_portal_message_alert,
+    send_client_portal_signin_code,
 )
 from app.services.portal_client_alerts import (
     new_message_headline,
@@ -164,6 +169,11 @@ matter_file_store = MatterFileStore()
 
 INVITE_TTL_DAYS = 14
 CLIENT_PORTAL_COOKIE_NAME = "client_portal_token"
+
+# A verified code chooses a matter within this window before the selection
+# ticket itself expires. Long enough to read a short list, short enough that a
+# ticket leaks little.
+PORTAL_SIGNIN_TICKET_TTL_SECONDS = 300
 
 # A portal message list is a conversation, not a dataset. Cap the page so a
 # long-running matter can never make the first paint unbounded.
@@ -535,18 +545,67 @@ def _set_cookie(response: Response, token: str) -> None:
     )
 
 
-def _portal_password_hash(
-    password: str,
-) -> str:  # pragma: no cover - bcrypt integration
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+def _signin_code_key(email: str) -> str:
+    return f"portal:signin:code:{hashlib.sha256(email.encode()).hexdigest()}"
 
 
-def _portal_password_matches(
-    password: str, password_hash: str | None
-) -> bool:  # pragma: no cover - bcrypt integration
-    return bool(password_hash) and bcrypt.checkpw(
-        password.encode("utf-8"), password_hash.encode("utf-8")
-    )
+def _signin_cooldown_key(email: str) -> str:
+    return f"portal:signin:cooldown:{hashlib.sha256(email.encode()).hexdigest()}"
+
+
+def _signin_ticket_key(ticket: str) -> str:
+    return f"portal:signin:ticket:{hashlib.sha256(ticket.encode()).hexdigest()}"
+
+
+def _hash_signin_code(email: str, code: str) -> str:
+    """Keyed digest, so a Redis leak cannot be brute-forced offline to a code."""
+    return hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        f"{email}|{code}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+# Dev/test fallback when Redis is not installed in the app state. Production
+# always has Redis; these keep local runs working without silently degrading.
+_signin_codes_fallback: dict[str, tuple[dict, float]] = {}
+_signin_tickets_fallback: dict[str, tuple[dict, float]] = {}
+_signin_cooldown_fallback: dict[str, tuple[dict, float]] = {}
+
+
+def _redis(request: Request):
+    return getattr(request.app.state, "redis", None)
+
+
+async def _store_json(request, key, value, ttl, fallback):
+    redis = _redis(request)
+    if redis:
+        await redis.setex(key, ttl, json.dumps(value))
+    else:
+        fallback[key] = (value, _time.time() + ttl)
+
+
+async def _load_json(request, key, fallback):
+    redis = _redis(request)
+    if redis:
+        raw = await redis.get(key)
+        return json.loads(raw) if raw else None
+    entry = fallback.get(key)
+    if not entry:
+        return None
+    value, expires = entry
+    if _time.time() > expires:
+        fallback.pop(key, None)
+        return None
+    return value
+
+
+async def _delete_json(request, key, fallback):
+    redis = _redis(request)
+    if redis:
+        await redis.delete(key)
+    else:
+        fallback.pop(key, None)
 
 
 async def _load_matter(db: AsyncSession, ctx: ClientPortalContext) -> Matter:
@@ -668,194 +727,430 @@ async def accept_invite(
     )
 
 
-@router.post("/activate", response_model=ClientPortalLoginResponse)
-async def activate_portal_account(  # pragma: no cover - exercised by browser/E2E integration
-    body: ClientPortalActivateRequest,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-):
-    """Convert a client invitation into a durable, password-backed account.
+@dataclass
+class _ClientMatterMatch:
+    """One portal matter an email can open, with the grant behind it."""
 
-    The invitation remains the matter-scoped revocation handle. The password
-    is only used to authenticate the client; it never widens matter access.
+    tenant_id: str
+    matter: Matter
+    invite: ClientPortalInvite
+    contact_id: str | None
+    user: User | None
+
+
+async def _client_portal_matches(
+    db: AsyncSession, email: str
+) -> list[_ClientMatterMatch]:
+    """Every portal matter an email may open, across active tenants.
+
+    Matches either a linked client account or the address on a live invite, so
+    a firm that invited by email without a contact still works. A matter counts
+    only when it is portal-enabled and has a non-revoked invite; the invite's
+    own expiry does not gate sign-in, because revocation is the control and a
+    matter can outlast the email that first announced it.
     """
-    token_hash = hashlib.sha256(body.token.encode("utf-8")).hexdigest()
-    invite = await resolve_active_portal_invite(db, ClientPortalInvite, token_hash)
-    if (
-        invite is None
-        or invite.revoked
-        or _aware(invite.expires_at) < datetime.now(timezone.utc)
-    ):
-        raise HTTPException(status_code=410, detail=PORTAL_INVITE_UNAVAILABLE_DETAIL)
-    matter = await db.scalar(
-        select(Matter).where(
-            Matter.id == invite.matter_id, Matter.tenant_id == invite.tenant_id
-        )
-    )
-    if matter is None or not matter.portal_enabled:
-        raise HTTPException(status_code=404, detail="Matter not found")
-    contact = None
-    if invite.contact_id:
-        contact = await db.scalar(
-            select(Contact).where(
-                Contact.id == invite.contact_id, Contact.tenant_id == invite.tenant_id
-            )
-        )
-    if contact is None and invite.email:
-        contact = await db.scalar(
-            select(Contact).where(
-                Contact.tenant_id == invite.tenant_id,
-                func.lower(Contact.email) == invite.email.lower(),
-            )
-        )
-    if contact is None:
-        raise HTTPException(
-            status_code=409, detail="A client contact is required before activation"
-        )
-    user = await db.scalar(
-        select(User).where(
-            User.tenant_id == invite.tenant_id,
-            User.email == (invite.email or contact.email).lower(),
-        )
-    )
-    if user is None:
-        user = User(
-            id=uuid.uuid4(),
-            tenant_id=invite.tenant_id,
-            email=(invite.email or contact.email).lower(),
-            full_name=contact.display_name or "Client",
-            role="client",
-            is_active=True,
-        )
-        db.add(user)
-        await db.flush()
-    if user.role != "client" or not user.is_active:
-        raise HTTPException(
-            status_code=403,
-            detail="This account is not eligible for client portal access",
-        )
-    user.password_hash = _portal_password_hash(body.password)
-    contact.client_user_id = user.id
-    invite.accepted_at = datetime.now(timezone.utc)
-    token = create_matter_portal_token(
-        tenant_id=str(invite.tenant_id),
-        matter_id=str(invite.matter_id),
-        contact_id=str(contact.id),
-        email=user.email,
-        invite_id=str(invite.id),
-        user_id=str(user.id),
-    )
-    await db.commit()
-    _set_cookie(response, token)
-    return ClientPortalLoginResponse(
-        matter_id=str(matter.id), matter_name=matter.matter_name, email=user.email
-    )
-
-
-@router.post("/login", response_model=ClientPortalLoginResponse)
-async def login_portal_account(  # pragma: no cover - exercised by browser/E2E integration
-    body: ClientPortalLoginRequest,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-):
-    """Authenticate a durable client account into one of its portal matters.
-
-    ``matter_id`` is optional. A returning client should not have to know an
-    internal UUID: one accessible matter signs straight in, several return a
-    409 listing them so the client picks, none is a 403.
-    """
-    email = body.email.lower().strip()
-    # Email is the only tenant-independent login locator; keep this lookup
-    # within the auth-only, transaction-local users-table bypass, then bind the
-    # discovered tenant before reading any portal data.
-    await enable_rls_bypass(db)
-    user = await db.scalar(
-        select(User).where(
-            User.email == email, User.role == "client", User.is_active.is_(True)
-        )
-    )
-    if user is None or not _portal_password_matches(body.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    await bind_tenant_context(db, str(user.tenant_id))
-    contact_ids = list(
+    normalized = (email or "").strip().lower()
+    if not normalized:
+        return []
+    await clear_tenant_context(db)
+    tenant_ids = list(
         (
             await db.scalars(
-                select(Contact.id).where(
-                    Contact.tenant_id == user.tenant_id,
-                    Contact.client_user_id == user.id,
+                select(Tenant.id).where(Tenant.is_active.is_(True)).order_by(Tenant.id)
+            )
+        ).all()
+    )
+    matches: list[_ClientMatterMatch] = []
+    seen: set[tuple[str, str]] = set()
+    for tenant_id in tenant_ids:
+        await set_tenant_context(db, str(tenant_id))
+        users = list(
+            (
+                await db.scalars(
+                    select(User).where(
+                        User.tenant_id == tenant_id,
+                        func.lower(User.email) == normalized,
+                        User.role == "client",
+                        User.is_active.is_(True),
+                    )
+                )
+            ).all()
+        )
+        user_by_contact: dict[str, User] = {}
+        contact_ids: set[uuid.UUID] = set()
+        for user in users:
+            contacts = list(
+                (
+                    await db.scalars(
+                        select(Contact).where(
+                            Contact.tenant_id == tenant_id,
+                            Contact.client_user_id == user.id,
+                        )
+                    )
+                ).all()
+            )
+            for contact in contacts:
+                user_by_contact[str(contact.id)] = user
+                contact_ids.add(contact.id)
+        email_contacts = list(
+            (
+                await db.scalars(
+                    select(Contact).where(
+                        Contact.tenant_id == tenant_id,
+                        func.lower(Contact.email) == normalized,
+                    )
+                )
+            ).all()
+        )
+        for contact in email_contacts:
+            contact_ids.add(contact.id)
+            if contact.client_user_id and str(contact.id) not in user_by_contact:
+                linked = next(
+                    (u for u in users if u.id == contact.client_user_id), None
+                )
+                if linked is not None:
+                    user_by_contact[str(contact.id)] = linked
+        if contact_ids:
+            matters = list(
+                (
+                    await db.scalars(
+                        select(Matter).where(
+                            Matter.tenant_id == tenant_id,
+                            Matter.client_contact_id.in_(contact_ids),
+                            Matter.portal_enabled.is_(True),
+                        )
+                    )
+                ).all()
+            )
+            for matter in matters:
+                invite = await db.scalar(
+                    select(ClientPortalInvite).where(
+                        ClientPortalInvite.tenant_id == tenant_id,
+                        ClientPortalInvite.matter_id == matter.id,
+                        ClientPortalInvite.revoked.is_(False),
+                    )
+                )
+                if invite is None:
+                    continue
+                key = (str(tenant_id), str(matter.id))
+                if key in seen:
+                    continue
+                seen.add(key)
+                contact_id = (
+                    str(matter.client_contact_id) if matter.client_contact_id else None
+                )
+                matches.append(
+                    _ClientMatterMatch(
+                        tenant_id=str(tenant_id),
+                        matter=matter,
+                        invite=invite,
+                        contact_id=contact_id,
+                        user=user_by_contact.get(contact_id) if contact_id else None,
+                    )
+                )
+        invited = list(
+            (
+                await db.scalars(
+                    select(ClientPortalInvite).where(
+                        ClientPortalInvite.tenant_id == tenant_id,
+                        func.lower(ClientPortalInvite.email) == normalized,
+                        ClientPortalInvite.revoked.is_(False),
+                    )
+                )
+            ).all()
+        )
+        for invite in invited:
+            matter = await db.scalar(
+                select(Matter).where(
+                    Matter.id == invite.matter_id,
+                    Matter.tenant_id == tenant_id,
+                    Matter.portal_enabled.is_(True),
                 )
             )
-        ).all()
-    )
-    if not contact_ids:
-        raise HTTPException(
-            status_code=403, detail="You do not have portal access to any matter"
-        )
-
-    matter_filter = [
-        Matter.tenant_id == user.tenant_id,
-        Matter.client_contact_id.in_(contact_ids),
-        Matter.portal_enabled.is_(True),
-    ]
-    if body.matter_id:
-        try:
-            matter_filter.append(Matter.id == uuid.UUID(body.matter_id))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid matter id") from exc
-    matters = list(
-        (
-            await db.scalars(
-                select(Matter).where(*matter_filter).order_by(Matter.created_at.desc())
+            if matter is None:
+                continue
+            key = (str(tenant_id), str(matter.id))
+            if key in seen:
+                continue
+            seen.add(key)
+            contact_id = str(invite.contact_id) if invite.contact_id else None
+            matches.append(
+                _ClientMatterMatch(
+                    tenant_id=str(tenant_id),
+                    matter=matter,
+                    invite=invite,
+                    contact_id=contact_id,
+                    user=user_by_contact.get(contact_id) if contact_id else None,
+                )
             )
-        ).all()
+    await clear_tenant_context(db)
+    return matches
+
+
+async def _matter_choice(
+    db: AsyncSession, match: _ClientMatterMatch
+) -> PortalMatterChoice:
+    tenant = await db.get(Tenant, uuid.UUID(match.tenant_id))
+    return PortalMatterChoice(
+        matter_id=str(match.matter.id),
+        matter_name=match.matter.matter_name,
+        matter_number=match.matter.matter_number,
+        firm_name=tenant.name if tenant else None,
     )
-    if not matters:
+
+
+async def _mint_session_for_match(
+    response: Response, db: AsyncSession, match: _ClientMatterMatch, email: str
+) -> ClientPortalSignInResponse:
+    """Issue the portal cookie for one matter, creating the client login if needed.
+
+    Snapshot everything the response needs before the commit: ``expire_on_commit``
+    can otherwise force a sync refresh outside the async context.
+    """
+    await bind_tenant_context(db, match.tenant_id)
+    matter = match.matter
+    matter_id = str(matter.id)
+    matter_name = matter.matter_name
+    invite_id = str(match.invite.id)
+    now = datetime.now(timezone.utc)
+    user = match.user
+    if user is None:
+        user = await db.scalar(
+            select(User).where(
+                User.tenant_id == uuid.UUID(match.tenant_id),
+                func.lower(User.email) == email,
+            )
+        )
+        if user is None:
+            user = User(
+                id=uuid.uuid4(),
+                tenant_id=uuid.UUID(match.tenant_id),
+                email=email,
+                full_name="Client",
+                role="client",
+                is_active=True,
+            )
+            db.add(user)
+            await db.flush()
+    if user.role != "client" or not user.is_active:
         raise HTTPException(
-            status_code=403, detail="You do not have portal access to that matter"
+            status_code=403, detail="This account cannot access the portal"
         )
-    if len(matters) > 1 and not body.matter_id:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "multiple_matters",
-                "matters": [
-                    PortalMatterChoice(
-                        matter_id=str(m.id),
-                        matter_name=m.matter_name,
-                        matter_number=m.matter_number,
-                    ).model_dump()
-                    for m in matters
-                ],
-            },
-        )
-    matter = matters[0]
-    # The invite is the durable revocation handle, not the access grant: an
-    # activated account keeps working after the emailed link's own TTL, and the
-    # session JWT still carries its shorter expiry. Only revocation ends it.
-    invite = await db.scalar(
-        select(ClientPortalInvite).where(
-            ClientPortalInvite.tenant_id == user.tenant_id,
-            ClientPortalInvite.matter_id == matter.id,
-            ClientPortalInvite.contact_id == matter.client_contact_id,
-            ClientPortalInvite.revoked.is_(False),
-        )
-    )
-    if invite is None:
-        raise HTTPException(
-            status_code=403, detail="You do not have portal access to that matter"
-        )
+    if match.contact_id:
+        contact = await db.get(Contact, uuid.UUID(match.contact_id))
+        if contact is not None and contact.client_user_id is None:
+            contact.client_user_id = user.id
+    if match.invite.accepted_at is None:
+        match.invite.accepted_at = now
+    match.invite.last_seen_at = now
+    user_id = str(user.id)
+    user_email = user.email
+    await db.commit()
     token = create_matter_portal_token(
-        tenant_id=str(user.tenant_id),
-        matter_id=str(matter.id),
-        contact_id=str(matter.client_contact_id) if matter.client_contact_id else None,
-        email=user.email,
-        invite_id=str(invite.id),
-        user_id=str(user.id),
+        tenant_id=match.tenant_id,
+        matter_id=matter_id,
+        contact_id=match.contact_id,
+        email=user_email,
+        invite_id=invite_id,
+        user_id=user_id,
     )
     _set_cookie(response, token)
-    return ClientPortalLoginResponse(
-        matter_id=str(matter.id), matter_name=matter.matter_name, email=user.email
+    return ClientPortalSignInResponse(
+        matter_id=matter_id, matter_name=matter_name, email=user_email
     )
+
+
+async def _send_signin_code(
+    db: AsyncSession, matches: list[_ClientMatterMatch], email: str, code: str
+) -> None:
+    """Email the code, naming the firm only when there is exactly one."""
+    firm_name = firm_phone = firm_email = None
+    tenant_ids = {m.tenant_id for m in matches}
+    if len(tenant_ids) == 1:
+        tenant_id = next(iter(tenant_ids))
+        await bind_tenant_context(db, tenant_id)
+        branding = await _portal_firm_branding(db, tenant_id)
+        if branding is not None:
+            firm_name = branding.firm_name
+            firm_phone = branding.firm_phone
+            firm_email = branding.firm_email
+    await send_client_portal_signin_code(
+        to_email=email,
+        code=code,
+        firm_name=firm_name,
+        firm_phone=firm_phone,
+        firm_email=firm_email,
+        ttl_minutes=max(1, settings.PORTAL_SIGNIN_CODE_TTL_SECONDS // 60),
+    )
+
+
+@router.post("/request-code")
+async def request_portal_signin_code(
+    body: ClientPortalRequestCodeRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Email a one-time sign-in code if the address can reach a portal.
+
+    Always returns the same message, whether or not the address matches, so the
+    endpoint is not an account oracle. The code is short-lived, single-use, and
+    stored only as a keyed digest. A per-address cooldown bounds resends and the
+    middleware caps requests per source IP.
+    """
+    email = body.email.strip().lower()
+    generic = {
+        "message": "If that email can access a portal, we've sent a sign-in code."
+    }
+    if not email:
+        return generic
+    cooldown_key = _signin_cooldown_key(email)
+    if await _load_json(request, cooldown_key, _signin_cooldown_fallback):
+        return generic
+    await _store_json(
+        request,
+        cooldown_key,
+        {"at": _time.time()},
+        settings.PORTAL_SIGNIN_CODE_COOLDOWN_SECONDS,
+        _signin_cooldown_fallback,
+    )
+    matches = await _client_portal_matches(db, email)
+    if not matches:
+        return generic
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    await _store_json(
+        request,
+        _signin_code_key(email),
+        {"code_hash": _hash_signin_code(email, code), "attempts": 0},
+        settings.PORTAL_SIGNIN_CODE_TTL_SECONDS,
+        _signin_codes_fallback,
+    )
+    try:
+        await _send_signin_code(db, matches, email, code)
+    except Exception:  # pragma: no cover - delivery is best-effort
+        logger.warning("Failed to send a client portal sign-in code", exc_info=True)
+    return generic
+
+
+@router.post("/verify-code", response_model=ClientPortalSignInResponse)
+async def verify_portal_signin_code(
+    body: ClientPortalVerifyCodeRequest,
+    response: Response,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Exchange an emailed code for a session, or a matter choice.
+
+    One accessible matter mints the session straight away. Several return a 409
+    with a short-lived selection ticket so the client picks the matter without
+    re-entering the code.
+    """
+    email = body.email.strip().lower()
+    code = body.code.strip()
+    generic_error = HTTPException(
+        status_code=400,
+        detail="That code is incorrect or has expired. Request a new one.",
+    )
+    entry = await _load_json(request, _signin_code_key(email), _signin_codes_fallback)
+    if entry is None:
+        raise generic_error
+    if not hmac.compare_digest(
+        str(entry.get("code_hash", "")), _hash_signin_code(email, code)
+    ):
+        attempts = int(entry.get("attempts", 0)) + 1
+        if attempts >= settings.PORTAL_SIGNIN_CODE_ATTEMPTS:
+            await _delete_json(request, _signin_code_key(email), _signin_codes_fallback)
+        else:
+            await _store_json(
+                request,
+                _signin_code_key(email),
+                {"code_hash": entry.get("code_hash"), "attempts": attempts},
+                settings.PORTAL_SIGNIN_CODE_TTL_SECONDS,
+                _signin_codes_fallback,
+            )
+        raise generic_error
+    await _delete_json(request, _signin_code_key(email), _signin_codes_fallback)
+    matches = await _client_portal_matches(db, email)
+    if not matches:
+        raise HTTPException(
+            status_code=403, detail="That email does not have portal access."
+        )
+    if len(matches) == 1:
+        return await _mint_session_for_match(response, db, matches[0], email)
+    ticket = secrets.token_urlsafe(32)
+    await _store_json(
+        request,
+        _signin_ticket_key(ticket),
+        {"email": email, "matters": [str(m.matter.id) for m in matches]},
+        PORTAL_SIGNIN_TICKET_TTL_SECONDS,
+        _signin_tickets_fallback,
+    )
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "multiple_matters",
+            "ticket": ticket,
+            "matters": [(await _matter_choice(db, m)).model_dump() for m in matches],
+        },
+    )
+
+
+@router.post("/select-matter", response_model=ClientPortalSignInResponse)
+async def select_portal_matter(
+    body: ClientPortalSelectMatterRequest,
+    response: Response,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Finish a multi-matter sign-in using the ticket from verify-code."""
+    entry = await _load_json(
+        request, _signin_ticket_key(body.ticket), _signin_tickets_fallback
+    )
+    if entry is None:
+        raise HTTPException(
+            status_code=400, detail="This sign-in expired. Request a new code."
+        )
+    await _delete_json(
+        request, _signin_ticket_key(body.ticket), _signin_tickets_fallback
+    )
+    if body.matter_id not in set(entry.get("matters", [])):
+        raise HTTPException(status_code=400, detail="Choose one of your matters.")
+    email = entry.get("email", "")
+    matches = await _client_portal_matches(db, email)
+    match = next((m for m in matches if str(m.matter.id) == body.matter_id), None)
+    if match is None:
+        raise HTTPException(
+            status_code=403, detail="That matter is no longer available."
+        )
+    return await _mint_session_for_match(response, db, match, email)
+
+
+@router.get("/matters", response_model=List[PortalMatterChoice])
+async def portal_list_matters(
+    resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """The signed-in client's portal matters, for the in-portal switcher."""
+    ctx, _matter = resolved
+    matches = await _client_portal_matches(db, ctx.email or "")
+    return [await _matter_choice(db, m) for m in matches]
+
+
+@router.post("/switch-matter", response_model=ClientPortalSignInResponse)
+async def switch_portal_matter(
+    body: ClientPortalSwitchMatterRequest,
+    response: Response,
+    resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mint a new session for another matter this client can already access."""
+    ctx, _matter = resolved
+    matches = await _client_portal_matches(db, ctx.email or "")
+    match = next((m for m in matches if str(m.matter.id) == body.matter_id), None)
+    if match is None:
+        raise HTTPException(
+            status_code=403, detail="That matter is not available to you."
+        )
+    return await _mint_session_for_match(response, db, match, ctx.email or "")
 
 
 # ── Session ─────────────────────────────────────────────────────────────────
@@ -1437,7 +1732,8 @@ async def portal_list_messages(
                 and (seen_at is None or _aware(m.occurred_at) > seen_at)
             ),
             sender_name=(
-                None if m.direction == "inbound"
+                None
+                if m.direction == "inbound"
                 else sender_names.get(m.created_by_user_id)
             ),
         )

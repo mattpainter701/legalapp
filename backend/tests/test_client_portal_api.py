@@ -10,6 +10,7 @@ import hashlib
 import io
 import secrets
 import uuid
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -28,10 +29,18 @@ from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
 from app.models.tenant import TenantSettings
 from app.models.user import User
-from app.routers.client_portal import CLIENT_PORTAL_COOKIE_NAME, _portal_password_hash
+from app.routers.client_portal import CLIENT_PORTAL_COOKIE_NAME
+from app.services.email import EmailDeliveryResult
 from app.services.portal_token import create_matter_portal_token
 
 PORTAL = "/api/portal/client"
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _fresh_portal_state(test_redis):
+    """Codes, cooldowns and rate-limit counters live in Redis; isolate tests."""
+    await test_redis.flushdb()
+    yield
 
 
 @pytest.mark.asyncio
@@ -186,7 +195,9 @@ def _portal_headers(token: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_session_reports_identity_and_expiry(client, portal_cookie, portal_matter):
+async def test_session_reports_identity_and_expiry(
+    client, portal_cookie, portal_matter
+):
     resp = await client.get(f"{PORTAL}/session", headers=_portal_headers(portal_cookie))
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -795,7 +806,9 @@ async def test_client_can_download_a_document_it_uploaded(client, portal_cookie)
     upload = await client.post(
         f"{PORTAL}/documents/upload",
         headers=headers,
-        files={"file": ("retainer.pdf", io.BytesIO(b"%PDF-1.4 body"), "application/pdf")},
+        files={
+            "file": ("retainer.pdf", io.BytesIO(b"%PDF-1.4 body"), "application/pdf")
+        },
     )
     assert upload.status_code == 201, upload.text
     doc_id = upload.json()["id"]
@@ -881,9 +894,7 @@ async def test_firm_invite_can_revoke_prior_live_invites(
 async def test_firm_invite_requires_an_email_when_no_client_contact_exists(
     client, portal_matter
 ):
-    resp = await client.post(
-        f"/api/matters/{portal_matter.id}/portal/invite", json={}
-    )
+    resp = await client.post(f"/api/matters/{portal_matter.id}/portal/invite", json={})
     assert resp.status_code == 400
     assert "email is required" in resp.json()["detail"].lower()
 
@@ -990,7 +1001,28 @@ async def test_overview_ignores_signatures_this_client_already_signed(
     assert body["pending_signature_count"] == 0
 
 
-# ── Firm branding, upload policy, and durable sign-in ───────────────────────
+# ── Firm branding, upload policy, and passwordless sign-in ──────────────────
+
+
+@contextmanager
+def _captured_signin_code():
+    """Capture the code the portal emails instead of sending it."""
+    with patch(
+        "app.routers.client_portal.send_client_portal_signin_code",
+        new_callable=AsyncMock,
+        return_value=EmailDeliveryResult.SENT,
+    ) as mock:
+        yield mock
+
+
+async def _request_signin_code(client, email, mock):
+    resp = await client.post(
+        f"{PORTAL}/request-code", json={"email": email}, headers={"Authorization": ""}
+    )
+    assert resp.status_code == 200, resp.text
+    if mock.await_args is None:
+        return None
+    return mock.await_args.kwargs["code"]
 
 
 async def _add_client_account(
@@ -999,9 +1031,8 @@ async def _add_client_account(
     *,
     email="client@example.com",
     full_name="Jane Client",
-    password="correct-horse-battery",
 ):
-    """A password-backed client login plus the contact it belongs to."""
+    """A passwordless client account plus the contact it belongs to."""
     user = User(
         id=uuid.uuid4(),
         tenant_id=tenant.id,
@@ -1009,7 +1040,6 @@ async def _add_client_account(
         full_name=full_name,
         role="client",
         is_active=True,
-        password_hash=_portal_password_hash(password),
     )
     db_session.add(user)
     await db_session.flush()
@@ -1125,39 +1155,110 @@ async def test_upload_policy_publishes_the_enforced_limits(client, portal_cookie
 
 
 @pytest.mark.asyncio
-async def test_login_without_matter_id_resolves_a_single_matter(
+async def test_request_code_is_generic_for_an_unknown_email(client):
+    with _captured_signin_code() as sent:
+        resp = await client.post(
+            f"{PORTAL}/request-code",
+            json={"email": "nobody@example.com"},
+            headers={"Authorization": ""},
+        )
+    assert resp.status_code == 200, resp.text
+    # No account oracle: same message either way, and no mail is attempted.
+    assert "sign-in code" in resp.json()["message"]
+    sent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_code_sign_in_resolves_a_single_matter(
     client, db_session, test_tenant, test_user
 ):
-    _user, contact = await _add_client_account(db_session, test_tenant)
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
     matter, _invite = await _seed_client_matter(
         db_session, test_tenant, test_user, contact
     )
+    with _captured_signin_code() as sent:
+        code = await _request_signin_code(client, email, sent)
+    assert code is not None
     resp = await client.post(
-        f"{PORTAL}/login",
-        json={"email": contact.email, "password": "correct-horse-battery"},
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": code},
+        headers={"Authorization": ""},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["matter_id"] == str(matter.id)
-    # The cookie the login set is enough to open the matter.
+    # The cookie verify-code set is enough to open the matter.
     session = await client.get(f"{PORTAL}/session")
     assert session.status_code == 200, session.text
     assert session.json()["matter_id"] == str(matter.id)
 
 
 @pytest.mark.asyncio
-async def test_login_without_matter_id_asks_for_a_choice_when_ambiguous(
+async def test_code_sign_in_makes_a_passwordless_client_login_on_first_use(
     client, db_session, test_tenant, test_user
 ):
-    _user, contact = await _add_client_account(db_session, test_tenant)
+    """An invite-by-email with no contact still becomes a real, revocable login."""
+    email = f"invite-{uuid.uuid4().hex[:8]}@example.com"
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"invite-only-{uuid.uuid4().hex[:8]}",
+        matter_name="Invite-only matter",
+        matter_type="litigation",
+        status="open",
+        portal_enabled=True,
+        client_contact_id=None,
+    )
+    db_session.add(matter)
+    await db_session.flush()
+    db_session.add(
+        ClientPortalInvite(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            matter_id=matter.id,
+            contact_id=None,
+            token_hash=hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
+            email=email,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=14),
+        )
+    )
+    await db_session.commit()
+    with _captured_signin_code() as sent:
+        code = await _request_signin_code(client, email, sent)
+    assert code is not None
+    resp = await client.post(
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": code},
+        headers={"Authorization": ""},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["matter_id"] == str(matter.id)
+    created = await db_session.scalar(
+        select(User).where(User.email == email, User.role == "client")
+    )
+    assert created is not None
+    assert created.password_hash is None
+
+
+@pytest.mark.asyncio
+async def test_code_sign_in_asks_for_a_choice_when_ambiguous(
+    client, db_session, test_tenant, test_user
+):
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
     first, _ = await _seed_client_matter(
         db_session, test_tenant, test_user, contact, name="Alpha v. Beta"
     )
     second, _ = await _seed_client_matter(
         db_session, test_tenant, test_user, contact, name="Gamma v. Delta"
     )
+    with _captured_signin_code() as sent:
+        code = await _request_signin_code(client, email, sent)
     resp = await client.post(
-        f"{PORTAL}/login",
-        json={"email": contact.email, "password": "correct-horse-battery"},
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": code},
+        headers={"Authorization": ""},
     )
     assert resp.status_code == 409, resp.text
     detail = resp.json()["detail"]
@@ -1166,36 +1267,169 @@ async def test_login_without_matter_id_asks_for_a_choice_when_ambiguous(
         str(first.id),
         str(second.id),
     }
+    chosen = await client.post(
+        f"{PORTAL}/select-matter",
+        json={"ticket": detail["ticket"], "matter_id": str(second.id)},
+        headers={"Authorization": ""},
+    )
+    assert chosen.status_code == 200, chosen.text
+    assert chosen.json()["matter_id"] == str(second.id)
 
 
 @pytest.mark.asyncio
-async def test_durable_login_survives_the_invitation_link_expiring(
+async def test_code_sign_in_survives_the_invitation_link_expiring(
     client, db_session, test_tenant, test_user
 ):
-    _user, contact = await _add_client_account(db_session, test_tenant)
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
     expired = datetime.now(timezone.utc) - timedelta(days=1)
     matter, _invite = await _seed_client_matter(
         db_session, test_tenant, test_user, contact, invite_expires_at=expired
     )
+    with _captured_signin_code() as sent:
+        code = await _request_signin_code(client, email, sent)
+    assert code is not None
     resp = await client.post(
-        f"{PORTAL}/login",
-        json={"email": contact.email, "password": "correct-horse-battery"},
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": code},
+        headers={"Authorization": ""},
     )
     assert resp.status_code == 200, resp.text
-    session = await client.get(f"{PORTAL}/session")
-    assert session.status_code == 200, session.text
-    assert session.json()["matter_id"] == str(matter.id)
+    assert resp.json()["matter_id"] == str(matter.id)
 
 
 @pytest.mark.asyncio
-async def test_login_rejects_a_bad_password(client, db_session, test_tenant, test_user):
-    _user, contact = await _add_client_account(db_session, test_tenant)
+async def test_sign_in_code_is_single_use(client, db_session, test_tenant, test_user):
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
     await _seed_client_matter(db_session, test_tenant, test_user, contact)
-    resp = await client.post(
-        f"{PORTAL}/login",
-        json={"email": contact.email, "password": "not-the-password"},
+    with _captured_signin_code() as sent:
+        code = await _request_signin_code(client, email, sent)
+    first = await client.post(
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": code},
+        headers={"Authorization": ""},
     )
-    assert resp.status_code == 401
+    assert first.status_code == 200, first.text
+    replay = await client.post(
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": code},
+        headers={"Authorization": ""},
+    )
+    assert replay.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_sign_in_code_rejects_a_wrong_code(
+    client, db_session, test_tenant, test_user
+):
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
+    await _seed_client_matter(db_session, test_tenant, test_user, contact)
+    with _captured_signin_code() as sent:
+        code = await _request_signin_code(client, email, sent)
+    wrong = "000000" if code != "000000" else "111111"
+    resp = await client.post(
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": wrong},
+        headers={"Authorization": ""},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_code_sign_in_is_cooldown_limited(
+    client, db_session, test_tenant, test_user
+):
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
+    await _seed_client_matter(db_session, test_tenant, test_user, contact)
+    with _captured_signin_code() as sent:
+        await _request_signin_code(client, email, sent)
+        # A second immediate request is accepted generically but sends nothing.
+        second = await client.post(
+            f"{PORTAL}/request-code",
+            json={"email": email},
+            headers={"Authorization": ""},
+        )
+    assert second.status_code == 200
+    assert sent.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_revoked_invite_kills_a_code_session(
+    client, db_session, test_tenant, test_user
+):
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
+    _matter, invite = await _seed_client_matter(
+        db_session, test_tenant, test_user, contact
+    )
+    with _captured_signin_code() as sent:
+        code = await _request_signin_code(client, email, sent)
+    resp = await client.post(
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": code},
+        headers={"Authorization": ""},
+    )
+    assert resp.status_code == 200, resp.text
+    invite.revoked = True
+    await db_session.commit()
+    assert (await client.get(f"{PORTAL}/session")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_revoked_invite_is_not_eligible_for_a_code(
+    client, db_session, test_tenant, test_user
+):
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
+    _matter, invite = await _seed_client_matter(
+        db_session, test_tenant, test_user, contact
+    )
+    invite.revoked = True
+    await db_session.commit()
+    with _captured_signin_code() as sent:
+        assert await _request_signin_code(client, email, sent) is None
+
+
+@pytest.mark.asyncio
+async def test_matter_switcher_lists_and_switches(
+    client, db_session, test_tenant, test_user
+):
+    email = f"client-{uuid.uuid4().hex[:8]}@example.com"
+    _user, contact = await _add_client_account(db_session, test_tenant, email=email)
+    first, _ = await _seed_client_matter(
+        db_session, test_tenant, test_user, contact, name="Alpha v. Beta"
+    )
+    second, _ = await _seed_client_matter(
+        db_session, test_tenant, test_user, contact, name="Gamma v. Delta"
+    )
+    with _captured_signin_code() as sent:
+        code = await _request_signin_code(client, email, sent)
+    choice = await client.post(
+        f"{PORTAL}/verify-code",
+        json={"email": email, "code": code},
+        headers={"Authorization": ""},
+    )
+    ticket = choice.json()["detail"]["ticket"]
+    selected = await client.post(
+        f"{PORTAL}/select-matter",
+        json={"ticket": ticket, "matter_id": str(first.id)},
+        headers={"Authorization": ""},
+    )
+    assert selected.status_code == 200, selected.text
+    listed = await client.get(f"{PORTAL}/matters")
+    assert listed.status_code == 200, listed.text
+    assert {row["matter_id"] for row in listed.json()} == {
+        str(first.id),
+        str(second.id),
+    }
+    switched = await client.post(
+        f"{PORTAL}/switch-matter", json={"matter_id": str(second.id)}
+    )
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["matter_id"] == str(second.id)
 
 
 @pytest.mark.asyncio
