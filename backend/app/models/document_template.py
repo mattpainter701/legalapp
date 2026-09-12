@@ -12,6 +12,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
@@ -21,6 +22,14 @@ from app.database import Base
 
 class DocumentTemplate(Base):
     __tablename__ = "document_templates"
+    __table_args__ = (
+        # Referenced by the composite foreign key on document_template_set_items,
+        # which is how a set is prevented at the database level from naming a
+        # template belonging to another tenant. Postgres requires a unique
+        # constraint on the referenced columns; this is the same shape migration
+        # 146 added to ``matters`` for research workspaces.
+        UniqueConstraint("tenant_id", "id", name="uq_document_templates_tenant_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

@@ -195,9 +195,10 @@ def _update_existing_fields(
             field["field_type"] = proposal.field_type
             field["multiline"] = proposal.field_type == "multiline"
         proposed_binding = reviewed_binding(proposal)
-        if proposed_binding != MANUAL_BINDING and not str(
-            field.get("binding") or ""
-        ).strip():
+        if (
+            proposed_binding != MANUAL_BINDING
+            and not str(field.get("binding") or "").strip()
+        ):
             field["binding"] = proposed_binding
         field["ai_suggested"] = True
         field["ai_update_kind"] = "updated"

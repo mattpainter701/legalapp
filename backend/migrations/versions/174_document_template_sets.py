@@ -62,6 +62,14 @@ def upgrade() -> None:
         "ix_document_template_sets_tenant", "document_template_sets", ["tenant_id"]
     )
 
+    # A composite foreign key needs a unique constraint on the columns it
+    # references. Migration 146 added the same shape to ``matters`` so research
+    # workspaces could be tenant-locked at the database level; this does it for
+    # templates so a set can never name another tenant's template.
+    op.create_unique_constraint(
+        "uq_document_templates_tenant_id", "document_templates", ["tenant_id", "id"]
+    )
+
     op.create_table(
         "document_template_set_items",
         sa.Column(
@@ -123,3 +131,6 @@ def downgrade() -> None:
     op.drop_table("document_template_set_items")
     op.drop_index("ix_document_template_sets_tenant", table_name="document_template_sets")
     op.drop_table("document_template_sets")
+    op.drop_constraint(
+        "uq_document_templates_tenant_id", "document_templates", type_="unique"
+    )

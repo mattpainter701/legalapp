@@ -110,6 +110,13 @@ _PURGE_ONLY_TABLES = {
     "document_integrity_events",
     "document_storage_operations",
     "document_template_previews",
+    # A set is a firm's own decision about which templates it drafts together,
+    # and its rows reference that firm's template ids. Purge it with an expired
+    # demo, but never clone it: a demo tenant gets the cloned templates and
+    # decides its own groupings rather than inheriting somebody else's, and a
+    # cloned set would otherwise point at the source tenant's template ids.
+    "document_template_set_items",
+    "document_template_sets",
     "durable_jobs",
     "engagement_packets",
     "error_logs",

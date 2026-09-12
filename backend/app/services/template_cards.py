@@ -156,10 +156,24 @@ _CARDS: tuple[Card, ...] = (
         group="Firm profile",
         fields=(
             CardField("name", "Firm name", alias="firm_name", legacy_path="firm.name"),
-            CardField("address", "Firm address", alias="firm_address", legacy_path="firm.address"),
-            CardField("phone", "Firm phone", alias="firm_phone", legacy_path="firm.phone"),
-            CardField("email", "Firm email", alias="firm_email", legacy_path="firm.email"),
-            CardField("website", "Firm website", alias="firm_website", legacy_path="firm.website"),
+            CardField(
+                "address",
+                "Firm address",
+                alias="firm_address",
+                legacy_path="firm.address",
+            ),
+            CardField(
+                "phone", "Firm phone", alias="firm_phone", legacy_path="firm.phone"
+            ),
+            CardField(
+                "email", "Firm email", alias="firm_email", legacy_path="firm.email"
+            ),
+            CardField(
+                "website",
+                "Firm website",
+                alias="firm_website",
+                legacy_path="firm.website",
+            ),
         ),
     ),
     Card(
@@ -168,17 +182,56 @@ _CARDS: tuple[Card, ...] = (
         kind=CardKind.MATTER,
         group="Matter",
         fields=(
-            CardField("name", "Matter name", alias="matter_name", legacy_path="matter.name"),
-            CardField("type", "Matter type", alias="matter_type", legacy_path="matter.type"),
-            CardField("description", "Matter description", alias="matter_description", legacy_path="matter.description"),
-            CardField("status", "Matter status", alias="matter_status", legacy_path="matter.status"),
-            CardField("stage", "Matter stage", alias="matter_stage", legacy_path="matter.stage"),
-            CardField("jurisdiction", "Jurisdiction", alias="matter_jurisdiction", legacy_path="matter.jurisdiction"),
-            CardField("case_number", "Case number", alias="case_number", legacy_path="matter.case_number"),
+            CardField(
+                "name", "Matter name", alias="matter_name", legacy_path="matter.name"
+            ),
+            CardField(
+                "type", "Matter type", alias="matter_type", legacy_path="matter.type"
+            ),
+            CardField(
+                "description",
+                "Matter description",
+                alias="matter_description",
+                legacy_path="matter.description",
+            ),
+            CardField(
+                "status",
+                "Matter status",
+                alias="matter_status",
+                legacy_path="matter.status",
+            ),
+            CardField(
+                "stage",
+                "Matter stage",
+                alias="matter_stage",
+                legacy_path="matter.stage",
+            ),
+            CardField(
+                "jurisdiction",
+                "Jurisdiction",
+                alias="matter_jurisdiction",
+                legacy_path="matter.jurisdiction",
+            ),
+            CardField(
+                "case_number",
+                "Case number",
+                alias="case_number",
+                legacy_path="matter.case_number",
+            ),
             CardField("court", "Court", alias="court", legacy_path="matter.court"),
             CardField("judge", "Judge", alias="judge", legacy_path="matter.judge"),
-            CardField("counterparty", "Counterparty", alias="counterparty", legacy_path="matter.counterparty"),
-            CardField("role", "Represented side", alias="matter_role", legacy_path="matter.role"),
+            CardField(
+                "counterparty",
+                "Counterparty",
+                alias="counterparty",
+                legacy_path="matter.counterparty",
+            ),
+            CardField(
+                "role",
+                "Represented side",
+                alias="matter_role",
+                legacy_path="matter.role",
+            ),
         ),
     ),
     Card(
@@ -187,10 +240,32 @@ _CARDS: tuple[Card, ...] = (
         kind=CardKind.MATTER,
         group="Billing",
         fields=(
-            CardField("method", "Billing method", alias="billing_method", legacy_path="matter.billing_method"),
-            CardField("cycle", "Billing cycle", alias="billing_cycle", legacy_path="matter.billing_cycle"),
-            CardField("hourly_rate", "Hourly rate", alias="hourly_rate", value_kind="number", legacy_path="matter.hourly_rate"),
-            CardField("budget_amount", "Budget amount", alias="budget_amount", value_kind="number", legacy_path="matter.budget_amount"),
+            CardField(
+                "method",
+                "Billing method",
+                alias="billing_method",
+                legacy_path="matter.billing_method",
+            ),
+            CardField(
+                "cycle",
+                "Billing cycle",
+                alias="billing_cycle",
+                legacy_path="matter.billing_cycle",
+            ),
+            CardField(
+                "hourly_rate",
+                "Hourly rate",
+                alias="hourly_rate",
+                value_kind="number",
+                legacy_path="matter.hourly_rate",
+            ),
+            CardField(
+                "budget_amount",
+                "Budget amount",
+                alias="budget_amount",
+                value_kind="number",
+                legacy_path="matter.budget_amount",
+            ),
         ),
     ),
     Card(
@@ -199,14 +274,54 @@ _CARDS: tuple[Card, ...] = (
         kind=CardKind.PERSON,
         group="Client",
         fields=(
-            CardField("full_name", "Client name", alias="client_name", legacy_path="client.name"),
-            CardField("email", "Client email", alias="client_email", legacy_path="client.email"),
-            CardField("phone", "Client phone", alias="client_phone", legacy_path="client.phone"),
-            CardField("street", "Client street", alias="client_street", legacy_path="client.address.street"),
-            CardField("city", "Client city", alias="client_city", legacy_path="client.address.city"),
-            CardField("state", "Client state", alias="client_state", legacy_path="client.address.state"),
-            CardField("zip", "Client ZIP", alias="client_zip", legacy_path="client.address.zip"),
-            CardField("country", "Client country", alias="client_country", legacy_path="client.address.country"),
+            CardField(
+                "full_name",
+                "Client name",
+                alias="client_name",
+                legacy_path="client.name",
+            ),
+            CardField(
+                "email",
+                "Client email",
+                alias="client_email",
+                legacy_path="client.email",
+            ),
+            CardField(
+                "phone",
+                "Client phone",
+                alias="client_phone",
+                legacy_path="client.phone",
+            ),
+            CardField(
+                "street",
+                "Client street",
+                alias="client_street",
+                legacy_path="client.address.street",
+            ),
+            CardField(
+                "city",
+                "Client city",
+                alias="client_city",
+                legacy_path="client.address.city",
+            ),
+            CardField(
+                "state",
+                "Client state",
+                alias="client_state",
+                legacy_path="client.address.state",
+            ),
+            CardField(
+                "zip",
+                "Client ZIP",
+                alias="client_zip",
+                legacy_path="client.address.zip",
+            ),
+            CardField(
+                "country",
+                "Client country",
+                alias="client_country",
+                legacy_path="client.address.country",
+            ),
         ),
     ),
     _role_card("plaintiff", "Plaintiff"),
@@ -217,8 +332,18 @@ _CARDS: tuple[Card, ...] = (
         kind=CardKind.PERSON,
         group="People",
         fields=(
-            CardField("full_name", "Attorney of record", alias="attorney_name", legacy_path="attorney.name"),
-            CardField("email", "Attorney email", alias="attorney_email", legacy_path="attorney.email"),
+            CardField(
+                "full_name",
+                "Attorney of record",
+                alias="attorney_name",
+                legacy_path="attorney.name",
+            ),
+            CardField(
+                "email",
+                "Attorney email",
+                alias="attorney_email",
+                legacy_path="attorney.email",
+            ),
         ),
     ),
     Card(
@@ -227,9 +352,24 @@ _CARDS: tuple[Card, ...] = (
         kind=CardKind.PERSON,
         group="People",
         fields=(
-            CardField("full_name", "Current user", alias="current_user_name", legacy_path="current_user.name"),
-            CardField("email", "Current user email", alias="current_user_email", legacy_path="current_user.email"),
-            CardField("prepared_by", "Prepared by", alias="prepared_by", legacy_path="current_user.prepared_by"),
+            CardField(
+                "full_name",
+                "Current user",
+                alias="current_user_name",
+                legacy_path="current_user.name",
+            ),
+            CardField(
+                "email",
+                "Current user email",
+                alias="current_user_email",
+                legacy_path="current_user.email",
+            ),
+            CardField(
+                "prepared_by",
+                "Prepared by",
+                alias="prepared_by",
+                legacy_path="current_user.prepared_by",
+            ),
         ),
     ),
     Card(
@@ -241,10 +381,18 @@ _CARDS: tuple[Card, ...] = (
         # from a matter record, so they carry no alias.  The repeat evaluator
         # supplies their values.
         fields=(
-            CardField("party_name", "Party name (this item)", legacy_path="item.party_name"),
-            CardField("party_role", "Party role (this item)", legacy_path="item.party_role"),
-            CardField("party_email", "Party email (this item)", legacy_path="item.party_email"),
-            CardField("party_phone", "Party phone (this item)", legacy_path="item.party_phone"),
+            CardField(
+                "party_name", "Party name (this item)", legacy_path="item.party_name"
+            ),
+            CardField(
+                "party_role", "Party role (this item)", legacy_path="item.party_role"
+            ),
+            CardField(
+                "party_email", "Party email (this item)", legacy_path="item.party_email"
+            ),
+            CardField(
+                "party_phone", "Party phone (this item)", legacy_path="item.party_phone"
+            ),
         ),
     ),
 )
@@ -266,7 +414,9 @@ def _build_legacy_paths() -> dict[str, str]:
             if entry.legacy_path:
                 mapping[entry.legacy_path] = f"{card.key}.{entry.key}"
             if entry.legacy_all_path:
-                mapping[entry.legacy_all_path] = f"{card.key}.{ALL_INSTANCES}.{entry.key}"
+                mapping[entry.legacy_all_path] = (
+                    f"{card.key}.{ALL_INSTANCES}.{entry.key}"
+                )
     return mapping
 
 
@@ -407,7 +557,7 @@ def indexed_alias(card_key: str, instance: int, entry: CardField) -> str:
     """
 
     prefix = f"{card_key}_"
-    suffix = entry.alias[len(prefix):] if entry.alias.startswith(prefix) else entry.key
+    suffix = entry.alias[len(prefix) :] if entry.alias.startswith(prefix) else entry.key
     return f"{card_key}_{instance}_{suffix}"
 
 

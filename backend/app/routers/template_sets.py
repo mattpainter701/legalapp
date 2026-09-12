@@ -403,9 +403,7 @@ async def set_interview(
     )
 
 
-async def _interview_suggestions(
-    *, db, tenant_id, current_user, matter_id, questions
-):
+async def _interview_suggestions(*, db, tenant_id, current_user, matter_id, questions):
     """Smart Fill the merged interview in one pass.
 
     The resolver is keyed by field name, and an interview key is a binding path
