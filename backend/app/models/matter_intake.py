@@ -69,6 +69,12 @@ class MatterIntake(Base):
     config: Mapped[dict] = mapped_column(JSONB, nullable=False)
     requirements: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     answers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Structured write-back proposals derived from the submitted answers
+    # (migration 176). Every entry is staff-reviewed before any Contact or
+    # Matter field changes; see app/services/intake_writeback.py.
+    proposed_changes: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
     delivery: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
