@@ -8,7 +8,6 @@ Smart Fill alias it did before.
 
 import pytest
 
-from app.services import template_cards
 from app.services.template_bindings import (
     MANUAL_BINDING,
     alias_for_binding,

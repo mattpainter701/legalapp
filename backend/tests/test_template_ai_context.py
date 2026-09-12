@@ -88,7 +88,18 @@ async def test_context_reaches_model_without_entering_signed_source_schema(monke
     assert [field["name"] for field in result.variable_schema["fields"]] == ["reference"]
     assert "template_context" not in result.variable_schema
     assert "Address requirement is absent from the source." in result.warnings
-    assert result.variable_schema["ai_proposal"]["prompt_version"] == "template-field-proposal-v2"
+    assert result.variable_schema["ai_proposal"]["prompt_version"] == "template-field-proposal-v3"
+    # v3 sends the card catalogue as the only legal binding vocabulary, so the
+    # model chooses from it instead of inventing a path the server discards.
+    card_keys = {card["card"] for card in evidence["cards"]}
+    assert {"client", "matter", "defendant"} <= card_keys
+    # Role instances are deliberately absent: which party a blank means is a
+    # decision about the matter, not something the document text can settle.
+    assert all(
+        "." not in field["path"].split(".", 1)[1]
+        for card in evidence["cards"]
+        for field in card["fields"]
+    )
 
 
 @pytest.mark.asyncio

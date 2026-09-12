@@ -11,6 +11,8 @@ from typing import Literal
 from docx import Document
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.template_bindings import MANUAL_BINDING
+
 from app.services.docx_templates import (
     docx_source_key,
     iter_docx_paragraphs_with_anchors,
@@ -19,6 +21,7 @@ from app.services.pdf_templates import (
     _discover_pdf_overlay_fields,
     _inspect_pdf_template,
 )
+from app.services.template_cards import canonical_path, resolve as resolve_card_path
 from app.services.template_intake import TemplateAnalysis
 
 
@@ -32,6 +35,35 @@ class AiFieldProposal(BaseModel):
     field_type: Literal["text", "multiline", "checkbox"] = "text"
     confidence: float = Field(default=0.5, ge=0, le=1)
     reason: str = Field(default="", max_length=500)
+    #: One path from the card catalogue, or ``manual``.  The model is told the
+    #: catalogue and told to pick from it; anything else is discarded rather
+    #: than stored, so a hallucinated data source can never reach a fill.
+    binding: str = Field(default=MANUAL_BINDING, max_length=200)
+
+
+def reviewed_binding(proposal: AiFieldProposal) -> str:
+    """Return the card path a proposal may carry, or the manual marker.
+
+    A proposal naming something the catalogue does not describe is not an
+    error worth rejecting the whole field over — the located source text is
+    still useful — so the field lands as manual and the reviewer binds it. The
+    dishonest outcome would be keeping the invented path and letting a fill
+    silently find nothing.
+
+    A role *instance* is refused the same way even though it is a valid path.
+    Which of a matter's defendants a blank means is a decision about that
+    matter, and the document text cannot settle it; binding to the second
+    defendant because the prose said "Defendant 2" would fill a filed document
+    from a party nobody chose.
+    """
+
+    path = str(getattr(proposal, "binding", "") or "").strip()
+    if not path or path == MANUAL_BINDING:
+        return MANUAL_BINDING
+    ref = resolve_card_path(path)
+    if ref is None or ref.instance is not None:
+        return MANUAL_BINDING
+    return canonical_path(path)
 
 
 class AiTemplateProposal(BaseModel):
@@ -162,6 +194,11 @@ def _update_existing_fields(
         if not field.get("pdf_field_name"):
             field["field_type"] = proposal.field_type
             field["multiline"] = proposal.field_type == "multiline"
+        proposed_binding = reviewed_binding(proposal)
+        if proposed_binding != MANUAL_BINDING and not str(
+            field.get("binding") or ""
+        ).strip():
+            field["binding"] = proposed_binding
         field["ai_suggested"] = True
         field["ai_update_kind"] = "updated"
         field["ai_existing_name"] = existing_name
@@ -224,6 +261,7 @@ def _docx_proposals(
                 "name": name,
                 "label": proposal.label.strip(),
                 "field_type": proposal.field_type,
+                "binding": reviewed_binding(proposal),
                 "source_text": source_text,
                 "confidence": round(min(0.75, proposal.confidence), 2),
                 "review_required": True,
@@ -343,6 +381,7 @@ def _text_proposals(
                 "name": name,
                 "label": proposal.label.strip(),
                 "field_type": proposal.field_type,
+                "binding": reviewed_binding(proposal),
                 "source_text": source_text,
                 "confidence": round(min(0.75, proposal.confidence), 2),
                 "review_required": True,

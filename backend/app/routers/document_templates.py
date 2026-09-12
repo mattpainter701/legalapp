@@ -147,6 +147,7 @@ from app.services.template_bindings import (
 )
 from app.services import template_cards
 from app.services.template_cards import CardKind
+from app.services.template_labels import unusable_labels
 from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
 from app.services.esign.placement import generated_signing_metadata
@@ -4573,6 +4574,34 @@ async def restore_template_version(
     return _template_response(template)
 
 
+def _ensure_usable_labels(variable_schema: dict | None) -> None:
+    """Refuse to publish a template whose blanks cannot be identified.
+
+    A label like "And" or "Shall Pay To" looks reviewed while telling the
+    person filling the form nothing, and tells an auditor of the finished
+    document nothing either. Detection produced labels like these, so the
+    check belongs at the gate where a draft becomes usable by the whole firm
+    rather than at the moment they are first proposed — a draft is allowed to
+    be unfinished.
+
+    The message names every field, so fixing it is one pass through the
+    editor rather than a hunt.
+    """
+
+    problems = unusable_labels(variable_schema)
+    if not problems:
+        return
+    listed = "; ".join(f"{name} {problem}" for name, problem in problems[:10])
+    more = "" if len(problems) <= 10 else f" (and {len(problems) - 10} more)"
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Rename these fields so someone filling the document knows what "
+            f"belongs in them: {listed}{more}."
+        ),
+    )
+
+
 @router.post(
     "/{template_id}/publish",
     response_model=DocumentTemplateResponse,
@@ -4612,6 +4641,7 @@ async def publish_template(
         )
 
     await _ensure_word_source_review(template, template.variable_schema)
+    _ensure_usable_labels(template.variable_schema)
     template.is_active = True
     template.status = "published"
     template.approved_at = datetime.now(timezone.utc)
