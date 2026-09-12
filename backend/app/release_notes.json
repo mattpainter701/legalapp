@@ -44,6 +44,31 @@
       ]
     },
     {
+      "id": "2026.09.11.14",
+      "version": "2026.09.11.14",
+      "title": "Preview the message before you send it",
+      "published_at": "2026-09-11",
+      "summary": "Client paperwork now goes out as a branded email with the firm's name and contact details and a clear portal button, with a separate short text, and the Send step previews both before anything is sent.",
+      "highlights": [
+        {
+          "title": "See the message before you send it",
+          "description": "The Send step shows the exact branded email and short text the client will receive, rendered by the same code that delivers them."
+        },
+        {
+          "title": "The email looks like your firm",
+          "description": "Paperwork now carries your firm's name and contact details and an Open Secure Client Portal button instead of one plain paragraph."
+        },
+        {
+          "title": "Email and text are separate messages",
+          "description": "The full checklist stays in the email; the text is a short line with the link, so the message is readable on any phone."
+        },
+        {
+          "title": "One link, described correctly",
+          "description": "The message no longer promises a second portal link: the invitation link is the portal, and signing the fee agreement unlocks the rest."
+        }
+      ]
+    },
+    {
       "id": "2026.09.11.13",
       "version": "2026.09.11.13",
       "title": "Intake answers apply to the matter after review",
@@ -61,6 +86,27 @@
         {
           "title": "Nothing changes without staff approval",
           "description": "Every proposed update waits for a staff member's decision, and a change is refused for re-review if the record moved after the proposal was made."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.11.16",
+      "version": "2026.09.11.16",
+      "title": "Send any of the three standard pieces",
+      "published_at": "2026-09-11",
+      "summary": "Start this case now lists the fee agreement, questionnaire, and client intake form together, fills the questionnaire with the matter type's own questions, and can send any subset.",
+      "highlights": [
+        {
+          "title": "The three common pieces, side by side",
+          "description": "The fee agreement, client questionnaire, and client intake form are each listed and selectable, so a firm can send one, two, or all three."
+        },
+        {
+          "title": "A fee agreement is now optional",
+          "description": "Send only the questionnaire or requested uploads when no agreement is needed. Signing still opens the portal when an agreement goes out."
+        },
+        {
+          "title": "Questions match the matter type",
+          "description": "The questionnaire starts with the standard questions for the matter type, and the upload hint shows examples for that practice instead of one generic list."
         }
       ]
     },

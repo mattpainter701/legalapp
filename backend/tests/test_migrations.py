@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["177_matter_venue"]
+    assert heads == ["178_intake_optional_agreement"]
 
 
 def test_matter_venue_migration_adds_and_drops_the_column():

@@ -138,12 +138,22 @@ export function paperworkOptions(draft, timeZone) {
     questions: draft.includeQuestionnaire
       ? lines(draft.questions).map((label, index) => ({ key: `question_${index + 1}`, label, required: true }))
       : [],
-    selected_documents: draft.forms.map(form => ({
-      document_id: form.documentId,
-      label: form.label,
-      requires_signature: form.requiresSignature,
-      due_at: dueDateToIso(form.due, timeZone),
-    })),
+    selected_documents: [
+      ...draft.forms.map(form => ({
+        document_id: form.documentId,
+        label: form.label,
+        requires_signature: form.requiresSignature,
+        due_at: dueDateToIso(form.due, timeZone),
+      })),
+      // The client intake form is one of the three common pieces and is not a
+      // signature document: the client fills it in, so it travels unsigned.
+      ...(draft.intakeFormDocumentId ? [{
+        document_id: draft.intakeFormDocumentId,
+        label: draft.intakeFormLabel || 'Client intake form',
+        requires_signature: false,
+        due_at: null,
+      }] : []),
+    ],
     upload_requirements: lines(draft.uploads).map((label, index) => ({
       key: `upload_${index + 1}`,
       label,
@@ -163,6 +173,8 @@ export const emptyDraft = {
   questions: 'Please describe your legal matter.\nWho are the other people or organizations involved?\nWhat important dates should your legal team know about? Enter none if unknown.',
   uploads: '',
   uploadsDue: '',
+  intakeFormDocumentId: '',
+  intakeFormLabel: '',
   email: '',
   channels: ['email'],
   smsPermissionVerified: false,
