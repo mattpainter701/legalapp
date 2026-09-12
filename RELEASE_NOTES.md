@@ -5,16 +5,6 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.11.13 — Intake answers apply to the matter after review
-
-Released September 11, 2026.
-
-Questionnaire answers propose updates to the contact and matter record (address, phone, case number, court, jurisdiction) for staff to accept. Conflict-of-interest names are checked against firm contacts; nothing changes without approval.
-
-- **Review questionnaire updates instead of retyping them.** Answers that map to the client contact or the matter — address, phone, case number, court, jurisdiction — become changes staff accept or reject, nothing retyped.
-- **Conflicts of interest checked automatically.** Names from the conflict section are checked against the firm's contacts and matters when the form is submitted, and the result is attached to the review task.
-- **Nothing changes without staff approval.** Every proposed update waits for a staff member's decision, and a change is refused for re-review if the record moved after the proposal was made.
-
 ## 2026.09.11.15 — Fee agreements fill themselves — drafts can't be approved half-empty
 
 Released September 11, 2026.
@@ -24,6 +14,16 @@ The retainer, its replenishment threshold, the contingency percentage, and the v
 - **Retainer and contingency terms fill from the matter.** The retainer amount, the balance that triggers replenishment, the contingency percentage, and the venue now fill from the matter record and its current retainer.
 - **Matters record their venue.** The matter record gains a venue field, set the same way as jurisdiction, so every document that names a forum fills from one place.
 - **Half-empty templates can't be approved.** Approving a template now checks that every required placeholder has a record or a default behind it, and jurisdiction terms must name their jurisdiction.
+
+## 2026.09.11.13 — Intake answers apply to the matter after review
+
+Released September 11, 2026.
+
+Questionnaire answers propose updates to the contact and matter record (address, phone, case number, court, jurisdiction) for staff to accept. Conflict-of-interest names are checked against firm contacts; nothing changes without approval.
+
+- **Review questionnaire updates instead of retyping them.** Answers that map to the client contact or the matter — address, phone, case number, court, jurisdiction — become changes staff accept or reject, nothing retyped.
+- **Conflicts of interest checked automatically.** Names from the conflict section are checked against the firm's contacts and matters when the form is submitted, and the result is attached to the review task.
+- **Nothing changes without staff approval.** Every proposed update waits for a staff member's decision, and a change is refused for re-review if the record moved after the proposal was made.
 
 ## 2026.09.11.11 — Declined signatures and resilient signing
 
