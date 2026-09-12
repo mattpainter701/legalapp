@@ -71,9 +71,13 @@ become the intake packet's upload requirements.
 Every placeholder in both documents is declared in the template's
 `variable_schema`, and each declares where its value comes from: a path from the
 server-owned binding catalogue (`client.name`, `matter.case_number`,
-`matter.hourly_rate`, …) or `manual`. Fee amounts, contingency percentages,
-scope, and exclusions are always `manual` — a fee term is decided by a person,
-never inferred from a record.
+`matter.hourly_rate`, …) or `manual`. Terms the matter's own records already
+carry fill from them — the contingency percentage (`matter.contingency_percentage`),
+the retainer and its replenishment threshold (`matter.retainer_amount`,
+`matter.retainer_minimum_balance`, resolved from the matter's current retainer
+record), and venue (`matter.venue`). Fee amounts the firm must decide — flat
+fees, deposits, rate ranges — and scope and exclusions stay `manual`: a fee
+term is decided by a person, never inferred from a record.
 
 That is what makes the intake form worth collecting: its fields carry the same
 bindings the rest of the document automation fills from, so a value the client

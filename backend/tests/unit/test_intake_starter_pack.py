@@ -84,9 +84,9 @@ def test_every_alias_is_claimed_by_exactly_one_practice():
     seen: dict[str, str] = {}
     for practice in pack.practices():
         for alias in practice.aliases:
-            assert alias not in seen, (
-                f"{alias} claimed by {seen.get(alias)} and {practice.slug}"
-            )
+            assert (
+                alias not in seen
+            ), f"{alias} claimed by {seen.get(alias)} and {practice.slug}"
             seen[alias] = practice.slug
 
 
@@ -185,22 +185,39 @@ def test_only_settled_terms_carry_a_default():
     } & set(defaults)
 
 
-def test_fee_terms_are_never_bound_to_a_record():
-    """A fee, deposit, or contingency term is decided by a person, never inferred."""
+def test_fee_terms_the_firm_decides_are_never_bound_to_a_record():
+    """A fee or deposit the firm must set is decided by a person, never inferred."""
 
-    money = {
+    decided_by_the_firm = {
         field.binding
         for field in pack.FEE_AGREEMENT.fields
         if field.name
         in {
             "flat_fee_amount",
-            "contingency_percentage",
             "advance_deposit_amount",
             "scope_of_representation",
             "excluded_matters",
         }
     }
-    assert money == {"manual"}
+    assert decided_by_the_firm == {"manual"}
+
+
+def test_fee_terms_the_matter_record_carries_bind_to_it():
+    """Contingency, retainer, and venue already live on the matter's records,
+    so Smart Fill fills them from there instead of asking again."""
+
+    by_name = {field.name: field.binding for field in pack.FEE_AGREEMENT.fields}
+    assert by_name["contingency_percentage"] == "matter.contingency_percentage"
+
+    nd_by_name = {
+        field.name: field.binding for field in pack.HOURLY_FEE_AGREEMENT_ND.fields
+    }
+    assert nd_by_name["retainer_amount"] == "matter.retainer_amount"
+    assert nd_by_name["retainer_minimum_balance"] == "matter.retainer_minimum_balance"
+    assert nd_by_name["venue"] == "matter.venue"
+    # Rate ranges are the firm's own schedule, not a record the matter carries.
+    assert nd_by_name["staff_rate_range"] == "manual"
+    assert nd_by_name["attorney_rate_range"] == "manual"
 
 
 def test_the_pack_names_the_documents_that_travel_with_it():

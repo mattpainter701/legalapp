@@ -59,6 +59,7 @@ _CATALOGUE: tuple[TemplateBinding, ...] = (
     TemplateBinding(
         "matter.jurisdiction", "matter_jurisdiction", "Jurisdiction", "Matter"
     ),
+    TemplateBinding("matter.venue", "venue", "Venue", "Matter"),
     TemplateBinding("matter.case_number", "case_number", "Case number", "Matter"),
     TemplateBinding("matter.court", "court", "Court", "Matter"),
     TemplateBinding("matter.judge", "judge", "Judge", "Matter"),
@@ -74,6 +75,24 @@ _CATALOGUE: tuple[TemplateBinding, ...] = (
     TemplateBinding("matter.hourly_rate", "hourly_rate", "Hourly rate", "Billing"),
     TemplateBinding(
         "matter.budget_amount", "budget_amount", "Budget amount", "Billing"
+    ),
+    # The retainer bindings resolve from the matter's *current* retainer record:
+    # the most recently created active retainer (falling back to the most
+    # recent of any status), never a sum across the matter's retainer history.
+    TemplateBinding(
+        "matter.contingency_percentage",
+        "contingency_percentage",
+        "Contingency percentage",
+        "Billing",
+    ),
+    TemplateBinding(
+        "matter.retainer_amount", "retainer_amount", "Retainer amount", "Billing"
+    ),
+    TemplateBinding(
+        "matter.retainer_minimum_balance",
+        "retainer_minimum_balance",
+        "Retainer minimum balance",
+        "Billing",
     ),
     # Client contact
     TemplateBinding("client.name", "client_name", "Client name", "Client"),
