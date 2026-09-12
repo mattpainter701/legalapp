@@ -157,6 +157,14 @@ function canAccessModule(user, module) {
 }
 
 function hasFinanceAccess(user) {
+  // Mirrors the backend's require_finance_admin: a billing capability from any
+  // role, with the legacy admin/accountant roles as the fallback.
+  const capabilities = user?.capabilities
+  if (Array.isArray(capabilities)) {
+    if (capabilities.includes('view_billing') || capabilities.includes('manage_billing')) {
+      return true
+    }
+  }
   return user?.role === 'admin' || user?.role === 'accountant'
 }
 
@@ -338,15 +346,15 @@ export default function App() {
         />
         <Route
           path="/invoices"
-          element={<ShellRoute title="Invoices" module="invoices"><InvoicesPage /></ShellRoute>}
+          element={<ShellRoute title="Invoices" financeOnly module="invoices"><InvoicesPage /></ShellRoute>}
         />
         <Route
           path="/invoices/:id"
-          element={<ShellRoute title="Invoice" module="invoices"><InvoiceDetailPage /></ShellRoute>}
+          element={<ShellRoute title="Invoice" financeOnly module="invoices"><InvoiceDetailPage /></ShellRoute>}
         />
         <Route
           path="/reports"
-          element={<ShellRoute title="Reports" module="reports"><ReportsPage /></ShellRoute>}
+          element={<ShellRoute title="Reports" financeOnly module="reports"><ReportsPage /></ShellRoute>}
         />
         <Route
           path="/trust"

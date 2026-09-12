@@ -303,6 +303,14 @@ class QBOSyncService:
         if not invoice:
             return None
 
+        # A draft has not cleared review. Pushing it to QBO would make it
+        # outstanding A/R in both systems on one click, so drafts are skipped
+        # here exactly as the bulk sync already skips them. Returning rather
+        # than raising keeps the retry wrapper from treating it as an outage.
+        if invoice.status == "draft":
+            logger.info("QBO invoice sync skipped for %s: still a draft", invoice_id)
+            return None
+
         # Get matter
         matter_result = await self.db.execute(
             select(Matter).where(Matter.id == invoice.matter_id)
@@ -482,10 +490,6 @@ class QBOSyncService:
             invoice.qbo_sync_error = None
             if getattr(invoice, "billed_at", None) is None:
                 invoice.billed_at = invoice.qbo_synced_at
-            # QBO creation is the accounting/billing event. It makes the
-            # receivable outstanding locally, but does not claim it was emailed.
-            if invoice.status == "draft":
-                invoice.status = "sent"
             time_entry_ids = [
                 line.source_id
                 for line in line_items

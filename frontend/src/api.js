@@ -2145,20 +2145,28 @@ export const getOverdueTasksReport = () =>
 export const getReportsBundle = () =>
   api.get('/reports/bundle').then(r => r.data)
 
-export const getRealizationReport = () =>
-  api.get('/reports/billing/realization').then(r => r.data)
+// Omit empty bounds so "all time" stays the default on the server side.
+const reportRange = (range = {}) => {
+  const params = {}
+  if (range.start) params.start = range.start
+  if (range.end) params.end = range.end
+  return params
+}
 
-export const getWipReport = () =>
-  api.get('/reports/billing/wip').then(r => r.data)
+export const getRealizationReport = (range) =>
+  api.get('/reports/billing/realization', { params: reportRange(range) }).then(r => r.data)
+
+export const getWipReport = (range) =>
+  api.get('/reports/billing/wip', { params: reportRange(range) }).then(r => r.data)
 
 export const getAgingReport = () =>
   api.get('/reports/billing/aging').then(r => r.data)
 
-export const downloadRealizationCsv = () =>
-  api.get('/reports/billing/realization', { params: { format: 'csv' }, responseType: 'blob' }).then(r => r.data)
+export const downloadRealizationCsv = (range) =>
+  api.get('/reports/billing/realization', { params: { ...reportRange(range), format: 'csv' }, responseType: 'blob' }).then(r => r.data)
 
-export const downloadWipCsv = () =>
-  api.get('/reports/billing/wip', { params: { format: 'csv' }, responseType: 'blob' }).then(r => r.data)
+export const downloadWipCsv = (range) =>
+  api.get('/reports/billing/wip', { params: { ...reportRange(range), format: 'csv' }, responseType: 'blob' }).then(r => r.data)
 
 export const downloadAgingCsv = () =>
   api.get('/reports/billing/aging', { params: { format: 'csv' }, responseType: 'blob' }).then(r => r.data)
@@ -2655,6 +2663,9 @@ export const deleteExpense = (id) =>
   api.delete(`/billing/expenses/${id}`)
 
 // Billing settings
+export const getTimeEntrySettings = () =>
+  api.get('/billing/time-entry-settings').then(r => r.data)
+
 export const getBillingSettings = () =>
   api.get('/billing/settings').then(r => r.data)
 export const updateBillingSettings = (data) =>
@@ -2674,6 +2685,24 @@ export const recordPayment = (data) =>
   api.post('/billing/payments', data).then(r => r.data)
 export const createInvoicePaymentLink = (id) =>
   api.post(`/billing/invoices/${id}/payment-link`).then(r => r.data)
+export const addInvoiceLineItem = (invoiceId, data) =>
+  api.post(`/billing/invoices/${invoiceId}/line-items`, data).then(r => r.data)
+
+export const updateInvoiceLineItem = (invoiceId, lineItemId, data) =>
+  api.patch(`/billing/invoices/${invoiceId}/line-items/${lineItemId}`, data).then(r => r.data)
+
+export const deleteInvoiceLineItem = (invoiceId, lineItemId) =>
+  api.delete(`/billing/invoices/${invoiceId}/line-items/${lineItemId}`).then(r => r.data)
+
+export const getInvoiceAvailableTrust = (invoiceId) =>
+  api.get(`/billing/invoices/${invoiceId}/available-trust`).then(r => r.data)
+
+export const applyTrustToInvoice = (invoiceId, data) =>
+  api.post(`/billing/invoices/${invoiceId}/apply-trust`, data).then(r => r.data)
+
+export const sendInvoice = (invoiceId, data = {}) =>
+  api.post(`/billing/invoices/${invoiceId}/send`, data).then(r => r.data)
+
 export const exportInvoice = (id, format = 'pdf') =>
   api.post(`/billing/invoices/${id}/export`, { format }, { responseType: 'blob' }).then(r => r.data)
 

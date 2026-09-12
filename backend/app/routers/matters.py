@@ -2326,15 +2326,25 @@ async def get_matter_time_entries(
     result = await db.execute(q)
     entries = result.scalars().all()
 
+    # Resolve timekeepers in one query so the matter table can name who worked.
+    user_ids = {e.user_id for e in entries if e.user_id}
+    names: dict[uuid.UUID, str] = {}
+    if user_ids:
+        name_rows = await db.execute(
+            select(User.id, User.full_name).where(User.id.in_(user_ids))
+        )
+        names = {uid: full_name for uid, full_name in name_rows.all()}
+
     return [
         {
             "id": str(e.id),
             "matter_id": str(e.matter_id),
             "user_id": str(e.user_id),
+            "user_name": names.get(e.user_id),
             "description": e.description,
-            "hours": float(e.hours),
-            "hourly_rate": float(e.hourly_rate),
-            "amount": float(e.amount),
+            "hours": str(e.hours),
+            "hourly_rate": str(e.hourly_rate),
+            "amount": str(e.amount),
             "date": str(e.date),
             "is_billable": e.is_billable,
             "status": e.status,
@@ -2383,9 +2393,10 @@ async def get_matter_invoices(
             "status": i.status,
             "issue_date": str(i.issue_date),
             "due_date": str(i.due_date),
-            "subtotal": float(i.subtotal),
-            "tax_amount": float(i.tax_amount),
-            "total": float(i.total),
+            # Money stays Decimal-as-string, matching every other billing route.
+            "subtotal": str(i.subtotal),
+            "tax_amount": str(i.tax_amount),
+            "total": str(i.total),
             "retainer_id": str(i.retainer_id) if i.retainer_id else None,
             "billing_period_start": (
                 str(i.billing_period_start) if i.billing_period_start else None
@@ -2398,16 +2409,16 @@ async def get_matter_invoices(
                     "id": str(li.id),
                     "source_type": li.source_type,
                     "description": li.description,
-                    "quantity": float(li.quantity),
-                    "unit_price": float(li.unit_price),
-                    "amount": float(li.amount),
+                    "quantity": str(li.quantity),
+                    "unit_price": str(li.unit_price),
+                    "amount": str(li.amount),
                 }
                 for li in i.line_items
             ],
             "payments": [
                 {
                     "id": str(p.id),
-                    "amount": float(p.amount),
+                    "amount": str(p.amount),
                     "payment_date": str(p.payment_date),
                     "method": p.method,
                 }

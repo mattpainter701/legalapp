@@ -22,6 +22,7 @@ async def test_realization_includes_expense_only_matters_without_n_plus_one_quer
         _rows(),
         _rows((matter_id, "Expense Only", Decimal("75.00"))),
         _rows(),
+        _rows(),
     ]
 
     report = await _realization_report(db, uuid.uuid4())
@@ -34,11 +35,15 @@ async def test_realization_includes_expense_only_matters_without_n_plus_one_quer
             "billable_amount": 75.0,
             "billable_time_amount": 0.0,
             "billable_expense_amount": 75.0,
+            "invoiced_amount": 0.0,
             "collected_amount": 0.0,
+            "billing_realization_pct": 0.0,
+            "collection_pct": 0.0,
             "realization_pct": 0.0,
         }
     ]
-    assert db.execute.await_count == 3
+    # time, expenses, invoiced, collected: a fixed set, never one query per matter.
+    assert db.execute.await_count == 4
     expense_sql = str(
         db.execute.await_args_list[1].args[0].compile(dialect=postgresql.dialect())
     )

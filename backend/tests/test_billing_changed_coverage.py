@@ -168,9 +168,13 @@ async def test_recurring_invoice_uses_expense_amount_fallback(monkeypatch):
                     _Result(scalars=[]),
                     _Result(scalars=[expense]),
                     _Result(rows=[]),
+                    # The tenant's existing invoice numbers, read so the next
+                    # number continues the sequence instead of restarting at 1.
+                    _Result(rows=[]),
                 ]
             )
             self.added = []
+            self.commits = 0
 
         async def execute(self, _statement):
             return next(self.results)
@@ -181,6 +185,16 @@ async def test_recurring_invoice_uses_expense_amount_fallback(monkeypatch):
         async def flush(self):
             return None
 
+        async def commit(self):
+            self.commits += 1
+
+        async def rollback(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.recurring_billing.set_tenant_context",
+        lambda *_args, **_kwargs: _async_value(None),
+    )
     db = FakeDb()
     result = await recurring_billing._generate_recurring_invoices_for_tenant(
         db, tenant_id, date(2026, 2, 1), 0
@@ -191,6 +205,10 @@ async def test_recurring_invoice_uses_expense_amount_fallback(monkeypatch):
     line_item = db.added[1]
     assert invoice.subtotal == Decimal("40")
     assert line_item.amount == Decimal("40")
+    # Numbered from the tenant's own sequence, and committed per matter so one
+    # later failure cannot roll back a bill that already generated cleanly.
+    assert invoice.invoice_number == "INV-2026-0001"
+    assert db.commits == 1
 
 
 def test_matter_context_formats_billable_expense_summary():
@@ -228,6 +246,8 @@ async def test_qbo_invoice_populates_contact_ar_and_billing_state(monkeypatch):
         qbo_invoice_id=None,
         billed_at=None,
     )
+    # Reviewed and sent: QBO sync is an accounting action on an approved bill.
+    invoice.status = "sent"
     matter = SimpleNamespace(
         counterparty="Client",
         matter_name="Matter",
@@ -316,3 +336,51 @@ async def test_qbo_invoice_populates_contact_ar_and_billing_state(monkeypatch):
     assert invoice.billed_at == invoice.qbo_synced_at
     assert time_entry.status == "invoiced"
     assert db.committed is True
+
+
+@pytest.mark.asyncio
+async def test_qbo_invoice_sync_skips_an_unreviewed_draft(monkeypatch):
+    """A draft has not cleared review; syncing it would create A/R twice over."""
+    tenant_id = str(uuid4())
+    invoice_id = uuid4()
+    invoice = SimpleNamespace(
+        id=invoice_id,
+        tenant_id=tenant_id,
+        matter_id=uuid4(),
+        status="draft",
+        issue_date=date(2026, 1, 2),
+        due_date=date(2026, 2, 1),
+        invoice_number="INV-3",
+        notes=None,
+        qbo_invoice_id=None,
+        billed_at=None,
+    )
+
+    class FakeDb:
+        def __init__(self):
+            self.committed = False
+
+        async def execute(self, _statement):
+            return _Result(scalar=invoice)
+
+        async def commit(self):
+            self.committed = True
+
+    from app.services.qbo_sync import QBOSyncService
+
+    db = FakeDb()
+    service = QBOSyncService(db, tenant_id, "token", sandbox=True)
+    monkeypatch.setattr(
+        "app.services.qbo_sync.set_tenant_context",
+        lambda _db, _tenant_id: _async_value(None),
+    )
+
+    async def fail_request(*_args, **_kwargs):
+        raise AssertionError("a draft must never reach QuickBooks")
+
+    monkeypatch.setattr(service, "_request", fail_request)
+
+    assert await service.sync_invoice(str(invoice_id)) is None
+    assert invoice.status == "draft"
+    assert invoice.qbo_invoice_id is None
+    assert db.committed is False

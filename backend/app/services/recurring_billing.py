@@ -11,6 +11,7 @@ from app.database import async_session_maker, set_tenant_context
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem
 from app.models.plugin import Matter
 from app.models.tenant import Tenant
+from app.services.billing_workflow import next_invoice_number
 
 logger = logging.getLogger(__name__)
 
@@ -159,10 +160,10 @@ async def _generate_recurring_invoices_for_tenant(
                 skipped += 1
                 continue
 
-            # Generate invoice number
-            invoice_number = _make_invoice_number(
-                tenant_id, today, generated_so_far + generated + 1
-            )
+            # Number from what the tenant already has, never from a counter
+            # local to this run: a run-local sequence restarts at 1 and
+            # collides with the invoices the previous run wrote.
+            invoice_number = await _next_invoice_number(db, tenant_id, today.year)
 
             # Build line items
             line_items = []
@@ -239,6 +240,12 @@ async def _generate_recurring_invoices_for_tenant(
             for exp in expenses:
                 exp.invoice_id = invoice.id
 
+            # Commit per matter: a later failure then cannot roll back bills
+            # that already generated cleanly, and the next number is read from
+            # committed rows.
+            await db.commit()
+            await set_tenant_context(db, str(tenant_id))
+
             generated += 1
             logger.info(
                 "Auto-generated invoice %s for matter %s ($%s)",
@@ -249,11 +256,21 @@ async def _generate_recurring_invoices_for_tenant(
 
         except Exception:
             logger.exception("Failed to generate invoice for matter %s", matter.id)
+            # Leave the session usable for the matters still to come.
+            await db.rollback()
+            await set_tenant_context(db, str(tenant_id))
             errors += 1
 
     return {"generated": generated, "skipped": skipped, "errors": errors}
 
 
-def _make_invoice_number(tenant_id: uuid.UUID, today: date, seq: int) -> str:
-    """Generate a unique invoice number like INV-2026-00042."""
-    return f"INV-{today.year}-{seq:05d}"
+async def _next_invoice_number(db, tenant_id: uuid.UUID, year: int) -> str:
+    """Next sequential number for the tenant, in the same INV-YYYY-NNNN shape
+    the manual billing path uses, so the two never diverge or collide."""
+    result = await db.execute(
+        select(Invoice.invoice_number).where(
+            Invoice.tenant_id == tenant_id,
+            Invoice.invoice_number.like(f"INV-{year}-%"),
+        )
+    )
+    return next_invoice_number([row[0] for row in result.all()], year)
