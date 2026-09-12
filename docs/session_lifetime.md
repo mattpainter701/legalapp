@@ -89,5 +89,9 @@ grandfathered.
   only that the session ended, since the distinction changes nothing about what
   they do next.
 - This page covers the firm app. The client portal, mediation portal and
-  workspace MCP tokens have their own lifetimes and are not governed by these
-  settings.
+  workspace/research MCP tokens have their own lifetimes and are not governed
+  by these settings. The epoch does gate the MCP *consent* routes, which
+  authenticate with the firm session — but it does not revoke an MCP token
+  already issued to a connected assistant, so a password reset alone does not
+  disconnect one. See
+  [MCP security operations](mcp_security_operations.md#firm-sessions-and-mcp-credentials-are-separate).

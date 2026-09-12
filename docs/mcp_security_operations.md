@@ -32,6 +32,38 @@ Workspace MCP and research MCP are separate products and identities:
   proposals, reviews, approvals, and tenant cloud-storage references continue
   through the same audited application services used by the portal and chat.
 
+## Firm sessions and MCP credentials are separate
+
+A firm session and an MCP credential are different identities with different
+lifetimes, and ending one does not end the other. Operators responding to a
+compromised account need both halves.
+
+What the firm session epoch (`users.sessions_valid_after`, set by a password
+reset or by "Sign out everywhere else" — see
+[session lifetime](session_lifetime.md)) reaches:
+
+- Every firm-app access token and refresh chain for that user.
+- The **workspace and research MCP consent and grant-management routes**, which
+  authenticate with the firm session through `get_current_user`. After a reset
+  the user must sign in again before they can grant, inspect, or revoke an MCP
+  client, or issue a Research API key.
+
+What it does **not** reach:
+
+- **An MCP access token already issued to a connected client.** Workspace and
+  research tool calls authenticate with their own audience-bound OAuth tokens
+  (`authenticate_workspace_request`), not the firm session, and those keep
+  working on their own lifetimes. A password reset therefore does not
+  disconnect Claude, ChatGPT, Codex, or any other connected assistant.
+- **A scoped tenant Research API token** (`lhrk_...`), which is not tied to a
+  user session at all.
+
+So a password reset is not sufficient response to a compromised account that
+had assistants connected. Revoke the grant explicitly — from Profile →
+Connected assistants, or by the incident-response step below. Turning on
+Privacy Mode also revokes every active workspace grant, which is the fastest
+blunt instrument when the specific client is not yet known.
+
 ## Enforced controls
 
 | Boundary | Control |
@@ -131,7 +163,10 @@ host, path, method, status, user agent, and time before classifying it.
 1. Disable the affected MCP product flag if identity or tenant isolation is in
    doubt. Do not disable the main portal as a first response.
 2. Revoke the affected workspace grant, Research OAuth grant, or Research API
-   token and retain the related usage and request identifiers.
+   token and retain the related usage and request identifiers. Do this even
+   when the user's password has been reset: a reset ends their firm sessions
+   and locks them out of the consent routes, but an MCP token already issued to
+   a connected client is unaffected by it.
 3. Remove only the affected dedicated Tunnel ingress rule if the hostname must
    be withdrawn; preserve the final 404 catch-all and unrelated portal routes.
 4. Export Cloudflare and application evidence, identify the deployed commit,
