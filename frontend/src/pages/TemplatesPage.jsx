@@ -1669,7 +1669,7 @@ export function RenderModal({ template, matters = [], matterLoading = false, onC
           <p className="font-semibold">Correct the source once</p>
           <div className="mt-2 flex flex-wrap gap-3">
             {matterId.trim() && <a href={`/matters/${encodeURIComponent(matterId.trim())}`} target="_blank" rel="noreferrer" className="underline">Open matter details (new tab)</a>}
-            {hasFirmFields && <a href="/admin?tab=settings#firm-branding" target="_blank" rel="noreferrer" className="underline">Open firm settings (new tab)</a>}
+            {hasFirmFields && <a href="/admin?tab=firm" target="_blank" rel="noreferrer" className="underline">Open firm settings (new tab)</a>}
           </div>
           <p className="mt-2 text-brand-muted">Keep this document open. After saving changes to the source, return and refresh values. Your entries stay intact; changed suggestions are yours to accept. Firm changes require an administrator.</p>
         </div>}

@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.12.4",
+      "version": "2026.09.12.4",
+      "title": "Rename your firm and edit its profile in one place",
+      "published_at": "2026-09-12",
+      "summary": "Administration has a Firm Profile tab. It renames the firm — including the name sign-up guessed from your email domain — and holds the contact details, currency and branding that clients see on portal invitations, invoices and statements.",
+      "highlights": [
+        {
+          "title": "Fix the firm name sign-up guessed from your domain",
+          "description": "Sign-up derived a firm name from your email domain and nothing could change it. Administration → Firm Profile now renames the firm everywhere clients see it."
+        },
+        {
+          "title": "Firm details moved out of the Settings tab",
+          "description": "Firm name, contact details and branding were the fifth card inside Settings. They now have their own tab, with the currency used on invoices added alongside."
+        }
+      ]
+    },
+    {
       "id": "2026.09.12.3",
       "version": "2026.09.12.3",
       "title": "Matter folders carry the matter number; automations stay in scope",

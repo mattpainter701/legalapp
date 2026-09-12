@@ -27,7 +27,7 @@ import { UserMcpAccessCell, UserMcpAccessDrawer } from './admin/UserMcpAccess'
 import UserAliases from './admin/UserAliases'
 import LicensingPanel from '../components/LicensingPanel'
 import IntegrationsHub, { LEGACY_INTEGRATION_TABS } from '../components/IntegrationsHub'
-import FirmBrandingPanel from '../components/FirmBrandingPanel'
+import FirmProfilePanel from '../components/FirmProfilePanel'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import BillingPage from './BillingPage'
 import BillingDefaultsPanel from '../components/BillingDefaultsPanel'
@@ -59,6 +59,7 @@ function StatCard({ label, value, sub }) {
 
 const ADMIN_TABS = [
   { id: 'users', label: 'Users' },
+  { id: 'firm', label: 'Firm Profile' },
   { id: 'guide', label: 'Admin Guide' },
   { id: 'roles', label: 'Roles' },
   { id: 'licensing', label: 'Licensing' },
@@ -79,7 +80,7 @@ const ACCOUNTANT_TABS = ADMIN_TABS.filter((tab) =>
 // launch and operate a reception team. Unrelated platform integrations remain
 // hidden until the tenant upgrades.
 const INTAKE_ADMIN_TABS = ADMIN_TABS.filter((tab) =>
-  ['users', 'licensing', 'billing', 'usage', 'tenant', 'integrations', 'settings', 'guide', 'support'].includes(tab.id)
+  ['users', 'firm', 'licensing', 'billing', 'usage', 'tenant', 'integrations', 'settings', 'guide', 'support'].includes(tab.id)
 )
 const INTAKE_ACCOUNTANT_TABS = INTAKE_ADMIN_TABS.filter((tab) =>
   ['licensing', 'billing', 'usage'].includes(tab.id)
@@ -1269,9 +1270,6 @@ function SettingsTab() {
         <FeatureFlagsSection settings={featureSettings} onUpdate={(s) => setFeatureSettings(s)} />
       )}
 
-      {/* Firm Branding */}
-      <FirmBrandingPanel />
-
       {/* Alerts & Budgets */}
       <AlertsSection />
     </div>
@@ -1409,6 +1407,7 @@ export default function AdminPage() {
             </div>
           )}
           {activeTab === 'usage' && <UsageTab />}
+          {activeTab === 'firm' && <FirmProfilePanel />}
           {activeTab === 'tenant' && <TenantTab />}
           {activeTab === 'settings' && <SettingsTab />}
           {activeTab === 'prompts' && <PromptAdminPage />}

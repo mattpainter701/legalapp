@@ -15,7 +15,7 @@ it('shows the saved firm value, settings destination and the selected field', as
   const { rerender } = render(view({ path: 'firm.name', label: 'Firm name' }))
   expect(await screen.findByText('Example Firm')).toBeInTheDocument()
   expect(screen.getByText('Configured')).toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'Firm settings' })).toHaveAttribute('href', '/admin?tab=settings#firm-branding')
+  expect(screen.getByRole('link', { name: 'Firm settings' })).toHaveAttribute('href', '/admin?tab=firm')
   rerender(view({ path: 'firm.phone', label: 'Firm phone' }))
   expect(screen.getByText('555-0100')).toBeInTheDocument()
   expect(screen.queryByText('Example Firm')).not.toBeInTheDocument()
