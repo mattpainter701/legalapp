@@ -179,7 +179,7 @@ export function mergeRefreshedTranscript(serverMessages, optimisticUserMessage, 
 /**
  * Render a registry generation into the transcript on screen.
  *
- * The first call for a turn splices the streaming pair in against whatever the
+ * The first call for a turn places the streaming pair against whatever the
  * server already holds — the page may have mounted after the turn began, in
  * which case the persisted user message is already there and must not be
  * duplicated. Later calls replace the streamed turn in place.
@@ -188,16 +188,42 @@ export function upsertGenerationTurn(messages, generation) {
   const next = Array.isArray(messages) ? [...messages] : []
   const { userMessage, assistantMessage } = generation
   const assistantIndex = next.findIndex((message) => message.id === assistantMessage.id)
-  if (assistantIndex < 0) {
-    return mergeRefreshedTranscript(next, userMessage, assistantMessage)
+  if (assistantIndex >= 0) {
+    next[assistantIndex] = { ...next[assistantIndex], ...assistantMessage }
+    const userIndex = assistantIndex - 1
+    if (userIndex >= 0 && next[userIndex].role === 'user' && userMessage.referenceContext) {
+      next[userIndex] = { ...next[userIndex], referenceContext: userMessage.referenceContext }
+    }
+    return next
   }
 
-  next[assistantIndex] = { ...next[assistantIndex], ...assistantMessage }
-  const userIndex = assistantIndex - 1
-  if (userIndex >= 0 && next[userIndex].role === 'user' && userMessage.referenceContext) {
-    next[userIndex] = { ...next[userIndex], referenceContext: userMessage.referenceContext }
+  const merged = mergeRefreshedTranscript(next, userMessage, assistantMessage)
+  if (merged.some((message) => message.id === assistantMessage.id)) return merged
+
+  // mergeRefreshedTranscript reconciles finished turns, so it only splices an
+  // assistant that already carries text. A turn that has only just started has
+  // none yet and still needs its placeholder mounted: that placeholder is what
+  // shows retrieval progress, and what a failure before the first token is
+  // reported in.
+  let userIndex = merged.findIndex((message) => message.id === userMessage.id)
+  if (userIndex < 0) {
+    for (let index = merged.length - 1; index >= 0; index -= 1) {
+      if (merged[index].role === 'user' && merged[index].content === userMessage.content) {
+        userIndex = index
+        break
+      }
+    }
   }
-  return next
+  if (userIndex < 0) return [...merged, assistantMessage]
+
+  // Never add a second answer to a turn the server has already answered.
+  let insertAt = userIndex + 1
+  while (insertAt < merged.length && merged[insertAt].role !== 'user') {
+    if (merged[insertAt].role === 'assistant') return merged
+    insertAt += 1
+  }
+  merged.splice(insertAt, 0, assistantMessage)
+  return merged
 }
 
 function deriveKeyphrases(text) {

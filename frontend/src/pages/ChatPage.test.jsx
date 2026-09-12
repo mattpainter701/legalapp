@@ -492,6 +492,70 @@ describe('ChatPage guarded stream lifecycle', () => {
     expect(screen.queryByText('Partial answer that must not remain authoritative')).not.toBeInTheDocument()
   })
 
+  it('reports a stream that fails before it produces any text', async () => {
+    apiMocks.getConversation.mockResolvedValue(conversation('conversation-a', 'Conversation A'))
+    // A non-OK response throws on the first pull, before any token — the shape
+    // an outage actually takes, and not expressible as a generator body.
+    apiMocks.streamMessage.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(new Error('Deterministic assistant outage')),
+      }),
+    }))
+
+    render(<ChatPage />)
+    await waitFor(() => expect(apiMocks.getConversation).toHaveBeenCalledWith('conversation-a'))
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Message the assistant'), 'Test the outage state')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    expect(await screen.findByText('Message could not be sent')).toBeInTheDocument()
+    expect(
+      await screen.findByText('An error occurred: Deterministic assistant outage'),
+    ).toBeInTheDocument()
+
+    // The outage must leave the conversation sendable, and the retry must go out.
+    apiMocks.streamMessage.mockImplementation(async function* () {
+      yield 'The retry completed safely.'
+      yield '[STREAM_COMPLETE]'
+    })
+    await user.type(screen.getByLabelText('Message the assistant'), 'Retry after outage')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    expect(await screen.findByText('The retry completed safely.')).toBeInTheDocument()
+    expect(apiMocks.streamMessage).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows retrieval progress before the first token of the answer arrives', async () => {
+    let releaseStream
+    const streamGate = new Promise((resolve) => { releaseStream = resolve })
+    apiMocks.getConversation.mockResolvedValue(conversation('conversation-a', 'Conversation A'))
+    apiMocks.streamMessage.mockImplementation(async function* () {
+      yield { type: 'progress', event: 'retrieving', status: 'Searching the firm library' }
+      await streamGate
+      yield 'Answer text'
+      yield '[STREAM_COMPLETE]'
+    })
+
+    render(<ChatPage />)
+    await waitFor(() => expect(apiMocks.getConversation).toHaveBeenCalledWith('conversation-a'))
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Message the assistant'), 'Question for A')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    // The assistant placeholder is what carries retrieval progress, so it has to
+    // be mounted while the answer still has no text: one status on the question,
+    // one on the answer being retrieved.
+    expect(await screen.findAllByText('Searching the firm library')).toHaveLength(2)
+    expect(within(screen.getByTestId('messages')).getAllByRole('article')).toHaveLength(2)
+
+    await act(async () => {
+      releaseStream()
+      await Promise.resolve()
+    })
+    expect(await screen.findByText('Answer text')).toBeInTheDocument()
+  })
+
   it('does not let a late stream from conversation A overwrite conversation B', async () => {
     let releaseStream
     let observedSignal
