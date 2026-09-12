@@ -347,6 +347,82 @@ async def test_accept_refuses_when_record_changed_since_proposal(
     assert env.contact.phone == "(312) 555-0777"
 
 
+@pytest.mark.asyncio
+async def test_an_answer_too_long_to_store_is_reported_not_dropped(
+    db_session, test_user, monkeypatch
+):
+    """A skipped answer that reaches nobody is the same as an answer lost."""
+    env = await make_packet(db_session, test_user, monkeypatch)
+    long_court = "C" * 400  # matter.court holds 300
+    await submit(
+        db_session,
+        env,
+        {"matter_court": long_court, "matter_judge": "Judge Rivera"},
+    )
+    state = env.packet.proposed_changes or {}
+    assert [item["id"] for item in state["oversized"]] == ["matter.court"]
+    assert state["oversized"][0]["length"] == 400
+    assert state["oversized"][0]["max_length"] == 300
+    assert state["oversized"][0]["label"] == "Court or agency"
+    # It is reported, never proposed: nothing here is acceptable.
+    assert [change["id"] for change in pending_changes(env)] == ["matter.judge"]
+    task = await db_session.get(Task, uuid.uuid5(env.packet.id, "writeback"))
+    assert task is not None
+    assert "Too long to store on Court or agency" in task.description
+    await db_session.refresh(env.matter)
+    assert env.matter.court is None
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_answer_alone_still_raises_the_review_task(
+    db_session, test_user, monkeypatch
+):
+    env = await make_packet(db_session, test_user, monkeypatch)
+    await submit(db_session, env, {"matter_court": "C" * 400})
+    assert pending_changes(env) == []
+    task = await db_session.get(Task, uuid.uuid5(env.packet.id, "writeback"))
+    assert task is not None
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_deciding_the_other_changes_leaves_the_task_open_for_it(
+    db_session, test_user, monkeypatch
+):
+    env = await make_packet(db_session, test_user, monkeypatch)
+    await submit(
+        db_session,
+        env,
+        {"matter_court": "C" * 400, "matter_judge": "Judge Rivera"},
+    )
+    result = await routes.accept_proposed_changes(
+        env.matter.id, IntakeChangeDecision(all=True), db_session, env.user
+    )
+    assert result["pending_count"] == 0
+    assert result["oversized_count"] == 1
+    task = await db_session.get(Task, uuid.uuid5(env.packet.id, "writeback"))
+    # The unresolvable answer still needs a person, so the task stays open.
+    assert task.status != "completed"
+
+
+def test_oversized_answers_reports_only_bound_over_long_answers():
+    questions = [
+        {"key": "matter_court", "label": "Court or agency"},
+        {"key": "matter_judge", "label": "Judge"},
+        {"key": "conflict_spouse", "label": "Spouse or partner"},
+    ]
+    reported = intake_writeback.oversized_answers(
+        questions,
+        {
+            "matter_court": "C" * 301,
+            "matter_judge": "Judge Rivera",
+            "conflict_spouse": "S" * 900,
+        },
+    )
+    # The judge fits; the conflict question binds to no record field at all.
+    assert [item["question_key"] for item in reported] == ["matter_court"]
+
+
 def test_question_bindings_built_from_intake_form():
     assert intake_writeback.QUESTION_BINDINGS["client_phone"] == "client.phone"
     assert (

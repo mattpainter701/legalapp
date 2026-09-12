@@ -42,7 +42,7 @@ from app.services.configurable_workflows import (
     build_preview,
     digest_payload,
 )
-from app.services.practice_resolution import practice_key
+from app.services.practice_resolution import practice_key, practice_scope_key
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +54,27 @@ def _normalized(value: str | None) -> str | None:
     return clean or None
 
 
-def _canonical(value: str | None) -> str | None:
-    """Reduce a free-text practice label to a stable comparison key.
+def _label_matches(rule_value: str | None, matter_value: str | None) -> bool:
+    """Does a matter's free-text label satisfy a rule's match value?
 
-    A label the shared alias table recognises compares by its practice slug,
-    so "Dissolution of Marriage" and "Family Law" are the same practice; a
-    label the table does not know keeps the historical normalized string.
+    Exact comparison, case- and whitespace-insensitive, always decides first.
+    Beyond that, a rule scoped to a whole practice — "Family Law" — also matches
+    any matter the shared resolver places in that practice, which is what lets
+    one rule cover a matter typed "Dissolution of Marriage".
+
+    A rule scoped to one kind of work inside a practice does *not* widen to its
+    siblings. Comparing both sides by practice slug would make a rule keyed to
+    "Adoption" fire on every divorce and protective-order matter, and one keyed
+    to "Chapter 7" fire on Chapter 13 filings, because each pair shares a pack.
+    These rules create tasks and draft documents, so a wrong match is work
+    appearing on a matter nobody scoped it to. Widening is therefore asymmetric
+    and deliberate: broad rules reach specific matters, never the reverse.
     """
 
-    return practice_key(value) or _normalized(value)
+    if _normalized(rule_value) == _normalized(matter_value):
+        return True
+    scope = practice_scope_key(rule_value)
+    return scope is not None and practice_key(matter_value) == scope
 
 
 def rule_definition_payload(rule: MatterWorkflowAutomationRule) -> dict[str, Any]:
@@ -92,13 +104,13 @@ def rule_matches(
     if trigger_event == "matter_stage_changed":
         if _normalized(matter.stage) != _normalized(rule.trigger_stage):
             return False
-    if rule.match_matter_type is not None and _canonical(
-        matter.matter_type
-    ) != _canonical(rule.match_matter_type):
+    if rule.match_matter_type is not None and not _label_matches(
+        rule.match_matter_type, matter.matter_type
+    ):
         return False
-    if rule.match_practice_area is not None and _canonical(
-        matter.practice_area
-    ) != _canonical(rule.match_practice_area):
+    if rule.match_practice_area is not None and not _label_matches(
+        rule.match_practice_area, matter.practice_area
+    ):
         return False
     return True
 

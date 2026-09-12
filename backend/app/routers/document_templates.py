@@ -11,6 +11,7 @@ Document Templates router — CRUD + variable substitution rendering.
 """
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import json
@@ -2191,12 +2192,15 @@ def _collect_smart_fill_candidates(
     return candidates
 
 
+@functools.lru_cache(maxsize=1)
 def _smart_fill_alias_vocabulary() -> frozenset[str]:
     """Every alias Smart Fill can ever produce, independent of any matter.
 
     Computed from the resolver itself against a fully populated probe matter
     rather than maintained as a second list, so the approval check below can
-    never drift out of sync with the candidate builder.
+    never drift out of sync with the candidate builder. The result depends on
+    nothing but the code, so it is built once per process rather than on every
+    approval.
     """
 
     def _contact() -> SimpleNamespace:

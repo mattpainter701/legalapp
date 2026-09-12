@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.12.1",
+      "version": "2026.09.12.1",
+      "title": "Matter folders carry the matter number; automations stay in scope",
+      "published_at": "2026-09-12",
+      "summary": "New matter folders are named with the matter number instead of an internal ID. A workflow rule scoped to one kind of work no longer fires on every matter in its practice. An intake answer too long to store now reaches staff.",
+      "highlights": [
+        {
+          "title": "Cloud folders are named with the matter number",
+          "description": "A new matter's folder reads Smith (CYBE0012) rather than an internal ID. Folders made before this keep their names and stay bound, and the audit recognises both."
+        },
+        {
+          "title": "Automation rules stay inside the scope you set",
+          "description": "A rule scoped to Adoption no longer fires on divorces, or Chapter 7 on Chapter 13. A rule scoped to a whole practice, like Family Law, still covers every matter in it."
+        },
+        {
+          "title": "An answer too long to store is reported, not dropped",
+          "description": "When a client's answer is longer than the field holds, the review task names it and says how long it is, instead of leaving the field quietly empty."
+        }
+      ]
+    },
+    {
       "id": "2026.09.11.12",
       "version": "2026.09.11.12",
       "title": "One practice resolver behind routing",
