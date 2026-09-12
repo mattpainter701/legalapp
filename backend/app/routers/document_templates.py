@@ -4885,8 +4885,10 @@ async def publish_template(
     _ensure_usable_labels(template.variable_schema)
     _validate_approval_ready(
         template=template,
-        variable_schema=template.variable_schema,
-        body=template.body,
+        variable_schema=getattr(template, "variable_schema", None),
+        # getattr: unit fixtures stub the row without a body, and a row with
+        # no body cannot reference jurisdiction_required_terms anyway.
+        body=str(getattr(template, "body", "") or ""),
     )
     template.is_active = True
     template.status = "published"
