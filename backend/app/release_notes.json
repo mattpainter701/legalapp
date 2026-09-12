@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.09.12.3",
-      "version": "2026.09.12.3",
+      "id": "2026.09.12.4",
+      "version": "2026.09.12.4",
       "title": "Sessions that end when you end them",
       "published_at": "2026-09-12",
       "summary": "Resetting your password now signs out everyone using your account, anywhere. You can also sign out your other devices yourself. Sessions left unused sign out after 12 hours.",
@@ -19,6 +19,27 @@
         {
           "title": "Unused sessions end on their own",
           "description": "A session left alone for 12 hours signs out, and none stays signed in beyond 30 days. You will be asked to sign in more often than before."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.12.3",
+      "version": "2026.09.12.3",
+      "title": "Matter folders carry the matter number; automations stay in scope",
+      "published_at": "2026-09-12",
+      "summary": "New matter folders are named with the matter number instead of an internal ID. A workflow rule scoped to one kind of work no longer fires on every matter in its practice. An intake answer too long to store now reaches staff.",
+      "highlights": [
+        {
+          "title": "Cloud folders are named with the matter number",
+          "description": "A new matter's folder reads Smith (CYBE0012) rather than an internal ID. Folders made before this keep their names and stay bound, and the audit recognises both."
+        },
+        {
+          "title": "Automation rules stay inside the scope you set",
+          "description": "A rule scoped to Adoption no longer fires on divorces, or Chapter 7 on Chapter 13. A rule scoped to a whole practice, like Family Law, still covers every matter in it."
+        },
+        {
+          "title": "An answer too long to store is reported, not dropped",
+          "description": "When a client's answer is longer than the field holds, the review task names it and says how long it is, instead of leaving the field quietly empty."
         }
       ]
     },

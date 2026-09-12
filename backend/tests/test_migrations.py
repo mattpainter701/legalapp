@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["180_session_epoch"]
+    assert heads == ["181_session_epoch"]
 
 
 def test_intake_optional_agreement_migration_widens_and_restores_the_column():
@@ -30,11 +30,11 @@ def test_intake_optional_agreement_migration_widens_and_restores_the_column():
 def test_session_epoch_migration_adds_and_drops_the_column():
     backend_dir = Path(__file__).resolve().parents[1]
     source = (
-        backend_dir / "migrations" / "versions" / "180_session_epoch.py"
+        backend_dir / "migrations" / "versions" / "181_session_epoch.py"
     ).read_text(encoding="utf-8")
 
-    assert 'revision = "180_session_epoch"' in source
-    assert 'down_revision = "179_native_signing"' in source
+    assert 'revision = "181_session_epoch"' in source
+    assert 'down_revision = "180_mediation_asset_recipient"' in source
     assert "sessions_valid_after" in source
     assert "op.add_column" in source
     assert "op.drop_column" in source

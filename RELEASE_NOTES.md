@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.12.3 — Sessions that end when you end them
+## 2026.09.12.4 — Sessions that end when you end them
 
 Released September 12, 2026.
 
@@ -14,6 +14,16 @@ Resetting your password now signs out everyone using your account, anywhere. You
 - **A password reset signs out everyone.** Resetting your password now ends every session on your account, on every device. Before, it changed the password and left anyone already signed in where they were.
 - **Sign out your other devices.** A new control on your profile ends every other session on your account. The device you are using stays signed in.
 - **Unused sessions end on their own.** A session left alone for 12 hours signs out, and none stays signed in beyond 30 days. You will be asked to sign in more often than before.
+
+## 2026.09.12.3 — Matter folders carry the matter number; automations stay in scope
+
+Released September 12, 2026.
+
+New matter folders are named with the matter number instead of an internal ID. A workflow rule scoped to one kind of work no longer fires on every matter in its practice. An intake answer too long to store now reaches staff.
+
+- **Cloud folders are named with the matter number.** A new matter's folder reads Smith (CYBE0012) rather than an internal ID. Folders made before this keep their names and stay bound, and the audit recognises both.
+- **Automation rules stay inside the scope you set.** A rule scoped to Adoption no longer fires on divorces, or Chapter 7 on Chapter 13. A rule scoped to a whole practice, like Family Law, still covers every matter in it.
+- **An answer too long to store is reported, not dropped.** When a client's answer is longer than the field holds, the review task names it and says how long it is, instead of leaving the field quietly empty.
 
 ## 2026.09.12.2 — Bills you can correct, send, and settle from trust
 

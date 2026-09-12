@@ -393,7 +393,7 @@ async def test_expired_trial_cannot_run_a_skill(
         json={"skill": "nda-review", "input_text": "Mutual NDA."},
     )
     assert resp.status_code == 402
-    assert "trial has ended" in resp.json()["detail"]
+    assert "expired" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -482,13 +482,7 @@ def test_every_advertised_skill_has_a_prompt_or_is_declared_generic():
     from app.services.plugins.executor import has_specialised_prompt
     from app.services.plugins.manifest import list_plugin_manifests
 
-    # Mediation templates are still to be authored with domain review.
-    known_generic = {
-        ("mediation-legal", "mediation-intake"),
-        ("mediation-legal", "mediation-brief"),
-        ("mediation-legal", "settlement-agreement"),
-        ("mediation-legal", "caucus-summary"),
-    }
+    known_generic = set()
 
     missing = {
         (manifest.plugin_name, skill)
@@ -528,9 +522,12 @@ def test_no_prompt_template_is_unreachable():
 
 
 @pytest.mark.asyncio
-async def test_generic_skill_run_is_flagged_to_the_user(client: AsyncClient, mock_llm):
-    from app.services.plugins.executor import GENERIC_TEMPLATE_FLAG
+async def test_generic_skill_run_is_flagged_to_the_user(client: AsyncClient, mock_llm, monkeypatch):
+    from app.services.plugins.executor import GENERIC_TEMPLATE_FLAG, SKILL_PROMPT_MAP
+    from app.services.plugins.prompts import ALL_DEFAULT_PROMPTS
 
+    monkeypatch.delitem(ALL_DEFAULT_PROMPTS, ("mediation-legal", "settlement-agreement"))
+    monkeypatch.delitem(SKILL_PROMPT_MAP["mediation-legal"], "settlement-agreement")
     await client.put(
         "/api/plugins/mediation-legal/profile",
         json={"profile_content": COMPLETE_PROFILE, "is_complete": True},

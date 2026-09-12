@@ -125,6 +125,9 @@ def asset_to_response(a: MediationAsset) -> AssetResponse:
         submitted_at=a.submitted_at,
         attorney_approved_at=a.attorney_approved_at,
         sent_at=a.sent_at,
+        released_to_party_id=str(a.released_to_party_id)
+        if a.released_to_party_id
+        else None,
         opposing_decision=a.opposing_decision,
         opposing_decided_at=a.opposing_decided_at,
         dispute_reason=a.dispute_reason,
@@ -132,6 +135,23 @@ def asset_to_response(a: MediationAsset) -> AssetResponse:
         created_at=a.created_at,
         updated_at=a.updated_at,
     )
+
+
+def asset_visible_to_party(asset: MediationAsset, party_id) -> bool:
+    return str(asset.submitted_by_party_id) == str(party_id) or (
+        asset.status in SHARED_ASSET_STATUSES
+        and str(asset.released_to_party_id) == str(party_id)
+    )
+
+
+def portal_asset_response(asset: MediationAsset, party_id) -> AssetResponse:
+    response = asset_to_response(asset)
+    if str(asset.submitted_by_party_id) != str(party_id):
+        response.submitted_by_party_id = None
+    # A submitter can see that its entry was sent, but not another party's ID.
+    if str(asset.released_to_party_id) != str(party_id):
+        response.released_to_party_id = None
+    return response
 
 
 def document_to_response(d: MediationDocument) -> DocumentResponse:
@@ -233,7 +253,7 @@ async def save_case_upload(
         raise HTTPException(status_code=400, detail="Filename is required")
 
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
-    file_bytes = await file.read()
+    file_bytes = await file.read(max_bytes + 1)
     if len(file_bytes) > max_bytes:
         raise HTTPException(
             status_code=413,
@@ -248,8 +268,8 @@ async def save_case_upload(
         str(doc_id),
     )
     os.makedirs(storage_dir, exist_ok=True)
-    safe_filename = os.path.basename(file.filename)
-    storage_path = os.path.join(storage_dir, safe_filename)
+    # The display filename is metadata, never a storage path or Windows stream.
+    storage_path = os.path.join(storage_dir, "content")
 
     async with aiofiles.open(storage_path, "wb") as out_file:
         await out_file.write(file_bytes)

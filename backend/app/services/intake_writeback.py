@@ -186,6 +186,9 @@ def derive_changes(questions, answers, contact, matter):
         if target is None:
             continue
         answer = " ".join(str(answers.get(key, "")).split())
+        # An over-long answer is reported by ``oversized_answers`` instead of
+        # proposed: the column cannot hold it, and truncating a client's words
+        # into their own record would be a silent edit nobody reviewed.
         if not answer or len(answer) > target["max"]:
             continue
         entity = target["entity"]
@@ -208,6 +211,37 @@ def derive_changes(questions, answers, contact, matter):
             }
         )
     return changes
+
+
+def oversized_answers(questions, answers):
+    """Answers that map to a record field but are too long to store there.
+
+    ``derive_changes`` skips them, so without this they would reach nobody: the
+    client answers, the field stays empty, and staff never learn the answer
+    exists. Reported as its own list rather than as a proposal, because there
+    is nothing here to accept — someone has to shorten it with the client.
+    """
+    reported = []
+    for question in questions:
+        key = question["key"]
+        binding = QUESTION_BINDINGS.get(key)
+        target = FIELD_TARGETS.get(binding) if binding else None
+        if target is None:
+            continue
+        answer = " ".join(str(answers.get(key, "")).split())
+        if not answer or len(answer) <= target["max"]:
+            continue
+        reported.append(
+            {
+                "id": f"{target['entity']}.{target['field']}",
+                "question_key": key,
+                "label": question.get("label") or target["field"],
+                "binding": binding,
+                "length": len(answer),
+                "max_length": target["max"],
+            }
+        )
+    return reported
 
 
 def _snapshot_matches(raw_matches):
@@ -271,7 +305,7 @@ async def _record_conflict_check(db, packet, matter, answers):
         return None
 
 
-def _task_description(changes, conflict_record):
+def _task_description(changes, conflict_record, oversized=()):
     lines = [
         "The client's questionnaire proposes updates to contact and matter "
         "records. Review each change and accept or reject it; accepted "
@@ -285,6 +319,13 @@ def _task_description(changes, conflict_record):
                 f"- Resolve {change['label']}: record has "
                 f"'{change['current']}', client answered '{change['proposed']}'"
             )
+    for item in oversized:
+        lines.append(
+            f"- Too long to store on {item['label']}: the client answered "
+            f"{item['length']} characters and the field holds "
+            f"{item['max_length']}. Shorten it with the client, then edit the "
+            "record by hand."
+        )
     if conflict_record is not None:
         if conflict_record.match_count:
             lines.append(
@@ -325,17 +366,20 @@ async def plan_writeback(db, packet, matter, answers):
     contact = await db.get(Contact, packet.contact_id)
     if contact is None:
         return None
-    changes = derive_changes(
-        packet.config.get("questions", []), answers, contact, matter
-    )
+    questions = packet.config.get("questions", [])
+    changes = derive_changes(questions, answers, contact, matter)
+    oversized = oversized_answers(questions, answers)
     conflict_record = await _record_conflict_check(db, packet, matter, answers)
     state = {
         "changes": changes,
+        "oversized": oversized,
         "conflict_check_id": str(conflict_record.id) if conflict_record else None,
         "derived_at": datetime.now(timezone.utc).isoformat(),
     }
     packet.proposed_changes = state
-    if not changes:
+    # An oversized answer raises the review task on its own: it has no proposal
+    # to accept, so the task is the only place a person would ever see it.
+    if not changes and not oversized:
         return state
     task_id = uuid.uuid5(packet.id, TASK_KIND)
     task = await db.scalar(
@@ -350,7 +394,7 @@ async def plan_writeback(db, packet, matter, answers):
             matter_id=packet.matter_id,
             contact_id=packet.contact_id,
             title=f"Review intake updates: {matter.matter_name}"[:500],
-            description=_task_description(changes, conflict_record),
+            description=_task_description(changes, conflict_record, oversized),
             task_type="review",
             status="pending",
             priority="high",
@@ -383,11 +427,13 @@ def public_changes(packet):
     return {
         "matter_id": str(packet.matter_id),
         "changes": state.get("changes", []),
+        "oversized": state.get("oversized", []),
         "conflict_check_id": state.get("conflict_check_id"),
         "derived_at": state.get("derived_at"),
         "pending_count": sum(
             1 for change in state.get("changes", []) if change["status"] == "pending"
         ),
+        "oversized_count": len(state.get("oversized", [])),
     }
 
 
@@ -499,7 +545,12 @@ async def decide_changes(
             note=f"{verb.capitalize()} {len(decided)} proposed intake update(s)",
             metadata={"change_ids": [change["id"] for change in decided]},
         )
-        if not any(change["status"] == "pending" for change in changes):
+        # An oversized answer has no proposal to decide, so deciding the rest
+        # must not auto-complete the task out from under it; someone still has
+        # to shorten it with the client and edit the record by hand.
+        if not any(
+            change["status"] == "pending" for change in changes
+        ) and not state.get("oversized"):
             transition_task(
                 db,
                 task,

@@ -13,15 +13,15 @@ on signing out everywhere.
 Nullable and additive. NULL means the user has never ended a session, which is
 the correct reading for every existing row.
 
-Revision ID: 180_session_epoch
-Revises: 179_native_signing
+Revision ID: 181_session_epoch
+Revises: 180_mediation_asset_recipient
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "180_session_epoch"
-down_revision = "179_native_signing"
+revision = "181_session_epoch"
+down_revision = "180_mediation_asset_recipient"
 branch_labels = None
 depends_on = None
 

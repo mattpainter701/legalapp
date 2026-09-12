@@ -8,8 +8,10 @@ single place a label maps to a practice.
 import pytest
 
 from app.services.practice_resolution import (
+    _SCOPE_ALIASES,
     DEFAULT_PRACTICE,
     practice_key,
+    practice_scope_key,
     practices,
     resolve_practice,
 )
@@ -104,3 +106,39 @@ def test_practice_key_canonicalises_a_recognised_label(value, expected_slug):
 @pytest.mark.parametrize("value", [None, "", "   ", "Something unrecognised"])
 def test_practice_key_returns_nothing_for_an_unrecognised_label(value):
     assert practice_key(value) is None
+
+
+def test_every_scope_alias_belongs_to_the_practice_it_is_listed_under():
+    """The scope table is curated by hand; a typo would silently stop widening."""
+    for slug, aliases in _SCOPE_ALIASES.items():
+        for alias in aliases:
+            assert practice_key(alias) == slug, f"{alias!r} does not resolve to {slug}"
+            assert practice_scope_key(alias) == slug
+
+
+def test_every_practice_except_general_can_be_named_as_a_scope():
+    for practice in practices():
+        if practice is DEFAULT_PRACTICE:
+            continue
+        assert practice_scope_key(practice.slug) == practice.slug
+        assert practice_scope_key(practice.label) == practice.slug
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Adoption",
+        "Chapter 7",
+        "DUI",
+        "NDA",
+        "Dissolution of Marriage",
+        "Something unrecognised",
+        "general",
+        "other",
+        None,
+        "",
+    ],
+)
+def test_a_label_naming_one_kind_of_work_is_not_a_scope(value):
+    """Only a whole-practice label widens a comparison to its practice."""
+    assert practice_scope_key(value) is None

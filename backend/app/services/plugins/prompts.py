@@ -4,6 +4,8 @@ Primary model: DeepSeek V4 Flash (deepseek-chat until V4 ships).
 These prompts are designed for legal-grounded AI assistance, not legal advice.
 """
 
+from app.services.plugins.mediation_prompts import MEDIATION_PROMPTS
+
 # ── Shared Constants ──────────────────────────────────────────────────────────
 
 WORK_PRODUCT_HEADER = """ATTORNEY WORK PRODUCT — PRIVILEGED AND CONFIDENTIAL
@@ -4860,6 +4862,7 @@ This is a draft for attorney review. Not a filed comment.
 # Used by executor.py SKILL_PROMPT_MAP auto-build and PromptResolver fallback.
 
 ALL_DEFAULT_PROMPTS: dict[tuple[str, str], str] = {
+    **MEDIATION_PROMPTS,
     # commercial-legal
     ("commercial-legal", "vendor-agreement-review"): COMMERCIAL_VENDOR_REVIEW_PROMPT,
     ("commercial-legal", "nda-review"): COMMERCIAL_NDA_REVIEW_PROMPT,

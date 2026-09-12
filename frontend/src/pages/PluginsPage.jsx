@@ -24,18 +24,20 @@ const PLUGIN_ICONS = {
 
 // ── State tab definitions ────────────────────────────────────────────────────
 const STATE_TABS = [
-  { key: 'purchased', label: 'Purchased', icon: ShoppingCart, filter: (p) => p.is_purchased && !p.is_locked && p.entitlement_status !== 'trial' },
-  { key: 'trials', label: 'Trials', icon: Sparkles, filter: (p) => p.entitlement_status === 'trial' },
-  { key: 'setup-required', label: 'Setup Required', icon: CircleAlert, filter: (p) => (p.is_purchased || p.entitlement_status === 'purchased') && p.setup_status !== 'complete' && !p.profile_is_complete },
-  { key: 'available', label: 'Available', icon: ShoppingCart, filter: (p) => !p.is_purchased && !p.is_locked && p.entitlement_status !== 'trial' && !p.is_trial },
-  { key: 'locked', label: 'Locked', icon: Ban, filter: (p) => p.is_locked || p.entitlement_status === 'locked' || p.entitlement_status === 'disabled' },
-]
+  { key: 'purchased', label: 'Purchased', icon: ShoppingCart },
+  { key: 'trials', label: 'Trials', icon: Sparkles },
+  { key: 'setup-required', label: 'Setup Required', icon: CircleAlert },
+  { key: 'available', label: 'Available', icon: ShoppingCart },
+  { key: 'locked', label: 'Locked', icon: Ban },
+].map((tab) => ({ ...tab, filter: (plugin) => stateFor(plugin) === tab.key }))
 
-function stateFor(plugin) {
-  if (plugin.is_locked || plugin.entitlement_status === 'locked' || plugin.entitlement_status === 'disabled') return 'locked'
+export function stateFor(plugin) {
+  if (plugin.is_locked || ['locked', 'disabled'].includes(plugin.entitlement_status)) return 'locked'
+  if (['expired', 'scheduled', 'available'].includes(plugin.entitlement_status)) return 'available'
   if (plugin.entitlement_status === 'trial') return 'trials'
-  if ((plugin.is_purchased || plugin.entitlement_status === 'purchased') && plugin.setup_status !== 'complete' && !plugin.profile_is_complete) return 'setup-required'
-  if (plugin.is_purchased || plugin.entitlement_status === 'purchased' || plugin.setup_status === 'complete' || plugin.profile_is_complete) return 'purchased'
+  if (plugin.is_purchased || ['purchased', 'included'].includes(plugin.entitlement_status)) {
+    return plugin.setup_status !== 'complete' && !plugin.profile_is_complete ? 'setup-required' : 'purchased'
+  }
   return 'available'
 }
 
@@ -53,7 +55,8 @@ export function PluginCard({ plugin, isAdmin, saving, onEntitlement, onNavigate 
   const Icon = PLUGIN_ICONS[pluginId] || Settings2
   const state = stateFor(plugin)
   const meta = STATE_META[state]
-  const openPlugin = () => onNavigate(plugin.primary_route || `/plugins/${pluginId}`)
+  const canOpenWorkspace = state === 'purchased' || state === 'trials'
+  const openPlugin = () => onNavigate(canOpenWorkspace ? plugin.primary_route || `/plugins/${pluginId}` : `/plugins/${pluginId}`)
 
   return (
     <div
@@ -70,7 +73,7 @@ export function PluginCard({ plugin, isAdmin, saving, onEntitlement, onNavigate 
           </h3>
           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold font-sans uppercase tracking-wider border ${meta.badgeCls}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${meta.dotCls}`} />
-            {meta.badge}
+            {plugin.entitlement_status === 'expired' ? 'Expired' : plugin.entitlement_status === 'scheduled' ? 'Scheduled' : meta.badge}
           </span>
         </div>
       </div>
@@ -92,7 +95,7 @@ export function PluginCard({ plugin, isAdmin, saving, onEntitlement, onNavigate 
           onClick={openPlugin}
           className="inline-flex min-h-[44px] min-w-[44px] w-full items-center justify-center py-2.5 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-xl group-hover:bg-brand-ink group-hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
         >
-          {plugin.is_purchased || state === 'purchased' ? 'Open Workspace' : 'View Add-on'}
+          {canOpenWorkspace ? 'Open Workspace' : state === 'setup-required' ? 'Complete Setup' : 'View Add-on'}
         </button>
         {isAdmin && (
           <div className="grid grid-cols-2 gap-2">
@@ -143,6 +146,7 @@ export default function PluginsPage() {
   const [savingPlugin, setSavingPlugin] = useState(null)
   const [activeTab, setActiveTab] = useState('purchased')
   const [notice, setNotice] = useState(null)
+  const [initialTabSelected, setInitialTabSelected] = useState(false)
 
   const loadPlugins = () => {
     setLoading(true)
@@ -150,6 +154,7 @@ export default function PluginsPage() {
       .then((data) => {
         const list = Array.isArray(data) ? data : data?.plugins || []
         setPlugins(list)
+        setError(null)
       })
       .catch((err) => {
         setError('Failed to load plugins.')
@@ -185,13 +190,14 @@ export default function PluginsPage() {
     return counts
   }, [plugins])
 
-  // Auto-select first non-empty tab on load if current tab is empty
+  // Choose the initial category once; keep empty tabs reachable after that.
   useEffect(() => {
-    if (!loading && tabCounts[activeTab] === 0) {
+    if (!loading && !initialTabSelected && plugins.length > 0) {
+      setInitialTabSelected(true)
       const first = STATE_TABS.find((t) => tabCounts[t.key] > 0)
       if (first) setActiveTab(first.key)
     }
-  }, [loading, tabCounts, activeTab])
+  }, [loading, tabCounts, initialTabSelected, plugins.length])
 
   const filteredPlugins = useMemo(
     () => plugins.filter(STATE_TABS.find((t) => t.key === activeTab)?.filter || (() => true)),
