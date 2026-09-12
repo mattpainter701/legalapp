@@ -857,3 +857,49 @@ def practice_key(value: str | None) -> str | None:
 
     matched = _match(value)
     return matched.slug if matched is not None else None
+
+
+#: The aliases that name a whole practice rather than one kind of work inside
+#: it. Only these widen a comparison to the practice: a firm that scoped an
+#: automation to "Family Law" means every family matter, while one scoped to
+#: "Adoption" means adoptions — not every divorce, custody and protective-order
+#: matter that happens to share the family pack. Every entry must be an alias of
+#: the practice it is listed under; `test_practice_resolution` asserts that.
+_SCOPE_ALIASES: dict[str, frozenset[str]] = {
+    "family": frozenset({"family", "family law", "domestic", "domestic relations"}),
+    "criminal": frozenset({"criminal", "criminal defense", "defense"}),
+    "injury": frozenset({"injury", "personal injury"}),
+    "estate": frozenset({"estate", "estate planning"}),
+    "employment": frozenset({"employment", "labor"}),
+    "business": frozenset({"business", "commercial", "corporate"}),
+    "real_estate": frozenset({"real estate", "property"}),
+    "immigration": frozenset({"immigration"}),
+    "bankruptcy": frozenset({"bankruptcy", "debt"}),
+    "litigation": frozenset({"litigation", "civil litigation"}),
+    "mediation": frozenset({"mediation", "alternative dispute resolution"}),
+}
+
+
+def practice_scope_key(value: str | None) -> str | None:
+    """Canonical slug for a label that names a whole practice, else ``None``.
+
+    A label naming one kind of work inside a practice — "Adoption", "Chapter 7",
+    "DUI" — returns ``None``: it identifies that work, not the practice around
+    it. The general pack is never a scope; it is where unrecognised matters
+    fall, so widening to it would scope a rule to "everything else".
+    """
+
+    normalized = _normalize(value)
+    if not normalized:
+        return None
+    for slug, aliases in _SCOPE_ALIASES.items():
+        if normalized in aliases:
+            return slug
+    for practice in _PRACTICES:
+        if practice is DEFAULT_PRACTICE:
+            continue
+        if normalized.replace(" ", "_") == practice.slug or normalized == _normalize(
+            practice.label
+        ):
+            return practice.slug
+    return None
