@@ -90,11 +90,15 @@ describe('portfolio keyboard navigation', () => {
     const user = userEvent.setup()
     render(
       <MemoryRouter>
-        <MyMatterRow
-          m={matter}
-          onToggleActive={vi.fn()}
-          togglingId={null}
-        />
+        <table>
+          <tbody>
+            <MyMatterRow
+              m={matter}
+              onToggleActive={vi.fn()}
+              togglingId={null}
+            />
+          </tbody>
+        </table>
       </MemoryRouter>,
     )
 

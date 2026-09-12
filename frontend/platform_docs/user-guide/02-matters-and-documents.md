@@ -13,7 +13,7 @@ The matter is the home for legal work. Use it to understand status and risk, fin
 
 ## Open the right matter
 
-Go to [My Matters](/matters), then select a matter name. The portfolio emphasizes files assigned to you. Use the matter title, client, type, and status to confirm that you are in the correct record before uploading, drafting, or sharing anything.
+Go to [My Matters](/matters), then select a matter name. The portfolio opens as a list that shows each matter's number, client, responsible and originating attorneys, practice area, and open date, alongside status and risk. Use the status tabs and keyword filter to narrow the list, or **Columns** to choose which columns appear on this device. Switch to **Board** for a lifecycle view (Open, Active, Pending, Closed): drag a matter card between columns to change its status, or drop it on **Closed** to run the same close check as the matter record. The portfolio emphasizes files assigned to you. Use the matter title, client, type, and status to confirm that you are in the correct record before uploading, drafting, or sharing anything.
 
 ## Keep the file coherent
 

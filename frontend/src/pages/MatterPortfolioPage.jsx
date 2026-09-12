@@ -2,8 +2,25 @@ import { useState, useEffect, useMemo } from 'react'
 import { reportError } from '../utils/reportError'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
-import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
+import { GripVertical } from 'lucide-react'
+import { getMattersV2, getMyMatters, setAssignmentActive, updateMatterV2 } from '../api'
+import { useAuth } from '../App'
 import NewMatterModal from '../components/NewMatterModal'
+import CloseMatterDialog from '../components/casesetup/CloseMatterDialog'
+import MatterListColumnsMenu, {
+  MATTER_LIST_COLUMN_DEFS,
+  useMatterListColumns,
+} from '../components/matters/MatterListColumns'
 import { TableSkeleton } from '../components/LoadingSkeleton'
 import { AlertBanner, EmptyState, Spinner } from '../components/ui'
 
@@ -144,6 +161,15 @@ function hasCloudFolderLinks(cloudFolder) {
 
 const STATUS_OPTIONS = ['all', 'open', 'active', 'pending', 'closed']
 
+// Tabs for the My Matters list. Labels mirror the lifecycle board columns.
+export const MY_MATTER_STATUS_TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'open', label: 'Open' },
+  { key: 'active', label: 'Active' },
+  { key: 'pending', label: 'Pending' },
+  { key: 'closed', label: 'Closed' },
+]
+
 // ── "Needs Action" classification ─────────────────────────────────────────────
 function needsAction(m) {
   if (m.status === 'threatened') return true
@@ -165,7 +191,7 @@ function dueTomorrow(m) {
 }
 
 // ── Matter Card (board view) ──────────────────────────────────────────────────
-export function MatterCard({ m, onToggleActive, togglingId, showAlert }) {
+export function MatterCard({ m, onToggleActive, togglingId, showAlert, dragHandle = null }) {
   const isToggling = togglingId === m.my_assignment_id
   return (
     <div
@@ -192,6 +218,7 @@ export function MatterCard({ m, onToggleActive, togglingId, showAlert }) {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {showAlert && <Icon d={Icons.alert} size={15} className="text-brand-rose" />}
+          {dragHandle}
         </div>
       </div>
 
@@ -240,59 +267,213 @@ export function MatterCard({ m, onToggleActive, togglingId, showAlert }) {
 }
 
 // ── My Matters list row ───────────────────────────────────────────────────────
-export function MyMatterRow({ m, onToggleActive, togglingId }) {
+function Dash() {
+  return <span className="font-sans text-[13px] text-brand-muted">—</span>
+}
+
+function formatOpenDate(value) {
+  if (!value) return null
+  try {
+    return format(parseISO(value), 'MMM d, yyyy')
+  } catch {
+    return null
+  }
+}
+
+// One renderer per selectable column. Keys match MATTER_LIST_COLUMN_DEFS so the
+// customizer and the table can never drift apart.
+export const MATTER_LIST_CELLS = {
+  matter: m => (
+    <div className="min-w-0 max-w-[22rem]">
+      {m.matter_number && (
+        <div className="truncate font-mono text-[11px] font-semibold text-brand-muted">{m.matter_number}</div>
+      )}
+      <Link
+        to={`/matters/${m.id}`}
+        className="inline-flex min-h-[44px] min-w-[44px] max-w-full items-center truncate rounded-sm font-sans text-[13.5px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+      >
+        {m.matter_name || '—'}
+      </Link>
+    </div>
+  ),
+  client: m => (m.client_name ? <span className="font-sans text-[13px] text-brand-ink-2">{m.client_name}</span> : <Dash />),
+  responsible_attorney: m => (m.attorney_of_record_name ? <span className="font-sans text-[13px] text-brand-ink-2">{m.attorney_of_record_name}</span> : <Dash />),
+  originating_attorney: m => (m.partner_attorney_name ? <span className="font-sans text-[13px] text-brand-ink-2">{m.partner_attorney_name}</span> : <Dash />),
+  practice_area: m => (m.practice_area ? <span className="font-sans text-[13px] font-medium text-brand-accent">{m.practice_area}</span> : <Dash />),
+  open_date: m => {
+    const value = formatOpenDate(m.created_at)
+    return value ? <span className="whitespace-nowrap font-sans text-[13px] text-brand-ink-2">{value}</span> : <Dash />
+  },
+  status: m => <StatusBadge status={m.status} />,
+  risk: m => <RiskBadge level={m.risk_level} />,
+  deadline: m => (m.overdue_deadline_label ? <DeadlineBadge label={m.overdue_deadline_label} /> : <Dash />),
+  cloud_folder: m => (hasCloudFolderLinks(m.cloud_folder) ? <CloudFolderLinks cloudFolder={m.cloud_folder} compact /> : <Dash />),
+}
+
+export function MyMatterRow({
+  m,
+  columns = MATTER_LIST_COLUMN_DEFS.map(def => def.key),
+  onToggleActive,
+  togglingId,
+}) {
   const isToggling = togglingId === m.my_assignment_id
   return (
-    <div
-      className="flex items-start gap-4 px-5 py-4 hover:bg-brand-bg-soft transition-colors group border-b border-brand-line last:border-0"
+    <tr className="group border-b border-brand-line transition-colors last:border-0 hover:bg-brand-bg-soft">
+      {columns.map(key => (
+        <td key={key} className={`px-4 py-2 align-top ${key === 'matter' ? 'pl-6' : ''}`}>
+          {MATTER_LIST_CELLS[key] ? MATTER_LIST_CELLS[key](m) : null}
+        </td>
+      ))}
+      <td className="whitespace-nowrap px-4 py-2 pr-6 text-right align-top">
+        <div className="flex items-center justify-end gap-2">
+          {m.my_assignment_id && (
+            <button
+              type="button"
+              onClick={() => onToggleActive(m.my_assignment_id, m.id, !m.is_active_working)}
+              disabled={isToggling}
+              className={`flex min-h-[44px] min-w-[44px] items-center gap-1.5 rounded-lg border px-3 text-[12px] font-semibold transition-all ${
+                m.is_active_working
+                  ? 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100'
+                  : 'border-brand-line bg-brand-bg-soft text-brand-muted hover:border-brand-line-2 hover:text-brand-ink'
+              } ${isToggling ? 'cursor-wait opacity-50' : ''}`}
+            >
+              {m.is_active_working
+                ? <><Icon d={Icons.activity} size={12} className="text-green-600" /> Active</>
+                : <><Icon d={Icons.activity} size={12} /> Set Active</>}
+            </button>
+          )}
+          <span className="font-sans text-sm font-semibold text-brand-accent opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">View →</span>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+// ── My Matters lifecycle board ────────────────────────────────────────────────
+// The four columns are the matter's own lifecycle, so dragging a card changes
+// the matter rather than rearranging a personal to-do list. Closing is not a
+// status patch: the drop opens the same readiness dialog the detail page uses,
+// because a close can strand unbilled work or client trust money.
+export const MATTER_LIFECYCLE_COLUMNS = [
+  { status: 'open', label: 'Open', tone: 'text-blue-700', dot: 'bg-blue-500', border: 'border-blue-200' },
+  { status: 'active', label: 'Active', tone: 'text-green-700', dot: 'bg-green-500', border: 'border-green-200' },
+  { status: 'pending', label: 'Pending', tone: 'text-amber-700', dot: 'bg-amber-500', border: 'border-amber-200' },
+  { status: 'closed', label: 'Closed', tone: 'text-gray-500', dot: 'bg-gray-400', border: 'border-gray-200' },
+]
+
+export function matterLifecycleStatus(m) {
+  const status = (m.status || 'open').toLowerCase()
+  if (['closed', 'settled', 'dismissed'].includes(status)) return 'closed'
+  if (status === 'pending') return 'pending'
+  if (status === 'active') return 'active'
+  return 'open'
+}
+
+function DraggableMatterCard({ m, onToggleActive, togglingId, moving }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: m.id,
+    data: { matter: m },
+    disabled: moving,
+  })
+  const style = transform
+    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, opacity: isDragging ? 0.7 : undefined }
+    : undefined
+  const handle = (
+    <button
+      type="button"
+      aria-label={`Move ${m.matter_name}`}
+      {...listeners}
+      {...attributes}
+      className="mt-0.5 rounded p-1 text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent"
     >
-      <div className="flex-1 min-w-0">
-        <div className="flex flex-wrap items-center gap-2 mb-1">
-          <Link
-            to={`/matters/${m.id}`}
-            className="inline-flex min-h-[44px] min-w-[44px] max-w-full items-center truncate rounded-sm font-sans text-[14px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
-          >
-            {m.matter_name}
-          </Link>
-          <StatusBadge status={m.status} />
-          <RiskBadge level={m.risk_level} />
-          <DeadlineBadge label={m.overdue_deadline_label} />
-        </div>
-        <div className="flex flex-wrap items-center gap-3 text-[12px] text-brand-muted font-sans">
-          {m.client_name && <span>Client: <span className="text-brand-ink-2 font-medium">{m.client_name}</span></span>}
-          {m.attorney_of_record_name && <span>Attorney: <span className="text-brand-ink-2 font-medium">{m.attorney_of_record_name}</span></span>}
-          {m.practice_area && <span className="text-brand-accent font-medium">{m.practice_area}</span>}
-          <span className="capitalize text-brand-muted">Role: <span className="text-brand-ink-2">{m.my_role?.replace(/_/g, ' ')}</span></span>
-        </div>
-        <div className="mt-2">
-          <CloudFolderLinks cloudFolder={m.cloud_folder} />
-        </div>
-        {m.active_workers?.length > 0 && (
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-brand-muted font-sans">
-            <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-            <span>{m.active_workers.join(', ')} {m.active_workers.length === 1 ? 'is' : 'are'} working on this</span>
-          </div>
+      <GripVertical size={15} />
+    </button>
+  )
+  return (
+    <div ref={setNodeRef} style={style} className={isDragging ? 'relative z-50' : ''}>
+      <MatterCard
+        m={m}
+        onToggleActive={onToggleActive}
+        togglingId={togglingId}
+        showAlert={matterLifecycleStatus(m) === 'open' && (m.status === 'threatened' || Boolean(m.overdue_deadline_label))}
+        dragHandle={handle}
+      />
+    </div>
+  )
+}
+
+function LifecycleColumn({ column, matters, onToggleActive, togglingId, movingId }) {
+  const { isOver, setNodeRef } = useDroppable({ id: column.status })
+  return (
+    <section
+      ref={setNodeRef}
+      aria-labelledby={`matter-lifecycle-${column.status}`}
+      className={`flex min-h-[420px] flex-col rounded-2xl border bg-brand-bg-soft/60 ${
+        isOver ? 'border-brand-accent bg-brand-accent/5 ring-2 ring-brand-accent/20' : column.border
+      }`}
+    >
+      <header className="flex items-center gap-2 border-b border-brand-line px-4 py-3">
+        <span className={`inline-block h-2 w-2 rounded-full ${column.dot}`} />
+        <h3 id={`matter-lifecycle-${column.status}`} className={`font-serif text-[15px] font-bold ${column.tone}`}>
+          {column.label}
+        </h3>
+        <span className="ml-auto rounded-full bg-brand-surface px-2 py-0.5 text-[11px] font-bold text-brand-muted">{matters.length}</span>
+      </header>
+      <div className="flex-1 space-y-2 p-3">
+        {matters.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-brand-line bg-brand-surface/60 px-4 py-6 text-center text-[12px] font-sans text-brand-muted">
+            {column.status === 'closed' ? 'Drop a matter here to close it.' : 'Drop a matter here.'}
+          </p>
+        ) : (
+          matters.map(m => (
+            <DraggableMatterCard
+              key={m.id}
+              m={m}
+              onToggleActive={onToggleActive}
+              togglingId={togglingId}
+              moving={movingId === m.id}
+            />
+          ))
         )}
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <button
-          type="button"
-          onClick={() => onToggleActive(m.my_assignment_id, m.id, !m.is_active_working)}
-          disabled={isToggling}
-          className={`flex min-h-[44px] min-w-[44px] items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
-            m.is_active_working
-              ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
-              : 'bg-brand-bg-soft text-brand-muted border-brand-line hover:text-brand-ink hover:border-brand-line-2'
-          } ${isToggling ? 'opacity-50 cursor-wait' : ''}`}
-        >
-          {m.is_active_working
-            ? <><Icon d={Icons.activity} size={12} className="text-green-600" /> Active</>
-            : <><Icon d={Icons.activity} size={12} /> Set Active</>
-          }
-        </button>
-        <span className="text-brand-accent font-sans text-sm font-semibold opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+    </section>
+  )
+}
+
+export function MatterLifecycleBoard({ matters, onMove, onToggleActive, togglingId, movingId }) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor),
+  )
+  const buckets = useMemo(() => {
+    const grouped = { open: [], active: [], pending: [], closed: [] }
+    matters.forEach(m => grouped[matterLifecycleStatus(m)].push(m))
+    return grouped
+  }, [matters])
+
+  const handleDragEnd = ({ active, over }) => {
+    if (!over) return
+    const matter = matters.find(m => m.id === active.id)
+    if (!matter) return
+    if (over.id === matterLifecycleStatus(matter)) return
+    onMove(matter, over.id)
+  }
+
+  return (
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {MATTER_LIFECYCLE_COLUMNS.map(column => (
+          <LifecycleColumn
+            key={column.status}
+            column={column}
+            matters={buckets[column.status]}
+            onToggleActive={onToggleActive}
+            togglingId={togglingId}
+            movingId={movingId}
+          />
+        ))}
       </div>
-    </div>
+    </DndContext>
   )
 }
 
@@ -342,6 +523,8 @@ export function MatterPortfolioRow({ matter: m }) {
 
 export default function MatterPortfolioPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const matterColumns = useMatterListColumns(user)
   const [myMatters, setMyMatters] = useState([])
   const [myLoading, setMyLoading] = useState(true)
   const [matters, setMatters] = useState([])
@@ -360,10 +543,17 @@ export default function MatterPortfolioPage() {
   const setPracticeFilter = value => setParam('practice', value, 'all')
   const search = searchParams.get('q') || ''
   const setSearch = value => setParam('q', value, '')
+  const myStatusFilter = searchParams.get('mstatus') || 'all'
+  const setMyStatusFilter = value => setParam('mstatus', value, 'all')
+  const mySearch = searchParams.get('mq') || ''
+  const setMySearch = value => setParam('mq', value, '')
   const [showCreate, setShowCreate] = useState(false)
   const [togglingId, setTogglingId] = useState(null)
-  const viewMode = searchParams.get('view') === 'list' ? 'list' : 'board'
-  const setViewMode = value => setParam('view', value, 'board')
+  const [movingId, setMovingId] = useState(null)
+  const [closeTarget, setCloseTarget] = useState(null)
+  const [boardNotice, setBoardNotice] = useState(null)
+  const viewMode = searchParams.get('view') === 'board' ? 'board' : 'list'
+  const setViewMode = value => setParam('view', value, 'list')
 
   const loadMyMatters = () => {
     setMyLoading(true)
@@ -396,6 +586,50 @@ export default function MatterPortfolioPage() {
     } catch { /* silent */ }
     finally { setTogglingId(null) }
   }
+
+  const handleMove = async (matter, toStatus) => {
+    // Closing is a governed action, not a status write. Let the readiness
+    // dialog decide whether the matter can actually be closed.
+    if (toStatus === 'closed') {
+      setCloseTarget(matter)
+      return
+    }
+    const previous = matter.status
+    setBoardNotice(null)
+    setMovingId(matter.id)
+    setMyMatters(prev => prev.map(m => (m.id === matter.id ? { ...m, status: toStatus } : m)))
+    try {
+      await updateMatterV2(matter.id, { status: toStatus })
+      loadMatters()
+    } catch {
+      setMyMatters(prev => prev.map(m => (m.id === matter.id ? { ...m, status: previous } : m)))
+      setBoardNotice({ type: 'error', title: 'Could not update matter', text: 'That matter could not be moved. Try again.' })
+    } finally {
+      setMovingId(null)
+    }
+  }
+
+  const myStatusCounts = useMemo(() => {
+    const counts = { all: myMatters.length, open: 0, active: 0, pending: 0, closed: 0 }
+    myMatters.forEach(m => { counts[matterLifecycleStatus(m)] += 1 })
+    return counts
+  }, [myMatters])
+
+  const myFiltered = useMemo(() => myMatters.filter(m => {
+    if (myStatusFilter !== 'all' && matterLifecycleStatus(m) !== myStatusFilter) return false
+    if (mySearch) {
+      const q = mySearch.toLowerCase()
+      return (
+        m.matter_name?.toLowerCase().includes(q) ||
+        m.matter_number?.toLowerCase().includes(q) ||
+        m.client_name?.toLowerCase().includes(q) ||
+        m.attorney_of_record_name?.toLowerCase().includes(q) ||
+        m.partner_attorney_name?.toLowerCase().includes(q) ||
+        m.practice_area?.toLowerCase().includes(q)
+      )
+    }
+    return true
+  }), [myMatters, myStatusFilter, mySearch])
 
   const practiceAreas = useMemo(() => {
     const set = new Set(matters.map(m => m.practice_area).filter(Boolean))
@@ -511,6 +745,17 @@ export default function MatterPortfolioPage() {
             </div>
           </div>
 
+          {boardNotice && (
+            <AlertBanner
+              type={boardNotice.type}
+              title={boardNotice.title}
+              className="mb-4"
+              onDismiss={() => setBoardNotice(null)}
+            >
+              {boardNotice.text}
+            </AlertBanner>
+          )}
+
           {myLoading ? (
             <div className="bg-brand-surface border border-brand-line rounded-xl">
               <Spinner />
@@ -525,77 +770,95 @@ export default function MatterPortfolioPage() {
               Matters assigned to you will appear here with deadlines, risk level, and active-work status.
             </EmptyState>
           ) : viewMode === 'board' ? (
-            /* Board view */
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {[
-                {
-                  title: 'Needs Action',
-                  items: boardColumns.needsAction,
-                  color: 'border-brand-rose/30',
-                  headerColor: 'text-brand-rose',
-                  showAlert: true,
-                  empty: 'No matters need attention.',
-                },
-                {
-                  title: 'Upcoming',
-                  items: boardColumns.upcoming,
-                  color: 'border-brand-amber/30',
-                  headerColor: 'text-brand-amber',
-                  showAlert: false,
-                  empty: 'No upcoming deadlines.',
-                },
-                {
-                  title: 'Active',
-                  items: boardColumns.active,
-                  color: 'border-brand-green/20',
-                  headerColor: 'text-brand-green',
-                  showAlert: false,
-                  empty: 'No actively worked matters.',
-                },
-                {
-                  title: 'Watching',
-                  items: boardColumns.watching,
-                  color: 'border-brand-line',
-                  headerColor: 'text-brand-ink',
-                  showAlert: false,
-                  empty: 'Nothing in the watch queue.',
-                },
-              ].map(col => (
-                <div key={col.title} className={`bg-brand-bg-soft border ${col.color} rounded-2xl`}>
-                  <div className="px-4 pt-4 pb-3 border-b border-brand-line/50 flex items-center justify-between">
-                    <h3 className={`font-serif font-bold text-[15px] ${col.headerColor}`}>{col.title}</h3>
-                    <span className="text-[12px] text-brand-muted font-sans">{col.items.length}</span>
-                  </div>
-                  <div className="p-3 space-y-2 min-h-[120px]">
-                    {col.items.length === 0 ? (
-                      <p className="text-brand-muted text-[12px] font-sans text-center py-6">{col.empty}</p>
-                    ) : (
-                      col.items.map(m => (
-                        <MatterCard
-                          key={m.id}
-                          m={m}
-                          onToggleActive={handleToggleActive}
-                          togglingId={togglingId}
-                          showAlert={col.showAlert}
-                        />
-                      ))
-                    )}
+            /* Lifecycle board: columns are the matter's own status. */
+            <MatterLifecycleBoard
+              matters={myMatters}
+              onMove={handleMove}
+              onToggleActive={handleToggleActive}
+              togglingId={togglingId}
+              movingId={movingId}
+            />
+          ) : (
+            /* List view: a dense table with per-user column choices. */
+            <>
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap gap-1 rounded-lg border border-brand-line bg-brand-surface p-0.5">
+                  {MY_MATTER_STATUS_TABS.map(tab => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setMyStatusFilter(tab.key)}
+                      className={`rounded-md px-3 py-1.5 text-[12px] font-semibold transition-colors ${
+                        myStatusFilter === tab.key ? 'bg-brand-ink text-white' : 'text-brand-muted hover:text-brand-ink'
+                      }`}
+                    >
+                      {tab.label}
+                      <span className="ml-1.5 text-[11px] opacity-70">{myStatusCounts[tab.key] ?? 0}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="relative min-w-56 flex-1">
+                  <Icon d={Icons.search} size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-brand-muted" />
+                  <input
+                    type="text"
+                    value={mySearch}
+                    onChange={e => setMySearch(e.target.value)}
+                    placeholder="Filter by keyword"
+                    aria-label="Filter my matters by keyword"
+                    className="w-full rounded-lg border border-brand-line bg-brand-surface py-2.5 pl-10 pr-4 text-sm font-sans text-brand-ink transition-all placeholder:text-brand-muted focus:border-brand-accent focus:outline-none focus:ring-1 focus:ring-brand-accent"
+                  />
+                </div>
+                <MatterListColumnsMenu hidden={matterColumns.hidden} onChange={matterColumns.save} />
+              </div>
+
+              {myFiltered.length === 0 ? (
+                <EmptyState
+                  visual={<Icon d={Icons.briefcase} size={22} />}
+                  title="No matters match this filter"
+                  actionLabel="Clear filter"
+                  onAction={() => { setMySearch(''); setMyStatusFilter('all') }}
+                >
+                  Try a different status or keyword.
+                </EmptyState>
+              ) : (
+                <div className="overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-sm">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full border-collapse text-left">
+                      <thead>
+                        <tr className="border-b border-brand-line bg-brand-bg-soft/50">
+                          {matterColumns.visibleKeys.map(key => {
+                            const def = MATTER_LIST_COLUMN_DEFS.find(column => column.key === key)
+                            return (
+                              <th
+                                key={key}
+                                scope="col"
+                                className={`whitespace-nowrap px-4 py-3 text-[11px] font-bold uppercase tracking-widest text-brand-muted ${key === 'matter' ? 'pl-6' : ''}`}
+                              >
+                                {def?.label}
+                              </th>
+                            )
+                          })}
+                          <th scope="col" className="whitespace-nowrap px-4 py-3 pr-6 text-right text-[11px] font-bold uppercase tracking-widest text-brand-muted">
+                            Actions
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {myFiltered.map(m => (
+                          <MyMatterRow
+                            key={m.id}
+                            m={m}
+                            columns={matterColumns.visibleKeys}
+                            onToggleActive={handleToggleActive}
+                            togglingId={togglingId}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            /* List view */
-            <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
-              {myMatters.map(m => (
-                <MyMatterRow
-                  key={m.id}
-                  m={m}
-                  onToggleActive={handleToggleActive}
-                  togglingId={togglingId}
-                />
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
 
@@ -742,6 +1005,20 @@ export default function MatterPortfolioPage() {
           navigate(`/matters/${m.id}`)
         }}
       />
+
+      {closeTarget && (
+        <CloseMatterDialog
+          matterId={closeTarget.id}
+          matterName={closeTarget.matter_name}
+          onClose={() => setCloseTarget(null)}
+          onClosed={() => {
+            setCloseTarget(null)
+            setBoardNotice({ type: 'success', title: 'Matter closed', text: `${closeTarget.matter_name} has been closed.` })
+            loadMyMatters()
+            loadMatters()
+          }}
+        />
+      )}
     </div>
   )
 }
