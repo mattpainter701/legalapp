@@ -5,14 +5,14 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.11.9 — Download a form, or finish it in Studio
+## 2026.09.11.9 — Prepare paperwork from a firm template
 
 Released September 11, 2026.
 
-Start this case now downloads a blank firm template or shared sample to fill and attach, or opens it in Template Studio, and an additional form can be uploaded directly.
+Start this case now prepares the fee agreement or an additional form from a firm template without leaving the matter, with values filled from the matter, and a finished form can be uploaded directly.
 
-- **Download a blank form.** The paperwork drawer hands you the original firm template or shared starter form, so you can fill it in your own editor and attach the finished file.
-- **Or finish it in Template Studio.** Open any firm template in Template Studio from the same list to produce a one-off document, instead of an in-app form that could not render complex forms.
+- **Prepare the fee agreement from a firm template.** Choose a firm template from the paperwork drawer, review it with values filled from this matter, and save it as the fee agreement in one step.
+- **Add an additional form the same way.** The Additional forms card prepares a signing form from a firm template too; it is saved to the matter and checked for signature automatically.
 - **Attach a completed form directly.** Additional forms now take a Choose a file upload, so a filled form can be attached without first saving it to the matter's documents.
 
 ## 2026.09.11.8 — Start with a 30-day trial

@@ -5,12 +5,12 @@
 - Add an operator SMS tab in `frontend/src/pages/PlatformPage.jsx` to save the sender and send a test message.
 - No migration: configuration uses the existing `platform_settings` table. The separate, firm-owned tenant SMS path (`/api/sms/config`) is unchanged.
 
-## 2026.09.11.9 — Download-or-Studio for paperwork forms
+## 2026.09.11.9 — Matter-aware template flow for paperwork forms
 
-- Replace the in-app fill form in the paperwork drawer with a download-or-Studio chooser. `FormLibraryDialog` now lists firm templates and shared samples with a Download action (`/templates/{id}/source` and `/templates/library/{id}/source`) and, for firm templates, an Open in Studio link to `/templates/{id}/studio`. The previous renderer exposed each sample's raw `variable_schema` (detected text placeholders, duplicate and blank field names) as an unusable form — the Nevada Living Will showed "undefined" and dozens of stray fields.
-- `PaperworkDrawer` no longer renders or uploads a form from the dialog. Firm templates and samples are downloaded and filled in the firm's own editor, then attached through the existing reviewed-file input, matching the "Choose a file" path that already worked.
+- Replace the in-app fill form in the paperwork drawer with the matter-aware template flow that Case Documents already uses. `PaperworkDrawer` opens `MatterTemplatePicker` pinned to the matter, so a fee agreement or additional form is completed in `RenderModal` with Smart Fills from the matter, previewed, and saved to the matter by the template render endpoint. The previous renderer exposed each sample's raw `variable_schema` (detected text placeholders, duplicate and blank field names) as an unusable form — the Nevada Living Will showed "undefined" and dozens of stray fields.
+- On save the drawer resolves the new matter document from the render response (`matter_document_id`, `output_filename`, `output_format`), preferring the matter's own record from `GET /matters/{id}/documents` for its `content_type`, and pre-selects it: from the Fee agreement card it becomes `agreement_document_id`; from the Additional forms card it is attached as a checked signing form. The agreement select also lists the chosen document when it rendered as Word, since the intake endpoint accepts any reviewed matter document.
+- Remove `FormLibraryDialog`. Shared samples are no longer offered from the drawer; they remain available from the Template Studio home.
 - Add a "Choose a file" upload to the drawer's Additional forms card. `uploadFormFile` posts to `POST /matters/{id}/documents/upload` and attaches the returned document as an additional signing form, so a locally filled form no longer has to be saved to the matter's documents first.
-- The Template Studio sample library (`SampleLibraryCard`, `SampleFillDialog`) and its per-sample fill-and-download are unchanged; only the paperwork-drawer path changed.
 
 ## 2026.09.11.8 — 30-day self-serve trials
 
