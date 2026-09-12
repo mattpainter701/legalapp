@@ -1344,12 +1344,48 @@ export const resendSignatureRequest = (matterId, requestId) =>
 export const voidSignatureRequest = (matterId, requestId, data) =>
   api.post(`/matters/${matterId}/signatures/${requestId}/void`, data).then((r) => r.data)
 
+// A signed copy the client uploaded waits for staff review: accepting it files
+// it as the executed document, rejecting it asks the client to redo it.
+export const acceptSignatureSubmission = (matterId, requestId) =>
+  api.post(`/matters/${matterId}/signatures/${requestId}/accept-submission`).then((r) => r.data)
+
+export const rejectSignatureSubmission = (matterId, requestId, data) =>
+  api.post(`/matters/${matterId}/signatures/${requestId}/reject-submission`, data).then((r) => r.data)
+
+// Staff view of the signing field manifest (form fields, placed and detected
+// signature lines) for a created request.
+export const getSignatureRequestFields = (matterId, requestId) =>
+  api.get(`/matters/${matterId}/signatures/${requestId}/fields`).then((r) => r.data)
+
 // E-signature (client portal side)
 export const listClientPortalSignatures = () =>
   clientPortalApi.get('/portal/client/signatures').then((r) => r.data)
 
-export const signClientPortalSignature = (requestId, data) =>
-  clientPortalApi.post(`/portal/client/signatures/${requestId}/sign`, data).then((r) => r.data)
+// The manifest of fillable and signable fields for one request: page sizes plus
+// every field's kind, rect (PDF points, bottom-left origin) and whether it
+// belongs to the acting signer.
+export const getClientPortalSignatureFields = (requestId) =>
+  clientPortalApi.get(`/portal/client/signatures/${requestId}/fields`).then((r) => r.data)
+
+// `field_values` maps field_id → string for the fields the client filled in the
+// browser. Signature, initials and date fields are stamped by the server from
+// the typed name, so they are never part of the map.
+export const signClientPortalSignature = (requestId, { field_values = {}, ...data }) =>
+  clientPortalApi
+    .post(`/portal/client/signatures/${requestId}/sign`, { ...data, field_values })
+    .then((r) => r.data)
+
+// The paper path: the client downloaded the PDF, completed and signed it
+// offline, and sends the signed copy back for the firm to review.
+export const uploadClientPortalSignedCopy = (requestId, file) => {
+  const form = new FormData()
+  form.append('file', file)
+  return clientPortalApi
+    .post(`/portal/client/signatures/${requestId}/upload`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    .then((r) => r.data)
+}
 
 export const declineClientPortalSignature = (requestId, data) =>
   clientPortalApi.post(`/portal/client/signatures/${requestId}/decline`, data).then((r) => r.data)

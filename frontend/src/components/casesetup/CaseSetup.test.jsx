@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import CaseSetupCard from './CaseSetupCard'
 import PaperworkDrawer from './PaperworkDrawer'
-import { dueDateToIso, paperworkOptions } from './paperwork'
+import { dueDateToIso, orderedRequirements, paperworkOptions, requirementState } from './paperwork'
 import api, {
   getAdminUsers, getIntakeStarterPack, getMatterDocuments, getMatterPaperwork, matterPaperworkAction, previewMatterPaperwork, uploadMatterDocument,
 } from '../../api'
@@ -65,27 +65,75 @@ it('states a due date at 5pm in the client timezone, not in UTC', () => {
   expect(dueDateToIso('', 'UTC')).toBeNull()
 })
 
-it('carries a due date for each dated item into the intake request', () => {
+it('builds the full intake request from a complete draft', () => {
   const options = paperworkOptions({
     email: 'jane@example.com', channels: ['email'], smsPermissionVerified: false, ownerId: '',
     agreementDocumentId: 'agreement', agreementDue: '2026-09-15',
+    intakeFormDocumentId: 'intake', intakeFormLabel: 'Client intake form.pdf', intakeFormRequiresSignature: true, intakeFormDue: '2026-09-16',
+    questionnaireDocumentId: 'questionnaire', questionnaireLabel: 'Family questionnaire.pdf', questionnaireRequiresSignature: false, questionnaireDue: '2026-09-18',
     forms: [{ documentId: 'form', label: 'Retainer addendum', requiresSignature: true, due: '2026-09-20' }],
-    includeQuestionnaire: true, questionnaireDue: '2026-09-18', questions: 'Describe the matter.',
-    uploads: 'Marriage certificate', uploadsDue: '2026-09-25', portalAfterSigning: true,
+    requestUploads: true, uploads: 'Marriage certificate\n\nRecent pay stubs', uploadsDue: '2026-09-25', portalAfterSigning: true,
   }, 'UTC')
-  expect(options.agreement_due_at).toBe('2026-09-15T17:00:00.000Z')
-  expect(options.selected_documents[0]).toMatchObject({ document_id: 'form', due_at: '2026-09-20T17:00:00.000Z' })
-  expect(options.questionnaire_due_at).toBe('2026-09-18T17:00:00.000Z')
-  expect(options.upload_requirements[0]).toMatchObject({ key: 'upload_1', due_at: '2026-09-25T17:00:00.000Z' })
+  expect(options).toEqual({
+    email: 'jane@example.com',
+    channels: ['email'],
+    timezone: 'UTC',
+    owner_id: null,
+    sms_permission_verified: false,
+    sms_case_updates_verified: false,
+    agreement_document_id: 'agreement',
+    agreement_due_at: '2026-09-15T17:00:00.000Z',
+    // The server's free-text questionnaire is never requested any more: the
+    // questionnaire is a PDF the firm supplies, sent like any other form.
+    questionnaire_due_at: null,
+    include_questionnaire: false,
+    questions: [],
+    portal_after_signing: true,
+    selected_documents: [
+      { document_id: 'intake', label: 'Client intake form.pdf', requires_signature: true, due_at: '2026-09-16T17:00:00.000Z' },
+      { document_id: 'questionnaire', label: 'Family questionnaire.pdf', requires_signature: false, due_at: '2026-09-18T17:00:00.000Z' },
+      { document_id: 'form', label: 'Retainer addendum', requires_signature: true, due_at: '2026-09-20T17:00:00.000Z' },
+    ],
+    upload_requirements: [
+      { key: 'upload_1', label: 'Marriage certificate', required: true, due_at: '2026-09-25T17:00:00.000Z' },
+      { key: 'upload_2', label: 'Recent pay stubs', required: true, due_at: '2026-09-25T17:00:00.000Z' },
+    ],
+    confirm_send: true,
+  })
 })
 
-it('drops a questionnaire due date when the questionnaire is not included', () => {
+it('sends no records unless the section is switched on', () => {
+  // A suggested list left in the textarea after the section was switched off
+  // must not quietly become a requirement.
   const options = paperworkOptions({
-    email: 'jane@example.com', channels: ['email'], forms: [], uploads: '',
-    includeQuestionnaire: false, questionnaireDue: '2026-09-18', questions: 'Unused',
+    email: 'jane@example.com', channels: ['email'], forms: [],
+    requestUploads: false, uploads: 'Marriage certificate', uploadsDue: '2026-09-25',
   }, 'UTC')
-  expect(options.questionnaire_due_at).toBeNull()
-  expect(options.questions).toEqual([])
+  expect(options.upload_requirements).toEqual([])
+  expect(options.selected_documents).toEqual([])
+  expect(options.include_questionnaire).toBe(false)
+})
+
+it('labels each requirement by how the client completes it', () => {
+  expect(requirementState({ completed: false }, 'fee_agreement')).toMatchObject({ label: 'Needs signature' })
+  expect(requirementState({ completed: true }, 'fee_agreement')).toMatchObject({ label: 'Signed' })
+  expect(requirementState({ completed: false, kind: 'signature' }, 'document_1')).toMatchObject({ label: 'Needs signature' })
+  expect(requirementState({ completed: false, kind: 'signature', submitted_document_id: 'copy' }, 'document_1')).toMatchObject({ label: 'Awaiting review' })
+  expect(requirementState({ completed: true, kind: 'signature' }, 'document_1')).toMatchObject({ label: 'Signed' })
+  expect(requirementState({ completed: false, kind: 'upload' }, 'upload_1')).toMatchObject({ label: 'Outstanding' })
+  expect(requirementState({ completed: true, kind: 'upload' }, 'upload_1')).toMatchObject({ label: 'Received' })
+  expect(requirementState({ completed: true, kind: 'document' }, 'document_2')).toMatchObject({ label: 'Received' })
+})
+
+it('hides the pre-completed legacy questionnaire row from the strip', () => {
+  const rows = orderedRequirements(packet({
+    requirements: {
+      fee_agreement: { completed: false },
+      questionnaire: { completed: true, required: false },
+      upload_1: { completed: false, kind: 'upload', label: 'Pay stubs' },
+    },
+  }))
+  expect(rows.map(row => row.key)).toEqual(['fee_agreement', 'upload_1'])
 })
 
 it('marks a passed deadline overdue on the paperwork strip', async () => {
@@ -100,6 +148,23 @@ it('marks a passed deadline overdue on the paperwork strip', async () => {
   // A completed requirement is never chased, whatever its date said.
   expect(screen.queryByText(/Due Jan 1, 2030/)).not.toBeInTheDocument()
   expect(screen.getByText('1 of 2 complete · sent 9/1/2026')).toBeInTheDocument()
+  expect(screen.getByText('Needs signature')).toBeInTheDocument()
+})
+
+it('labels the strip by how each requirement completes', async () => {
+  getMatterPaperwork.mockResolvedValue(packet({
+    requirements: {
+      fee_agreement: { completed: true, completed_at: '2026-09-02T12:00:00Z' },
+      document_a: { completed: false, kind: 'signature', label: 'Client intake form', submitted_document_id: 'copy' },
+      upload_1: { completed: true, kind: 'upload', label: 'Pay stubs' },
+      upload_2: { completed: false, kind: 'upload', label: 'Existing orders' },
+    },
+  }))
+  render(<CaseSetupCard matterId="matter" />)
+  expect(await screen.findByText('Signed')).toBeInTheDocument()
+  expect(screen.getByText('Awaiting review')).toBeInTheDocument()
+  expect(screen.getByText('Received')).toBeInTheDocument()
+  expect(screen.getByText('Outstanding')).toBeInTheDocument()
 })
 
 it('offers the kickoff when the matter has no packet yet', async () => {
@@ -123,11 +188,24 @@ it('sends the chosen documents and their deadlines from the drawer', async () =>
     onClose={vi.fn()}
     onSent={onSent}
   />)
+  // The Documents step reads top to bottom in the order the client meets them.
+  expect(screen.getAllByRole('heading', { level: 3 }).map(heading => heading.textContent)).toEqual([
+    'Fee agreement (optional)', 'Client intake form (optional)', 'Client questionnaire (optional)', 'Additional forms',
+  ])
+  // Records are an explicit opt-in, collapsed until switched on.
+  expect(screen.getByRole('checkbox', { name: /Records to request from the client/ })).not.toBeChecked()
+  expect(screen.queryByLabelText('One record per line')).not.toBeInTheDocument()
+  // Nothing about the retired free-text questionnaire remains.
+  expect(screen.queryByText(/Reset to standard questions/)).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('One question per line')).not.toBeInTheDocument()
+
   await user.selectOptions(screen.getByLabelText('From matter documents'), 'agreement')
   await user.click(screen.getByLabelText(/Intake form\.pdf/))
+  expect(screen.getByRole('checkbox', { name: 'Client signs this form' })).toBeChecked()
 
   await user.click(screen.getByRole('button', { name: '2. Deadlines' }))
   await user.type(screen.getByLabelText(/^Due$/, { selector: '#due-fee-agreement' }), '2026-09-15')
+  expect(screen.queryByLabelText(/^Due$/, { selector: '#due-uploads' })).not.toBeInTheDocument()
 
   await user.click(screen.getByRole('button', { name: '3. Send' }))
   await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
@@ -139,6 +217,9 @@ it('sends the chosen documents and their deadlines from the drawer', async () =>
   expect(options.selected_documents).toEqual([
     expect.objectContaining({ document_id: 'form', requires_signature: true, due_at: null }),
   ])
+  expect(options.upload_requirements).toEqual([])
+  expect(options.include_questionnaire).toBe(false)
+  expect(options.questions).toEqual([])
   expect(onSent).toHaveBeenCalledOnce()
 })
 
@@ -189,7 +270,7 @@ it('prepares an additional signing form from a firm template', async () => {
 
   const form = await screen.findByRole('checkbox', { name: /Engagement Letter\.pdf/ })
   expect(form).toBeChecked()
-  expect(screen.getByRole('checkbox', { name: /Track signature/ })).toBeChecked()
+  expect(screen.getByRole('checkbox', { name: 'Client signs this form' })).toBeChecked()
   // It is a signing form; the fee agreement is still unchosen.
   expect(screen.getByLabelText('From matter documents')).toHaveValue('')
 })
@@ -211,7 +292,15 @@ it('attaches a locally filled form uploaded through Choose a file', async () => 
 it('sends without a fee agreement when another standard piece is included', async () => {
   const user = userEvent.setup()
   const onSent = vi.fn()
-  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={onSent} />)
+  render(<PaperworkDrawer
+    matterId="matter"
+    documents={[{ id: 'questionnaire', filename: 'Family questionnaire.pdf', content_type: 'application/pdf' }]}
+    clientEmail="jane@example.com"
+    timeZone="UTC"
+    onClose={vi.fn()}
+    onSent={onSent}
+  />)
+  await user.selectOptions(screen.getByLabelText('Choose the client questionnaire'), 'questionnaire')
   await user.click(screen.getByRole('button', { name: '3. Send' }))
   const send = screen.getByRole('button', { name: 'Send paperwork' })
   expect(send).toBeEnabled()
@@ -219,20 +308,24 @@ it('sends without a fee agreement when another standard piece is included', asyn
   const [, body] = api.post.mock.calls.at(-1)
   const options = JSON.parse(body.get('options'))
   expect(options.agreement_document_id).toBeNull()
+  expect(options.selected_documents).toEqual([
+    { document_id: 'questionnaire', label: 'Family questionnaire.pdf', requires_signature: true, due_at: null },
+  ])
   expect(onSent).toHaveBeenCalledOnce()
 })
 
 it('will not send a packet with nothing included', async () => {
   const user = userEvent.setup()
   render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
-  await user.click(screen.getByLabelText(/Client questionnaire/))
+  // Switching records on without listing any is still nothing.
+  await user.click(screen.getByRole('checkbox', { name: /Records to request from the client/ }))
   await user.click(screen.getByRole('button', { name: '3. Send' }))
   expect(screen.getByRole('button', { name: 'Send paperwork' })).toBeDisabled()
   expect(screen.getByRole('alert')).toHaveTextContent('at least one')
   expect(api.post).not.toHaveBeenCalled()
 })
 
-it('includes the client intake form as an unsigned document', async () => {
+it('sends the client intake form signed by default, or unsigned when the toggle is off', async () => {
   const user = userEvent.setup()
   render(<PaperworkDrawer
     matterId="matter"
@@ -243,12 +336,44 @@ it('includes the client intake form as an unsigned document', async () => {
     onSent={vi.fn()}
   />)
   await user.selectOptions(screen.getByLabelText('Choose the client intake form'), 'intake')
+  // The chosen form is no longer offered as an additional form.
+  expect(screen.queryByRole('checkbox', { name: /Client intake form\.pdf/ })).not.toBeInTheDocument()
+  const signs = screen.getByRole('checkbox', { name: 'Client signs this form' })
+  expect(signs).toBeChecked()
+  await user.click(signs)
+
+  await user.click(screen.getByRole('button', { name: '2. Deadlines' }))
+  await user.type(screen.getByLabelText(/^Due$/, { selector: '#due-intake-form' }), '2026-09-16')
+
   await user.click(screen.getByRole('button', { name: '3. Send' }))
   await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
   const [, body] = api.post.mock.calls.at(-1)
   const options = JSON.parse(body.get('options'))
   expect(options.selected_documents).toEqual([
-    expect.objectContaining({ document_id: 'intake', requires_signature: false }),
+    { document_id: 'intake', label: 'Client intake form.pdf', requires_signature: false, due_at: '2026-09-16T17:00:00.000Z' },
+  ])
+})
+
+it('prepares the questionnaire from a firm template and sends it as a signed form', async () => {
+  const user = userEvent.setup()
+  getMatterDocuments.mockResolvedValue([])
+  render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
+
+  await user.click(screen.getByRole('button', { name: /Prepare the client questionnaire/ }))
+  await user.click(screen.getByRole('button', { name: 'Save to matter' }))
+  expect(await screen.findByLabelText('Choose the client questionnaire')).toHaveValue('rendered-doc')
+  expect(screen.getByRole('checkbox', { name: 'Client signs this form' })).toBeChecked()
+
+  await user.click(screen.getByRole('button', { name: '2. Deadlines' }))
+  await user.type(screen.getByLabelText(/^Due$/, { selector: '#due-questionnaire' }), '2026-09-18')
+
+  await user.click(screen.getByRole('button', { name: '3. Send' }))
+  await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
+  const [, body] = api.post.mock.calls.at(-1)
+  const options = JSON.parse(body.get('options'))
+  expect(options.include_questionnaire).toBe(false)
+  expect(options.selected_documents).toEqual([
+    { document_id: 'rendered-doc', label: 'Engagement Letter.pdf', requires_signature: true, due_at: '2026-09-18T17:00:00.000Z' },
   ])
 })
 
@@ -256,13 +381,15 @@ it('previews the exact branded message the client will receive', async () => {
   const user = userEvent.setup()
   render(<PaperworkDrawer
     matterId="matter"
-    documents={[]}
+    documents={[{ id: 'intake', filename: 'Client intake form.pdf', content_type: 'application/pdf' }]}
     clientEmail="jane@example.com"
     timeZone="UTC"
     onClose={vi.fn()}
     onSent={vi.fn()}
   />)
 
+  // The preview waits for a sendable draft.
+  await user.selectOptions(screen.getByLabelText('Choose the client intake form'), 'intake')
   await user.click(screen.getByRole('button', { name: '3. Send' }))
 
   // The server renders the copy; the drawer only displays it.
@@ -277,16 +404,42 @@ it('previews the exact branded message the client will receive', async () => {
   expect(await screen.findByText('Painter Law: Your paperwork is ready in your secure portal.')).toBeInTheDocument()
 })
 
-it('seeds the matter type questions and upload hint from the starter pack', async () => {
+it('offers the starter pack records only when the firm asks for them', async () => {
+  const user = userEvent.setup()
   getIntakeStarterPack.mockResolvedValue({
     practice: 'family',
     practice_label: 'Family and domestic relations',
     questions: [{ key: 'matter_summary', label: 'What happened?' }],
-    upload_requirements: [{ key: 'upload_family_orders', label: 'Any existing court orders' }],
+    upload_requirements: [
+      { key: 'upload_family_orders', label: 'Any existing court orders' },
+      { key: 'upload_family_income', label: 'Recent pay stubs' },
+    ],
   })
   render(<PaperworkDrawer matterId="matter" documents={[]} clientEmail="jane@example.com" timeZone="UTC" onClose={vi.fn()} onSent={vi.fn()} />)
   await waitFor(() => expect(getIntakeStarterPack).toHaveBeenCalledWith({ matter_id: 'matter' }))
-  expect(await screen.findByPlaceholderText('Any existing court orders')).toBeInTheDocument()
+
+  await user.click(screen.getByRole('checkbox', { name: /Records to request from the client/ }))
+  const records = screen.getByLabelText('One record per line')
+  // Switched on, the list is still empty: the pack is a suggestion, not a default.
+  expect(records).toHaveValue('')
+  expect(records).toHaveAttribute('placeholder', 'Any existing court orders\nRecent pay stubs')
+  expect(screen.getByText(/Records to send us/)).toBeInTheDocument()
+
+  await user.click(screen.getByRole('button', { name: 'Use the suggested list for Family and domestic relations' }))
+  expect(records).toHaveValue('Any existing court orders\nRecent pay stubs')
+
+  await user.click(screen.getByRole('button', { name: '2. Deadlines' }))
+  await user.type(screen.getByLabelText(/^Due$/, { selector: '#due-uploads' }), '2026-09-25')
+
+  await user.click(screen.getByRole('button', { name: '3. Send' }))
+  expect(screen.getByText('2 requested records — due 2026-09-25')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
+  const [, body] = api.post.mock.calls.at(-1)
+  const options = JSON.parse(body.get('options'))
+  expect(options.upload_requirements).toEqual([
+    { key: 'upload_1', label: 'Any existing court orders', required: true, due_at: '2026-09-25T17:00:00.000Z' },
+    { key: 'upload_2', label: 'Recent pay stubs', required: true, due_at: '2026-09-25T17:00:00.000Z' },
+  ])
 })
 
 it('keeps case-update texts out of an intake-only consent', () => {
@@ -294,7 +447,7 @@ it('keeps case-update texts out of an intake-only consent', () => {
   // the life of the matter; the two permissions travel separately.
   const base = {
     email: 'jane@example.com', channels: ['email', 'sms'], forms: [], uploads: '',
-    includeQuestionnaire: false, questions: '', smsPermissionVerified: true,
+    smsPermissionVerified: true,
   }
   expect(paperworkOptions(base, 'UTC').sms_case_updates_verified).toBe(false)
   expect(paperworkOptions({ ...base, smsCaseUpdatesVerified: true }, 'UTC').sms_case_updates_verified).toBe(true)
