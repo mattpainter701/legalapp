@@ -2,6 +2,12 @@
 
 import uuid as _uuid
 from datetime import date, datetime
+
+# A field literally named "date" cannot annotate itself as ``Optional[date]``.
+# In a class body the value is bound before the annotation is evaluated, so
+# ``date`` already means ``None`` and the field silently becomes NoneType,
+# rejecting every real date. These fields use the alias instead.
+from datetime import date as _date
 from decimal import Decimal
 from typing import Optional
 
@@ -26,7 +32,7 @@ class TimeEntryUpdate(BaseModel):
     description: Optional[str] = None
     hours: Optional[Decimal] = Field(default=None, gt=0)
     hourly_rate: Optional[Decimal] = Field(default=None, gt=0)
-    date: Optional[date] = None
+    date: Optional[_date] = None
     is_billable: Optional[bool] = None
     utbms_task_code: Optional[str] = None
     utbms_activity_code: Optional[str] = None
@@ -38,6 +44,8 @@ class TimeEntryResponse(BaseModel):
     tenant_id: str
     matter_id: str
     user_id: str
+    # Who recorded the time. A firm-wide list is unreadable without it.
+    user_name: Optional[str] = None
     description: str
     hours: Decimal
     hourly_rate: Decimal
@@ -79,6 +87,9 @@ class TimerStartRequest(BaseModel):
     description: str = Field(default="", max_length=4000)
     is_billable: bool = True
     hourly_rate: Optional[Decimal] = Field(default=None, gt=0)
+    # The timekeeper's local calendar date. Without it an entry started in the
+    # US evening is stamped with tomorrow's UTC date and bills on the wrong day.
+    date: Optional[_date] = None
 
 
 class TimerStopRequest(BaseModel):
@@ -125,7 +136,7 @@ class ExpenseCreate(BaseModel):
 class ExpenseUpdate(BaseModel):
     description: Optional[str] = Field(default=None, min_length=1)
     amount: Optional[Decimal] = Field(default=None, gt=0)
-    date: Optional[date] = None
+    date: Optional[_date] = None
     due_date: Optional[date] = None
     category: Optional[str] = Field(default=None, min_length=1, max_length=100)
     vendor: Optional[str] = Field(default=None, max_length=300)
@@ -416,6 +427,16 @@ class InvoiceExportRequest(BaseModel):
 
 
 # ── Billing Settings ─────────────────────────────────────────────────────────
+
+
+class TimeEntrySettingsResponse(BaseModel):
+    """Non-financial entry rules every timekeeper needs to record time.
+
+    Deliberately excludes the firm's default rate: the increment governs what a
+    valid entry looks like, while rates are finance data behind /billing/settings.
+    """
+
+    time_rounding_minutes: int
 
 
 class BillingSettingsResponse(BaseModel):

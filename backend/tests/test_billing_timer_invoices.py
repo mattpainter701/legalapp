@@ -2,8 +2,10 @@
 sequential numbering, status transitions, and void-release behavior."""
 
 import uuid
+from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -496,3 +498,177 @@ class TestBillingSettings:
         )
         stop = await client.post("/api/billing/time-entries/timer/stop", json={})
         assert Decimal(stop.json()["hours"]) == Decimal("0.25")
+
+
+@pytest.mark.asyncio
+async def test_timer_start_accepts_the_timekeepers_local_date(client, test_matter):
+    """An evening entry must not be stamped with tomorrow's UTC date."""
+    matter = test_matter
+
+    local_day = (date.today() - timedelta(days=1)).isoformat()
+    r = await client.post(
+        "/api/billing/time-entries/timer/start",
+        json={
+            "matter_id": str(matter.id),
+            "description": "Evening call",
+            "date": local_day,
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["date"] == local_day
+
+    await client.delete("/api/billing/time-entries/timer")
+
+
+@pytest.mark.asyncio
+async def test_timer_stop_records_the_narrative(client, test_matter):
+    """The description given at stop is what lands on the bill."""
+    matter = test_matter
+
+    start = await client.post(
+        "/api/billing/time-entries/timer/start",
+        json={"matter_id": str(matter.id)},
+    )
+    assert start.status_code == 201, start.text
+
+    stop = await client.post(
+        "/api/billing/time-entries/timer/stop",
+        json={"description": "Call with opposing counsel"},
+    )
+    assert stop.status_code == 200, stop.text
+    assert stop.json()["description"] == "Call with opposing counsel"
+    assert stop.json()["status"] == "draft"
+
+
+@pytest.mark.asyncio
+async def test_time_entry_list_names_the_timekeeper(client, test_matter, test_user):
+    """A firm-wide list is unreadable without who recorded each entry."""
+    matter = test_matter
+
+    created = await client.post(
+        "/api/billing/time-entries",
+        json={
+            "matter_id": str(matter.id),
+            "description": "Drafted motion",
+            "hours": "1.5",
+            "hourly_rate": "200.00",
+            "date": date.today().isoformat(),
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    listing = await client.get(f"/api/billing/time-entries?matter_id={matter.id}")
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+    assert items
+    assert items[0]["user_name"] == test_user.full_name
+
+
+@pytest.mark.asyncio
+async def test_time_entry_settings_readable_without_finance_access(
+    db_session, test_tenant, test_redis
+):
+    """Every timekeeper needs the increment; only finance sees firm rates."""
+    from datetime import datetime, timezone
+
+    from httpx import ASGITransport, AsyncClient
+    from jose import jwt as jose_jwt
+
+    from app.config import get_settings
+    from app.database import get_db
+    from app.main import app
+    from app.models.user import User
+
+    settings = get_settings()
+    timekeeper = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="paralegal@testfirm.com",
+        full_name="Pat Paralegal",
+        role="user",
+        oauth_provider="google",
+        oauth_subject="google-sub-paralegal",
+        is_active=True,
+    )
+    db_session.add(timekeeper)
+    await db_session.commit()
+
+    token = jose_jwt.encode(
+        {
+            "sub": str(timekeeper.id),
+            "tenant_id": str(test_tenant.id),
+            "role": timekeeper.role,
+            "email": timekeeper.email,
+            "billing_tier": test_tenant.billing_tier,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    previous_redis = getattr(app.state, "redis", None)
+    app.state.redis = test_redis
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as ac:
+            allowed = await ac.get("/api/billing/time-entry-settings")
+            assert allowed.status_code == 200
+            assert allowed.json()["time_rounding_minutes"] == 6
+
+            # The firm's rates stay behind the finance gate.
+            refused = await ac.get("/api/billing/settings")
+            assert refused.status_code == 403
+    finally:
+        app.state.redis = previous_redis
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_time_entry_date_can_be_corrected(client, test_matter):
+    """Editing an entry's date must work: the edit form sends it on every save."""
+    created = await client.post(
+        "/api/billing/time-entries",
+        json={
+            "matter_id": str(test_matter.id),
+            "description": "Drafted motion",
+            "hours": "1.0",
+            "date": "2026-07-01",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    corrected = await client.patch(
+        f"/api/billing/time-entries/{created.json()['id']}",
+        json={"description": "Drafted motion", "hours": "1.0", "date": "2026-06-30"},
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["date"] == "2026-06-30"
+
+
+@pytest.mark.asyncio
+async def test_expense_date_can_be_corrected(client, test_matter):
+    """Same for expenses: a mis-dated receipt has to be fixable."""
+    created = await client.post(
+        "/api/billing/expenses",
+        json={
+            "matter_id": str(test_matter.id),
+            "description": "Filing fee",
+            "amount": "125.00",
+            "date": "2026-07-01",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    corrected = await client.patch(
+        f"/api/billing/expenses/{created.json()['id']}",
+        json={"date": "2026-06-30"},
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["date"] == "2026-06-30"

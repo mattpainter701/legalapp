@@ -2627,6 +2627,9 @@ export const deleteExpense = (id) =>
   api.delete(`/billing/expenses/${id}`)
 
 // Billing settings
+export const getTimeEntrySettings = () =>
+  api.get('/billing/time-entry-settings').then(r => r.data)
+
 export const getBillingSettings = () =>
   api.get('/billing/settings').then(r => r.data)
 export const updateBillingSettings = (data) =>

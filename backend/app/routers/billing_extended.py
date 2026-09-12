@@ -26,6 +26,7 @@ from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Pay
 from app.models.contact import Contact
 from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
+from app.models.user import User
 from app.routers.firm import get_firm_branding
 from app.schemas.billing import (
     TimeEntryCreate,
@@ -49,6 +50,7 @@ from app.schemas.billing import (
     InvoiceExportRequest,
     BillingSettingsResponse,
     BillingSettingsUpdate,
+    TimeEntrySettingsResponse,
 )
 from app.services.billing_workflow import (
     DEFAULT_ROUNDING_MINUTES,
@@ -428,6 +430,24 @@ def _time_entry_filters(
     return conditions
 
 
+async def _with_user_names(db: AsyncSession, entries: list) -> list[dict]:
+    """Resolve each entry's timekeeper in one query, never one per row."""
+    user_ids = {e.user_id for e in entries if e.user_id}
+    names: dict[uuid.UUID, str] = {}
+    if user_ids:
+        rows = await db.execute(
+            select(User.id, User.full_name).where(User.id.in_(user_ids))
+        )
+        names = {uid: full_name for uid, full_name in rows.all()}
+
+    resolved = []
+    for entry in entries:
+        payload = TimeEntryResponse.model_validate(entry, from_attributes=True)
+        payload.user_name = names.get(entry.user_id)
+        resolved.append(payload)
+    return resolved
+
+
 @router.get("/time-entries")
 async def list_time_entries(
     matter_id: str | None = Query(None),
@@ -481,9 +501,7 @@ async def list_time_entries(
     entries = result.scalars().all()
 
     return TimeEntryListResponse(
-        items=[
-            TimeEntryResponse.model_validate(e, from_attributes=True) for e in entries
-        ],
+        items=await _with_user_names(db, list(entries)),
         total=total_count,
         total_hours=Decimal(str(total_hours)),
         total_amount=Decimal(str(total_amount)),
@@ -542,7 +560,7 @@ async def start_timer(
         hours=Decimal("0"),
         hourly_rate=hourly_rate,
         amount=Decimal("0"),
-        date=now.date(),
+        date=body.date or now.date(),
         is_billable=body.is_billable,
         status="running",
         timer_started_at=now,
@@ -1741,6 +1759,26 @@ async def export_invoice(
 
 
 # ── Billing Settings ────────────────────────────────────────────────────────
+
+
+@router.get("/time-entry-settings")
+async def get_time_entry_settings(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TimeEntrySettingsResponse:
+    """Return the tenant's billing increment.
+
+    Any timekeeper may read this: it defines what a valid entry looks like, so
+    the entry form can accept the same 6-minute units the timer produces. Rates
+    stay behind the finance-gated /billing/settings.
+    """
+    user = await get_current_user(request, db)
+    billing_cfg = await _get_billing_config(db, user.tenant_id)
+    return TimeEntrySettingsResponse(
+        time_rounding_minutes=int(
+            billing_cfg.get("time_rounding_minutes") or DEFAULT_ROUNDING_MINUTES
+        )
+    )
 
 
 @router.get("/settings")
