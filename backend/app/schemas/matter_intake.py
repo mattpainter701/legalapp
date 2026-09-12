@@ -116,3 +116,14 @@ class IntakeMeeting(BaseModel):
 class IntakeRetry(BaseModel):
     delivery_key: str = Field(max_length=100)
     confirm_not_sent: Literal[True]
+
+
+class IntakeChangeDecision(BaseModel):
+    change_id: str | None = Field(default=None, max_length=200)
+    all: bool = False
+
+    @model_validator(mode="after")
+    def one_target(self):
+        if self.all == (self.change_id is not None):
+            raise ValueError("Choose one proposed change or the whole set")
+        return self
