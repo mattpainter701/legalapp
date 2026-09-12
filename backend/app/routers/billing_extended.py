@@ -1,6 +1,7 @@
 """Extended billing router — time entries, expenses, invoice generation, payments."""
 
 import asyncio
+from html import escape as html_escape
 import logging
 import uuid
 from datetime import date, datetime, timezone, timedelta
@@ -51,6 +52,10 @@ from app.schemas.billing import (
     BillingSettingsResponse,
     BillingSettingsUpdate,
     TimeEntrySettingsResponse,
+    InvoiceLineItemCreateRequest,
+    InvoiceLineItemUpdateRequest,
+    InvoiceSendRequest,
+    InvoiceSendResponse,
 )
 from app.services.billing_workflow import (
     DEFAULT_ROUNDING_MINUTES,
@@ -218,6 +223,11 @@ async def _billing_preview_data(
     times = (await db.execute(time_stmt)).scalars().all()
     expenses = (await db.execute(expense_stmt)).scalars().all()
     return matter, times, expenses
+
+
+def _format_money(amount: Decimal | None) -> str:
+    """Plain currency text for the delivery email."""
+    return f"${Decimal(str(amount or 0)):,.2f}"
 
 
 def _expense_invoice_amount(expense: Expense) -> Decimal:
@@ -1378,6 +1388,196 @@ async def _trigger_qbo_sync_payment(payment_id: str, tenant_id: str):
         await service.sync_payment_with_retry(payment_id)
 
 
+# ── Draft line items ────────────────────────────────────────────────────────
+# A generated bill is a starting point, not a verdict. Until it is sent, a
+# reviewer can reword a narrative, write a line down, add a flat fee, or
+# discount the bill — the loop every firm runs before a client sees it.
+
+
+async def _load_draft_invoice_for_edit(
+    db: AsyncSession, invoice_id: str, tenant_id: uuid.UUID
+) -> Invoice:
+    """Fetch and lock an invoice, refusing anything that has left draft."""
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
+    result = await db.execute(
+        select(Invoice)
+        .where(Invoice.id == invoice_uuid, Invoice.tenant_id == tenant_id)
+        .with_for_update()
+    )
+    invoice = result.scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="Only draft invoices may be edited. Void this invoice to make changes.",
+        )
+    return invoice
+
+
+async def _recompute_invoice_totals(db: AsyncSession, invoice: Invoice) -> None:
+    """Re-derive subtotal, tax and total from the invoice's current lines.
+
+    The invoice stores a tax amount rather than a rate, so the rate in force
+    when it was generated is recovered from the existing figures and re-applied.
+    """
+    rows = await db.execute(
+        select(func.coalesce(func.sum(InvoiceLineItem.amount), 0)).where(
+            InvoiceLineItem.invoice_id == invoice.id
+        )
+    )
+    subtotal = Decimal(str(rows.scalar() or 0)).quantize(Decimal("0.01"))
+
+    previous_subtotal = invoice.subtotal or Decimal("0")
+    if previous_subtotal > 0:
+        tax_rate = (invoice.tax_amount or Decimal("0")) / previous_subtotal
+    else:
+        tax_rate = Decimal("0")
+
+    invoice.subtotal = subtotal
+    invoice.tax_amount = (subtotal * tax_rate).quantize(Decimal("0.01"))
+    invoice.total = invoice.subtotal + invoice.tax_amount
+
+
+@router.post("/invoices/{invoice_id}/line-items", status_code=201)
+async def add_invoice_line_item(
+    invoice_id: str,
+    body: InvoiceLineItemCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceResponse:
+    """Add a flat fee, adjustment or discount line to a draft invoice."""
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice = await _load_draft_invoice_for_edit(db, invoice_id, user.tenant_id)
+
+    # A discount is stored as a negative amount so the subtotal simply sums.
+    amount = body.amount
+    if body.source_type == "discount" and amount > 0:
+        amount = -amount
+
+    order_result = await db.execute(
+        select(func.coalesce(func.max(InvoiceLineItem.sort_order), -1)).where(
+            InvoiceLineItem.invoice_id == invoice.id
+        )
+    )
+    next_order = int(order_result.scalar() or -1) + 1
+
+    db.add(
+        InvoiceLineItem(
+            invoice_id=invoice.id,
+            source_type=body.source_type,
+            source_id=None,
+            description=body.description.strip(),
+            quantity=body.quantity,
+            unit_price=(amount / body.quantity).quantize(Decimal("0.01")),
+            amount=amount.quantize(Decimal("0.01")),
+            sort_order=next_order,
+        )
+    )
+    await db.flush()
+    await _recompute_invoice_totals(db, invoice)
+    await db.commit()
+    return await _load_invoice_response(db, invoice.id, user.tenant_id)
+
+
+@router.patch("/invoices/{invoice_id}/line-items/{line_item_id}")
+async def update_invoice_line_item(
+    invoice_id: str,
+    line_item_id: str,
+    body: InvoiceLineItemUpdateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceResponse:
+    """Reword or re-price a single line on a draft invoice."""
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice = await _load_draft_invoice_for_edit(db, invoice_id, user.tenant_id)
+
+    line_uuid = _parse_uuid(line_item_id, "line item")
+    line_result = await db.execute(
+        select(InvoiceLineItem).where(
+            InvoiceLineItem.id == line_uuid,
+            InvoiceLineItem.invoice_id == invoice.id,
+        )
+    )
+    line = line_result.scalar_one_or_none()
+    if not line:
+        raise HTTPException(status_code=404, detail="Line item not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No changes supplied")
+
+    if "description" in update_data:
+        line.description = update_data["description"].strip()
+    if "quantity" in update_data:
+        line.quantity = update_data["quantity"]
+    if "unit_price" in update_data:
+        line.unit_price = update_data["unit_price"]
+
+    line.amount = (line.quantity * line.unit_price).quantize(Decimal("0.01"))
+
+    await db.flush()
+    await _recompute_invoice_totals(db, invoice)
+    await db.commit()
+    return await _load_invoice_response(db, invoice.id, user.tenant_id)
+
+
+@router.delete("/invoices/{invoice_id}/line-items/{line_item_id}")
+async def delete_invoice_line_item(
+    invoice_id: str,
+    line_item_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceResponse:
+    """Remove a line from a draft, releasing its source work back to unbilled."""
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice = await _load_draft_invoice_for_edit(db, invoice_id, user.tenant_id)
+
+    line_uuid = _parse_uuid(line_item_id, "line item")
+    line_result = await db.execute(
+        select(InvoiceLineItem).where(
+            InvoiceLineItem.id == line_uuid,
+            InvoiceLineItem.invoice_id == invoice.id,
+        )
+    )
+    line = line_result.scalar_one_or_none()
+    if not line:
+        raise HTTPException(status_code=404, detail="Line item not found")
+
+    # Pulling billed work off a draft must return it to the unbilled pool,
+    # otherwise the hours are stranded and can never be billed again.
+    if line.source_id and line.source_type == "time_entry":
+        entry_result = await db.execute(
+            select(TimeEntry).where(
+                TimeEntry.id == line.source_id,
+                TimeEntry.tenant_id == user.tenant_id,
+            )
+        )
+        entry = entry_result.scalar_one_or_none()
+        if entry:
+            entry.invoice_id = None
+            entry.status = "draft"
+    elif line.source_id and line.source_type == "expense":
+        expense_result = await db.execute(
+            select(Expense).where(
+                Expense.id == line.source_id,
+                Expense.tenant_id == user.tenant_id,
+            )
+        )
+        expense = expense_result.scalar_one_or_none()
+        if expense:
+            expense.invoice_id = None
+
+    await db.delete(line)
+    await db.flush()
+    await _recompute_invoice_totals(db, invoice)
+    await db.commit()
+    return await _load_invoice_response(db, invoice.id, user.tenant_id)
+
+
 @router.patch("/invoices/{invoice_id}")
 async def update_invoice(
     invoice_id: str,
@@ -1458,6 +1658,130 @@ async def update_invoice(
     await db.commit()
 
     return await _load_invoice_response(db, invoice_uuid, user.tenant_id)
+
+
+# ── Delivery ────────────────────────────────────────────────────────────────
+
+
+@router.post("/invoices/{invoice_id}/send")
+async def send_invoice(
+    invoice_id: str,
+    body: InvoiceSendRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> InvoiceSendResponse:
+    """Email the invoice to the client with its PDF attached.
+
+    Marking a bill as sent is an accounting event; this actually delivers it.
+    The status only moves to "sent" when delivery succeeded, so a firm never
+    believes a client received a bill that never left the building.
+    """
+    from app.services.email import EmailDeliveryResult, email_service
+    from app.services.invoice_pdf import generate_invoice_pdf
+    from app.services.mail_attachment import MailAttachment
+
+    user = await _require_billing_manager(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
+
+    result = await db.execute(
+        select(Invoice)
+        .where(Invoice.id == invoice_uuid, Invoice.tenant_id == user.tenant_id)
+        .with_for_update()
+    )
+    invoice = result.scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status in ("void", "written_off"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"A '{invoice.status}' invoice cannot be sent.",
+        )
+
+    matter = await _get_matter_or_404(db, str(invoice.matter_id), user.tenant_id)
+    defaults = await _matter_billing_defaults(db, matter, user.tenant_id)
+
+    recipients = [r.strip() for r in (body.to or []) if r and r.strip()]
+    if not recipients and defaults.get("default_recipient"):
+        recipients = [defaults["default_recipient"]]
+    if not recipients:
+        raise HTTPException(
+            status_code=400,
+            detail="No recipient. Add an email address to the matter's client, or supply one.",
+        )
+
+    inv = await _load_invoice_response(db, invoice.id, user.tenant_id)
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == user.tenant_id))
+    branding = await get_firm_branding(db, tenant)
+    firm_name = (branding or {}).get("firm_name") or (tenant.name if tenant else "")
+
+    pdf_bytes = await asyncio.to_thread(generate_invoice_pdf, inv, branding)
+    attachment = MailAttachment(
+        filename=f"invoice_{inv.invoice_number}.pdf",
+        content=pdf_bytes,
+        content_type="application/pdf",
+    )
+
+    subject = body.subject or f"Invoice {inv.invoice_number} from {firm_name}".strip()
+    intro = body.message or (
+        f"Please find invoice {inv.invoice_number} attached for "
+        f"{inv.matter_name or 'your matter'}."
+    )
+    amount_due = _format_money(inv.balance_due)
+    text_body = (
+        f"{intro}\n\n"
+        f"Invoice: {inv.invoice_number}\n"
+        f"Issued: {inv.issue_date}\n"
+        f"Due: {inv.due_date}\n"
+        f"Amount due: {amount_due}\n"
+    )
+    html_body = (
+        f"<p>{html_escape(intro)}</p>"
+        f"<table role='presentation' cellpadding='6'>"
+        f"<tr><td><strong>Invoice</strong></td><td>{html_escape(inv.invoice_number)}</td></tr>"
+        f"<tr><td><strong>Issued</strong></td><td>{inv.issue_date}</td></tr>"
+        f"<tr><td><strong>Due</strong></td><td>{inv.due_date}</td></tr>"
+        f"<tr><td><strong>Amount due</strong></td><td>{html_escape(amount_due)}</td></tr>"
+        f"</table>"
+    )
+
+    delivery = await email_service.send_email(
+        to=recipients,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        attachment=attachment,
+    )
+
+    if delivery != EmailDeliveryResult.SENT:
+        # Leave the status alone: an undelivered bill is not outstanding A/R.
+        return InvoiceSendResponse(
+            delivered=False,
+            recipients=recipients,
+            detail=(
+                "Email delivery is not configured for this firm. "
+                "Download the PDF and send it yourself, or mark the invoice as sent."
+            )
+            if delivery == EmailDeliveryResult.UNCONFIGURED
+            else f"The invoice could not be emailed ({delivery.value}).",
+            invoice=inv,
+        )
+
+    now = datetime.now(timezone.utc)
+    invoice.sent_at = now
+    if invoice.status == "draft":
+        invoice.status = "sent"
+    if getattr(invoice, "billed_at", None) is None:
+        invoice.billed_at = now
+    await db.commit()
+
+    refreshed = await _load_invoice_response(db, invoice.id, user.tenant_id)
+    return InvoiceSendResponse(
+        delivered=True,
+        recipients=recipients,
+        detail=f"Invoice emailed to {', '.join(recipients)}.",
+        invoice=refreshed,
+    )
 
 
 # ── Payments ────────────────────────────────────────────────────────────────

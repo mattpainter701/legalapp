@@ -2649,6 +2649,18 @@ export const recordPayment = (data) =>
   api.post('/billing/payments', data).then(r => r.data)
 export const createInvoicePaymentLink = (id) =>
   api.post(`/billing/invoices/${id}/payment-link`).then(r => r.data)
+export const addInvoiceLineItem = (invoiceId, data) =>
+  api.post(`/billing/invoices/${invoiceId}/line-items`, data).then(r => r.data)
+
+export const updateInvoiceLineItem = (invoiceId, lineItemId, data) =>
+  api.patch(`/billing/invoices/${invoiceId}/line-items/${lineItemId}`, data).then(r => r.data)
+
+export const deleteInvoiceLineItem = (invoiceId, lineItemId) =>
+  api.delete(`/billing/invoices/${invoiceId}/line-items/${lineItemId}`).then(r => r.data)
+
+export const sendInvoice = (invoiceId, data = {}) =>
+  api.post(`/billing/invoices/${invoiceId}/send`, data).then(r => r.data)
+
 export const exportInvoice = (id, format = 'pdf') =>
   api.post(`/billing/invoices/${id}/export`, { format }, { responseType: 'blob' }).then(r => r.data)
 

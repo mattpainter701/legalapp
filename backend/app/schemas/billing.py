@@ -298,6 +298,59 @@ class InvoiceCreate(BaseModel):
     line_items: list[InvoiceLineItemCreate] = []
 
 
+EDITABLE_LINE_SOURCE_TYPES = ("flat_fee", "adjustment", "discount")
+
+
+class InvoiceLineItemCreateRequest(BaseModel):
+    """A charge a reviewer adds by hand while the bill is still a draft."""
+
+    description: str = Field(..., min_length=1, max_length=4000)
+    # A discount is a negative amount, so the sign is not constrained here.
+    amount: Decimal
+    quantity: Decimal = Field(default=Decimal("1"), gt=0)
+    source_type: str = Field(default="adjustment")
+
+    @field_validator("source_type")
+    @classmethod
+    def _known_source_type(cls, value: str) -> str:
+        if value not in EDITABLE_LINE_SOURCE_TYPES:
+            raise ValueError(
+                f"source_type must be one of {', '.join(EDITABLE_LINE_SOURCE_TYPES)}"
+            )
+        return value
+
+    @field_validator("amount")
+    @classmethod
+    def _non_zero(cls, value: Decimal) -> Decimal:
+        if value == 0:
+            raise ValueError("amount must not be zero")
+        return value
+
+
+class InvoiceLineItemUpdateRequest(BaseModel):
+    """Edit a line on a draft: reword it, or write it down."""
+
+    description: Optional[str] = Field(default=None, min_length=1, max_length=4000)
+    quantity: Optional[Decimal] = Field(default=None, gt=0)
+    unit_price: Optional[Decimal] = None
+
+
+class InvoiceSendRequest(BaseModel):
+    """Deliver a bill to the client by email, with the PDF attached."""
+
+    # Defaults to the matter's client contact when omitted.
+    to: Optional[list[str]] = None
+    subject: Optional[str] = Field(default=None, max_length=300)
+    message: Optional[str] = Field(default=None, max_length=8000)
+
+
+class InvoiceSendResponse(BaseModel):
+    delivered: bool
+    recipients: list[str]
+    detail: str
+    invoice: "InvoiceResponse"
+
+
 class InvoiceUpdate(BaseModel):
     issue_date: Optional[date] = None
     due_date: Optional[date] = None
@@ -447,3 +500,7 @@ class BillingSettingsResponse(BaseModel):
 class BillingSettingsUpdate(BaseModel):
     default_hourly_rate: Optional[Decimal] = Field(default=None, gt=0)
     time_rounding_minutes: Optional[int] = Field(default=None, ge=1, le=60)
+
+
+# InvoiceSendResponse embeds InvoiceResponse, defined further down this module.
+InvoiceSendResponse.model_rebuild()

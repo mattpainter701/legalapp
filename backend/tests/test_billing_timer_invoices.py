@@ -7,6 +7,7 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.plugin import Matter
@@ -672,3 +673,190 @@ async def test_expense_date_can_be_corrected(client, test_matter):
     )
     assert corrected.status_code == 200, corrected.text
     assert corrected.json()["date"] == "2026-06-30"
+
+
+class TestDraftLineItemEditing:
+    """The bill review loop: adjust a generated draft before the client sees it."""
+
+    async def test_reword_and_write_down_a_line(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="4.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+        line = invoice["line_items"][0]
+        assert Decimal(invoice["total"]) == Decimal("1000.00")
+
+        edited = await client.patch(
+            f"/api/billing/invoices/{invoice['id']}/line-items/{line['id']}",
+            json={"description": "Drafted and revised motion", "unit_price": "200.00"},
+        )
+        assert edited.status_code == 200, edited.text
+        body = edited.json()
+        assert body["line_items"][0]["description"] == "Drafted and revised motion"
+        # 4 hours written down from $250 to $200 an hour.
+        assert Decimal(body["line_items"][0]["amount"]) == Decimal("800.00")
+        assert Decimal(body["subtotal"]) == Decimal("800.00")
+        assert Decimal(body["total"]) == Decimal("800.00")
+
+    async def test_add_a_discount_line(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="4.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        discounted = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/line-items",
+            json={
+                "description": "Courtesy discount",
+                "amount": "100.00",
+                "source_type": "discount",
+            },
+        )
+        assert discounted.status_code == 201, discounted.text
+        body = discounted.json()
+        # A discount is stored negative so the subtotal simply sums.
+        assert Decimal(body["line_items"][-1]["amount"]) == Decimal("-100.00")
+        assert Decimal(body["total"]) == Decimal("900.00")
+
+    async def test_add_a_flat_fee_line(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        added = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/line-items",
+            json={
+                "description": "Filing package",
+                "amount": "500.00",
+                "source_type": "flat_fee",
+            },
+        )
+        assert added.status_code == 201, added.text
+        assert Decimal(added.json()["total"]) == Decimal("750.00")
+
+    async def test_removing_a_line_releases_the_work(self, client, test_matter):
+        entry = await _log_time(client, test_matter.id, hours="2.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+        line = invoice["line_items"][0]
+
+        removed = await client.delete(
+            f"/api/billing/invoices/{invoice['id']}/line-items/{line['id']}"
+        )
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["line_items"] == []
+        assert Decimal(removed.json()["total"]) == Decimal("0.00")
+
+        # The hours must return to the unbilled pool, not be stranded.
+        released = await client.get(f"/api/billing/time-entries/{entry['id']}")
+        assert released.status_code == 200
+        assert released.json()["invoice_id"] is None
+        assert released.json()["status"] == "draft"
+
+    async def test_sent_invoices_are_not_editable(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+        sent = await client.patch(
+            f"/api/billing/invoices/{invoice['id']}", json={"status": "sent"}
+        )
+        assert sent.status_code == 200, sent.text
+
+        refused = await client.patch(
+            f"/api/billing/invoices/{invoice['id']}/line-items/{invoice['line_items'][0]['id']}",
+            json={"description": "Too late"},
+        )
+        assert refused.status_code == 400
+        assert "draft" in refused.json()["detail"].lower()
+
+    async def test_a_zero_amount_adjustment_is_refused(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+        refused = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/line-items",
+            json={"description": "Nothing", "amount": "0"},
+        )
+        assert refused.status_code == 422
+
+
+class TestInvoiceDelivery:
+    async def test_send_reports_unconfigured_email_without_marking_sent(
+        self, client, test_matter, db_session, test_tenant
+    ):
+        """A bill that never left the building must not become outstanding A/R."""
+        from app.models.contact import Contact
+
+        client_contact = Contact(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            first_name="Client",
+            last_name="Contact",
+            email="client@example.com",
+        )
+        db_session.add(client_contact)
+        await db_session.commit()
+
+        matter_result = await db_session.execute(
+            select(Matter).where(Matter.id == test_matter.id)
+        )
+        matter = matter_result.scalar_one()
+        matter.client_contact_id = client_contact.id
+        await db_session.commit()
+
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        sent = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/send", json={}
+        )
+        assert sent.status_code == 200, sent.text
+        body = sent.json()
+        # Email is not configured in tests, so delivery must report failure
+        # and the invoice must stay a draft.
+        assert body["delivered"] is False
+        assert body["recipients"] == ["client@example.com"]
+        assert body["invoice"]["status"] == "draft"
+        assert body["invoice"]["sent_at"] is None
+
+    async def test_send_requires_a_recipient(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="1.0")
+        invoice = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+
+        refused = await client.post(
+            f"/api/billing/invoices/{invoice['id']}/send", json={}
+        )
+        assert refused.status_code == 400
+        assert "recipient" in refused.json()["detail"].lower()

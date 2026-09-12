@@ -695,6 +695,22 @@ async def qbo_sync_invoice(
         ar_account_id=qbo.qbo_ar_account_id if qbo else None,
         ar_account_name=qbo.qbo_ar_account_name if qbo else None,
     )
+    # Refuse before the round trip: a draft has not been reviewed, and syncing
+    # it would make it outstanding A/R in QuickBooks and here on one click.
+    from app.models.billing import Invoice
+
+    invoice_status = await db.scalar(
+        select(Invoice.status).where(
+            Invoice.id == invoice_id,
+            Invoice.tenant_id == user.tenant_id,
+        )
+    )
+    if invoice_status == "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="Send this invoice or mark it as sent before syncing it to QuickBooks.",
+        )
+
     result = await svc.sync_invoice_with_retry(invoice_id)
 
     if result is None:

@@ -9,7 +9,9 @@ import {
   ExternalLink,
   FileText,
   Link2,
+  Minus,
   Pencil,
+  Plus,
   Printer,
   Receipt,
   RefreshCw,
@@ -18,13 +20,17 @@ import {
   X,
 } from 'lucide-react'
 import {
+  addInvoiceLineItem,
   createInvoicePaymentLink,
+  deleteInvoiceLineItem,
   exportInvoice,
   getInvoice,
   getQBOStatus,
   recordPayment,
+  sendInvoice,
   syncInvoiceToQBO,
   updateInvoice,
+  updateInvoiceLineItem,
 } from '../api'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useToast } from '../components/toast/useToast'
@@ -53,6 +59,12 @@ const money = new Intl.NumberFormat('en-US', {
 })
 
 const fieldClass = 'min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent'
+
+/** Today in the user's own timezone; toISOString() can report tomorrow. */
+function todayLocal(now = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
 
 function displayDate(value) {
   if (!value) return 'Not set'
@@ -116,10 +128,15 @@ export default function InvoiceDetailPage() {
   const [paymentForm, setPaymentForm] = useState({
     amount: '',
     method: 'bank_transfer',
-    payment_date: new Date().toISOString().slice(0, 10),
+    payment_date: todayLocal(),
     reference_number: '',
     notes: '',
   })
+  const [editingLineId, setEditingLineId] = useState(null)
+  const [lineForm, setLineForm] = useState({ description: '', quantity: '', unit_price: '' })
+  const [lineError, setLineError] = useState(null)
+  const [showAdjustment, setShowAdjustment] = useState(false)
+  const [adjustmentForm, setAdjustmentForm] = useState({ description: '', amount: '', source_type: 'discount' })
 
   const loadInvoice = useCallback(async () => {
     setLoading(true)
@@ -163,6 +180,15 @@ export default function InvoiceDetailPage() {
       })
       if (!confirmed) return
     }
+    if (newStatus === 'written_off') {
+      const confirmed = await confirmAction({
+        title: 'Write off the balance?',
+        message: 'The outstanding balance is forgiven. The invoice stays on record but leaves accounts receivable.',
+        confirmLabel: 'Write off balance',
+        destructive: true,
+      })
+      if (!confirmed) return
+    }
     if (newStatus === 'void') {
       const confirmed = await confirmAction({
         title: 'Void invoice?',
@@ -176,7 +202,13 @@ export default function InvoiceDetailPage() {
     setBusyAction(`status-${newStatus}`)
     try {
       await updateInvoice(id, { status: newStatus })
-      toast.success(newStatus === 'sent' ? 'Invoice marked as sent' : 'Invoice voided')
+      toast.success(
+        newStatus === 'sent'
+          ? 'Invoice marked as sent'
+          : newStatus === 'written_off'
+            ? 'Balance written off'
+            : 'Invoice voided',
+      )
       await loadInvoice()
     } catch (error) {
       const detail = error?.response?.data?.detail
@@ -184,6 +216,139 @@ export default function InvoiceDetailPage() {
         message: typeof detail === 'string' ? detail : 'Please try again.',
       })
       reportError('Failed to update invoice status', error)
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const startEditingLine = (lineItem) => {
+    setLineError(null)
+    setEditingLineId(lineItem.id)
+    setLineForm({
+      description: lineItem.description || '',
+      quantity: String(lineItem.quantity ?? '1'),
+      unit_price: String(lineItem.unit_price ?? '0'),
+    })
+  }
+
+  const handleSaveLine = async (event) => {
+    event.preventDefault()
+    setLineError(null)
+    const quantity = Number.parseFloat(lineForm.quantity)
+    const unitPrice = Number.parseFloat(lineForm.unit_price)
+    if (!lineForm.description.trim()) {
+      setLineError('Enter a description for this charge.')
+      return
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setLineError('Quantity must be greater than zero.')
+      return
+    }
+    if (!Number.isFinite(unitPrice)) {
+      setLineError('Enter a rate.')
+      return
+    }
+
+    setBusyAction(`line-${editingLineId}`)
+    try {
+      await updateInvoiceLineItem(id, editingLineId, {
+        description: lineForm.description.trim(),
+        quantity,
+        unit_price: unitPrice,
+      })
+      setEditingLineId(null)
+      toast.success('Charge updated')
+      await loadInvoice()
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      setLineError(typeof detail === 'string' ? detail : 'The charge could not be updated.')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleRemoveLine = async (lineItem) => {
+    const fromWork = lineItem.source_type === 'time_entry' || lineItem.source_type === 'expense'
+    const confirmed = await confirmAction({
+      title: 'Remove this charge?',
+      message: fromWork
+        ? 'The underlying work returns to the unbilled queue and can be billed later.'
+        : 'This charge will be removed from the invoice.',
+      confirmLabel: 'Remove charge',
+      destructive: true,
+    })
+    if (!confirmed) return
+
+    setBusyAction(`remove-${lineItem.id}`)
+    try {
+      await deleteInvoiceLineItem(id, lineItem.id)
+      toast.success('Charge removed')
+      await loadInvoice()
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      toast.error('Charge was not removed', {
+        message: typeof detail === 'string' ? detail : 'Please try again.',
+      })
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleAddAdjustment = async (event) => {
+    event.preventDefault()
+    setLineError(null)
+    const amount = Number.parseFloat(adjustmentForm.amount)
+    if (!adjustmentForm.description.trim()) {
+      setLineError('Describe this charge so the client can read the bill.')
+      return
+    }
+    if (!Number.isFinite(amount) || amount === 0) {
+      setLineError('Enter an amount other than zero.')
+      return
+    }
+
+    setBusyAction('add-line')
+    try {
+      await addInvoiceLineItem(id, {
+        description: adjustmentForm.description.trim(),
+        amount: Math.abs(amount),
+        source_type: adjustmentForm.source_type,
+      })
+      setShowAdjustment(false)
+      setAdjustmentForm({ description: '', amount: '', source_type: 'discount' })
+      toast.success('Charge added')
+      await loadInvoice()
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      setLineError(typeof detail === 'string' ? detail : 'The charge could not be added.')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleSendInvoice = async () => {
+    const confirmed = await confirmAction({
+      title: 'Email this invoice?',
+      message: 'The client receives the invoice PDF by email, and the invoice is recorded as sent.',
+      confirmLabel: 'Send invoice',
+    })
+    if (!confirmed) return
+
+    setBusyAction('send')
+    try {
+      const result = await sendInvoice(id)
+      if (result.delivered) {
+        toast.success(`Invoice sent to ${result.recipients.join(', ')}`)
+      } else {
+        // Delivery failed, so the invoice is deliberately still a draft.
+        toast.error('Invoice was not emailed', { message: result.detail })
+      }
+      await loadInvoice()
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      toast.error('Invoice was not sent', {
+        message: typeof detail === 'string' ? detail : 'Please try again.',
+      })
     } finally {
       setBusyAction(null)
     }
@@ -346,6 +511,11 @@ export default function InvoiceDetailPage() {
 
   const paidAmount = Number(invoice.amount_paid ?? invoice.payments?.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) ?? 0)
   const balance = Math.max(0, Number(invoice.balance_due ?? Number(invoice.total || 0) - paidAmount))
+  const isDraft = invoice.status === 'draft'
+  const canSend = !['void', 'written_off', 'paid'].includes(invoice.status)
+  // Forgiving a balance is how an uncollectable bill leaves A/R once a payment
+  // has been taken and voiding is no longer possible.
+  const canWriteOff = ['sent', 'partially_paid'].includes(invoice.status) && balance > 0
   const canVoid = ['draft', 'sent'].includes(invoice.status) && paidAmount === 0
   const canCollect = ['sent', 'partially_paid'].includes(invoice.status) && balance > 0
   const qboSynced = invoice.qbo_sync_status === 'synced'
@@ -386,14 +556,24 @@ export default function InvoiceDetailPage() {
                 <Pencil size={15} /> Edit draft
               </button>
             )}
+            {canSend && (
+              <button
+                type="button"
+                onClick={handleSendInvoice}
+                disabled={busyAction === 'send'}
+                className="btn-primary inline-flex items-center gap-2 disabled:opacity-60"
+              >
+                <Send size={15} /> {busyAction === 'send' ? 'Sending' : 'Email invoice'}
+              </button>
+            )}
             {invoice.status === 'draft' && (
               <button
                 type="button"
                 onClick={() => handleStatusChange('sent')}
                 disabled={busyAction === 'status-sent'}
-                className="btn-primary inline-flex items-center gap-2 disabled:opacity-60"
+                className="btn-secondary inline-flex items-center gap-2 disabled:opacity-60"
               >
-                <Send size={15} /> {busyAction === 'status-sent' ? 'Updating' : 'Mark as sent'}
+                <Check size={15} /> {busyAction === 'status-sent' ? 'Updating' : 'Mark as sent'}
               </button>
             )}
             <button
@@ -443,8 +623,8 @@ export default function InvoiceDetailPage() {
               <table className="min-w-[660px] w-full border-collapse text-left text-sm">
                 <thead className="border-b border-brand-line bg-brand-bg-soft/60">
                   <tr>
-                    {['Description', 'Type', 'Quantity', 'Rate', 'Amount'].map((heading) => (
-                      <th key={heading} scope="col" className={`px-4 py-3 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-muted ${heading === 'Amount' ? 'text-right' : ''}`}>
+                    {[...['Description', 'Type', 'Quantity', 'Rate', 'Amount'], ...(isDraft ? [''] : [])].map((heading, index) => (
+                      <th key={heading || `actions-${index}`} scope="col" className={`px-4 py-3 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-muted ${heading === 'Amount' ? 'text-right' : ''}`}>
                         {heading}
                       </th>
                     ))}
@@ -452,35 +632,161 @@ export default function InvoiceDetailPage() {
                 </thead>
                 <tbody className="divide-y divide-brand-line">
                   {(invoice.line_items || []).map((lineItem) => (
-                    <tr key={lineItem.id}>
-                      <td className="max-w-md px-4 py-3 text-brand-ink">{lineItem.description}</td>
-                      <td className="px-4 py-3">
-                        <span className="inline-flex rounded-full bg-brand-bg-soft px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-brand-muted">
-                          {sourceLabel(lineItem.source_type)}
-                        </span>
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-brand-muted">{Number(lineItem.quantity || 0).toFixed(2)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-brand-muted">{money.format(Number(lineItem.unit_price || 0))}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-brand-ink">{money.format(Number(lineItem.amount || 0))}</td>
-                    </tr>
+                    editingLineId === lineItem.id ? (
+                      <tr key={lineItem.id} className="bg-brand-bg-soft/40">
+                        <td colSpan={isDraft ? 6 : 5} className="px-4 py-4">
+                          <form onSubmit={handleSaveLine} className="grid gap-3 sm:grid-cols-4">
+                            <div className="sm:col-span-2">
+                              <label htmlFor="line-description" className="mb-1.5 block text-xs font-semibold text-brand-ink">Description</label>
+                              <input id="line-description" className={fieldClass} value={lineForm.description} onChange={(event) => setLineForm({ ...lineForm, description: event.target.value })} />
+                            </div>
+                            <div>
+                              <label htmlFor="line-quantity" className="mb-1.5 block text-xs font-semibold text-brand-ink">Quantity</label>
+                              <input id="line-quantity" type="number" step="0.01" min="0.01" className={fieldClass} value={lineForm.quantity} onChange={(event) => setLineForm({ ...lineForm, quantity: event.target.value })} />
+                            </div>
+                            <div>
+                              <label htmlFor="line-rate" className="mb-1.5 block text-xs font-semibold text-brand-ink">Rate</label>
+                              <input id="line-rate" type="number" step="0.01" className={fieldClass} value={lineForm.unit_price} onChange={(event) => setLineForm({ ...lineForm, unit_price: event.target.value })} />
+                            </div>
+                            {lineError && <p role="alert" className="text-xs text-brand-rose sm:col-span-4">{lineError}</p>}
+                            <div className="flex gap-2 sm:col-span-4">
+                              <button type="submit" disabled={busyAction === `line-${lineItem.id}`} className="btn-primary inline-flex min-h-10 items-center gap-2 disabled:opacity-60">
+                                <Save size={14} /> Save charge
+                              </button>
+                              <button type="button" onClick={() => setEditingLineId(null)} className="btn-secondary inline-flex min-h-10 items-center gap-2">
+                                Cancel
+                              </button>
+                            </div>
+                          </form>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={lineItem.id}>
+                        <td className="max-w-md px-4 py-3 text-brand-ink">{lineItem.description}</td>
+                        <td className="px-4 py-3">
+                          <span className="inline-flex rounded-full bg-brand-bg-soft px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-brand-muted">
+                            {sourceLabel(lineItem.source_type)}
+                          </span>
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-brand-muted">{Number(lineItem.quantity || 0).toFixed(2)}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-brand-muted">{money.format(Number(lineItem.unit_price || 0))}</td>
+                        <td className={`whitespace-nowrap px-4 py-3 text-right font-semibold ${Number(lineItem.amount || 0) < 0 ? 'text-brand-green' : 'text-brand-ink'}`}>{money.format(Number(lineItem.amount || 0))}</td>
+                        {isDraft && (
+                          <td className="whitespace-nowrap px-4 py-3 text-right">
+                            <div className="flex justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => startEditingLine(lineItem)}
+                                aria-label={`Edit ${lineItem.description}`}
+                                className="tap-target rounded-xl text-brand-accent-2 hover:bg-brand-bg-soft"
+                              >
+                                <Pencil size={15} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveLine(lineItem)}
+                                disabled={busyAction === `remove-${lineItem.id}`}
+                                aria-label={`Remove ${lineItem.description}`}
+                                className="tap-target rounded-xl text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose disabled:opacity-60"
+                              >
+                                <X size={15} />
+                              </button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    )
                   ))}
                 </tbody>
                 <tfoot className="border-t border-brand-line bg-brand-bg-soft/40">
                   <tr>
                     <td colSpan={4} className="px-4 pt-4 text-right text-xs font-semibold text-brand-muted">Subtotal</td>
                     <td className="px-4 pt-4 text-right font-semibold text-brand-ink">{money.format(Number(invoice.subtotal || 0))}</td>
+                    {isDraft && <td />}
                   </tr>
                   <tr>
                     <td colSpan={4} className="px-4 py-2 text-right text-xs font-semibold text-brand-muted">Tax</td>
                     <td className="px-4 py-2 text-right text-brand-ink">{money.format(Number(invoice.tax_amount || 0))}</td>
+                    {isDraft && <td />}
                   </tr>
                   <tr>
                     <td colSpan={4} className="px-4 pb-4 text-right text-sm font-bold text-brand-ink">Total</td>
                     <td className="px-4 pb-4 text-right font-serif text-lg font-bold text-brand-ink">{money.format(Number(invoice.total || 0))}</td>
+                    {isDraft && <td />}
                   </tr>
                 </tfoot>
               </table>
             </div>
+
+            {isDraft && (
+              <div className="border-t border-brand-line px-4 py-4 sm:px-5">
+                {showAdjustment ? (
+                  <form onSubmit={handleAddAdjustment} className="grid gap-3 sm:grid-cols-4">
+                    <div>
+                      <label htmlFor="adjustment-type" className="mb-1.5 block text-xs font-semibold text-brand-ink">Charge type</label>
+                      <select
+                        id="adjustment-type"
+                        className={fieldClass}
+                        value={adjustmentForm.source_type}
+                        onChange={(event) => setAdjustmentForm({ ...adjustmentForm, source_type: event.target.value })}
+                      >
+                        <option value="discount">Discount</option>
+                        <option value="flat_fee">Flat fee</option>
+                        <option value="adjustment">Adjustment</option>
+                      </select>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label htmlFor="adjustment-description" className="mb-1.5 block text-xs font-semibold text-brand-ink">Description</label>
+                      <input
+                        id="adjustment-description"
+                        className={fieldClass}
+                        placeholder={adjustmentForm.source_type === 'discount' ? 'Courtesy discount' : 'Filing package'}
+                        value={adjustmentForm.description}
+                        onChange={(event) => setAdjustmentForm({ ...adjustmentForm, description: event.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="adjustment-amount" className="mb-1.5 block text-xs font-semibold text-brand-ink">Amount</label>
+                      <input
+                        id="adjustment-amount"
+                        type="number"
+                        step="0.01"
+                        className={fieldClass}
+                        value={adjustmentForm.amount}
+                        onChange={(event) => setAdjustmentForm({ ...adjustmentForm, amount: event.target.value })}
+                      />
+                    </div>
+                    {lineError && <p role="alert" className="text-xs text-brand-rose sm:col-span-4">{lineError}</p>}
+                    <div className="flex gap-2 sm:col-span-4">
+                      <button type="submit" disabled={busyAction === 'add-line'} className="btn-primary inline-flex min-h-10 items-center gap-2 disabled:opacity-60">
+                        {busyAction === 'add-line' ? 'Adding' : 'Add charge'}
+                      </button>
+                      <button type="button" onClick={() => { setShowAdjustment(false); setLineError(null) }} className="btn-secondary inline-flex min-h-10 items-center gap-2">
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => { setAdjustmentForm({ description: '', amount: '', source_type: 'discount' }); setShowAdjustment(true) }}
+                      className="btn-secondary inline-flex min-h-10 items-center gap-2"
+                    >
+                      <Minus size={14} /> Add discount
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setAdjustmentForm({ description: '', amount: '', source_type: 'flat_fee' }); setShowAdjustment(true) }}
+                      className="btn-secondary inline-flex min-h-10 items-center gap-2"
+                    >
+                      <Plus size={14} /> Add flat fee
+                    </button>
+                    <p className="text-xs text-brand-muted">Charges can be edited while this bill is a draft.</p>
+                  </div>
+                )}
+              </div>
+            )}
           </section>
 
           <section className="overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-sm">
@@ -645,7 +951,7 @@ export default function InvoiceDetailPage() {
                 <p className="text-sm font-semibold text-brand-ink">QuickBooks Online</p>
                 <p className={`mt-1 text-xs ${qboSynced ? 'text-brand-green' : 'text-brand-muted'}`}>{qboSynced ? `Synced${invoice.qbo_invoice_id ? ` · ${invoice.qbo_invoice_id}` : ''}` : statusLabel(invoice.qbo_sync_status || 'not synced')}</p>
               </div>
-              <button type="button" onClick={handleSyncToQBO} disabled={busyAction === 'qbo' || !qboConnected || qboSynced} title={!qboConnected ? 'Connect QuickBooks in Admin first' : qboSynced ? 'Successfully synced to QuickBooks' : 'Sync to QuickBooks and mark billed'} className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-xs font-semibold disabled:cursor-not-allowed ${qboSynced ? 'bg-brand-green text-white' : 'border border-brand-line bg-brand-surface text-brand-ink'}`}>
+              <button type="button" onClick={handleSyncToQBO} disabled={busyAction === 'qbo' || !qboConnected || qboSynced || isDraft} title={!qboConnected ? 'Connect QuickBooks in Admin first' : qboSynced ? 'Successfully synced to QuickBooks' : isDraft ? 'Send this invoice or mark it as sent before syncing' : 'Sync this invoice to QuickBooks'} className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-xs font-semibold disabled:cursor-not-allowed ${qboSynced ? 'bg-brand-green text-white' : 'border border-brand-line bg-brand-surface text-brand-ink'}`}>
                 {busyAction === 'qbo' ? <RefreshCw size={14} className="animate-spin" /> : <span aria-hidden="true" className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-muted text-[9px] font-black text-white">qb</span>}
                 {busyAction === 'qbo' ? 'Syncing' : qboSynced ? 'Synced' : 'Sync'}
               </button>
@@ -655,6 +961,17 @@ export default function InvoiceDetailPage() {
                 {busyAction === 'status-void' ? <RefreshCw size={14} className="animate-spin" /> : <Ban size={14} />}
                 {busyAction === 'status-void' ? 'Voiding invoice' : 'Void invoice'}
               </button>
+            )}
+            {canWriteOff && (
+              <>
+                <button type="button" onClick={() => handleStatusChange('written_off')} disabled={busyAction === 'status-written_off'} className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-brand-line bg-brand-surface px-3 text-xs font-semibold text-brand-muted hover:bg-brand-bg-soft disabled:opacity-60">
+                  {busyAction === 'status-written_off' ? <RefreshCw size={14} className="animate-spin" /> : <Ban size={14} />}
+                  {busyAction === 'status-written_off' ? 'Writing off' : 'Write off balance'}
+                </button>
+                <p className="mt-2 text-[11px] text-brand-muted">
+                  Forgives the {money.format(balance)} still outstanding and takes this bill out of receivables.
+                </p>
+              </>
             )}
           </section>
         </aside>
