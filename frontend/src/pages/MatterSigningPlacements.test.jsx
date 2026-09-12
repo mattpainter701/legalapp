@@ -34,7 +34,7 @@ it('always sends through the portal provider with the generated PDF descriptor',
   // Dropbox Sign is gone: there is nothing to choose.
   expect(screen.queryByLabelText('Signing provider')).not.toBeInTheDocument()
   expect(screen.queryByText(/Dropbox/)).not.toBeInTheDocument()
-  expect(screen.getByText(/Place signature fields on the PDF \(optional/)).toBeInTheDocument()
+  expect(screen.getByText(/Place a signature, initials, or date block per signer on the PDF \(optional/)).toBeInTheDocument()
   await fillSigner()
   fireEvent.submit(screen.getByPlaceholderText('Signer 1 full name').closest('form'))
   await waitFor(() => expect(api.sendSignatureRequest).toHaveBeenCalledWith('matter', 'request'))
@@ -73,6 +73,37 @@ it('retains custom Word roles and rejects a partial final placement review', asy
   fireEvent.submit(screen.getByPlaceholderText('Signer 1 full name').closest('form'))
   expect(await screen.findByText('Add signing fields for every role required by this document.')).toBeInTheDocument()
   expect(api.createSignatureRequest).not.toHaveBeenCalled()
+})
+
+it('says the invitation email was not delivered instead of reporting it sent', async () => {
+  api.getMatterDocuments.mockResolvedValue({ items: [{ id: 'auth', filename: 'Fee agreement.pdf' }] })
+  api.sendSignatureRequest.mockResolvedValue({
+    id: 'request',
+    status: 'sent',
+    signers: [{ id: 's1', email: 'client@example.test', status: 'pending', invitation_delivery_status: 'unconfigured' }],
+  })
+  render(<MemoryRouter><SignatureRequestsPanel matterId="matter" /></MemoryRouter>)
+  await screen.findByRole('option', { name: 'Fee agreement.pdf' })
+  fireEvent.change(screen.getByLabelText('Document to sign'), { target: { value: 'auth' } })
+  await fillSigner()
+  fireEvent.submit(screen.getByPlaceholderText('Signer 1 full name').closest('form'))
+  const status = await screen.findByRole('status')
+  expect(status).toHaveTextContent('the email invitation to client@example.test was not delivered')
+  expect(status).toHaveTextContent('the outbound email settings are incomplete')
+  expect(screen.queryByText(/Signature request sent\./)).not.toBeInTheDocument()
+})
+
+it('gives each added signer their own role so their fields stay separate', async () => {
+  api.getMatterDocuments.mockResolvedValue({ items: [{ id: 'auth', filename: 'Fee agreement.pdf' }] })
+  render(<MemoryRouter><SignatureRequestsPanel matterId="matter" /></MemoryRouter>)
+  await screen.findByRole('option', { name: 'Fee agreement.pdf' })
+  fireEvent.click(screen.getByRole('button', { name: 'Add signer' }))
+  const roles = screen.getAllByRole('combobox').filter((node) => node.querySelector('option[value="co_client"]'))
+  expect(roles.map((node) => node.value)).toEqual(['client', 'co_client'])
+  // Two signers on one role would leave the placement review unable to tell
+  // their signature fields apart, so it is called out before sending.
+  fireEvent.change(roles[1], { target: { value: 'client' } })
+  expect(screen.getByRole('alert')).toHaveTextContent('Client is used by more than one signer')
 })
 
 it('sends a due date so the signature raises a follow-up task', async () => {

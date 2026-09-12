@@ -2572,6 +2572,40 @@ function signerStatusLabel(signer) {
   return 'Pending signature'
 }
 
+// Why an invitation email never left the server. The API reports a per-signer
+// delivery result; a configuration problem must never be shown as "sent".
+const EMAIL_DELIVERY_REASONS = {
+  disabled: 'outbound email is turned off for this environment',
+  unconfigured: 'the outbound email settings are incomplete',
+  reauthorization_required: 'the sending mailbox needs to be reconnected',
+  invalid_recipient: 'the signer address was rejected',
+  failed: 'the mail server rejected the message',
+}
+
+const SENT_NOTICE = 'Signature request sent. Signers will see it in their client portal Signatures tab when it is their turn.'
+
+// The request is created and visible in the portal either way, so an
+// undelivered invitation is a warning rather than a failure — but it has to be
+// said, and it has to name the signer whose email did not go out.
+export function signatureSendNotice(request) {
+  const undelivered = (request?.signers || []).filter((signer) => (
+    signer.invitation_delivery_status
+    && !['sent', 'not_required'].includes(signer.invitation_delivery_status)
+    // A signer who already acted is not waiting on an invitation.
+    && !['signed', 'declined'].includes(signer.status)
+  ))
+  if (!undelivered.length) return { text: SENT_NOTICE, delivered: true }
+  const reasons = [...new Set(undelivered.map((signer) => (
+    EMAIL_DELIVERY_REASONS[signer.invitation_delivery_status]
+    || String(signer.invitation_delivery_status).replace(/_/g, ' ')
+  )))]
+  const recipients = undelivered.map((signer) => signer.email).filter(Boolean).join(', ')
+  return {
+    text: `Signature request created, but the email invitation${recipients ? ` to ${recipients}` : ''} was not delivered — ${reasons.join('; ')}. The request is waiting in the signer's client portal; fix email delivery and use Resend, or tell the signer directly.`,
+    delivered: false,
+  }
+}
+
 const EMPTY_SIGNING_FIELDS = []
 
 export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
@@ -2594,6 +2628,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [notice, setNotice] = useState('')
+  const [noticeDelivered, setNoticeDelivered] = useState(true)
 
   const load = useCallback(() => {
     // The endpoint answers with a list, but a paged or empty body must not
@@ -2614,6 +2649,14 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
   const requiredRoles = selectedDocument?.signing_roles || EMPTY_SIGNING_FIELDS
   const placementRoles = [...new Set([...requiredRoles, ...initialFields.map(field => field.role), ...signers.map(signer => signer.role).filter(Boolean)])]
   const roleOptions = [...SIGNER_ROLE_OPTIONS, ...placementRoles.filter(role => !SIGNER_ROLE_OPTIONS.some(option => option.value === role)).map(role => ({ value: role, label: role }))]
+  // The placement review groups its fields by role, so it needs the signer
+  // behind each role to label them — two signers are only distinguishable
+  // there once each carries their own role and name.
+  const placementSigners = placementRoles.map(role => ({
+    role,
+    name: signers.find(signer => signer.role === role && signer.name.trim())?.name.trim() || '',
+  }))
+  const duplicateRoles = [...new Set(signers.map(signer => signer.role).filter(role => signers.filter(other => other.role === role).length > 1))]
   useEffect(() => {
     let cancelled = false
     setSigningSource(null)
@@ -2669,7 +2712,14 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
     setSigners((prev) => prev.map((row, i) => i === idx ? { ...row, [key]: value } : row))
   }
 
-  const addSigner = () => setSigners((prev) => [...prev, newSignerRow()])
+  // Every signer needs their own role: signing fields are bound to a role, and
+  // the request is rejected when two signers claim the same one. Default the
+  // new row to the first role nobody has taken.
+  const addSigner = () => setSigners((prev) => {
+    const taken = new Set(prev.map((signer) => signer.role))
+    const free = SIGNER_ROLE_OPTIONS.find((option) => !taken.has(option.value))
+    return [...prev, { ...newSignerRow(), role: free ? free.value : 'signer' }]
+  })
 
   const removeSigner = (idx) => {
     setSigners((prev) => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx))
@@ -2679,6 +2729,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
     e.preventDefault()
     setErr('')
     setNotice('')
+    setNoticeDelivered(true)
     if (!docId) { setErr('Choose a document to send for signature.'); return }
     const preparedSigners = signers.map((s, idx) => ({
       name: s.name.trim(),
@@ -2718,7 +2769,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
         reminder_days: parsedReminderDays,
         enforce_signing_order: enforceSigningOrder,
       })
-      await sendSignatureRequest(matterId, req.id)
+      const sent = await sendSignatureRequest(matterId, req.id)
       setSigners([newSignerRow()])
       setDocId('')
       setReviewOpen(false); setSigningSource(null); setPositionedFields(EMPTY_SIGNING_FIELDS)
@@ -2726,7 +2777,9 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
       setDueOn('')
       setReminderDays('7,1')
       setEnforceSigningOrder(true)
-      setNotice('Signature request sent. Signers will see it in their client portal Signatures tab when it is their turn.')
+      const outcome = signatureSendNotice(sent)
+      setNoticeDelivered(outcome.delivered)
+      setNotice(outcome.text)
       load()
     } catch (e2) {
       setErr(e2?.response?.data?.detail || 'Failed to create signature request.')
@@ -2738,6 +2791,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
   const voidReq = async (id) => {
     setErr('')
     setNotice('')
+    setNoticeDelivered(true)
     try {
       const reason = (voidReasonById[id] || '').trim()
       await voidSignatureRequest(matterId, id, reason ? { reason } : undefined)
@@ -2752,9 +2806,12 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
   const resendReq = async (id) => {
     setErr('')
     setNotice('')
+    setNoticeDelivered(true)
     try {
-      await resendSignatureRequest(matterId, id)
-      setNotice('Signature invitation resent to the signer or signers who can act now.')
+      const resent = await resendSignatureRequest(matterId, id)
+      const outcome = signatureSendNotice(resent)
+      setNoticeDelivered(outcome.delivered)
+      setNotice(outcome.delivered ? 'Signature invitation resent to the signer or signers who can act now.' : outcome.text)
       load()
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Failed to resend the signature invitation.')
@@ -2764,6 +2821,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
   const acceptSubmission = async (id) => {
     setErr('')
     setNotice('')
+    setNoticeDelivered(true)
     setReviewingId(id)
     try {
       await acceptSignatureSubmission(matterId, id)
@@ -2779,6 +2837,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
   const rejectSubmission = async (id) => {
     setErr('')
     setNotice('')
+    setNoticeDelivered(true)
     const reason = (rejectReasonById[id] || '').trim()
     if (!reason) { setErr('Tell the client what to redo before rejecting the signed copy.'); return }
     setReviewingId(id)
@@ -2876,11 +2935,11 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
           {selectedDocument && (
             <div className="flex flex-wrap items-center gap-3">
               <button type="button" onClick={() => setReviewOpen(true)} className="rounded border border-brand-line px-3 py-2 text-sm">Review PDF signing positions</button>
-              <span className="text-xs text-brand-muted">Place signature fields on the PDF (optional — fields in the PDF and printed signature lines are detected automatically)</span>
+              <span className="text-xs text-brand-muted">Place a signature, initials, or date block per signer on the PDF (optional — fields in the PDF and printed signature lines are detected automatically)</span>
               {positionedFields.length > 0 && <span className="text-xs">{positionedFields.length} positioned signing fields</span>}
             </div>
           )}
-          {reviewOpen && (signingSource ? <GeneratedSigningPlacementReview key={docId} source={signingSource} initialFields={initialFields} signerRoles={placementRoles} onChange={setPositionedFields} /> : <p role="status">Loading final PDF for placement review…</p>)}
+          {reviewOpen && (signingSource ? <GeneratedSigningPlacementReview key={docId} source={signingSource} initialFields={initialFields} signerRoles={placementSigners} onChange={setPositionedFields} /> : <p role="status">Loading final PDF for placement review…</p>)}
           <label className="inline-flex items-center gap-2 text-xs text-brand-muted">
             <input type="checkbox" checked={enforceSigningOrder} onChange={(e) => setEnforceSigningOrder(e.target.checked)} />
             <span>Require signers to complete in listed order</span>
@@ -2896,7 +2955,13 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
                 <button type="button" onClick={() => removeSigner(idx)} disabled={signers.length === 1} className="px-3 py-2 text-xs font-semibold text-brand-rose disabled:text-brand-muted disabled:cursor-not-allowed">Remove</button>
               </div>
             ))}
+            {duplicateRoles.length > 0 && (
+              <p role="alert" className="text-xs font-semibold text-brand-amber">
+                {duplicateRoles.map(formatSignerRole).join(', ')} is used by more than one signer. Give each signer their own role so they get their own signature fields.
+              </p>
+            )}
             <button type="button" onClick={addSigner} className="text-xs font-semibold text-brand-accent hover:text-brand-ink">Add signer</button>
+            <p className="text-[11px] text-brand-muted">Each signer signs the fields placed for their role. Add the signer first, then place their blocks in the PDF review above.</p>
           </div>
           <button type="submit" disabled={busy || uploading} className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50">
             {busy ? 'Sending…' : 'Send for signature'}
@@ -2904,7 +2969,7 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
         </form>
 
         {err && <p className="text-sm text-brand-rose">{err}</p>}
-        {notice && <p className="text-sm text-brand-green">{notice}</p>}
+        {notice && <p role="status" className={`text-sm ${noticeDelivered ? 'text-brand-green' : 'text-brand-amber font-semibold'}`}>{notice}</p>}
 
         <div>
           <h3 className="text-sm font-sans font-semibold text-brand-ink mb-3">Signature queue</h3>
@@ -2992,7 +3057,11 @@ export function SignatureRequestsPanel({ matterId, refreshKey = 0 }) {
                         <span className="text-right">
                           <span className={s.status === 'signed' ? 'text-brand-green font-semibold' : s.status === 'declined' ? 'text-brand-rose font-semibold' : 'text-brand-amber font-semibold'}>{signerStatusLabel(s)}</span>
                           {s.viewed_at && s.status === 'pending' && <span className="block text-brand-muted">Viewed {formatSignatureDate(s.viewed_at)}</span>}
-                          {!s.viewed_at && s.invitation_delivery_status && <span className="block text-brand-muted">Email {s.invitation_delivery_status.replace('_', ' ')}</span>}
+                          {!s.viewed_at && s.invitation_delivery_status && (
+                            <span className={`block ${['sent', 'not_required'].includes(s.invitation_delivery_status) ? 'text-brand-muted' : 'text-brand-amber font-semibold'}`}>
+                              Email {s.invitation_delivery_status.replace(/_/g, ' ')}
+                            </span>
+                          )}
                         </span>
                       </div>
                     ))}

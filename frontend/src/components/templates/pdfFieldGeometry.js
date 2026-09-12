@@ -125,9 +125,64 @@ export const nextFieldName = (fields) => {
   return `field_${suffix}`
 }
 
+// Default signing-field sizes in PDF points. A signature block a client can
+// actually read is roughly the size Acrobat and the e-sign vendors use: wide
+// enough for a full name on a ruled line, tall enough for the role caption
+// above it. The old 120x24 strip looked like a typo on a letter-size page.
+export const SIGNING_FIELD_SIZES = {
+  signature: { width: 230, height: 56 },
+  initials: { width: 96, height: 56 },
+  date: { width: 150, height: 44 },
+}
+
+// Below this the ruled line and caption stop being legible, so resizing is
+// clamped here rather than at the generic 12pt floor.
+export const SIGNING_FIELD_MIN_SIZES = {
+  signature: { width: 96, height: 30 },
+  initials: { width: 44, height: 30 },
+  date: { width: 64, height: 24 },
+}
+
+const SIGNING_FIELD_MARGIN = 54
+const SIGNING_FIELD_GAP = 12
+
+// Lay new signing blocks out on a grid of uniform slots sized for the widest
+// block, starting at the foot of the page and filling left to right, then
+// upward. Uniform slots are what keeps a signature and an initials block from
+// landing on top of each other, which a simple diagonal cascade did.
+export const createSigningFieldRect = (fieldType, { page, pageNumber, fields = [] }) => {
+  const size = SIGNING_FIELD_SIZES[fieldType] || SIGNING_FIELD_SIZES.signature
+  const pageWidth = Number(page?.width) || 612
+  const pageHeight = Number(page?.height) || 792
+  const usableWidth = Math.max(MIN_FIELD_SIZE, pageWidth - SIGNING_FIELD_MARGIN * 2)
+  const usableHeight = Math.max(MIN_FIELD_SIZE, pageHeight - SIGNING_FIELD_MARGIN * 2)
+  const width = Math.min(size.width, usableWidth)
+  const height = Math.min(size.height, usableHeight)
+  const slot = {
+    width: Math.min(SIGNING_FIELD_SIZES.signature.width, usableWidth) + SIGNING_FIELD_GAP,
+    height: Math.min(SIGNING_FIELD_SIZES.signature.height, usableHeight) + SIGNING_FIELD_GAP,
+  }
+  const bottomRow = pageHeight * 0.12
+  const columns = Math.max(1, Math.floor((usableWidth + SIGNING_FIELD_GAP) / slot.width))
+  const rows = Math.max(1, Math.floor((pageHeight - bottomRow - SIGNING_FIELD_MARGIN) / slot.height))
+  const placed = fields.filter((field) => Number(field?.page) === Number(pageNumber)).length
+  const cell = placed % (columns * rows)
+  const left = clamp(
+    SIGNING_FIELD_MARGIN + (cell % columns) * slot.width,
+    0,
+    Math.max(0, pageWidth - width),
+  )
+  const bottom = clamp(
+    bottomRow + Math.floor(cell / columns) * slot.height,
+    0,
+    Math.max(0, pageHeight - height),
+  )
+  return [left, bottom, left + width, bottom + height].map(roundCoordinate)
+}
+
 const PREFERRED_DIMENSIONS = {
   checkbox: { width: 20, height: 20 },
-  signature: { width: 180, height: 36 },
+  signature: SIGNING_FIELD_SIZES.signature,
   multiline: { width: 200, height: 64 },
 }
 
