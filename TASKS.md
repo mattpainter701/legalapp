@@ -1,5 +1,52 @@
 # TASKS.md
 
+## First-customer launch — open items (2026-09-11)
+
+Tracking doc for the first-customer go-live so nothing below is forgotten.
+Nothing here is optional unless marked.
+
+### Merged
+- [x] #427 `feat/first-customer-prereqs` — 30-day self-serve trials: signup provisions a trial through `Tenant.expires_at`, premium AI is held back, the operator is emailed, and the platform console can set/extend/revoke a trial.
+- [x] #429 `feat/platform-sms-provider` — platform-managed shared Twilio account (encrypted at rest) plus an operator test-send in the console.
+
+### Identity and email (Microsoft 365)
+- [ ] Create the production Entra app under the getlawhand.com tenant with redirect URIs `https://getlawhand.com/api/auth/microsoft/callback` and `https://getlawhand.com/api/integrations/microsoft/callback`; set `MICROSOFT_CLIENT_ID`/`MICROSOFT_CLIENT_SECRET`; keep `MICROSOFT_TENANT_ID=common` so customer firms can still connect.
+- [ ] Re-create the Google OAuth client under a getlawhand.com-owned Google Cloud project for Google-using customers.
+- [ ] Reconnect every existing tenant after the app swap (stored tokens are bound to the old client).
+- [ ] Enable outbound email: `EMAIL_ENABLED=true` with M365 SMTP (`smtp.office365.com:587`, `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_FROM=support@getlawhand.com`) so marketing, trial, and operator notifications deliver. Until then, mail is logged not-sent.
+- [ ] Route password reset through the connected M365 mailbox (Graph `sendMail`); it is SMTP-only today.
+- [ ] Publish an apex MX/SPF/DKIM/DMARC runbook for getlawhand.com (none exists; keep the isolated `intake.getlawhand.com` records untouched).
+- [ ] Update Teams/Office manifests to the new app IDs.
+
+### Trials and signup
+- [ ] Decide whether `full-platform` joins `intake-only` as `public_signup`.
+- [ ] Confirm the public signup UI reflects the 30-day trial and expiry.
+
+### SMS / Twilio
+- [x] Platform-managed shared Twilio sender + operator test send (#429).
+- [ ] Route a tenant's outbound SMS through the shared account when it has no active per-tenant config.
+- [ ] Add `StatusCallback` to outbound sends so delivery advances past `submitted`.
+- [ ] Trust the proxy (`--proxy-headers` / `FORWARDED_ALLOW_IPS`) so webhook signature verification matches `https`.
+- [ ] Complete A2P 10DLC / toll-free registration and counsel review (external, the launch long pole).
+- [ ] Add a tenant SMS configuration admin UI if firm-owned senders are later required.
+- [ ] Run a live send/reply/STOP/status rehearsal through real ingress (all provider tests are mocked today).
+
+### Feature gating / debloat
+- [ ] Make `enabled_modules` a server-enforced, plan-independent allowlist (currently UI-only and ignored when a plan is set) and add a per-module picker plus default module to the platform page.
+
+### Billing (deferred to ~month 5)
+- [ ] Helcim provider abstraction (payment plans/subscriptions, card-on-file via HelcimPay.js, webhook reconciliation, Invoice API).
+- [ ] 6-months-free to 200 dollars/month conversion.
+- [ ] Premium AI included allowance plus per-unit overage over a cost/charge ledger.
+
+### Launch blockers (operator)
+- [ ] Rotate exposed production secrets (P0) and re-verify each provider.
+- [ ] Refresh the off-host backup restore proof at the current migration head and escrow the Restic password independently.
+- [ ] Decide and enforce the QA gate (`LAWHAND_QA_GATE_REQUIRED`).
+- [ ] Fix intake P0s: call-draft cross-contamination and silent upload rejection.
+- [ ] Wire the frontend error reporter (Sentry or equivalent) or explicitly accept console-only.
+- [ ] Confirm all intentionally-disabled flags in `/etc/lawhand/core.env`.
+
 ## Cloud provider portability remediation — 2026-09-07
 
 - [x] A2: Add tenant-scoped verified user aliases with primary-address-first OAuth matching, correspondence matching, one-time proof, duplicate protection, and administrator management UI.
