@@ -1114,8 +1114,8 @@ export const deleteMediationAsset = (id, assetId) =>
 export const approveMediationAsset = (id, assetId) =>
   api.post(`/plugins/mediation/cases/${id}/assets/${assetId}/approve`).then(r => r.data)
 
-export const sendMediationAsset = (id, assetId) =>
-  api.post(`/plugins/mediation/cases/${id}/assets/${assetId}/send`).then(r => r.data)
+export const sendMediationAsset = (id, assetId, partyId) =>
+  api.post(`/plugins/mediation/cases/${id}/assets/${assetId}/send`, { party_id: partyId }).then(r => r.data)
 
 // Documents (vault)
 export const listMediationDocuments = (id) =>

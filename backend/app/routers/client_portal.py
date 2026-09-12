@@ -1653,6 +1653,7 @@ async def portal_mediation(
 
     proposal_responses = []
     for proposal in proposals:
+        mediation_service.assert_proposal_integrity(proposal)
         is_own = proposal.proposed_by_party_id == party_id
         recipient = next(
             (row for row in proposal.recipients if row.party_id == party_id),
@@ -1711,7 +1712,7 @@ async def portal_mediation(
             _portal_mediation_asset(asset)
             for asset in assets
             if asset.submitted_by_party_id != party_id
-            and asset.status in mediation_service.SHARED_ASSET_STATUSES
+            and mediation_service.asset_visible_to_party(asset, party_id)
         ],
         documents=document_responses,
         proposals=proposal_responses,

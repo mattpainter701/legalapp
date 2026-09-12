@@ -210,7 +210,7 @@ async def test_non_approver_can_prepare_but_cannot_approve_or_release(
         ),
         (
             f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send",
-            None,
+            {"party_id": party_b["id"]},
         ),
         (
             f"/api/plugins/mediation/cases/{case_id}/documents/{document.json()['id']}/release",
@@ -375,7 +375,8 @@ async def test_full_approval_workflow(client, test_tenant):
 
     # Cannot send before approval is respected: re-approve idempotent guard
     resp = await client.post(
-        f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send"
+        f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send",
+        json={"party_id": opposing_party["id"]},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "sent"
@@ -399,13 +400,174 @@ async def test_full_approval_workflow(client, test_tenant):
     resp = await client.get(f"/api/plugins/mediation/cases/{case_id}")
     titles = [s["title"] for s in resp.json()["sessions"]]
     assert any("approved" in t.lower() for t in titles)
-    assert any("sent" in t.lower() for t in titles)
+    assert any("released" in t.lower() for t in titles)
+
+
+async def test_asset_release_requires_a_named_recipient_and_preserves_evidence(
+    client, test_tenant
+):
+    case = await _make_case(
+        client,
+        summary="Private caucus strategy",
+        fixed_fee="5000",
+        waiting_on="Internal advice",
+    )
+    case_id = case["id"]
+    owner = await _add_party(client, case_id, "our_client", "Client")
+    recipient = await _add_party(
+        client, case_id, "opposing_party", "Intended recipient"
+    )
+    outsider = await _add_party(client, case_id, "opposing_party", "Other opponent")
+    mediator = await _add_party(client, case_id, "mediator", "Neutral")
+    headers = {}
+    for party in (owner, recipient, outsider, mediator):
+        headers[party["id"]] = await _portal_headers(
+            client,
+            tenant_id=test_tenant.id,
+            case_id=case_id,
+            party_id=party["id"],
+            party_role=party["role"],
+        )
+    created = await client.post(
+        "/api/portal/mediation/assets",
+        json={"description": "Confidential account", "value": "1000"},
+        headers=headers[owner["id"]],
+    )
+    asset_id = created.json()["id"]
+    send_url = f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send"
+    assert (await client.post(send_url)).status_code == 422
+    assert (
+        await client.post(send_url, json={"party_id": recipient["id"]})
+    ).status_code == 409
+    await client.post(
+        f"/api/portal/mediation/assets/{asset_id}/submit", headers=headers[owner["id"]]
+    )
+    await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/approve"
+    )
+    for invalid_party in (owner, mediator):
+        assert (
+            await client.post(send_url, json={"party_id": invalid_party["id"]})
+        ).status_code == 422
+    assert (
+        await client.post(send_url, json={"party_id": "invalid"})
+    ).status_code == 422
+    assert (
+        await client.post(send_url, json={"party_id": str(uuid.uuid4())})
+    ).status_code == 404
+    other_case = await _make_case(client)
+    foreign_party = await _add_party(
+        client, other_case["id"], "opposing_party", "Different case"
+    )
+    assert (
+        await client.post(send_url, json={"party_id": foreign_party["id"]})
+    ).status_code == 404
+    sent = await client.post(send_url, json={"party_id": recipient["id"]})
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["released_to_party_id"] == recipient["id"]
+    assert (
+        await client.post(send_url, json={"party_id": outsider["id"]})
+    ).status_code == 409
+    for party in (recipient, outsider, mediator):
+        response = await client.get(
+            "/api/portal/mediation/case", headers=headers[party["id"]]
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert (
+            not {
+                "summary",
+                "fixed_fee",
+                "waiting_on",
+                "matter_id",
+                "client_contact_id",
+                "assets_count",
+            }
+            & body["case"].keys()
+        )
+        assert len(body["shared_assets"]) == (1 if party == recipient else 0)
+        rows = (
+            await client.get(
+                "/api/portal/mediation/assets", headers=headers[party["id"]]
+            )
+        ).json()
+        assert len(rows) == (1 if party == recipient else 0)
+        if rows:
+            assert rows[0]["submitted_by_party_id"] is None
+    denied = await client.post(
+        f"/api/portal/mediation/assets/{asset_id}/decision",
+        json={"decision": "approved"},
+        headers=headers[outsider["id"]],
+    )
+    assert denied.status_code == 404
+    decided = await client.post(
+        f"/api/portal/mediation/assets/{asset_id}/decision",
+        json={"decision": "approved"},
+        headers=headers[recipient["id"]],
+    )
+    assert decided.status_code == 200
+    for party in (owner, recipient):
+        assert (
+            await client.delete(
+                f"/api/plugins/mediation/cases/{case_id}/parties/{party['id']}"
+            )
+        ).status_code == 409
+    assert (
+        await client.delete(
+            f"/api/plugins/mediation/cases/{case_id}/parties/{outsider['id']}"
+        )
+    ).status_code == 204
+
+
+async def test_party_contact_must_belong_to_this_tenant(
+    client, db_session, test_tenant
+):
+    from app.models.contact import Contact
+    from app.models.tenant import Tenant
+
+    case = await _make_case(client)
+    contact = Contact(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        first_name="Known",
+        last_name="Client",
+    )
+    foreign_tenant = Tenant(
+        id=uuid.uuid4(),
+        name="Other firm",
+        domain=f"other-{uuid.uuid4().hex[:8]}.example",
+    )
+    db_session.add(foreign_tenant)
+    await db_session.flush()
+    foreign_contact = Contact(
+        id=uuid.uuid4(),
+        tenant_id=foreign_tenant.id,
+        first_name="Other",
+        last_name="Client",
+    )
+    db_session.add_all([contact, foreign_contact])
+    await db_session.commit()
+    base = f"/api/plugins/mediation/cases/{case['id']}/parties"
+    for value in (str(foreign_contact.id), str(uuid.uuid4())):
+        assert (
+            await client.post(base, json={"name": "Wrong contact", "contact_id": value})
+        ).status_code == 404
+    created = await client.post(
+        base, json={"name": "Known", "contact_id": str(contact.id)}
+    )
+    assert created.status_code == 201, created.text
+    url = f"{base}/{created.json()['id']}"
+    assert (
+        await client.patch(url, json={"contact_id": str(foreign_contact.id)})
+    ).status_code == 404
+    assert (await client.patch(url, json={"contact_id": None})).status_code == 200
 
 
 async def test_approved_and_sent_assets_are_immutable(client, test_tenant):
     case = await _make_case(client)
     case_id = case["id"]
     client_party = await _add_party(client, case_id, "our_client", "Jane Doe")
+    opposing_party = await _add_party(client, case_id, "opposing_party", "John Doe")
     party_headers = await _portal_headers(
         client,
         tenant_id=test_tenant.id,
@@ -437,7 +599,8 @@ async def test_approved_and_sent_assets_are_immutable(client, test_tenant):
     )
     assert changed.status_code == 409
     sent = await client.post(
-        f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send"
+        f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send",
+        json={"party_id": opposing_party["id"]},
     )
     assert sent.status_code == 200
     deleted = await client.delete(
@@ -451,6 +614,14 @@ async def test_approved_and_sent_assets_are_immutable(client, test_tenant):
     assert record["description"] == before["description"]
     assert record["value"] == before["value"]
     assert record["status"] == "sent"
+    assert (
+        await client.delete(f"/api/plugins/mediation/cases/{case_id}")
+    ).status_code == 409
+    assert (
+        await client.patch(
+            f"/api/plugins/mediation/cases/{case_id}", json={"status": "closed"}
+        )
+    ).status_code == 200
 
 
 async def test_party_documents_are_private_until_firm_release_and_then_immutable(
@@ -570,7 +741,7 @@ async def test_opposing_cannot_send_or_edit_others(client, test_tenant):
         json={"decision": "approved"},
         headers=opp_hdrs,
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 404
 
 
 async def test_portal_session_uses_the_partys_current_role(client, test_tenant):
@@ -611,7 +782,8 @@ async def test_portal_session_uses_the_partys_current_role(client, test_tenant):
     ).status_code == 200
     assert (
         await client.post(
-            f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send"
+            f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send",
+            json={"party_id": opposing_party["id"]},
         )
     ).status_code == 200
 
@@ -770,6 +942,25 @@ async def test_proposal_counter_chain(client, test_tenant):
     proposals = {p["title"]: p for p in resp.json()}
     assert proposals["Offer 1"]["status"] == "superseded"
     assert proposals["Counter"]["status"] == "open"
+
+    # A previously released counter can reach another deliberately selected
+    # recipient without trying to supersede its parent a second time.
+    neutral = await _add_party(client, case_id, "mediator", "Neutral")
+    extra_release = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/proposals/{counter_id}/release",
+        json={"party_ids": [neutral["id"]]},
+    )
+    assert extra_release.status_code == 200, extra_release.text
+    assert set(extra_release.json()["recipient_party_ids"]) == {a["id"], neutral["id"]}
+    for party in (a, b, neutral):
+        assert (
+            await client.delete(
+                f"/api/plugins/mediation/cases/{case_id}/parties/{party['id']}"
+            )
+        ).status_code == 409
+    assert (
+        await client.delete(f"/api/plugins/mediation/cases/{case_id}")
+    ).status_code == 409
 
     # Once one reviewed counter is released, neither portal users nor firm
     # staff can branch a second counter from the superseded parent.
