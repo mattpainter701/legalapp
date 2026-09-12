@@ -1063,14 +1063,21 @@ async def test_portal_decline_closes_followup_and_writes_matter_timeline(
 
 @pytest.mark.asyncio
 async def test_portal_sign_keeps_signature_and_retries_when_storage_fails(
-    client, db_session, test_tenant, test_user, portal_matter, portal_cookie, monkeypatch
+    client,
+    db_session,
+    test_tenant,
+    test_user,
+    portal_matter,
+    portal_cookie,
+    monkeypatch,
 ):
     from sqlalchemy.orm import selectinload
 
+    from app.models.plugin import MatterEvent
     from app.models.signature import SignatureRequest, SignatureSigner
     from app.routers import esignature as esignature_router
     from app.services.esign import service as esign_service
-    from app.services.matter_file_store import StorageResult
+    from app.services.matter_file_store import MatterFileNotFound, StorageResult
 
     request = SignatureRequest(
         id=uuid.uuid4(),
@@ -1099,8 +1106,16 @@ async def test_portal_sign_keeps_signature_and_retries_when_storage_fails(
     # The source-document hash check is covered by the acceptance flow; this
     # test isolates the storage-failure durability path.
     monkeypatch.setattr(
-        esignature_router, "_source_document_is_unchanged", AsyncMock(return_value=True)
+        esignature_router, "_verified_source_bytes", AsyncMock(return_value=b"%PDF-")
     )
+    # No readable source in this fixture: completion files the certificate only.
+    monkeypatch.setattr(
+        esign_service._file_store,
+        "read_matter_file_bytes",
+        AsyncMock(side_effect=MatterFileNotFound("fixture has no bytes")),
+    )
+    request.document_id = None
+    await db_session.commit()
 
     async def failed_store(**_kwargs):
         return StorageResult(
@@ -1115,17 +1130,34 @@ async def test_portal_sign_keeps_signature_and_retries_when_storage_fails(
         "consent_to_electronic_signature": True,
     }
     url = f"{PORTAL}/signatures/{request.id}/sign"
-    failed = await client.post(url, headers=_portal_headers(portal_cookie), json=signing)
-    assert failed.status_code == 503
+    # A storage outage never fails the client's action: the signature is
+    # recorded, the portal is told filing is pending, and staff (not the
+    # client) see the storage error.
+    pending = await client.post(
+        url, headers=_portal_headers(portal_cookie), json=signing
+    )
+    assert pending.status_code == 200, pending.text
+    assert pending.json()["status"] == "partially_signed"
+    assert pending.json()["completion_pending"] is True
+    assert pending.json()["completion_error"] is None
 
     durable = await db_session.scalar(
         select(SignatureRequest)
         .options(selectinload(SignatureRequest.signers))
         .where(SignatureRequest.id == request.id)
     )
-    assert durable.status == "sent"
+    assert durable.status == "partially_signed"
     assert durable.signers[0].status == "signed"
     assert durable.signers[0].typed_signature == "Client Name"
+    assert durable.signers[0].method == "portal_inline"
+    assert "Storage unavailable" in durable.completion_error
+    event = await db_session.scalar(
+        select(MatterEvent).where(
+            MatterEvent.matter_id == portal_matter.id,
+            MatterEvent.title.like("Signed copy could not be filed%"),
+        )
+    )
+    assert event is not None
 
     async def succeeds(**_kwargs):
         return StorageResult(
@@ -1139,6 +1171,7 @@ async def test_portal_sign_keeps_signature_and_retries_when_storage_fails(
     retry = await client.post(url, headers=_portal_headers(portal_cookie), json=signing)
     assert retry.status_code == 200, retry.text
     assert retry.json()["status"] == "completed"
+    assert retry.json()["completion_pending"] is False
 
 
 # ── Firm branding, upload policy, and passwordless sign-in ──────────────────

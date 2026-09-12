@@ -27,6 +27,18 @@ def immutable_certificate_filename(
     return f"{safe_base}-signature-evidence-{request_token}-{digest[:16]}.{extension}"
 
 
+def _signer_method(signer) -> str:
+    return str(
+        getattr(signer, "method", None)
+        or (getattr(signer, "audit", None) or {}).get("method")
+        or "portal"
+    )
+
+
+def _field_count(signer) -> int:
+    return len(getattr(signer, "field_values", None) or {})
+
+
 def build_certificate(
     *,
     matter_name: str,
@@ -36,10 +48,12 @@ def build_certificate(
     source_sha256: str | None = None,
     evidence_sha256: str | None = None,
     positioned_fields: list[dict] | None = None,
+    executed_sha256: str | None = None,
 ) -> tuple[bytes, str, str]:
     """Return (content_bytes, filename, content_type) for the signed certificate.
 
-    ``signers`` is a list of SignatureSigner ORM rows (all signed).
+    ``signers`` is a list of SignatureSigner ORM rows (all signed). When an
+    executed copy was filed, ``executed_sha256`` binds the certificate to it.
     """
     base = (document_name or "document").rsplit(".", 1)[0]
     generated = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
@@ -85,12 +99,19 @@ def build_certificate(
             c.drawString(
                 inch, y, f"Positioned fields bound to source: {len(positioned_fields)}"
             )
+        if executed_sha256:
+            y -= 0.25 * inch
+            c.drawString(inch, y, f"Executed copy SHA-256: {executed_sha256}")
         y -= 0.35 * inch
         c.setFont("Helvetica-Oblique", 8)
         c.drawString(
             inch,
             y,
-            "This artifact records acknowledgments; it is not a signed copy of the source document.",
+            (
+                "This certificate records the signing evidence; the executed copy is filed separately."
+                if executed_sha256
+                else "This artifact records acknowledgments; it is not a signed copy of the source document."
+            ),
         )
         y -= 0.5 * inch
 
@@ -104,6 +125,7 @@ def build_certificate(
                 f"Name: {s.name}  <{s.email}>",
                 f"Signature: {s.typed_signature or '—'}",
                 f"Signed at: {signed}    IP: {s.signed_ip or '—'}",
+                f"Method: {_signer_method(s)}    Fields filled: {_field_count(s)}",
             ]
             for ln in lines:
                 c.drawString(inch + 0.2 * inch, y, ln[:95])
@@ -122,7 +144,8 @@ def build_certificate(
             f"<tr><td>{html_escape(str(s.name))} &lt;{html_escape(str(s.email))}&gt;</td>"
             f"<td>{html_escape(str(s.typed_signature or '—'))}</td>"
             f"<td>{html_escape(s.signed_at.isoformat() if s.signed_at else '—')}</td>"
-            f"<td>{html_escape(str(s.signed_ip or '—'))}</td></tr>"
+            f"<td>{html_escape(str(s.signed_ip or '—'))}</td>"
+            f"<td>{html_escape(_signer_method(s))} / {_field_count(s)}</td></tr>"
             for s in signers
         )
         safe_matter_name = html_escape(str(matter_name))
@@ -135,6 +158,10 @@ def build_certificate(
             if positioned_fields
             else ""
         )
+        if executed_sha256:
+            placement_note += (
+                f"<p>Executed copy SHA-256: {html_escape(str(executed_sha256))}</p>"
+            )
         html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Certificate of Completion</title></head><body>
 <h1>Signature Acknowledgment Certificate</h1>
@@ -145,6 +172,6 @@ def build_certificate(
 <b>Evidence SHA-256:</b> {safe_evidence_sha256}</p>
 {placement_note}<p><i>This artifact records acknowledgments; it is not a signed copy of the source document.</i></p>
 <table border="1" cellpadding="6" cellspacing="0">
-<thead><tr><th>Signer</th><th>Signature</th><th>Signed at</th><th>IP</th></tr></thead>
+<thead><tr><th>Signer</th><th>Signature</th><th>Signed at</th><th>IP</th><th>Method / fields</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
         return html.encode("utf-8"), f"{base}-signature-evidence.html", "text/html"

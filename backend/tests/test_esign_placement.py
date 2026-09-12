@@ -7,8 +7,6 @@ from app.schemas.matter_document import MatterDocumentResponse
 
 from app.services.esign.placement import (
     PlacementError,
-    from_dropbox_coordinates,
-    to_dropbox_form_field,
     validate_placements,
     template_positioned_fields,
     signing_template_fields,
@@ -47,26 +45,6 @@ def _field(**overrides):
     }
     value.update(overrides)
     return value
-
-
-def test_pdf_bottom_left_round_trips_through_dropbox_top_left_coordinates():
-    field = validate_placements([_field()], source_sha256=SHA, signer_roles={"client"})[
-        0
-    ]
-    payload = to_dropbox_form_field(field, signer_index=0)
-    assert payload["page"] == 1
-    assert payload["x"] == 72
-    assert payload["y"] == 656
-    assert payload["width"] == 162
-    assert payload["height"] == 40
-    assert from_dropbox_coordinates(
-        x=payload["x"],
-        y=payload["y"],
-        width=payload["width"],
-        height=payload["height"],
-        page_width=612,
-        page_height=792,
-    ) == pytest.approx((72, 100, 216, 136))
 
 
 def test_stale_digest_and_unresolved_role_fail_closed():
@@ -181,7 +159,6 @@ def test_invalid_manifest_cannot_be_sent(overrides):
 @pytest.mark.parametrize(
     "options",
     [
-        {"width": 595},
         {"rotation": 90},
         {"crop": [10, 10, 612, 792]},
         {"crop": [0, 0, 600, 790]},
@@ -192,6 +169,16 @@ def test_unsupported_pdf_geometry_fails_closed(options):
     fields = validate_placements([_field()], source_sha256=SHA, signer_roles={"client"})
     with pytest.raises(PlacementError):
         validate_pdf_geometry(_pdf(**options), fields)
+
+
+def test_a4_pages_are_accepted_for_portal_signing():
+    """Only the removed external provider required US Letter pages."""
+    fields = validate_placements(
+        [_field(page_width=595, page_height=842, rect=[72, 100, 216, 136])],
+        source_sha256=SHA,
+        signer_roles={"client"},
+    )
+    validate_pdf_geometry(_pdf(width=595, height=842), fields)
 
 
 def test_page_count_and_dimensions_are_verified_from_actual_pdf():
@@ -226,7 +213,7 @@ def test_final_pdf_review_requires_all_original_signer_roles():
     "source_format,width,role,has_positions",
     [
         ("pdf", 612, "client", True),
-        ("pdf", 595, "client", False),
+        ("pdf", 595, "client", True),
         ("pdf", 612, "", False),
         ("docx", 612, "client", False),
     ],

@@ -60,8 +60,11 @@ test('Jane Doe: create matter, review fee, send paperwork, sign, unlock portal, 
   await page.getByRole('button', { name: 'Send client paperwork', exact: true }).click()
   await page.getByRole('combobox', { name: 'From matter documents' }).selectOption(fee.id)
   await labelled(page, 'General intake form.pdf').check()
-  await page.getByLabel('One question per line').fill('Describe your matter')
-  await page.getByLabel('Requested client uploads — one per line').fill('Marriage certificate')
+  // Records the client already has are opt-in now, so nothing is requested by
+  // accident. The questionnaire is a firm-supplied PDF, not a typed question
+  // list, so this journey sends the fee agreement and one signing form.
+  await page.getByLabel(/^\s*Records to request from the client/).check()
+  await page.getByLabel('One record per line').fill('Marriage certificate')
   await page.getByRole('button', { name: '3. Send' }).click()
   await expect(labelled(page, 'Client email')).toHaveValue('jane.onboarding@example.com')
   await page.getByRole('button', { name: 'Send paperwork', exact: true }).click()
@@ -76,37 +79,42 @@ test('Jane Doe: create matter, review fee, send paperwork, sign, unlock portal, 
     await expect(clientPage).toHaveURL(/\/portal\/client\/matter$/)
     await expect(clientPage.getByRole('tab', { name: 'Messages', exact: true })).toHaveCount(0)
     expect((await clientPage.request.get('/api/portal/client/messages')).status()).toBe(403)
-    await clientPage.getByRole('button', { name: 'Review and sign fee agreement', exact: true }).click()
+    await clientPage.getByRole('button', { name: 'Open and sign' }).first().click()
     const requests = await json(await clientPage.request.get('/api/portal/client/signatures'))
     expect(requests).toHaveLength(2)
+    // The client signs on the document itself: the page renders, the typed
+    // legal name is adopted, and every signature field the plan placed is
+    // clicked to put that name on the line.
     const sign = async documentId => {
       const req = requests.find(item => item.document_id === documentId)
-      const field = clientPage.locator(`[id="signature-${req.id}"]`)
-      const card = field.locator('..')
+      const card = clientPage.getByRole('region', { name: `Sign ${req.document_name}` })
       await expect(labelled(card, 'PDF page 1')).toBeVisible()
-      await field.fill('Jane Doe')
-      await labelled(card, 'I have reviewed every page of this document.').check()
+      await card.locator(`[id="legal-name-${req.id}"]`).fill('Jane Doe')
+      const unsigned = card.getByText(/^Click to (sign|initial)$/)
+      for (let remaining = await unsigned.count(); remaining > 0; remaining--) {
+        await unsigned.first().click()
+      }
+      await expect(unsigned).toHaveCount(0)
       await card.getByLabel(/I consent to use an electronic signature/).check()
       await card.getByRole('button', { name: 'Sign document', exact: true }).click()
-      await expect(field).toHaveCount(0)
+      await expect(card).toHaveCount(0)
     }
     await sign(fee.id)
     await expect.poll(() => messages().length).toBe(2)
     expect(messages()[1].body).toContain('portal')
     const packet = await json(await page.request.get(base + '/intake'))
     expect(packet.requirements.fee_agreement.completed).toBe(true)
-    expect(packet.requirements.questionnaire.completed).toBe(false)
     expect(packet.requirements[`document_${form.id.replaceAll('-', '')}`].completed).toBe(false)
     expect(new Date(packet.signing_followup_due_at) - new Date(packet.requirements.fee_agreement.completed_at)).toBe(24 * 60 * 60 * 1000)
     await expect(clientPage.getByRole('tab', { name: 'Messages', exact: true })).toBeVisible()
     await sign(form.id)
     await clientPage.getByRole('tab', { name: 'Overview', exact: true }).click()
-    await clientPage.getByLabel('Describe your matter', { exact: false }).fill('Divorce consultation')
-    await clientPage.getByRole('button', { name: 'Submit completed questionnaire' }).click()
-    await expect(clientPage.getByText('Questionnaire: Complete', { exact: true })).toBeVisible()
+    // Signing the form files its executed copy, so the checklist shows it done
+    // and only the requested record is still waiting on the client.
+    await expect(clientPage.getByText('Signed ✓').first()).toBeVisible()
     // The upload control names the requested record (audit finding 8).
     await labelled(clientPage, 'Upload Marriage certificate').setInputFiles(fixture('general-intake.pdf'))
-    await expect(clientPage.getByText('Submitted — awaiting staff review', { exact: true })).toBeVisible()
+    await expect(clientPage.getByText('Received — under review', { exact: true })).toBeVisible()
     const submitted = await json(await page.request.get(base + '/intake'))
     expect(submitted.requirements.upload_1.completed).toBe(false)
     const docId = submitted.requirements.upload_1.submitted_document_id

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import PortalDocumentTransfer from '../components/PortalDocumentTransfer'
 import ClientIntakeChecklist from '../components/ClientIntakeChecklist'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
+import { SIGNED_COPY_RECEIVED_MESSAGE, signedOutcomeMessage } from '../components/portal/signingMessages'
 import {
   getClientIntake,
   getClientPortalSession,
@@ -18,7 +19,6 @@ import {
   createClientPortalInvoicePayment,
   downloadClientPortalInvoiceUrl,
   listClientPortalSignatures,
-  signClientPortalSignature,
   declineClientPortalSignature,
   listClientPortalMatters,
   switchClientPortalMatter,
@@ -1141,17 +1141,16 @@ function portalSignatureStatus(req) {
   if (req.status === 'expired') return 'Expired'
   if (req.status === 'declined') return 'Declined'
   if (req.status === 'voided') return 'Voided'
+  if (req.status === 'completed') return 'Signed'
+  if (req.submitted_document_id) return 'Awaiting review'
+  if (req.completion_pending) return 'Signed — filing'
   return 'Action required'
 }
 
 function SignaturesTab({ onSessionError, onChanged }) {
   const confirmAction = useConfirm()
   const [requests, setRequests] = useState([])
-  const [signing, setSigning] = useState(null) // request id being signed
   const [declining, setDeclining] = useState(null)
-  const [typedByRequest, setTypedByRequest] = useState({})
-  const [acceptedByRequest, setAcceptedByRequest] = useState({})
-  const [reviewedByRequest, setReviewedByRequest] = useState({})
   const [declineReasonByRequest, setDeclineReasonByRequest] = useState({})
   const [err, setErr] = useState('')
   const [success, setSuccess] = useState('')
@@ -1171,30 +1170,13 @@ function SignaturesTab({ onSessionError, onChanged }) {
   }, [onSessionError])
   useEffect(() => { load() }, [load])
 
-  const sign = async (req) => {
+  // The in-document form reports back after a sign or an upload; the tab owns
+  // the lasting confirmation because the reloaded request no longer shows the form.
+  const signed = async (result) => {
     setErr('')
-    setSuccess('')
-    const typed = (typedByRequest[req.id] || '').trim()
-    if (!typed) { setErr('Type your full legal name exactly as you want it to appear on the signature certificate.'); return }
-    if (!reviewedByRequest[req.id]) { setErr('Review every page of the document before signing.'); return }
-    if (!acceptedByRequest[req.id]) { setErr('Review and accept the electronic signature consent before signing.'); return }
-    setSigning(req.id)
-    try {
-      await signClientPortalSignature(req.id, {
-        typed_signature: typed,
-        consent_to_electronic_signature: true,
-        consent_text_version: 'clarity-esign-consent-v1',
-      })
-      setTypedByRequest((prev) => ({ ...prev, [req.id]: '' }))
-      setAcceptedByRequest((prev) => ({ ...prev, [req.id]: false }))
-      setSuccess('Signature acknowledgment captured. Your legal team will receive an evidence certificate linked to the source document.')
-      await load()
-      onChanged()
-    } catch (e) {
-      if (!onSessionError(e)) setErr(errorMessage(e, 'Failed to sign. Please try again.'))
-    } finally {
-      setSigning(null)
-    }
+    setSuccess(result?.submitted_document_id ? SIGNED_COPY_RECEIVED_MESSAGE : signedOutcomeMessage(result))
+    await load()
+    onChanged()
   }
 
   const decline = async (req) => {
@@ -1235,7 +1217,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
           <CheckCircle2 size={22} className="text-brand-green mt-0.5" />
           <div>
             <p className="text-sm font-medium text-brand-ink">You're all caught up.</p>
-            <p className="text-sm text-brand-ink-2 mt-1">No signature acknowledgments are awaiting your action. Evidence certificates will appear in Documents when available.</p>
+            <p className="text-sm text-brand-ink-2 mt-1">No documents are waiting for your signature. Signed copies and evidence certificates appear in Documents when available.</p>
           </div>
         </div>
         {success && <p role="status" aria-live="polite" className="text-sm text-brand-green mt-3">{success}</p>}
@@ -1250,23 +1232,22 @@ function SignaturesTab({ onSessionError, onChanged }) {
         <div className="flex items-start gap-3">
           <LockKeyhole size={22} className="text-brand-accent mt-0.5" />
           <div>
-            <p className="text-sm font-semibold text-brand-ink">Signature acknowledgment</p>
-            <p className="text-sm text-brand-ink-2 mt-1">Review each source document, type your legal name, and consent to sign electronically. We record the time, portal identity, IP address, and document hashes in an evidence certificate; this does not alter the source document.</p>
+            <p className="text-sm font-semibold text-brand-ink">Sign your documents here</p>
+            <p className="text-sm text-brand-ink-2 mt-1">Fill in any fields on the document, type your legal name to adopt it as your signature, and click each signature line to place it. We record the time, portal identity, IP address, and document hashes in an evidence certificate filed with the signed copy.</p>
           </div>
         </div>
       </Card>
       <ErrorBanner message={err} />
       {success && <p role="status" aria-live="polite" className="text-sm text-brand-green">{success}</p>}
       {requests.map((req) => {
-        const typed = typedByRequest[req.id] || ''
-        const accepted = Boolean(acceptedByRequest[req.id])
-        const canAct = ['sent', 'partially_signed'].includes(req.status)
+        const open = ['sent', 'partially_signed'].includes(req.status)
+        const waiting = Boolean(req.submitted_document_id || req.completion_pending)
         const declineReason = declineReasonByRequest[req.id] || ''
         return (
           <Card key={req.id}>
             <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-4">
               <div>
-                <div className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide mb-3 ${canAct ? 'bg-brand-amber/10 text-brand-amber' : 'bg-brand-bg-soft text-brand-ink-2'}`}>
+                <div className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide mb-3 ${open && !waiting ? 'bg-brand-amber/10 text-brand-amber' : req.status === 'completed' ? 'bg-brand-green/10 text-brand-green' : 'bg-brand-bg-soft text-brand-ink-2'}`}>
                   {portalSignatureStatus(req)}
                 </div>
                 <p className="text-base font-serif font-bold text-brand-ink">{req.document_name || 'Document'}</p>
@@ -1295,57 +1276,41 @@ function SignaturesTab({ onSessionError, onChanged }) {
               ))}
             </div>
 
-            {canAct ? (
+            {open ? (
               <>
-                <ClientSignatureDocument request={req} reviewed={Boolean(reviewedByRequest[req.id])} onReviewed={value => setReviewedByRequest(previous => ({ ...previous, [req.id]: value }))} />
-                <label htmlFor={`signature-${req.id}`} className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Typed signature</label>
-                <input
-                  id={`signature-${req.id}`}
-                  value={typed}
-                  onChange={(e) => setTypedByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
-                  placeholder="Type your full legal name"
-                  className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-                />
-                <label className="flex items-start gap-2 mt-3 text-xs text-brand-ink-2">
-                  <input
-                    type="checkbox"
-                    checked={accepted}
-                    onChange={(e) => setAcceptedByRequest((prev) => ({ ...prev, [req.id]: e.target.checked }))}
-                    className="mt-0.5"
-                    required
-                  />
-                  <span>I consent to use an electronic signature for this acknowledgment. I understand my typed name and audit evidence will be attached to an evidence certificate linked by hash to the source document, and the source document itself is not modified.</span>
-                </label>
-                <button
-                  onClick={() => sign(req)}
-                  disabled={signing === req.id || !typed.trim() || !accepted || !reviewedByRequest[req.id]}
-                  className="mt-4 w-full sm:w-auto px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {signing === req.id ? 'Capturing signature…' : 'Sign document'}
-                </button>
-                <div className="mt-4 border-t border-brand-line pt-4">
-                  <label htmlFor={`decline-reason-${req.id}`} className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">
-                    Not signing? Tell your legal team why (optional)
-                  </label>
-                  <input
-                    id={`decline-reason-${req.id}`}
-                    value={declineReason}
-                    onChange={(e) => setDeclineReasonByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
-                    placeholder="Add a reason before declining"
-                    className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-                  />
-                  <button
-                    onClick={() => decline(req)}
-                    disabled={declining === req.id}
-                    className="mt-2 w-full sm:w-auto px-5 py-2.5 border border-brand-rose text-brand-rose text-sm font-sans font-semibold rounded-lg hover:bg-brand-rose/5 transition-all disabled:opacity-50"
-                  >
-                    {declining === req.id ? 'Declining…' : 'Decline to sign'}
-                  </button>
-                  <p className="text-xs text-brand-ink-2 mt-2">You will be asked to confirm. A decline is recorded and cannot be undone here.</p>
-                </div>
+                <ClientSignatureDocument request={req} onChanged={signed} onSessionError={onSessionError} />
+                {!waiting && (
+                  <details className="mt-4 border-t border-brand-line pt-4">
+                    <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-brand-ink-2">Not signing?</summary>
+                    <div className="mt-3">
+                      <label htmlFor={`decline-reason-${req.id}`} className="block text-xs text-brand-ink-2 mb-1">
+                        Tell your legal team why (optional)
+                      </label>
+                      <input
+                        id={`decline-reason-${req.id}`}
+                        value={declineReason}
+                        onChange={(e) => setDeclineReasonByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
+                        placeholder="Add a reason before declining"
+                        className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+                      />
+                      <button
+                        onClick={() => decline(req)}
+                        disabled={declining === req.id}
+                        className="mt-2 w-full sm:w-auto px-5 py-2.5 border border-brand-rose text-brand-rose text-sm font-sans font-semibold rounded-lg hover:bg-brand-rose/5 transition-all disabled:opacity-50"
+                      >
+                        {declining === req.id ? 'Declining…' : 'Decline to sign'}
+                      </button>
+                      <p className="text-xs text-brand-ink-2 mt-2">You will be asked to confirm. A decline is recorded and cannot be undone here.</p>
+                    </div>
+                  </details>
+                )}
               </>
             ) : (
-              <p className="text-sm text-brand-ink-2">This signature request is no longer open for signing.</p>
+              <p className="text-sm text-brand-ink-2">
+                {req.status === 'completed'
+                  ? 'Signed. The signed copy and its evidence certificate are in Documents.'
+                  : 'This signature request is no longer open for signing.'}
+              </p>
             )}
           </Card>
         )

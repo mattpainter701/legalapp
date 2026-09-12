@@ -5,7 +5,7 @@ import ClientIntakeChecklist from './ClientIntakeChecklist'
 import { startMatterIntake } from './MatterIntakePanel'
 import CaseSetupCard from './casesetup/CaseSetupCard'
 import NewMatterModal from './NewMatterModal'
-import api, { getClientIntake, submitClientIntake, createMatterV2, getContacts, getAdminUsers, getPlugins, getMatterPaperwork, matterPaperworkAction, getMatterDocuments } from '../api'
+import api, { getClientIntake, submitClientIntake, createMatterV2, getContacts, getAdminUsers, getPlugins, getMatterPaperwork, matterPaperworkAction, getMatterDocuments, uploadClientPortalDocument } from '../api'
 
 vi.mock('./MatterImportWizard', () => ({ default: () => <div>Historical import wizard</div> }))
 
@@ -13,6 +13,7 @@ vi.mock('../api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
   getClientIntake: vi.fn(), submitClientIntake: vi.fn(), createMatterV2: vi.fn(), getContacts: vi.fn(), getAdminUsers: vi.fn(), getPlugins: vi.fn(), createContact: vi.fn(),
   getMatterPaperwork: vi.fn(), matterPaperworkAction: vi.fn(), getMatterDocuments: vi.fn(), getIntakeStarterPack: vi.fn(),
+  uploadClientPortalDocument: vi.fn(), downloadClientPortalDocumentUrl: (id) => `/api/portal/client/documents/${id}/download`,
 }))
 afterEach(cleanup)
 const packet = () => ({
@@ -42,17 +43,95 @@ it('names the requested record on the client upload control', async () => {
   render(<ClientIntakeChecklist />)
   expect(await screen.findByLabelText('Upload Marriage certificate')).toBeInTheDocument()
 })
-it('keeps signature outstanding after questionnaire completion', async () => {
+it('keeps signature outstanding after a legacy questionnaire is answered', async () => {
   const user = userEvent.setup(); const onSign = vi.fn()
   submitClientIntake.mockResolvedValue({ ...packet(), requirements: { fee_agreement: { completed: false }, questionnaire: { completed: true } } })
   render(<ClientIntakeChecklist onSign={onSign} />)
   await user.type(await screen.findByLabelText('Describe your matter *'), 'Case summary')
   await user.click(screen.getByRole('button', { name: 'Submit completed questionnaire' }))
-  await screen.findByText('Questionnaire: Complete')
+  // Old packets carried free-text questions; once answered the questionnaire
+  // has no row of its own — new packets ship it as a PDF form instead.
+  await waitFor(() => expect(screen.queryByLabelText('Describe your matter *')).not.toBeInTheDocument())
   expect(submitClientIntake).toHaveBeenCalledWith({ summary: 'Case summary' })
   expect(screen.queryByText(/paperwork is complete/)).not.toBeInTheDocument()
-  await user.click(screen.getByRole('button', { name: 'Review and sign fee agreement' }))
+  expect(screen.getByText('Fee agreement')).toBeInTheDocument()
+  expect(screen.getByText('Needs your signature')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Open and sign' }))
   expect(onSign).toHaveBeenCalledOnce()
+})
+it('groups forms to sign apart from records to send, with a status on each', async () => {
+  const user = userEvent.setup(); const onSign = vi.fn()
+  getClientIntake.mockResolvedValue({
+    ...packet(),
+    questions: [],
+    requirements: {
+      fee_agreement: { completed: true, completed_at: '2026-09-02T10:00:00Z' },
+      questionnaire: { completed: true, required: false },
+      document_a: { kind: 'signature', label: 'Client intake form', completed: false, document_id: 'doc-a', signature_id: 'sig-a', due_at: '2026-09-20T17:00:00Z' },
+      document_b: { kind: 'signature', label: 'Client questionnaire', completed: false, submitted_document_id: 'copy-b', document_id: 'doc-b', signature_id: 'sig-b' },
+      document_c: { kind: 'signature', label: 'HIPAA release', completed: false, declined: true, document_id: 'doc-c', signature_id: 'sig-c' },
+      document_d: { kind: 'document', label: 'Medical history', completed: false, document_id: 'doc-d' },
+      upload_1: { kind: 'upload', label: 'Marriage certificate', completed: false },
+      upload_2: { kind: 'upload', label: 'Photo ID', completed: false, submitted_document_id: 'copy-2' },
+      upload_3: { kind: 'upload', label: 'Pay stubs', completed: true },
+    },
+  })
+  render(<ClientIntakeChecklist onSign={onSign} />)
+  expect(await screen.findByRole('heading', { name: 'Your paperwork' })).toBeInTheDocument()
+  expect(screen.getByText('Forms to complete and sign')).toBeInTheDocument()
+  expect(screen.getByText('Records to send us')).toBeInTheDocument()
+  expect(screen.queryByText(/Questionnaire:/)).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Submit completed questionnaire' })).not.toBeInTheDocument()
+
+  expect(screen.getByText('Fee agreement')).toBeInTheDocument()
+  expect(screen.getByText('Signed ✓')).toBeInTheDocument()
+  expect(screen.getByText('Awaiting review')).toBeInTheDocument()
+  expect(screen.getByText('Declined')).toBeInTheDocument()
+  expect(screen.getAllByText('Needs your signature')).toHaveLength(1)
+  // A form sent without a signature requirement is completed, not signed.
+  expect(screen.getByText('Needs completing')).toBeInTheDocument()
+  expect(screen.getByText(/Due Sep 20, 2026/)).toBeInTheDocument()
+  // Only the forms still waiting on the client are actionable.
+  expect(screen.getAllByRole('button', { name: 'Open and sign' })).toHaveLength(1)
+  await user.click(screen.getByRole('button', { name: 'Open and sign' }))
+  expect(onSign).toHaveBeenCalledOnce()
+  expect(screen.getByRole('link', { name: 'Download form' })).toHaveAttribute('href', expect.stringContaining('doc-d'))
+  expect(screen.getByLabelText('Upload completed form')).toHaveAttribute('accept', expect.stringContaining('application/pdf'))
+
+  expect(screen.getByText('Needed')).toBeInTheDocument()
+  expect(screen.getByText('Received — under review')).toBeInTheDocument()
+  expect(screen.getByText('Accepted')).toBeInTheDocument()
+  const upload = screen.getByLabelText('Upload Marriage certificate')
+  expect(upload).toHaveAttribute('accept', expect.stringContaining('image/*'))
+  expect(upload).toHaveAttribute('accept', expect.stringContaining('.docx'))
+  expect(screen.queryByLabelText('Upload Pay stubs')).not.toBeInTheDocument()
+})
+it('renders a packet without a fee agreement or records', async () => {
+  getClientIntake.mockResolvedValue({
+    ...packet(),
+    questions: [],
+    requirements: {
+      questionnaire: { completed: true, required: false },
+      document_a: { kind: 'signature', label: 'Client intake form', completed: false, document_id: 'doc-a', signature_id: 'sig-a' },
+    },
+  })
+  render(<ClientIntakeChecklist onSign={vi.fn()} />)
+  expect(await screen.findByText('Client intake form')).toBeInTheDocument()
+  expect(screen.queryByText('Fee agreement')).not.toBeInTheDocument()
+  expect(screen.queryByText('Records to send us')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Open and sign' })).toBeInTheDocument()
+})
+it('submits an uploaded record against its requirement', async () => {
+  const user = userEvent.setup()
+  uploadClientPortalDocument.mockResolvedValue({ id: 'doc-up' })
+  api.post.mockResolvedValue({ data: { ...packet(), requirements: { fee_agreement: { completed: true }, questionnaire: { completed: true }, upload_1: { kind: 'upload', label: 'Marriage certificate', completed: false, submitted_document_id: 'doc-up' } } } })
+  getClientIntake.mockResolvedValue({ ...packet(), questions: [], requirements: { fee_agreement: { completed: true }, questionnaire: { completed: true }, upload_1: { kind: 'upload', label: 'Marriage certificate', completed: false } } })
+  render(<ClientIntakeChecklist />)
+  const file = new File(['scan'], 'certificate.pdf', { type: 'application/pdf' })
+  await user.upload(await screen.findByLabelText('Upload Marriage certificate'), file)
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/portal/client/intake/requirements/upload_1/submission', { document_id: 'doc-up' }))
+  expect(uploadClientPortalDocument).toHaveBeenCalledWith(file, 'Intake: upload_1')
+  expect(await screen.findByText('Received — under review')).toBeInTheDocument()
 })
 it('preserves answers when submission fails', async () => {
   const user = userEvent.setup()

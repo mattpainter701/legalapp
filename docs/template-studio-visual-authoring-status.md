@@ -15,7 +15,7 @@ and #356 branches so CI exercises their shared editor and generation paths.
 | Page-accurate Word source view | #354: LibreOffice PDF conversion, bounded tenant/source/options cache, pdf.js pages/thumbnails/zoom, Document/Fields tabs and safe fallback. See [source preview](mcp/template-studio-source-preview.md). |
 | Richer text view | #352: source-order tables, common numbering, emphasis, Unicode-safe selection and source review. Preserved by the integrated editor. |
 | White-out toggle / eraser | #355 (from #359): manual value-less PDF covers, drag/resize/remove, undo/redo, per-field source-cover control and cover-only publication/generation. See [PDF covers](mcp/template-studio-pdf-covers.md). |
-| Signature fields to e-sign tabs | #355: saved generated-PDF placements and signer roles; final-PDF authoring for reflowed Word output; role, digest and page checks; Dropbox Sign multipart fields. See [signing placements](mcp/template-signing-placements.md). |
+| Signature fields to e-sign tabs | #355: saved generated-PDF placements and signer roles; final-PDF authoring for reflowed Word output; role, digest and page checks; placements rendered in the portal's in-document signing view. See [signing placements](mcp/template-signing-placements.md). |
 | Placeholder substitution | #355 (from #356): explicitly reviewed spans become literal placeholders in a new Word draft, preserving original evidence. Source mode suggestion/override, rendered token selection, original download and targeted wording cleanup are included. See [Word authoring](template-studio-word-placeholder-authoring.md). |
 
 Release entries .7, .8 and .9 record covers, signing and Word authoring respectively;
@@ -46,20 +46,16 @@ support or matter document rescanning.
 - Word pagination can change after values are filled. Signing positions are
   reviewed on the saved final PDF, never transferred from a Word source preview.
   Required signer roles survive reflow and cannot be omitted at dispatch.
-- Positioned dispatch currently supports unrotated US Letter pages with matching
-  zero-origin MediaBox/CropBox and unit scale. Unsupported geometry or unassigned
-  roles do not block unsigned document generation; final signing review remains
-  required. The internal portal explicitly rejects positioned requests.
-- Dropbox Sign uses `files[]`, a JSON-encoded flat `form_fields_per_document`
-  array, `date_signed` date fields, one-based PDF pages, top-left 72-DPI positions,
-  and 80-DPI dimensions with the documented width adjustment. Provider API calls
-  in tests are stubbed. Live provider test-mode visual acceptance is still needed
-  before production use; no real signature requests were sent in this task.
+- Positioned dispatch supports unrotated pages with matching zero-origin
+  MediaBox/CropBox and unit scale. Unsupported geometry or unassigned roles do
+  not block unsigned document generation; final signing review remains
+  required. The portal renders positioned fields in the client's in-document
+  signing view and stamps them onto the executed copy.
 
 ## Verification evidence
 
 Focused tests cover covers and invalid geometry, the publish/generate/save flow,
-signing roles and coordinate conversion, request creation and stubbed dispatch,
+signing roles and placement geometry, request creation and portal dispatch,
 Word span substitution/cleanup, original evidence and failed-write compensation.
 The final combined PR must pass all required CI, diff coverage and merge gates.
 
@@ -67,10 +63,6 @@ Synthetic headless Edge checks exercised rendered placeholder selection/zoom,
 final-PDF signing placement and page changes, and the integrated Word editor's
 async mode suggestion, explicit override, unsaved-field derivation and draft
 callback. Artifacts are stored outside Git under the task output directory.
-LibreOffice is not installed on this workstation; live conversion fidelity and
-provider test-mode rendering remain deployment acceptance checks.
+LibreOffice is not installed on this workstation; live conversion fidelity
+remains a deployment acceptance check.
 
-Provider references verified 2026-09-07:
-[field format](https://developers.hellosign.com/docs/sdks/open-api/form-fields-per-document/),
-[coordinates](https://help.dropbox.com/integrations/how-to-use-the-form-fields-per-document-parameter),
-[send contract](https://developers.hellosign.com/api/signature-request/send).
