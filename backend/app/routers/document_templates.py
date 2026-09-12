@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -43,6 +44,7 @@ from app.models.document_template_preview import DocumentTemplatePreview
 from app.models.matter_document import MatterDocument
 from app.models.matter_party import MatterParty
 from app.models.plugin import Matter, MatterEvent
+from app.models.retainer import Retainer
 from app.models.tenant import TenantSettings
 from app.schemas.document_template import (
     DocumentTemplateBindingCatalogue,
@@ -142,6 +144,7 @@ from app.services.template_bindings import (
     alias_for_binding,
     catalogue as binding_catalogue,
     collections as binding_collections,
+    custom_binding,
     declared_bindings,
     is_item_binding,
 )
@@ -2016,6 +2019,7 @@ def _collect_smart_fill_candidates(
     matter: Matter | None,
     parties: Sequence[MatterParty] = (),
     current_user,
+    retainer: Retainer | None = None,
 ) -> dict[str, DocumentTemplateVariableSuggestion]:
     candidates: dict[str, DocumentTemplateVariableSuggestion] = {}
 
@@ -2064,6 +2068,9 @@ def _collect_smart_fill_candidates(
         "billing_cycle": matter.billing_cycle,
         "hourly_rate": matter.hourly_rate,
         "budget_amount": matter.budget_amount,
+        # getattr: fixtures and pre-venue matters may not carry the attribute.
+        "contingency_percentage": getattr(matter, "contingency_percentage", None),
+        "venue": getattr(matter, "venue", None),
         "matter_role": matter.role,
         "represented_side": matter.role,
         "counterparty": matter.counterparty,
@@ -2076,6 +2083,24 @@ def _collect_smart_fill_candidates(
             source_type="matter",
             source_field=alias,
             record_id=matter.id,
+        )
+
+    if retainer is not None:
+        _add_candidate(
+            candidates,
+            "retainer_amount",
+            retainer.amount,
+            source_type="retainer",
+            source_field="amount",
+            record_id=retainer.id,
+        )
+        _add_candidate(
+            candidates,
+            "retainer_minimum_balance",
+            retainer.minimum_balance,
+            source_type="retainer",
+            source_field="minimum_balance",
+            record_id=retainer.id,
         )
 
     _collect_caption_party_candidates(candidates, parties)
@@ -2166,6 +2191,165 @@ def _collect_smart_fill_candidates(
     return candidates
 
 
+def _smart_fill_alias_vocabulary() -> frozenset[str]:
+    """Every alias Smart Fill can ever produce, independent of any matter.
+
+    Computed from the resolver itself against a fully populated probe matter
+    rather than maintained as a second list, so the approval check below can
+    never drift out of sync with the candidate builder.
+    """
+
+    def _contact() -> SimpleNamespace:
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            display_name="Probe",
+            email="probe@example.com",
+            phone="555-0100",
+            address={
+                "street": "1 Probe St",
+                "city": "Probeville",
+                "state": "PR",
+                "zip": "00000",
+                "country": "US",
+            },
+        )
+
+    def _party(role: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            role=role,
+            is_primary=True,
+            created_at="",
+            contact=_contact(),
+        )
+
+    matter = SimpleNamespace(
+        id=uuid.uuid4(),
+        matter_name="Probe",
+        matter_type="probe",
+        description="Probe",
+        status="open",
+        stage="probe",
+        jurisdiction="Probe",
+        case_number="PR-0",
+        court="Probe Court",
+        judge="Probe Judge",
+        billing_method="hourly",
+        billing_cycle="monthly",
+        hourly_rate=Decimal("1"),
+        budget_amount=Decimal("1"),
+        contingency_percentage=Decimal("1"),
+        venue="Probe County",
+        role="plaintiff",
+        counterparty="Probe Counterparty",
+        client=_contact(),
+        attorney_of_record=SimpleNamespace(
+            id=uuid.uuid4(), full_name="Probe Attorney", email="probe@firm.com"
+        ),
+    )
+    retainer = SimpleNamespace(
+        id=uuid.uuid4(), amount=Decimal("1"), minimum_balance=Decimal("1")
+    )
+    candidates = _collect_smart_fill_candidates(
+        matter=matter,
+        parties=[_party("plaintiff"), _party("defendant")],
+        current_user=SimpleNamespace(
+            id=uuid.uuid4(), full_name="Probe User", email="probe@user.com"
+        ),
+        retainer=retainer,
+    )
+    return frozenset(candidates)
+
+
+def _binding_is_resolvable(binding: str) -> bool:
+    """Whether a declared binding path Smart Fill can resolve against a record.
+
+    Item bindings resolve per repeating-section iteration and custom bindings
+    through the custom-field service, so both fill without a catalogue alias.
+    Manual bindings and paths the catalogue no longer describes cannot.
+    """
+
+    if binding == MANUAL_BINDING:
+        return False
+    return (
+        is_item_binding(binding)
+        or custom_binding(binding) is not None
+        or alias_for_binding(binding) is not None
+    )
+
+
+def _validate_approval_ready(
+    *,
+    template: DocumentTemplate,
+    variable_schema: dict | None,
+    body: str,
+) -> None:
+    """Refuse approval for a template a matter can never completely fill.
+
+    A field that is required, has no default, and no record behind it would
+    render as an empty clause in a filed document. At approval time every such
+    field must either declare a resolvable binding or match a name Smart Fill
+    produces. A body that references ``jurisdiction_required_terms`` must also
+    record which jurisdiction's terms they are.
+    """
+
+    fields = (
+        variable_schema.get("fields") if isinstance(variable_schema, dict) else None
+    )
+    if not isinstance(fields, list):
+        fields = []
+    bindings = declared_bindings(variable_schema)
+    vocabulary = _smart_fill_alias_vocabulary()
+
+    unresolvable: list[str] = []
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+        if field.get("included", True) is False:
+            continue
+        # PDF source-backed fields are filled by hand through the mandatory
+        # activation-preview and render flow; that preview gate, not Smart
+        # Fill, is what guarantees them a value.
+        if field.get("pdf_source_key") or field.get("pdf_overlay"):
+            continue
+        if not field.get("required"):
+            continue
+        if str(field.get("default") or "").strip():
+            continue
+        binding = bindings.get(name)
+        if binding is not None:
+            resolvable = _binding_is_resolvable(binding)
+        else:
+            resolvable = _normalize_variable_name(name) in vocabulary
+        if not resolvable:
+            unresolvable.append(name)
+
+    problems: list[str] = []
+    if unresolvable:
+        problems.append(
+            "required field(s) with no data source and no default: "
+            + ", ".join(sorted(unresolvable))
+            + ". Bind each to a record field, match a Smart Fill name, or set a default."
+        )
+    if (
+        "jurisdiction_required_terms" in extract_template_variables(body or "")
+        and not str(getattr(template, "jurisdiction", None) or "").strip()
+    ):
+        problems.append(
+            "the body references {{jurisdiction_required_terms}} but the template "
+            "records no jurisdiction. Set the jurisdiction the drafted terms "
+            "were written against."
+        )
+    if problems:
+        raise HTTPException(
+            status_code=422,
+            detail="This template cannot be approved: " + "; ".join(problems),
+        )
+
+
 async def _load_matter_context(
     *,
     db: AsyncSession,
@@ -2217,6 +2401,38 @@ async def _load_matter_parties(
         )
     )
     return list(result.scalars().all())
+
+
+async def _load_current_retainer(
+    *,
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    matter: Matter | None,
+) -> Retainer | None:
+    """Return the matter's current retainer, if it has one.
+
+    "Current" is the most recently created *active* retainer; a matter can hold
+    several retainer rows over its life (replenishments, refunds), and the
+    replenishment threshold a template fills is the active agreement's, not a
+    sum across history. When no active row exists, fall back to the most
+    recently created row of any status so a retired retainer's terms do not
+    silently fill from nothing.
+    """
+
+    if matter is None:
+        return None
+    return await db.scalar(
+        select(Retainer)
+        .where(
+            Retainer.matter_id == matter.id,
+            Retainer.tenant_id == tenant_id,
+        )
+        .order_by(
+            case((Retainer.status == "active", 0), else_=1),
+            Retainer.created_at.desc(),
+        )
+        .limit(1)
+    )
 
 
 def _schema_for_values(variable_schema: Any, variables: dict[str, str]) -> Any:
@@ -2401,12 +2617,32 @@ async def build_variable_suggestions(
         ]:
             if variable not in variables:
                 variables.append(variable)
+    bindings = declared_bindings(getattr(template, "variable_schema", None))
+    # The retainer record is a second query, so read it only when this
+    # template can actually fill from it: a declared retainer binding or an
+    # unbound field named after the retainer aliases.
+    retainer_aliases = {"retainer_amount", "retainer_minimum_balance"}
+    needs_retainer = matter is not None and (
+        any(
+            (alias_for_binding(binding) or "") in retainer_aliases
+            for binding in bindings.values()
+        )
+        or any(
+            _normalize_variable_name(variable) in retainer_aliases
+            for variable in variables
+        )
+    )
+    retainer = (
+        await _load_current_retainer(db=db, tenant_id=tenant_id, matter=matter)
+        if needs_retainer
+        else None
+    )
     candidates = _collect_smart_fill_candidates(
         matter=matter,
         parties=parties,
         current_user=current_user,
+        retainer=retainer,
     )
-    bindings = declared_bindings(getattr(template, "variable_schema", None))
 
     custom = await template_custom_fields.suggestions(db, tenant_id, matter, bindings)
     firm = await template_firm_fields.suggestions(db, tenant_id, bindings)
@@ -4294,6 +4530,11 @@ async def update_template(
         updates["approved_at"] = None
         updates["approved_by_user_id"] = None
     elif current_format == "pdf" and requested_activation:
+        _validate_approval_ready(
+            template=template,
+            variable_schema=updates.get("variable_schema", template.variable_schema),
+            body=effective_body,
+        )
         updates["approved_at"] = datetime.now(timezone.utc)
         updates["approved_by_user_id"] = current_user.id
     elif (
@@ -4642,6 +4883,13 @@ async def publish_template(
 
     await _ensure_word_source_review(template, template.variable_schema)
     _ensure_usable_labels(template.variable_schema)
+    _validate_approval_ready(
+        template=template,
+        variable_schema=getattr(template, "variable_schema", None),
+        # getattr: unit fixtures stub the row without a body, and a row with
+        # no body cannot reference jurisdiction_required_terms anyway.
+        body=str(getattr(template, "body", "") or ""),
+    )
     template.is_active = True
     template.status = "published"
     template.approved_at = datetime.now(timezone.utc)

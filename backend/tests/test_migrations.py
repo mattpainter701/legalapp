@@ -12,7 +12,19 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["176_intake_writeback"]
+    assert heads == ["177_matter_venue"]
+
+
+def test_matter_venue_migration_adds_and_drops_the_column():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "177_matter_venue.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "177_matter_venue"' in source
+    assert 'down_revision = "176_intake_writeback"' in source
+    assert "ADD COLUMN venue varchar(300)" in source
+    assert "DROP COLUMN venue" in source
 
 
 def test_alembic_revision_ids_fit_the_version_table_column():

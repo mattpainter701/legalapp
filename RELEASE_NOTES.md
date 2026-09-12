@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.11.15 — Fee agreements fill themselves — drafts can't be approved half-empty
+
+Released September 11, 2026.
+
+The retainer, its replenishment threshold, the contingency percentage, and the venue in your fee agreement now fill from the matter and its retainer record; a template whose required placeholders nothing can fill can't be approved.
+
+- **Retainer and contingency terms fill from the matter.** The retainer amount, the balance that triggers replenishment, the contingency percentage, and the venue now fill from the matter record and its current retainer.
+- **Matters record their venue.** The matter record gains a venue field, set the same way as jurisdiction, so every document that names a forum fills from one place.
+- **Half-empty templates can't be approved.** Approving a template now checks that every required placeholder has a record or a default behind it, and jurisdiction terms must name their jurisdiction.
+
 ## 2026.09.11.13 — Intake answers apply to the matter after review
 
 Released September 11, 2026.

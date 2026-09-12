@@ -23,6 +23,7 @@ class MatterCreate(BaseModel):
     role: str | None = Field(None, max_length=100)
     counterparty: str | None = Field(None, max_length=500)
     jurisdiction: str | None = Field(None, max_length=300)
+    venue: str | None = Field(None, max_length=300)
 
     source: str | None = Field(None, max_length=500)
 
@@ -68,6 +69,7 @@ class MatterUpdate(BaseModel):
     role: str | None = Field(None, max_length=100)
     counterparty: str | None = Field(None, max_length=500)
     jurisdiction: str | None = Field(None, max_length=300)
+    venue: str | None = Field(None, max_length=300)
     source: str | None = Field(None, max_length=500)
     practice_area: str | None = Field(None, max_length=200)
     status: str | None = Field(None, max_length=100)
@@ -152,6 +154,7 @@ class MatterResponse(BaseModel):
     role: str | None
     counterparty: str | None
     jurisdiction: str | None
+    venue: str | None
     status: str
     stage: str | None
     source: str | None
