@@ -27,7 +27,7 @@ from app.services.navigation import resolve_navigation
 from app.services.module_visibility import resolve_enabled_modules, resolve_plan_meta
 from app.services.plugin_entitlements import active_plugin_names
 from app.services.rbac_service import get_user_capabilities
-from app.services import session_policy
+from app.services import session_policy, workspace_mcp_revocation
 from app.services.llm_routing import resolve_llm_route, route_matter_context_allowed
 from app.services.office_access import (
     require_office_globally_enabled,
@@ -1840,8 +1840,27 @@ async def reset_password(
     # chains by their origin. Rotation and request authorisation both consult
     # it, so this holds across every worker without needing to find the keys.
     user.sessions_valid_after = session_policy.session_epoch_now()
+
+    # Sessions are only half of it. A Workspace MCP access token authenticates
+    # with its own audience-bound credential, so a connected assistant would
+    # survive the reset and stay reachable by whoever prompted it. Serialize
+    # against concurrent consent creation the same way Privacy Mode does.
+    await lock_tenant_workspace_mcp_policy(db, user.tenant_id)
+    revoked_grants = await workspace_mcp_revocation.revoke_user_workspace_grants(
+        db,
+        request,
+        user=user,
+        reason=workspace_mcp_revocation.PASSWORD_RESET_REASON,
+    )
     await db.commit()
-    logger.info("Password reset ended all sessions for user_id=%s", user.id)
+    await workspace_mcp_revocation.cleanup_revoked_grant_runtime(
+        request, revoked_grants
+    )
+    logger.info(
+        "Password reset ended all sessions for user_id=%s and revoked %d assistant(s)",
+        user.id,
+        len(revoked_grants),
+    )
 
     return {"message": "Password reset successfully"}
 
@@ -2089,6 +2108,7 @@ async def get_me(
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
     demo_session = await _active_demo_session(db, user.tenant_id)
     standard_context_allowed = await _standard_matter_context_policy(db, user.tenant_id)
+    reconnect = await workspace_mcp_revocation.pending_reconnect_clients(db, user)
     return UserInfo(
         id=str(user.id),
         tenant_id=str(user.tenant_id),
@@ -2120,6 +2140,7 @@ async def get_me(
         primary_jurisdictions=user.primary_jurisdictions or [],
         privacy_mode=user.privacy_mode,
         workspace_mcp_enabled=getattr(user, "workspace_mcp_enabled", True),
+        workspace_mcp_reconnect=reconnect,
         demo=(
             {
                 "session_id": str(demo_session.id),
@@ -2161,60 +2182,23 @@ async def update_me(
     revoked_workspace_grants: list[WorkspaceMCPGrant] = []
     if enabling_privacy_mode:
         # Privacy Mode must take effect immediately—not only on the next MCP
-        # request. Revoke every active Workspace MCP grant for this user;
-        # Research MCP only accesses public authority and remains a separate
-        # product with its own connection controls.
-        revoked_workspace_grants = list(
-            (
-                await db.scalars(
-                    select(WorkspaceMCPGrant)
-                    .where(
-                        WorkspaceMCPGrant.tenant_id == user.tenant_id,
-                        WorkspaceMCPGrant.user_id == user.id,
-                        WorkspaceMCPGrant.client_id.not_like("research.%"),
-                        WorkspaceMCPGrant.status == "active",
-                        WorkspaceMCPGrant.revoked_at.is_(None),
-                    )
-                    .with_for_update()
-                )
-            ).all()
+        # request. Shares its revocation path with a password reset so the two
+        # cannot drift; Research MCP only accesses public authority and remains
+        # a separate product with its own connection controls.
+        revoked_workspace_grants = (
+            await workspace_mcp_revocation.revoke_user_workspace_grants(
+                db,
+                request,
+                user=user,
+                reason=workspace_mcp_revocation.PRIVACY_MODE_REASON,
+            )
         )
-        if revoked_workspace_grants:
-            from app.services.workspace_mcp_oauth import append_workspace_mcp_audit
-
-            revoked_at = datetime.now(timezone.utc)
-            for grant in revoked_workspace_grants:
-                grant.status = "revoked"
-                grant.revoked_at = revoked_at
-                grant.revoked_by_user_id = user.id
-                grant.revocation_reason = "Privacy Mode enabled"
-                await append_workspace_mcp_audit(
-                    db,
-                    request,
-                    tenant_id=user.tenant_id,
-                    user_id=user.id,
-                    grant_id=grant.id,
-                    client_id=grant.client_id,
-                    event_type="grant_revoked",
-                    outcome="success",
-                    metadata={"reason": grant.revocation_reason},
-                )
     await db.commit()
-    if revoked_workspace_grants:
-        # The database grant is authoritative. Redis cleanup is best effort so
-        # an unavailable cache cannot prevent the privacy-policy change.
-        from app.services.workspace_mcp_oauth import (
-            revoke_workspace_grant_runtime,
-        )
-
-        for grant in revoked_workspace_grants:
-            try:
-                await revoke_workspace_grant_runtime(request, grant.id)
-            except Exception:
-                logger.exception(
-                    "Workspace MCP runtime credential cleanup failed after Privacy Mode enable",
-                    extra={"grant_id": str(grant.id)},
-                )
+    # The database grant is authoritative. Redis cleanup is best effort so an
+    # unavailable cache cannot prevent the privacy-policy change.
+    await workspace_mcp_revocation.cleanup_revoked_grant_runtime(
+        request, revoked_workspace_grants
+    )
     # SET LOCAL tenant context ends at commit. Restore it before the refresh
     # and every subsequent RLS-protected query in this transaction.
     await set_tenant_context(db, str(user.tenant_id))
@@ -2260,6 +2244,12 @@ async def update_me(
         primary_jurisdictions=user.primary_jurisdictions or [],
         privacy_mode=user.privacy_mode,
         workspace_mcp_enabled=getattr(user, "workspace_mcp_enabled", True),
+        # Turning Privacy Mode off is precisely when a suppressed reconnect
+        # prompt becomes relevant again, and this response is what the UI
+        # refreshes from — so it has to carry the list too.
+        workspace_mcp_reconnect=await workspace_mcp_revocation.pending_reconnect_clients(
+            db, user
+        ),
     )
 
 

@@ -15,8 +15,9 @@ from jose import jwt
 
 from app.config import get_settings
 from app.main import app
+from app.models.workspace_mcp_grant import WorkspaceMCPGrant
 from app.routers import auth
-from app.services import session_policy
+from app.services import session_policy, workspace_mcp_revocation
 
 settings = get_settings()
 
@@ -255,3 +256,96 @@ async def test_revoke_all_requires_authentication(client):
         "/api/auth/sessions/revoke-all", headers={"Authorization": "Bearer not-a-token"}
     )
     assert response.status_code == 401
+
+
+# ── A reset disconnects the user's assistants too ─────────────────────────────
+
+
+async def _connected_assistant(db, user, *, client_id="claude", name="Claude"):
+    grant = WorkspaceMCPGrant(
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        client_id=client_id,
+        client_name=name,
+        scopes=["matters:read"],
+        status="active",
+        consent_version="v1",
+        consent_sha256="0" * 64,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
+    db.add(grant)
+    await db.commit()
+    await db.refresh(grant)
+    return grant
+
+
+@pytest.mark.asyncio
+async def test_password_reset_disconnects_connected_assistants(
+    client, db_session, test_user, test_redis
+):
+    """Sessions were only half of it.
+
+    An MCP access token authenticates with its own audience-bound credential, so
+    a connected assistant would otherwise survive the reset and stay reachable
+    by whoever prompted it.
+    """
+    grant = await _connected_assistant(db_session, test_user)
+
+    token = "reset-token-" + uuid.uuid4().hex
+    await test_redis.setex(auth._reset_key(token), 600, test_user.email)
+    reset = await client.post(
+        "/api/auth/reset-password",
+        json={"token": token, "password": STRONG_PASSWORD},
+    )
+    assert reset.status_code == 200
+
+    await db_session.refresh(grant)
+    assert grant.status == "revoked"
+    assert grant.revoked_at is not None
+    assert grant.revocation_reason == workspace_mcp_revocation.PASSWORD_RESET_REASON
+
+
+@pytest.mark.asyncio
+async def test_a_disconnected_assistant_is_offered_back_by_name(
+    client, db_session, test_user, test_tenant, test_redis
+):
+    """The symptom is an assistant that silently stops answering.
+
+    /auth/me has to name it, because reconnecting is an OAuth flow only the
+    assistant can start — there is nothing the server can do but be clear.
+    """
+    await _connected_assistant(db_session, test_user)
+    token = "reset-token-" + uuid.uuid4().hex
+    await test_redis.setex(auth._reset_key(token), 600, test_user.email)
+    await client.post(
+        "/api/auth/reset-password",
+        json={"token": token, "password": STRONG_PASSWORD},
+    )
+
+    fresh = _access_token(test_user, test_tenant, issued_at=datetime.now(timezone.utc))
+    me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {fresh}"})
+
+    assert me.status_code == 200
+    pending = me.json()["workspace_mcp_reconnect"]
+    assert [item["client_name"] for item in pending] == ["Claude"]
+
+
+@pytest.mark.asyncio
+async def test_research_grants_are_left_alone_by_a_reset(
+    client, db_session, test_user, test_redis
+):
+    """Research MCP reaches only public authority and is a separate product."""
+    research = await _connected_assistant(
+        db_session, test_user, client_id="research.claude", name="Claude Research"
+    )
+
+    token = "reset-token-" + uuid.uuid4().hex
+    await test_redis.setex(auth._reset_key(token), 600, test_user.email)
+    await client.post(
+        "/api/auth/reset-password",
+        json={"token": token, "password": STRONG_PASSWORD},
+    )
+
+    await db_session.refresh(research)
+    assert research.status == "active"
+    assert research.revoked_at is None

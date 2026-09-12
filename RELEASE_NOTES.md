@@ -9,9 +9,10 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 Released September 12, 2026.
 
-Resetting your password now signs out everyone using your account, anywhere. You can also sign out your other devices yourself. Sessions left unused sign out after 12 hours.
+Resetting your password now signs out everyone using your account and disconnects your AI assistants, and the app tells you which ones to reconnect. Unused sessions sign out after 12 hours.
 
 - **A password reset signs out everyone.** Resetting your password now ends every session on your account, on every device. Before, it changed the password and left anyone already signed in where they were.
+- **It disconnects your assistants too.** A reset now cuts off Claude, ChatGPT, Codex and any other connected assistant. The app then names each one and shows you how to reconnect it.
 - **Sign out your other devices.** A new control on your profile ends every other session on your account. The device you are using stays signed in.
 - **Unused sessions end on their own.** A session left alone for 12 hours signs out, and none stays signed in beyond 30 days. You will be asked to sign in more often than before.
 

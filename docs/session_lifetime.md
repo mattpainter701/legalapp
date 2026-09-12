@@ -47,7 +47,8 @@ successor on another device dies with it.
   sign that someone out.
 - **Signing out everywhere** (`POST /api/auth/sessions/revoke-all`), reachable
   from Profile → "Sign out everywhere else". The caller is re-issued rather
-  than signed out with everyone else.
+  than signed out with everyone else. This one ends browser sessions only; the
+  control says so, and points at the assistants list for the rest.
 
 The epoch is stamped to a whole second, which leaves a deliberate sub-second
 window: a credential minted earlier in the same wall-clock second survives.
@@ -88,10 +89,11 @@ grandfathered.
   `absolute_lifetime_exceeded`, `origin_unknown`); the 401 the person sees says
   only that the session ended, since the distinction changes nothing about what
   they do next.
-- This page covers the firm app. The client portal, mediation portal and
-  workspace/research MCP tokens have their own lifetimes and are not governed
-  by these settings. The epoch does gate the MCP *consent* routes, which
-  authenticate with the firm session — but it does not revoke an MCP token
-  already issued to a connected assistant, so a password reset alone does not
-  disconnect one. See
+- This page covers the firm app. The client portal and mediation portal have
+  their own token lifetimes and are not governed by these settings.
+- A password reset also revokes that user's Workspace MCP grants, disconnecting
+  their assistants, and the app then names them so they can be reconnected.
+  "Sign out everywhere else" deliberately does not: it is a browser-session
+  control, and silently dropping someone's assistants is not what they asked
+  for. Research MCP and tenant Research API tokens are untouched by either. See
   [MCP security operations](mcp_security_operations.md#firm-sessions-and-mcp-credentials-are-separate).

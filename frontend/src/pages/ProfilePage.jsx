@@ -107,7 +107,7 @@ export default function ProfilePage() {
 
   const signOutEverywhereElse = async () => {
     if (sessionsRevoking) return
-    if (!window.confirm('Sign out of every other device?\n\nAnyone signed in as you elsewhere — another computer, a phone, a browser you forgot — is signed out immediately. You stay signed in here.')) return
+    if (!window.confirm('Sign out of every other device?\n\nAnyone signed in as you elsewhere — another computer, a phone, a browser you forgot — is signed out immediately. You stay signed in here.\n\nConnected assistants are not disconnected by this; revoke those separately below, or reset your password to end everything at once.')) return
     setSessionsRevoking(true)
     setSessionsStatus('')
     try {
@@ -248,7 +248,7 @@ export default function ProfilePage() {
           <div style={{ flex: 1 }}>
             <h2 style={{ margin: 0, fontSize: 17 }}>Signed in elsewhere</h2>
             <p style={{ margin: '4px 0 0', color: '#6A7587', fontSize: 13 }}>
-              Signing in leaves a session on that device until it is used, or until it reaches its maximum age. If you have left yourself signed in somewhere you no longer control, end those sessions here.
+              Signing in leaves a session on that device until it is used, or until it reaches its maximum age. If you have left yourself signed in somewhere you no longer control, end those sessions here. This signs out browsers only — connected assistants keep their own access, and are listed below. Resetting your password ends both.
             </p>
           </div>
           <button
@@ -268,7 +268,10 @@ export default function ProfilePage() {
       </section>
 
       <div style={{ marginBottom: 24 }}>
-        <WorkspaceMcpGrantsPanel blockedReason={mcpBlockedReason(user)} />
+        <WorkspaceMcpGrantsPanel
+          blockedReason={mcpBlockedReason(user)}
+          pendingReconnect={user?.workspace_mcp_reconnect || []}
+        />
       </div>
 
       <ReleaseInfoPanel className="mb-6" />

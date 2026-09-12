@@ -6,11 +6,15 @@
       "version": "2026.09.12.4",
       "title": "Sessions that end when you end them",
       "published_at": "2026-09-12",
-      "summary": "Resetting your password now signs out everyone using your account, anywhere. You can also sign out your other devices yourself. Sessions left unused sign out after 12 hours.",
+      "summary": "Resetting your password now signs out everyone using your account and disconnects your AI assistants, and the app tells you which ones to reconnect. Unused sessions sign out after 12 hours.",
       "highlights": [
         {
           "title": "A password reset signs out everyone",
           "description": "Resetting your password now ends every session on your account, on every device. Before, it changed the password and left anyone already signed in where they were."
+        },
+        {
+          "title": "It disconnects your assistants too",
+          "description": "A reset now cuts off Claude, ChatGPT, Codex and any other connected assistant. The app then names each one and shows you how to reconnect it."
         },
         {
           "title": "Sign out your other devices",

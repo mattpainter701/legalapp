@@ -48,21 +48,48 @@ reset or by "Sign out everywhere else" — see
   the user must sign in again before they can grant, inspect, or revoke an MCP
   client, or issue a Research API key.
 
+- **Every Workspace MCP grant that user holds.** A reset revokes them in the
+  same transaction that stamps the epoch, with `revocation_reason` set to
+  `Password reset`, and invalidates their live tokens in Redis afterwards. This
+  is deliberate: an MCP access token authenticates with its own audience-bound
+  credential, so without this a connected assistant would survive the reset and
+  stay reachable by whoever prompted it. The revocation path is shared with
+  Privacy Mode (`app/services/workspace_mcp_revocation.py`) so the two cannot
+  drift apart.
+
 What it does **not** reach:
 
-- **An MCP access token already issued to a connected client.** Workspace and
-  research tool calls authenticate with their own audience-bound OAuth tokens
-  (`authenticate_workspace_request`), not the firm session, and those keep
-  working on their own lifetimes. A password reset therefore does not
-  disconnect Claude, ChatGPT, Codex, or any other connected assistant.
+- **A research MCP grant.** Research reaches only public authority and is a
+  separate product with its own connection controls.
 - **A scoped tenant Research API token** (`lhrk_...`), which is not tied to a
   user session at all.
+- **A workspace grant belonging to a different user** — revocation is per-user,
+  as consent is.
 
-So a password reset is not sufficient response to a compromised account that
-had assistants connected. Revoke the grant explicitly — from Profile →
-Connected assistants, or by the incident-response step below. Turning on
-Privacy Mode also revokes every active workspace grant, which is the fastest
-blunt instrument when the specific client is not yet known.
+So a password reset now *is* sufficient to cut a compromised account off from
+its own connected assistants. It is still not sufficient for a tenant Research
+API token or another user's grant; revoke those explicitly, from Profile →
+Connected assistants or by the incident-response step below. Turning on Privacy
+Mode remains the fastest blunt instrument when the affected user is known but
+the specific client is not.
+
+### Reconnecting after a reset
+
+Reconnecting cannot be driven from the server: an MCP client starts its own
+OAuth flow. What the product does instead is make the disconnect legible, so
+the symptom is never an unexplained silent failure.
+
+`GET /api/auth/me` returns `workspace_mcp_reconnect`, naming each assistant a
+password reset disconnected that has not come back. It is computed, not stored:
+a client with a live grant again drops off the list, so reconnecting is what
+clears it. It is suppressed entirely while Privacy Mode is on, because a
+reconnect would be refused. Entries age out after
+`RECONNECT_PROMPT_DAYS` (14).
+
+The user sees a banner naming the assistants, and a card in Profile → Workspace
+MCP assistants with the server URL and the three steps. If a user reports an
+assistant that stopped answering after a reset, that card is where to send
+them.
 
 ## Enforced controls
 
@@ -163,10 +190,10 @@ host, path, method, status, user agent, and time before classifying it.
 1. Disable the affected MCP product flag if identity or tenant isolation is in
    doubt. Do not disable the main portal as a first response.
 2. Revoke the affected workspace grant, Research OAuth grant, or Research API
-   token and retain the related usage and request identifiers. Do this even
-   when the user's password has been reset: a reset ends their firm sessions
-   and locks them out of the consent routes, but an MCP token already issued to
-   a connected client is unaffected by it.
+   token and retain the related usage and request identifiers. A password reset
+   already revokes that user's own workspace grants, so this step covers what
+   it cannot: research grants, tenant Research API tokens, and grants held by
+   other users.
 3. Remove only the affected dedicated Tunnel ingress rule if the hostname must
    be withdrawn; preserve the final 404 catch-all and unrelated portal routes.
 4. Export Cloudflare and application evidence, identify the deployed commit,
