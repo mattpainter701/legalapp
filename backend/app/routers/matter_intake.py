@@ -17,6 +17,7 @@ from app.routers.client_portal import portal_matter_dep
 from app.routers.firm import get_firm_branding
 from app.schemas.matter_intake import (
     IntakeAnswers,
+    IntakeChangeDecision,
     IntakeMeeting,
     IntakePreviewResponse,
     IntakeReceipt,
@@ -24,7 +25,7 @@ from app.schemas.matter_intake import (
     IntakeStart,
     IntakeSubmission,
 )
-from app.services import matter_intake as service
+from app.services import intake_writeback, matter_intake as service
 from app.services.access_control import require_capability
 from app.services.matter_access import can_access_matter
 from app.services.matter_document_organization import autofile_folder_id
@@ -378,6 +379,46 @@ async def cancel(
     return service.public_packet(packet)
 
 
+@router.get("/{matter_id}/intake/proposed-changes")
+async def list_proposed_changes(
+    matter_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_capability("manage_matters")),
+):
+    packet = await staff_packet(db, user, matter_id)
+    return intake_writeback.public_changes(packet)
+
+
+@router.post("/{matter_id}/intake/proposed-changes/accept")
+async def accept_proposed_changes(
+    matter_id: uuid.UUID,
+    body: IntakeChangeDecision,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_capability("manage_matters")),
+):
+    packet = await staff_packet(db, user, matter_id)
+    result = await intake_writeback.decide_changes(
+        db, user, packet, change_id=body.change_id, decide_all=body.all, accept=True
+    )
+    await db.commit()
+    return result
+
+
+@router.post("/{matter_id}/intake/proposed-changes/reject")
+async def reject_proposed_changes(
+    matter_id: uuid.UUID,
+    body: IntakeChangeDecision,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_capability("manage_matters")),
+):
+    packet = await staff_packet(db, user, matter_id)
+    result = await intake_writeback.decide_changes(
+        db, user, packet, change_id=body.change_id, decide_all=body.all, accept=False
+    )
+    await db.commit()
+    return result
+
+
 async def client_packet(db, resolved):
     ctx, matter = resolved
     await set_tenant_context(db, ctx.tenant_id)
@@ -470,6 +511,11 @@ async def submit(
         db.add(document)
         await db.flush()
         packet.answers = body.answers
+        # Derive structured write-back proposals (and run the conflict feed)
+        # inside the same submit transaction.  Re-submits of identical answers
+        # never reach this branch: the completed requirement short-circuits
+        # above, so tasks and proposals cannot duplicate.
+        await intake_writeback.plan_writeback(db, packet, matter, body.answers)
         packet.requirements = {
             **packet.requirements,
             "questionnaire": {

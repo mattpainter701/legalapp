@@ -77,6 +77,7 @@ def public_packet(packet, *, client=False):
     }
     if not client:
         data.update(delivery=packet.delivery, owner_id=str(packet.owner_id))
+        data["proposed_changes"] = packet.proposed_changes or {}
     else:
         data["requirements"] = {
             name: {

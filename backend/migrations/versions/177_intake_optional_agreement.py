@@ -10,15 +10,15 @@ Downgrade restores NOT NULL and will fail if a packet with no fee agreement
 exists, because the previous shape could not represent one. Resolve or remove
 those packets before downgrading.
 
-Revision ID: 176_intake_optional_agreement
-Revises: 175_document_template_sets
+Revision ID: 177_intake_optional_agreement
+Revises: 176_intake_writeback
 """
 
 from sqlalchemy.dialects import postgresql
 from alembic import op
 
-revision = "176_intake_optional_agreement"
-down_revision = "175_document_template_sets"
+revision = "177_intake_optional_agreement"
+down_revision = "176_intake_writeback"
 branch_labels = None
 depends_on = None
 
