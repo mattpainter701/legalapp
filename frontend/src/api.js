@@ -2109,20 +2109,28 @@ export const getOverdueTasksReport = () =>
 export const getReportsBundle = () =>
   api.get('/reports/bundle').then(r => r.data)
 
-export const getRealizationReport = () =>
-  api.get('/reports/billing/realization').then(r => r.data)
+// Omit empty bounds so "all time" stays the default on the server side.
+const reportRange = (range = {}) => {
+  const params = {}
+  if (range.start) params.start = range.start
+  if (range.end) params.end = range.end
+  return params
+}
 
-export const getWipReport = () =>
-  api.get('/reports/billing/wip').then(r => r.data)
+export const getRealizationReport = (range) =>
+  api.get('/reports/billing/realization', { params: reportRange(range) }).then(r => r.data)
+
+export const getWipReport = (range) =>
+  api.get('/reports/billing/wip', { params: reportRange(range) }).then(r => r.data)
 
 export const getAgingReport = () =>
   api.get('/reports/billing/aging').then(r => r.data)
 
-export const downloadRealizationCsv = () =>
-  api.get('/reports/billing/realization', { params: { format: 'csv' }, responseType: 'blob' }).then(r => r.data)
+export const downloadRealizationCsv = (range) =>
+  api.get('/reports/billing/realization', { params: { ...reportRange(range), format: 'csv' }, responseType: 'blob' }).then(r => r.data)
 
-export const downloadWipCsv = () =>
-  api.get('/reports/billing/wip', { params: { format: 'csv' }, responseType: 'blob' }).then(r => r.data)
+export const downloadWipCsv = (range) =>
+  api.get('/reports/billing/wip', { params: { ...reportRange(range), format: 'csv' }, responseType: 'blob' }).then(r => r.data)
 
 export const downloadAgingCsv = () =>
   api.get('/reports/billing/aging', { params: { format: 'csv' }, responseType: 'blob' }).then(r => r.data)
