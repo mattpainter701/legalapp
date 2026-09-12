@@ -96,6 +96,10 @@ from app.models.sms import (  # noqa: F401
 )
 from app.models.document_template import DocumentTemplate
 from app.models.document_template_version import DocumentTemplateVersion
+from app.models.document_template_set import (
+    DocumentTemplateSet,
+    DocumentTemplateSetItem,
+)
 from app.models.sample_template import SampleTemplate
 from app.models.studio_render import (
     StudioPreferredRenderEvidence,
@@ -342,6 +346,8 @@ __all__ = [
     "LeadFunnelEvent",
     "DocumentTemplate",
     "DocumentTemplateVersion",
+    "DocumentTemplateSet",
+    "DocumentTemplateSetItem",
     "SampleTemplate",
     "DocumentTemplatePreview",
     "StudioDraft",
