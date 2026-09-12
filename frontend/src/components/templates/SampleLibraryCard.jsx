@@ -3,6 +3,45 @@ import { BookOpen, Download, Eye, LibraryBig, Loader2 } from 'lucide-react'
 import { getSampleTemplates, getSampleTemplateSource } from '../../api'
 import SampleFillDialog from './SampleFillDialog'
 
+// The catalog API returns an unordered flat list. Present samples grouped by
+// document type, with the catch-all "other" last, and within each type ordered
+// by jurisdiction then title so a firm can find its state's form quickly.
+const CATEGORY_ORDER = [
+  'advance_directive',
+  'bill_of_sale',
+  'contract',
+  'court_form',
+  'lease',
+  'power_of_attorney',
+  'will',
+  'other',
+]
+
+const CATEGORY_LABELS = {
+  advance_directive: 'Advance Directive',
+  bill_of_sale: 'Bill of Sale',
+  contract: 'Contract',
+  court_form: 'Court Form',
+  lease: 'Lease',
+  power_of_attorney: 'Power of Attorney',
+  will: 'Will',
+  other: 'Other',
+}
+
+const categoryLabel = (category) => (
+  CATEGORY_LABELS[category] || String(category || 'other').replace(/_/g, ' ')
+)
+
+const categoryRank = (category) => {
+  const index = CATEGORY_ORDER.indexOf(category)
+  return index === -1 ? CATEGORY_ORDER.length : index
+}
+
+const jurisdictionLabel = (sample) => {
+  const list = sample.jurisdictions || []
+  return list.length ? list.join(', ') : 'General'
+}
+
 // Shared, platform-owned sample forms available to every tenant. The catalog is
 // read-only: users can preview the source PDF or fill it ad hoc, but samples
 // never become tenant templates and never appear in the firm library queues.
@@ -48,6 +87,25 @@ export default function SampleLibraryCard() {
     (category === 'all' || sample.category === category)
     && (jurisdiction === 'all' || (sample.jurisdictions || []).includes(jurisdiction))
   )), [samples, category, jurisdiction])
+
+  const groups = useMemo(() => {
+    const byCategory = new Map()
+    visible.forEach((sample) => {
+      const key = sample.category || 'other'
+      if (!byCategory.has(key)) byCategory.set(key, [])
+      byCategory.get(key).push(sample)
+    })
+    return [...byCategory.entries()]
+      .sort(([a], [b]) => categoryRank(a) - categoryRank(b) || a.localeCompare(b))
+      .map(([key, items]) => ({
+        key,
+        label: categoryLabel(key),
+        items: [...items].sort((a, b) => {
+          const byJurisdiction = jurisdictionLabel(a).localeCompare(jurisdictionLabel(b))
+          return byJurisdiction !== 0 ? byJurisdiction : String(a.title || '').localeCompare(String(b.title || ''))
+        }),
+      }))
+  }, [visible])
 
   const preview = async (sample) => {
     setPreviewing(sample.id)
@@ -103,38 +161,47 @@ export default function SampleLibraryCard() {
           {error}
         </p>
       ) : visible.length ? (
-        <ul className="mt-3 divide-y divide-brand-line">
-          {visible.map((sample) => (
-            <li key={sample.id} className="flex items-center justify-between gap-3 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-brand-ink">{sample.title}</p>
-                <p className="truncate text-xs text-brand-muted">
-                  {sample.category?.replace(/_/g, ' ')}
-                  {sample.jurisdictions?.length ? ` · ${sample.jurisdictions.join(', ')}` : ''}
-                  {sample.field_count ? ` · ${sample.field_count} fields` : ''}
-                </p>
+        <div className="mt-3 space-y-4">
+          {groups.map((group) => (
+            <section key={group.key} aria-label={`${group.label} forms`}>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted">{group.label}</h3>
+                <span className="text-[11px] font-semibold text-brand-muted" aria-label={`${group.items.length} forms`}>{group.items.length}</span>
               </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => preview(sample)}
-                  disabled={previewing === sample.id}
-                  className="inline-flex items-center gap-1 rounded-lg border border-brand-line px-2.5 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-bg disabled:opacity-50"
-                >
-                  {previewing === sample.id ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
-                  Preview
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilling(sample)}
-                  className="inline-flex items-center gap-1 rounded-lg bg-brand-ink px-2.5 py-1.5 text-xs font-semibold text-white"
-                >
-                  <Download size={13} aria-hidden="true" /> Fill
-                </button>
-              </div>
-            </li>
+              <ul className="mt-1 divide-y divide-brand-line border-t border-brand-line">
+                {group.items.map((sample) => (
+                  <li key={sample.id} className="flex items-center justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-brand-ink">{sample.title}</p>
+                      <p className="truncate text-xs text-brand-muted">
+                        {jurisdictionLabel(sample)}
+                        {sample.field_count ? ` · ${sample.field_count} fields` : ''}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => preview(sample)}
+                        disabled={previewing === sample.id}
+                        className="inline-flex items-center gap-1 rounded-lg border border-brand-line px-2.5 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-bg disabled:opacity-50"
+                      >
+                        {previewing === sample.id ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
+                        Preview
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFilling(sample)}
+                        className="inline-flex items-center gap-1 rounded-lg bg-brand-ink px-2.5 py-1.5 text-xs font-semibold text-white"
+                      >
+                        <Download size={13} aria-hidden="true" /> Fill
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       ) : (
         <p className="mt-3 rounded-lg border border-dashed border-brand-line px-3 py-4 text-xs leading-5 text-brand-muted">
           No sample forms match this filter.
