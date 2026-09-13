@@ -86,7 +86,8 @@ vi.mock('../components/chat/ChatRail', () => ({
   ),
 }))
 
-import ChatPage, { mergeRefreshedTranscript } from './ChatPage'
+import { getChatGeneration, resetChatGenerations } from '../chatGenerations'
+import ChatPage, { mergeRefreshedTranscript, upsertGenerationTurn } from './ChatPage'
 
 const conversation = (id, title, messages = []) => ({
   conversation: { id, title, updated_at: '2099-01-01T00:00:00Z' },
@@ -176,6 +177,42 @@ describe('streamed transcript reconciliation', () => {
     expect(merged[1].progress).toEqual(fallbackAssistant.progress)
   })
 
+  it('reattaches a running turn to a transcript that already holds its saved question', () => {
+    const generation = {
+      clientTurnId: 'turn-live',
+      userMessage: {
+        id: 'temp-turn-live',
+        role: 'user',
+        content: 'Question for A',
+        client_turn_id: 'turn-live',
+        _known_server_message_ids: [],
+      },
+      assistantMessage: {
+        id: 'stream-turn-live',
+        role: 'assistant',
+        content: 'Partial answer',
+        client_turn_id: 'turn-live',
+      },
+    }
+    const serverTranscript = [{
+      id: 'server-user-a',
+      role: 'user',
+      content: 'Question for A',
+      created_at: '2099-01-01T00:00:01Z',
+    }]
+
+    const reattached = upsertGenerationTurn(serverTranscript, generation)
+    expect(reattached.filter((message) => message.role === 'user')).toHaveLength(1)
+    expect(reattached.map((message) => message.content)).toEqual(['Question for A', 'Partial answer'])
+
+    const advanced = upsertGenerationTurn(reattached, {
+      ...generation,
+      assistantMessage: { ...generation.assistantMessage, content: 'Partial answer and the rest' },
+    })
+    expect(advanced).toHaveLength(2)
+    expect(advanced[1].content).toBe('Partial answer and the rest')
+  })
+
   it('keeps the completed fallback directly after its persisted user when the assistant is not visible yet', () => {
     const optimisticUser = {
       id: 'temp-pending-turn',
@@ -206,6 +243,9 @@ describe('streamed transcript reconciliation', () => {
 describe('ChatPage guarded stream lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Generations are module state by design — they outlive the page so that
+    // leaving Chat cannot cancel an answer. Each test needs its own registry.
+    resetChatGenerations()
     authHarness.value = {
       user: { privacy_mode: false },
       refreshUser: vi.fn(),
@@ -243,7 +283,10 @@ describe('ChatPage guarded stream lifecycle', () => {
     apiMocks.updateConversation.mockImplementation(async (_id, data) => data)
   })
 
-  afterEach(() => cleanup())
+  afterEach(() => {
+    cleanup()
+    resetChatGenerations()
+  })
 
   it('keeps streamed answer text visible and offers a retry when source metadata refresh fails', async () => {
     const source = {
@@ -447,6 +490,70 @@ describe('ChatPage guarded stream lifecycle', () => {
     expect(await screen.findByText('Message could not be sent')).toBeInTheDocument()
     expect(screen.getAllByText(/An error occurred: The assistant stream ended/)).toHaveLength(1)
     expect(screen.queryByText('Partial answer that must not remain authoritative')).not.toBeInTheDocument()
+  })
+
+  it('reports a stream that fails before it produces any text', async () => {
+    apiMocks.getConversation.mockResolvedValue(conversation('conversation-a', 'Conversation A'))
+    // A non-OK response throws on the first pull, before any token — the shape
+    // an outage actually takes, and not expressible as a generator body.
+    apiMocks.streamMessage.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(new Error('Deterministic assistant outage')),
+      }),
+    }))
+
+    render(<ChatPage />)
+    await waitFor(() => expect(apiMocks.getConversation).toHaveBeenCalledWith('conversation-a'))
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Message the assistant'), 'Test the outage state')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    expect(await screen.findByText('Message could not be sent')).toBeInTheDocument()
+    expect(
+      await screen.findByText('An error occurred: Deterministic assistant outage'),
+    ).toBeInTheDocument()
+
+    // The outage must leave the conversation sendable, and the retry must go out.
+    apiMocks.streamMessage.mockImplementation(async function* () {
+      yield 'The retry completed safely.'
+      yield '[STREAM_COMPLETE]'
+    })
+    await user.type(screen.getByLabelText('Message the assistant'), 'Retry after outage')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    expect(await screen.findByText('The retry completed safely.')).toBeInTheDocument()
+    expect(apiMocks.streamMessage).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows retrieval progress before the first token of the answer arrives', async () => {
+    let releaseStream
+    const streamGate = new Promise((resolve) => { releaseStream = resolve })
+    apiMocks.getConversation.mockResolvedValue(conversation('conversation-a', 'Conversation A'))
+    apiMocks.streamMessage.mockImplementation(async function* () {
+      yield { type: 'progress', event: 'retrieving', status: 'Searching the firm library' }
+      await streamGate
+      yield 'Answer text'
+      yield '[STREAM_COMPLETE]'
+    })
+
+    render(<ChatPage />)
+    await waitFor(() => expect(apiMocks.getConversation).toHaveBeenCalledWith('conversation-a'))
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Message the assistant'), 'Question for A')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    // The assistant placeholder is what carries retrieval progress, so it has to
+    // be mounted while the answer still has no text: one status on the question,
+    // one on the answer being retrieved.
+    expect(await screen.findAllByText('Searching the firm library')).toHaveLength(2)
+    expect(within(screen.getByTestId('messages')).getAllByRole('article')).toHaveLength(2)
+
+    await act(async () => {
+      releaseStream()
+      await Promise.resolve()
+    })
+    expect(await screen.findByText('Answer text')).toBeInTheDocument()
   })
 
   it('does not let a late stream from conversation A overwrite conversation B', async () => {
@@ -660,6 +767,120 @@ describe('ChatPage guarded stream lifecycle', () => {
     expect(await screen.findByText(/could not complete this response/i)).toBeInTheDocument()
     expect(conversationALoads).toBe(3)
     expect(screen.queryByText('Partial answer')).not.toBeInTheDocument()
+  })
+
+  it('keeps a response running when Chat is closed, and shows it again on return', async () => {
+    let releaseStream
+    let observedSignal
+    let conversationALoads = 0
+    const streamGate = new Promise((resolve) => { releaseStream = resolve })
+    const persistedUser = {
+      id: 'server-user-a',
+      role: 'user',
+      content: 'Question for A',
+      sources: [],
+      created_at: '2099-01-01T00:00:01Z',
+    }
+    apiMocks.getConversation.mockImplementation(async () => {
+      conversationALoads += 1
+      if (conversationALoads === 1) return conversation('conversation-a', 'Conversation A')
+      if (conversationALoads === 2) {
+        return conversation('conversation-a', 'Conversation A', [persistedUser])
+      }
+      return conversation('conversation-a', 'Conversation A', [
+        persistedUser,
+        assistantMessage('server-answer-a', 'Answer the server finished anyway'),
+      ])
+    })
+    apiMocks.streamMessage.mockImplementation(async function* (...args) {
+      observedSignal = args[5]?.signal
+      yield 'Partial answer'
+      await streamGate
+      yield ' and the rest of it'
+      yield '[STREAM_COMPLETE]'
+    })
+
+    const view = render(<ChatPage />)
+    await waitFor(() => expect(conversationALoads).toBe(1))
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Message the assistant'), 'Question for A')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    expect(await screen.findByText('Partial answer')).toBeInTheDocument()
+
+    // Opening another menu unmounts Chat. Cancelling the read here would make the
+    // server record an interruption instead of the answer.
+    view.unmount()
+    expect(observedSignal.aborted).toBe(false)
+
+    render(<ChatPage />)
+    await waitFor(() => expect(conversationALoads).toBe(2))
+    expect(await screen.findByText('Partial answer')).toBeInTheDocument()
+    expect(within(screen.getByTestId('messages')).getAllByText('Question for A')).toHaveLength(1)
+
+    await act(async () => {
+      releaseStream()
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByText('Answer the server finished anyway')).toBeInTheDocument()
+    expect(observedSignal.aborted).toBe(false)
+    await user.type(screen.getByLabelText('Message the assistant'), 'Follow-up question')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled())
+  })
+
+  it('has the answer waiting when the response finishes while Chat is closed', async () => {
+    let releaseStream
+    let observedSignal
+    let streamFinished = false
+    let conversationALoads = 0
+    const streamGate = new Promise((resolve) => { releaseStream = resolve })
+    apiMocks.getConversation.mockImplementation(async () => {
+      conversationALoads += 1
+      if (conversationALoads === 1) return conversation('conversation-a', 'Conversation A')
+      return conversation('conversation-a', 'Conversation A', [
+        {
+          id: 'server-user-a',
+          role: 'user',
+          content: 'Question for A',
+          sources: [],
+          created_at: '2099-01-01T00:00:01Z',
+        },
+        assistantMessage('server-answer-a', 'Answer waiting on return'),
+      ])
+    })
+    apiMocks.streamMessage.mockImplementation(async function* (...args) {
+      observedSignal = args[5]?.signal
+      try {
+        yield 'Partial answer'
+        await streamGate
+        yield ' finished with nobody watching'
+        yield '[STREAM_COMPLETE]'
+      } finally {
+        streamFinished = true
+      }
+    })
+
+    const view = render(<ChatPage />)
+    await waitFor(() => expect(conversationALoads).toBe(1))
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Message the assistant'), 'Question for A')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    expect(await screen.findByText('Partial answer')).toBeInTheDocument()
+
+    view.unmount()
+    await act(async () => {
+      releaseStream()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(streamFinished).toBe(true))
+    expect(observedSignal.aborted).toBe(false)
+
+    render(<ChatPage />)
+    expect(await screen.findByText('Answer waiting on return')).toBeInTheDocument()
+    // Reconciled and let go of, rather than left to linger over later loads.
+    await waitFor(() => expect(getChatGeneration('conversation-a')).toBeNull())
+    await user.type(screen.getByLabelText('Message the assistant'), 'Follow-up question')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled())
   })
 
   it('aborts a detached generation when its non-active conversation is deleted', async () => {

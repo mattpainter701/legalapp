@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.12.6 — Rename your firm and edit its profile in one place
+## 2026.09.12.7 — Rename your firm and edit its profile in one place
 
 Released September 12, 2026.
 
@@ -13,6 +13,15 @@ Administration has a Firm Profile tab. It renames the firm — including the nam
 
 - **Fix the firm name sign-up guessed from your domain.** Sign-up derived a firm name from your email domain and nothing could change it. Administration → Firm Profile now renames the firm everywhere clients see it.
 - **Firm details moved out of the Settings tab.** Firm name, contact details and branding were the fifth card inside Settings. They now have their own tab in Administration, next to Users.
+
+## 2026.09.12.6 — Answers keep running when you leave the chat
+
+Released September 12, 2026.
+
+A long answer no longer disappears when you open another part of LawHand while it is being written. It keeps going, and it is there when you come back to the conversation.
+
+- **Leave the chat without losing the answer.** Opening matters, invoices or any other screen mid-answer used to cancel it. The answer now finishes and is saved to the conversation.
+- **Pick the answer back up where it got to.** Reopen the conversation while it is still being written and the answer carries on in front of you instead of showing only your question.
 
 ## 2026.09.12.5 — Sessions that end when you end them
 
