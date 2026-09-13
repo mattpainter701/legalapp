@@ -283,6 +283,14 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
     ): "verifies Twilio signature plus message-bound account and tenant context",
     (
         frozenset({"POST"}),
+        "/api/platform/email/webhook/postmark",
+    ): (
+        "the mail relay calls this unauthenticated; it compares a bearer "
+        "secret in constant time and writes only to the platform suppression "
+        "list, which holds no tenant data"
+    ),
+    (
+        frozenset({"POST"}),
         "/api/integrations/zoom-phone/webhook",
     ): "verifies per-tenant webhook secret",
     (

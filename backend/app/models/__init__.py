@@ -173,6 +173,10 @@ from app.models.document_integrity_event import DocumentIntegrityEvent
 from app.models.stripe_webhook_event import StripeWebhookEvent
 from app.models.esign_webhook_event import ESignWebhookEvent
 from app.models.inbound_email import InboundEmail, InboundEmailAlias
+from app.models.email_suppression import (
+    EmailSuppression,
+    PlatformEmailWebhookEvent,
+)
 from app.models.prospect_follow_through import (
     ProspectFollowThrough,
     EngagementPacket,
@@ -239,6 +243,8 @@ from app.models.automation_service import (
 )
 
 __all__ = [
+    "EmailSuppression",
+    "PlatformEmailWebhookEvent",
     "WorkflowConfigurationProposal",
     "WorkflowRun",
     "WorkflowRunStep",

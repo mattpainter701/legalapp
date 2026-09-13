@@ -40,6 +40,10 @@ class EmailDeliveryResult(str, Enum):
     UNCONFIGURED = "unconfigured"
     REAUTHORIZATION_REQUIRED = "reauthorization_required"
     INVALID_RECIPIENT = "invalid_recipient"
+    # Every recipient is on the platform suppression list after a hard bounce
+    # or spam complaint. Not a configuration error and not a provider failure:
+    # the message was deliberately withheld and retrying will not help.
+    SUPPRESSED = "suppressed"
     FAILED = "failed"
 
     def __bool__(self) -> bool:
@@ -78,6 +82,13 @@ def email_delivery_http_error(
         )
     if result == EmailDeliveryResult.INVALID_RECIPIENT:
         return 422, f"{action} requires a valid email recipient."
+    if result == EmailDeliveryResult.SUPPRESSED:
+        return (
+            422,
+            f"{action} was not completed because that address previously "
+            "returned a permanent delivery failure or spam complaint. Confirm "
+            "the address, then ask an administrator to clear the suppression.",
+        )
     return (
         502,
         f"{action} was not completed because the email provider did not accept "
@@ -452,6 +463,7 @@ class EmailService:
         text_body: str = "",
         attachment: MailAttachment | None = None,
         attachments: list[MailAttachment] | None = None,
+        db=None,
     ) -> EmailDeliveryResult:
         """
         Send an email to one or more recipients.
@@ -459,6 +471,10 @@ class EmailService:
         Returns a typed result so disabled/unconfigured delivery can never be
         reported as success. Message content is not logged when delivery is
         unavailable.
+
+        Recipients on the platform suppression list are dropped before
+        submission. Pass ``db`` when the caller already holds a session; the
+        suppression lookup opens its own otherwise.
         """
         if not to:
             logger.warning("send_email called with empty recipient list — skipping")
@@ -472,6 +488,19 @@ class EmailService:
                 len(to),
             )
             return configuration_status
+
+        # Imported here rather than at module scope: this module is imported by
+        # config-only code paths that must not pull in the database engine.
+        from app.services.email_suppression import filter_suppressed
+
+        to, suppressed = await filter_suppressed(to, db=db)
+        if suppressed:
+            logger.info(
+                "Withheld email from suppressed recipients (count=%d)",
+                len(suppressed),
+            )
+        if not to:
+            return EmailDeliveryResult.SUPPRESSED
 
         try:
             msg = MIMEMultipart("alternative")

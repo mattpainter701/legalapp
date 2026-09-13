@@ -43,6 +43,7 @@ services:
       RUN_SCHEDULER: "false"
       PUBLIC_SIGNUP_ENABLED: "false"
       EMAIL_ENABLED: "false"
+      EMAIL_REQUIRED: "false"
       WORKSPACE_MCP_ENABLED: "false"
       MCP_PRODUCT_ENABLED: "false"
       RESEARCH_MCP_OAUTH_ENABLED: "false"

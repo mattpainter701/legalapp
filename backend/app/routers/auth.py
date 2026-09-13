@@ -1789,6 +1789,7 @@ async def forgot_password(
             "Reset your LawHand password",
             html_body,
             text_body,
+            db=db,
         )
         if not sent:
             logger.error("Password reset email failed for user_id=%s", user.id)

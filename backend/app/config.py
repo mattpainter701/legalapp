@@ -486,6 +486,17 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = "support@getlawhand.com"
     MARKETING_LEAD_EMAIL: str = "support@getlawhand.com"
     SLACK_WEBHOOK_URL: str = ""  # Optional: Slack incoming webhook URL
+    # Deployments that carry real users must refuse to boot with system email
+    # unavailable: password reset degrades to a silent no-op that still tells
+    # the caller a link was sent. dev1/CI leave this false deliberately.
+    EMAIL_REQUIRED: bool = False
+    # Hard bounces and spam complaints are held platform-wide so repeated sends
+    # to a dead address stop damaging domain reputation.
+    EMAIL_SUPPRESSION_ENABLED: bool = True
+    # Shared secret presented by the ESP's bounce webhook. Postmark and most
+    # transactional providers do not sign payloads, so the endpoint is
+    # authenticated by a bearer secret rather than an HMAC over the body.
+    PLATFORM_EMAIL_WEBHOOK_SECRET: str = ""
 
     # Never set True in production — enables /dev/* endpoints
     DEV_MODE: bool = False
@@ -1260,6 +1271,71 @@ def validate_qbo_settings(settings: Settings) -> None:
             )
 
 
+def validate_platform_email_settings(settings: Settings) -> None:
+    """Validate outbound system email and fail closed when it is required.
+
+    System email carries password resets and security notices. When it is
+    misconfigured, ``EmailService`` returns a typed non-success and the forgot
+    password route still answers "a reset link has been sent" — correct for
+    account enumeration, indistinguishable from working delivery for an
+    operator. A deployment that sets ``EMAIL_REQUIRED`` refuses to boot rather
+    than serve accounts that can never recover a password.
+    """
+    sender = (settings.EMAIL_FROM or "").strip()
+    host = (settings.EMAIL_HOST or "").strip()
+    username = (settings.EMAIL_USER or "").strip()
+    password = settings.EMAIL_PASS or ""
+
+    if settings.EMAIL_REQUIRED and not settings.EMAIL_ENABLED:
+        raise ValueError(
+            "EMAIL_REQUIRED=true but EMAIL_ENABLED=false. System email carries "
+            "password resets; a deployment with real users cannot serve them "
+            "with delivery disabled. Set EMAIL_ENABLED=true and configure an "
+            "SMTP relay, or set EMAIL_REQUIRED=false for a deployment that "
+            "intentionally has no outbound email."
+        )
+
+    if settings.EMAIL_ENABLED:
+        if not host:
+            raise ValueError("EMAIL_HOST must be set when EMAIL_ENABLED=true")
+        if not sender or "@" not in sender:
+            raise ValueError(
+                "EMAIL_FROM must be a valid address when EMAIL_ENABLED=true"
+            )
+        if not 1 <= settings.EMAIL_PORT <= 65535:
+            raise ValueError("EMAIL_PORT must be between 1 and 65535")
+        # Anonymous submission is allowed for a trusted local relay, but a
+        # half-supplied credential pair is always a misconfiguration.
+        if bool(username) != bool(password):
+            raise ValueError(
+                "EMAIL_USER and EMAIL_PASS must be set together (or both left "
+                "empty for an unauthenticated local relay)"
+            )
+        if password and _looks_like_placeholder(password):
+            raise ValueError("EMAIL_PASS is still a placeholder value")
+
+    if settings.EMAIL_REQUIRED:
+        # A hosted relay is reached across the network, so an unauthenticated
+        # submission here means the credential was forgotten, not that a
+        # trusted loopback relay is in use.
+        if not username or not password:
+            raise ValueError(
+                "EMAIL_REQUIRED=true demands authenticated SMTP: set EMAIL_USER "
+                "and EMAIL_PASS to the credentials issued by your relay."
+            )
+        if settings.EMAIL_SUPPRESSION_ENABLED and not settings.EMAIL_ENABLED:
+            raise ValueError("EMAIL_SUPPRESSION_ENABLED requires EMAIL_ENABLED")
+
+    secret = settings.PLATFORM_EMAIL_WEBHOOK_SECRET
+    if secret:
+        if len(secret) < 32:
+            raise ValueError(
+                "PLATFORM_EMAIL_WEBHOOK_SECRET must be at least 32 characters"
+            )
+        if _looks_like_placeholder(secret):
+            raise ValueError("PLATFORM_EMAIL_WEBHOOK_SECRET is still a placeholder")
+
+
 def validate_inbound_email_settings(settings: Settings) -> None:
     if not settings.INBOUND_EMAIL_ENABLED:
         return
@@ -1546,6 +1622,7 @@ def get_settings() -> Settings:
     validate_platform_bootstrap_settings(settings)
     validate_mcp_security_settings(settings)
     validate_qbo_settings(settings)
+    validate_platform_email_settings(settings)
     validate_inbound_email_settings(settings)
     validate_template_ocr_settings(settings)
     validate_template_studio_settings(settings)
