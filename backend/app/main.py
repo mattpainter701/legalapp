@@ -15,7 +15,12 @@ from sqlalchemy import text
 from starlette.routing import Route
 
 from app.config import get_settings
-from app.database import async_session_maker, engine, set_tenant_context
+from app.database import (
+    async_session_maker,
+    engine,
+    generation_engine,
+    set_tenant_context,
+)
 from app.middleware.request_id import RequestIdMiddleware
 from app.middleware.tenant import TenantMiddleware
 from app.middleware.module_guard import ModuleGuardMiddleware
@@ -337,6 +342,9 @@ async def lifespan(app: FastAPI):
     await matter_context_cache_manager.close()
     await communication_context_cache.close()
     await engine.dispose()
+    # Generation leases pin their connections for the length of a chat turn, so
+    # this pool can still hold sockets after the request pool has drained.
+    await generation_engine.dispose()
     logger.info("Shutdown complete")
 
 

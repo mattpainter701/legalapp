@@ -1,5 +1,132 @@
 # TASKS.md
 
+## Performance and scalability — 50-seat firm readiness — 2026-09-12
+
+From a database/performance review of the 50-concurrent-user case. Two items
+shipped; the rest are queued here with enough context to start cold.
+
+**Context that applies to all of them.** Document *bodies* live in the
+customer's own cloud (`backend/app/services/matter_file_store.py`), but
+everything else is ours: chat message content (`messages.content`, `Text`),
+RAG chunks and embeddings, the `cloud_metadata_index` file mirror, matters,
+tasks, billing, trust ledger, and `usage_records.query_text`. Production is a
+single host — 4 Uvicorn workers, 1 scheduler, 1 PostgreSQL (`max_connections=100`),
+1 Redis — per `docs/customer-data-scale-roadmap-2026-08-27.md`.
+
+### Done
+- [x] Edge rate limits keyed per caller instead of per IP. `$binary_remote_addr`
+  collapsed a whole firm into one bucket: 50 users behind one office NAT address
+  shared the general 60r/m budget, about one request a second for the building,
+  while a single SPA navigation fans out several calls. `nginx/nginx.conf` now
+  derives `$lh_limit_key` from a stable prefix of the access token and falls
+  back to the IP only for anonymous callers. Provider webhooks moved to their
+  own per-IP `webhook` zone so raising `api` did not loosen unauthenticated
+  ingest. Measured: 3/15 → 15/15 requests admitted for five users on one IP,
+  with single-user throttling, the anonymous IP fallback, and the
+  refresh-cannot-reset-the-bucket property all still holding.
+- [x] Chat turns draw from a dedicated connection pool. A turn holds a
+  session-level advisory lock, so it pins one connection for the whole turn
+  (seconds to minutes) — and those came from the pool serving ordinary
+  requests, so enough concurrent chats made unrelated matter/task/document
+  reads queue for `DATABASE_POOL_TIMEOUT_SECONDS` and fail. Generation now has
+  its own bounded pool (`DATABASE_GENERATION_POOL_SIZE`), and exhausting it
+  returns 503 "retry in a moment" on chat instead of breaking everything else.
+
+### P1 — silent truncation and unbounded reads
+- [ ] `backend/app/routers/tasks.py:490` `get_overdue_tasks` has no `limit` or
+  `offset`, and `frontend/src/pages/TasksPage.jsx:1253` calls it with none.
+  Every overdue task in the firm comes back in one response, is serialized
+  through `TaskResponse.model_validate` in a Python loop, and renders as
+  unvirtualized DOM rows. Sibling `list_tasks` already defaults to
+  `limit: 100, offset: 0` — copy that shape and paginate the section. This is
+  the one most likely to actually take a page down rather than mislead.
+- [ ] `backend/app/routers/matter_documents.py` has no `limit`/`offset`/`page`
+  parameter anywhere in the file. Same treatment.
+- [ ] `backend/app/routers/matters.py:565` searches `matter_name` only.
+  `Matter.case_number` exists and is displayed throughout the UI, but is not in
+  the filter — so the identifier people actually say out loud ("I'm calling
+  about 24-CV-01847") returns nothing. Add `case_number` and
+  `client.display_name`.
+- [ ] `frontend/src/pages/MatterPortfolioPage.jsx:693` fetches
+  `page_size: 100` once with no pagination, filters the search box against
+  those 100 in memory, and `:770` renders `total: matters.length` — so a firm
+  with 10,000 matters sees "Total: 100". The API already returns a real
+  `total` and accepts `search`/`status`/`practice_area`; pass them through.
+
+  These four are the still-open P0s from `docs/reviews/SCALE_REVIEW.md`, which
+  has the full inventory (partner log capped at 25, revision history sliced to
+  5, chat sidebar documents unbounded). Read it before starting.
+
+### P2 — database
+- [ ] 37 RLS policies write `tenant_id::text = current_setting(...)`, casting
+  the *column*, which makes the btree index on `tenant_id` unusable. Any query
+  whose only selective predicate is the tenant does a sequential scan. It
+  covers the core tables from `001_initial_schema.py` — users, documents,
+  chunks, conversations, messages, usage_records — plus 20 later migrations
+  (`grep -rl "tenant_id::text = current_setting" backend/migrations/versions/`).
+  62 newer policies already use the index-friendly shape
+  `tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid`;
+  normalize the rest to match in one migration. Mechanical, but it must also
+  drop and recreate each policy, and `AGENTS.md` section 1 governs the head
+  number (current head: `179_native_signing.py`). Verify with `EXPLAIN` that an
+  index scan replaces the seq scan on `messages` and `matters`.
+- [ ] `chunks_embedding_idx` is an `ivfflat` index with `lists = 100`, set in
+  `001_initial_schema.py:171` when the table was empty and never revisited.
+  IVFFlat centroids are built from the data present at build time, so an index
+  created on an empty or tiny table gives poor recall as the corpus grows, and
+  `lists` wants roughly `rows/1000` under a million rows. Two parts: rebuild
+  (or move to HNSW, which does not need retraining) and measure recall. Also
+  check the interaction with RLS — an ANN scan with the tenant predicate
+  applied after it can return fewer rows than the `LIMIT` asked for. The public
+  legal corpus is correctly isolated in a separate `courtlistener-db` and is
+  not part of this.
+- [ ] Put a pooler (pgbouncer, transaction mode) in front of PostgreSQL. The
+  connection budget is now 3 × (6+6+3+2) = 51 on Cube M and 5 × 15 = 75 on the
+  4-worker profile, against `max_connections=100` — there is no headroom to add
+  workers without one. The RLS GUCs are set transaction-locally via the
+  `after_begin` hook in `backend/app/database.py`, so transaction pooling is
+  compatible; confirm that before committing to it.
+
+### P2 — infrastructure
+- [ ] Split Redis into security and cache instances. One instance currently
+  mixes refresh-token replay tombstones and the revoked-JWT denylist with the
+  RAG cache, at 384MB with `noeviction` — so cache pressure makes security
+  writes fail and new sessions error. Workstream 4 of
+  `docs/customer-data-scale-roadmap-2026-08-27.md` specifies this in full
+  (`SECURITY_REDIS_URL` / `CACHE_REDIS_URL`, dual-write, cutover, exit gate).
+- [ ] MCP rate-limit zones (`mcp_workspace`, `mcp_research`) are still keyed on
+  `$binary_remote_addr`, and hosted MCP clients arrive from shared Claude/ChatGPT
+  cloud egress — so every customer's MCP traffic lands in one bucket, a worse
+  collapse than the office-NAT one just fixed. The caller key added for the app
+  zones does not transfer as-is: MCP tokens serialize `iss` and `aud` before
+  `sub` (`backend/app/services/workspace_mcp_oauth.py:221`), so the 128-character
+  window would capture only the constant prefix and put every caller back in one
+  bucket. Needs its own map with a window sized for that claim order, and a test
+  proving two MCP callers key differently. `workspace_mcp_budgets` already
+  limits per grant at the app layer, which is why this is P2 and not P1.
+- [ ] Re-validate `USER_HOURLY_LIMIT = 600` in
+  `backend/app/middleware/rate_limit.py:82` now that the edge no longer starves
+  users. At 10 requests a minute sustained it is likely the new binding
+  constraint for a power user, and the file already documents one endpoint
+  exempted because a background poll exhausted the budget
+  (`USER_HOURLY_EXEMPT_PREFIXES`). Measure real per-user request counts from
+  `api_access_logs` before changing the number.
+
+### P3 — capacity baseline
+- [ ] Build the load-test baseline described in workstream 5 of
+  `docs/customer-data-scale-roadmap-2026-08-27.md`: k6/Locust journeys over
+  login/refresh, matters, chat, uploads, search and background sync, run at 1×,
+  2× peak, burst and soak, recording event-loop lag, pool waits, Redis memory,
+  provider throttling and error rates. Never load-test with client documents.
+  Until this exists, every number in this section — including the two fixes
+  above — is reasoned from code, not measured under load.
+- [ ] Establish the Microsoft Graph / Google Drive throttling ceiling. Every
+  document read is a live provider fetch (`matter_file_store.py`), and 50 users
+  browsing documents is 50 users' worth of Graph calls under one app
+  registration. `ProviderThrottled` exists and `CLOUD_SEARCH_CACHE_TTL` plus the
+  `cloud_metadata_index` avoid most round trips; what is missing is knowing
+  where the ceiling actually is and what the UI does when it is hit.
+
 ## First-customer launch — open items (2026-09-11)
 
 Tracking doc for the first-customer go-live so nothing below is forgotten.
