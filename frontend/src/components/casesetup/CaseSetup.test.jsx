@@ -120,6 +120,7 @@ it('labels each requirement by how the client completes it', () => {
   expect(requirementState({ completed: false, kind: 'signature' }, 'document_1')).toMatchObject({ label: 'Needs signature' })
   expect(requirementState({ completed: false, kind: 'signature', submitted_document_id: 'copy' }, 'document_1')).toMatchObject({ label: 'Awaiting review' })
   expect(requirementState({ completed: true, kind: 'signature' }, 'document_1')).toMatchObject({ label: 'Signed' })
+  expect(requirementState({ completed: false, kind: 'signature', signed_pending_filing: true }, 'document_1')).toMatchObject({ label: 'Signed — filing' })
   expect(requirementState({ completed: false, kind: 'upload' }, 'upload_1')).toMatchObject({ label: 'Outstanding' })
   expect(requirementState({ completed: true, kind: 'upload' }, 'upload_1')).toMatchObject({ label: 'Received' })
   expect(requirementState({ completed: true, kind: 'document' }, 'document_2')).toMatchObject({ label: 'Received' })

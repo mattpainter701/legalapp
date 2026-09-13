@@ -1111,6 +1111,27 @@ async def test_reconcile_mirrors_an_uploaded_copy_until_staff_decide(ctx):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_mirrors_a_signed_request_whose_copy_is_not_filed_yet(ctx):
+    c = ctx
+    c.signature.status = "partially_signed"
+    c.signature.signers = [
+        s.SignatureSigner(id=uuid.uuid4(), sign_order=1, status="signed")
+    ]
+
+    await s.mirror_submissions(c.db, c.packet)
+    agreement = c.packet.requirements["fee_agreement"]
+    assert agreement["signed_pending_filing"] is True
+    assert agreement["completed"] is False
+    shown = s.public_packet(c.packet, client=True)["requirements"]["fee_agreement"]
+    assert shown["signed_pending_filing"] is True
+
+    # Filed: completion marks the requirement itself, so the interim flag goes.
+    c.signature.status = "completed"
+    await s.mirror_submissions(c.db, c.packet)
+    assert "signed_pending_filing" not in c.packet.requirements["fee_agreement"]
+
+
+@pytest.mark.asyncio
 async def test_start_plans_signature_placements_on_the_agreement(ctx, monkeypatch):
     c = ctx
     planned = []

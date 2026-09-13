@@ -1,10 +1,25 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from app.models.signature import SignatureRequest, SignatureSigner
+from app.services.connected_mail import ConnectedMailDelivery
 from app.services.email import EmailDeliveryResult
 from app.services.esign import notifications
+
+
+def _connected_mail(result, provider="google", detail=""):
+    """Stand in for send_client_email: records each call, answers ``result``."""
+    calls = []
+
+    async def send(
+        db, *, tenant_id, actor_user_id, to, subject, html_body, text_body, smtp_service
+    ):
+        calls.append((to, subject, html_body, text_body, actor_user_id))
+        return ConnectedMailDelivery(result, detail, provider=provider)
+
+    return send, calls
 
 
 def _request(*, ordered=True):
@@ -37,21 +52,20 @@ def _request(*, ordered=True):
 async def test_invitation_notifies_only_actionable_signer_and_records_delivery(
     monkeypatch,
 ):
-    delivered = []
-
-    async def send_email(to, subject, html_body, text_body):
-        delivered.append((to, subject, html_body, text_body))
-        return EmailDeliveryResult.SENT
-
-    monkeypatch.setattr(notifications.email_service, "send_email", send_email)
+    send, delivered = _connected_mail(EmailDeliveryResult.SENT)
+    monkeypatch.setattr(notifications, "send_client_email", send)
     request = _request()
+    request.created_by_user_id = "user-1"
 
-    results = await notifications.notify_actionable_signers(request)
+    results = await notifications.notify_actionable_signers(None, request)
 
     assert results == [EmailDeliveryResult.SENT]
     assert delivered[0][0] == ["first@example.com"]
     assert "Engagement Letter.pdf" in delivered[0][1]
+    # Sent as the requesting user, so it leaves their own mailbox.
+    assert delivered[0][4] == "user-1"
     assert request.signers[0].audit["invitation_delivery_status"] == "sent"
+    assert request.signers[0].audit["invitation_provider"] == "google"
     assert request.signers[0].audit["invitation_sent_at"]
     assert request.signers[1].audit is None
 
@@ -66,14 +80,19 @@ def test_mark_signer_viewed_preserves_first_view_timestamp():
 
 @pytest.mark.asyncio
 async def test_delivery_failure_is_visible_in_audit(monkeypatch):
-    async def send_email(*args, **kwargs):
-        return EmailDeliveryResult.UNCONFIGURED
-
-    monkeypatch.setattr(notifications.email_service, "send_email", send_email)
+    send, _calls = _connected_mail(
+        EmailDeliveryResult.REAUTHORIZATION_REQUIRED,
+        provider=None,
+        detail="Reconnect Google Workspace mail",
+    )
+    monkeypatch.setattr(notifications, "send_client_email", send)
     request = _request()
-    await notifications.notify_actionable_signers(request)
-    assert request.signers[0].audit["invitation_delivery_status"] == "unconfigured"
-    assert "invitation_sent_at" not in request.signers[0].audit
+    await notifications.notify_actionable_signers(None, request)
+    audit = request.signers[0].audit
+    assert audit["invitation_delivery_status"] == "reauthorization_required"
+    assert audit["invitation_delivery_detail"] == "Reconnect Google Workspace mail"
+    assert "invitation_sent_at" not in audit
+    assert "invitation_provider" not in audit
 
 
 class _Scalars:
@@ -111,13 +130,8 @@ async def test_due_reminders_send_once_and_expire_overdue_requests(monkeypatch):
     due.expires_at = now + timedelta(days=7)
     expired = _request()
     expired.expires_at = now - timedelta(minutes=1)
-    delivered = []
-
-    async def send_email(*args, **kwargs):
-        delivered.append(args)
-        return EmailDeliveryResult.SENT
-
-    monkeypatch.setattr(notifications.email_service, "send_email", send_email)
+    send, delivered = _connected_mail(EmailDeliveryResult.SENT)
+    monkeypatch.setattr(notifications, "send_client_email", send)
     db = _Db([due, expired])
 
     assert await notifications.process_due_reminders(db, now=now) == 1
@@ -137,10 +151,58 @@ async def test_reminder_skips_unconfigured_day(monkeypatch):
     async def unexpected(*args, **kwargs):
         pytest.fail("email should not be sent")
 
-    monkeypatch.setattr(notifications.email_service, "send_email", unexpected)
+    monkeypatch.setattr(notifications, "send_client_email", unexpected)
     assert (
         await notifications.process_due_reminders(
             _Db([request]), now=datetime(2026, 8, 27, tzinfo=timezone.utc)
         )
         == 0
     )
+
+
+class _LookupDb:
+    """Answers scalar() with the rows in order: the user, then the matter."""
+
+    def __init__(self, *rows):
+        self.rows = list(rows)
+
+    async def scalar(self, statement):
+        return self.rows.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_requester_is_told_when_every_signer_has_signed(monkeypatch):
+    send, delivered = _connected_mail(EmailDeliveryResult.SENT)
+    monkeypatch.setattr(notifications, "send_client_email", send)
+    request = _request()
+    request.created_by_user_id = "user-1"
+    request.status = "partially_signed"
+    for signer in request.signers:
+        signer.status = "signed"
+    user = SimpleNamespace(id="user-1", email="attorney@firm.example")
+    matter = SimpleNamespace(matter_name="Smith v. Jones")
+
+    result = await notifications.notify_requester_signed(
+        _LookupDb(user, matter), request
+    )
+
+    assert result is EmailDeliveryResult.SENT
+    to, subject, html, text, actor = delivered[0]
+    assert to == ["attorney@firm.example"]
+    assert actor == "user-1"
+    assert subject == "Signed: Engagement Letter.pdf — Smith v. Jones"
+    assert "First Client, Second Client signed" in text
+    # Not filed yet: the note says so instead of promising a filed copy.
+    assert "being filed" in text
+    assert "/matters/" in html
+
+
+@pytest.mark.asyncio
+async def test_requester_notice_is_skipped_without_a_sender(monkeypatch):
+    async def unexpected(*args, **kwargs):
+        pytest.fail("nobody to notify")
+
+    monkeypatch.setattr(notifications, "send_client_email", unexpected)
+    request = _request()
+    request.created_by_user_id = None
+    assert await notifications.notify_requester_signed(None, request) is None

@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.database import async_session_maker, set_tenant_context
@@ -95,6 +96,7 @@ def public_packet(packet, *, client=False):
                     "required",
                     "submitted_document_id",
                     "submitted_at",
+                    "signed_pending_filing",
                     "declined",
                     "declined_at",
                     "decline_reason",
@@ -698,7 +700,15 @@ async def cancel_packet(db, packet, reason):
 
 
 async def mirror_submissions(db, packet):
-    """Copy each open request's uploaded-copy state onto its requirement."""
+    """Copy each open request's client-visible signing state onto its requirement.
+
+    Two states are mirrored: an uploaded copy awaiting staff review, and a
+    request every signer has signed whose executed copy is not filed yet
+    (storage refused it and the scheduler retries). Without the second the
+    checklist keeps asking for a signature the client already gave.
+    """
+    from app.services.esign.service import completion_pending
+
     targets = []
     if packet.signature_id and packet.requirements.get("fee_agreement"):
         targets.append(("fee_agreement", packet.signature_id))
@@ -713,7 +723,9 @@ async def mirror_submissions(db, packet):
         if not requirement or requirement.get("completed"):
             continue
         request = await db.scalar(
-            select(SignatureRequest).where(
+            select(SignatureRequest)
+            .options(selectinload(SignatureRequest.signers))
+            .where(
                 SignatureRequest.id == request_id,
                 SignatureRequest.tenant_id == packet.tenant_id,
                 SignatureRequest.matter_id == packet.matter_id,
@@ -721,6 +733,7 @@ async def mirror_submissions(db, packet):
         )
         if request is None:
             continue
+        pending_filing = completion_pending(request)
         submitted_id = (
             str(request.submitted_document_id)
             if request.submitted_document_id and request.status != "completed"
@@ -734,16 +747,20 @@ async def mirror_submissions(db, packet):
         if (
             requirement.get("submitted_document_id") == submitted_id
             and requirement.get("submitted_at") == submitted_at
+            and bool(requirement.get("signed_pending_filing")) == pending_filing
         ):
             continue
         updated = {
             key_: value
             for key_, value in requirement.items()
-            if key_ not in ("submitted_document_id", "submitted_at")
+            if key_
+            not in ("submitted_document_id", "submitted_at", "signed_pending_filing")
         }
         if submitted_id:
             updated["submitted_document_id"] = submitted_id
             updated["submitted_at"] = submitted_at
+        if pending_filing:
+            updated["signed_pending_filing"] = True
         packet.requirements = {**packet.requirements, key: updated}
 
 
@@ -967,6 +984,10 @@ async def reconcile(db, packet):
             await close_task(db, packet, f"due:{key}", f"{label} received")
         elif requirement.get("declined"):
             await close_task(db, packet, f"due:{key}", f"{label} declined")
+        elif requirement.get("signed_pending_filing"):
+            # The client has done their part; only the firm's storage is
+            # outstanding, and the signature panel reports that separately.
+            await close_task(db, packet, f"due:{key}", f"{label} signed")
         else:
             await ensure_task(
                 db,

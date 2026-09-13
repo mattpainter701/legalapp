@@ -95,6 +95,8 @@ export function requirementState(requirement, key = '') {
     return { label: requirement.kind ? 'Received' : 'Complete', tone: 'done' }
   }
   if (requirement.submitted_document_id) return { label: 'Awaiting review', tone: 'review' }
+  // Every signer signed; the executed copy is still being filed to storage.
+  if (requirement.signed_pending_filing) return { label: 'Signed — filing', tone: 'waiting' }
   return { label: signed ? 'Needs signature' : 'Outstanding', tone: 'waiting' }
 }
 

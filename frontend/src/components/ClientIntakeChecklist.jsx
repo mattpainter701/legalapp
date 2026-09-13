@@ -25,7 +25,15 @@ export function formStatus(item) {
   if (item.completed) return { label: signed ? 'Signed ✓' : 'Completed ✓', tone: 'green' }
   if (item.declined) return { label: 'Declined', tone: 'rose' }
   if (item.submitted_document_id) return { label: 'Awaiting review', tone: 'muted' }
+  // Every signer has signed but the executed copy is still being filed; the
+  // client owes nothing more, so this never reads as a request to sign again.
+  if (item.signed_pending_filing) return { label: 'Signed — filing', tone: 'muted' }
   return { label: signed ? 'Needs your signature' : 'Needs completing', tone: 'amber' }
+}
+
+// A form the client has already acted on but the firm has not closed out.
+export function formWaiting(item) {
+  return !item.completed && Boolean(item.submitted_document_id || item.signed_pending_filing)
 }
 
 export function recordStatus(item) {
@@ -84,6 +92,16 @@ export default function ClientIntakeChecklist({ onSign }) {
     catch (e) { if (e.response?.status !== 404) setError('Your paperwork checklist could not load. Please retry.') }
   }, [])
   useEffect(() => { load() }, [load])
+  // A signed form flips to "Signed" once its executed copy is filed, which
+  // happens on the server without the client doing anything, so the checklist
+  // watches for it instead of leaving the client to press refresh.
+  const requirementsSnapshot = packet?.requirements
+  const waiting = Object.values(requirementsSnapshot || {}).some(item => item && formWaiting(item))
+  useEffect(() => {
+    if (!waiting) return undefined
+    const timer = setInterval(load, 15000)
+    return () => clearInterval(timer)
+  }, [waiting, load])
   async function submit(e) {
     e.preventDefault(); setBusy(true); setError('')
     try { setPacket(await submitClientIntake(answers)) }
@@ -133,7 +151,7 @@ export default function ClientIntakeChecklist({ onSign }) {
         <Group heading="Forms to complete and sign">
           {forms.map((item) => {
             const status = formStatus(item)
-            const open = actionable && !item.completed && !item.submitted_document_id && !item.declined
+            const open = actionable && !item.completed && !formWaiting(item) && !item.declined
             return (
               <Row key={item.key} label={item.label || 'Form'} due={!item.completed ? fmtDue(item.due_at) : ''} status={status}>
                 {item.kind === 'signature'

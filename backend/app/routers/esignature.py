@@ -61,6 +61,7 @@ from app.services.esign.notifications import (
     mark_signer_viewed,
     notify_actionable_signers,
     notify_actionable_signers_sms,
+    notify_requester_signed,
     notify_signer,
 )
 from app.services.esign.placement import PlacementError
@@ -641,7 +642,7 @@ async def send_signature_request(
         req.provider_envelope_id = envelope_id
     req.status = "sent"
     req.sent_at = datetime.now(timezone.utc)
-    await notify_actionable_signers(req)
+    await notify_actionable_signers(db, req)
     await notify_actionable_signers_sms(db, req)
     await ensure_signature_followup(db, req)
     await db.commit()
@@ -667,7 +668,7 @@ async def resend_signature_request(
         raise HTTPException(
             status_code=409, detail="Only an open signature request can be resent"
         )
-    await notify_actionable_signers(req)
+    await notify_actionable_signers(db, req)
     await db.commit()
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
     return await _to_response(db, req)
@@ -742,7 +743,7 @@ async def accept_signature_submission(
     if req.status == "completed":
         await after_completion(db, req)
     else:
-        await notify_actionable_signers(req)
+        await notify_actionable_signers(db, req)
     await db.commit()
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
     return await _to_response(db, req)
@@ -790,7 +791,7 @@ async def reject_signature_submission(
     db.add(event)
     for signer in reopened:
         if signer_can_act_now(req, signer):
-            await notify_signer(signer, req, kind="resubmit")
+            await notify_signer(db, signer, req, kind="resubmit")
     from app.services import matter_intake
 
     await db.flush()
@@ -997,7 +998,14 @@ async def portal_sign(
     if req.status == "completed":
         await after_completion(db, req)
     elif not completion_pending(req):
-        await notify_actionable_signers(req)
+        await notify_actionable_signers(db, req)
+    if not already_signed and (req.status == "completed" or completion_pending(req)):
+        # The sender hears about the last signature now, not once filing
+        # succeeds: a storage outage must not also hide that the client acted.
+        try:
+            await notify_requester_signed(db, req)
+        except Exception:  # noqa: BLE001 - the signature is recorded regardless
+            logger.exception("Signed notice for request %s could not be sent", req.id)
     await db.commit()
 
     result = await db.execute(

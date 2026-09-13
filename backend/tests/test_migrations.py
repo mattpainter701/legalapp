@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["181_session_epoch"]
+    assert heads == ["182_unpublished_tpl_inactive"]
 
 
 def test_intake_optional_agreement_migration_widens_and_restores_the_column():
@@ -833,3 +833,15 @@ def test_tenant_guc_nullif_migration_rewrites_only_known_unsafe_policies():
     # Policies that were born safe must never be touched by the downgrade.
     assert "tenant_isolation_storage_migrations" not in source
     assert "contacts_tenant_isolation" not in source
+
+
+def test_unpublished_templates_migration_only_deactivates_unpublished_rows():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "182_unpublished_tpl_inactive.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "182_unpublished_tpl_inactive"' in source
+    assert 'down_revision = "181_session_epoch"' in source
+    assert "published_version_no IS NULL" in source
+    assert "is_active = false" in source
