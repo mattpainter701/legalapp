@@ -55,7 +55,7 @@ assert_location_policy() {
       in_location && index($0, "client_max_body_size 256k;") { body_cap = 1 }
       in_location && index($0, "include /etc/nginx/snippets/api_proxy.conf;") { api_proxy = 1 }
       in_location && index($0, "include /etc/nginx/snippets/sse_streaming.conf;") { streaming = 1 }
-      in_location && index($0, "limit_req zone=api burst=20 nodelay;") { rate_limit = 1 }
+      in_location && index($0, "limit_req zone=webhook burst=20 nodelay;") { rate_limit = 1 }
       in_location && $0 ~ /^[[:space:]]*}[[:space:]]*$/ {
         if (!body_cap || !api_proxy || !streaming || (require_rate_limit && !rate_limit)) {
           exit 41
