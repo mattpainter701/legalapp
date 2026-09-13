@@ -266,6 +266,12 @@ async def test_sent_delivery_audit_prevents_task_deletion(
 ):
     sender = _RecordingSender()
     monkeypatch.setattr(task_automation, "email_service", sender)
+    # The fixture tenant has no cloud-mail grant, and client mail no longer
+    # falls back to the platform relay unless an operator opts in. These
+    # tests are about delivery semantics, not transport.
+    monkeypatch.setattr(
+        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
+    )
     matter = await _matter(db_session, test_tenant, test_user)
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
@@ -1937,6 +1943,12 @@ async def test_the_worker_delivers_a_queued_send(
 ):
     sender = _RecordingSender()
     monkeypatch.setattr(task_automation, "email_service", sender)
+    # The fixture tenant has no cloud-mail grant, and client mail no longer
+    # falls back to the platform relay unless an operator opts in. These
+    # tests are about delivery semantics, not transport.
+    monkeypatch.setattr(
+        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
+    )
     matter = await _matter(db_session, test_tenant, test_user)
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
