@@ -3,7 +3,7 @@
 Owner: Codex task `01a07c9f-098a-7e23-a39c-bf40851013f3`.
 Baseline: `origin/main` at `a3d8e36a`, 2026-09-07.
 
-The [original proposal](https://github.com/mattpainter701/legalapp/blob/claude/libreoffice-template-studio-nz4xy1/docs/template-studio-visual-authoring-plan.md)
+The [original proposal](https://github.com/mattpainter701/lawhand/blob/claude/libreoffice-template-studio-nz4xy1/docs/template-studio-visual-authoring-plan.md)
 is design input. Existing behavior and correctness take precedence over its
 ordering and implementation suggestions. Source review/richer text shipped in
 #352 (`a1eefc26`), and page-accurate source preview shipped in #354 (`a3d8e36a`).

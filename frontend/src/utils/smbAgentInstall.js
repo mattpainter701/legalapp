@@ -1,5 +1,5 @@
 export const AGENT_DOWNLOAD_BASE =
-  'https://github.com/mattpainter701/legalapp/releases/latest/download'
+  'https://github.com/mattpainter701/lawhand/releases/latest/download'
 
 const PAIRING_CODE_PATTERN = /^[A-Z0-9]+(?:-[A-Z0-9]+){3}$/
 
@@ -12,7 +12,7 @@ const WINDOWS_TRUSTED_DOWNLOAD_HELPER = [
   '  $HostName = $Uri.IdnHost.ToLowerInvariant()',
   "  $CdnHosts = @('objects.githubusercontent.com', 'release-assets.githubusercontent.com', 'github-releases.githubusercontent.com')",
   "  if ($HostName -eq 'github.com') {",
-  "    return -not $Uri.Query -and $Uri.AbsolutePath -match '^/mattpainter701/legalapp/releases/(latest/download/agent-update\\.json|download/agent-v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)/(agent-update\\.json|lawhand-agent-x64\\.msi|lawhand-agent-linux-x86_64\\.tar\\.gz))$'",
+  "    return -not $Uri.Query -and $Uri.AbsolutePath -match '^/mattpainter701/lawhand/releases/(latest/download/agent-update\\.json|download/agent-v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)/(agent-update\\.json|lawhand-agent-x64\\.msi|lawhand-agent-linux-x86_64\\.tar\\.gz))$'",
   '  }',
   '  return $CdnHosts -contains $HostName',
   '}',
@@ -141,7 +141,7 @@ export function buildWindowsInstallCommand(pairingCode = '') {
   return [
     "$ErrorActionPreference = 'Stop'",
     ...WINDOWS_TRUSTED_DOWNLOAD_HELPER,
-    "$Base = 'https://github.com/mattpainter701/legalapp/releases/latest/download'",
+    "$Base = 'https://github.com/mattpainter701/lawhand/releases/latest/download'",
     "$ManifestFile = Join-Path $env:TEMP 'lawhand-agent-update.json'",
     "$Msi = Join-Path $env:TEMP 'lawhand-agent-x64.msi'",
     "$Log = Join-Path $env:TEMP 'lawhand-agent-install.log'",
@@ -150,7 +150,7 @@ export function buildWindowsInstallCommand(pairingCode = '') {
     "if ($Manifest.schema_version -ne 1 -or ([string]$Manifest.version) -notmatch '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$') { throw 'Invalid LawHand update manifest.' }",
     "$Asset = $Manifest.assets.'windows-x86_64'",
     "if ($Asset.name -ne 'lawhand-agent-x64.msi' -or ([string]$Asset.sha256) -notmatch '^[0-9a-fA-F]{64}$') { throw 'Invalid Windows release entry.' }",
-    "$MsiUrl = \"https://github.com/mattpainter701/legalapp/releases/download/agent-v$($Manifest.version)/$($Asset.name)\"",
+    "$MsiUrl = \"https://github.com/mattpainter701/lawhand/releases/download/agent-v$($Manifest.version)/$($Asset.name)\"",
     'Invoke-LawHandDownload ([Uri]$MsiUrl) $Msi 536870912',
     "$Expected = ([string]$Asset.sha256).ToLowerInvariant()",
     "$Actual = (Get-FileHash -LiteralPath $Msi -Algorithm SHA256).Hash.ToLowerInvariant()",

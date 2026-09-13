@@ -69,7 +69,7 @@ def test_manifest_url_allowlist_is_exact():
         updater.RELEASE_ASSET_BASE + "0.15.0/lawhand-agent-x64.msi"
     )
     assert not updater._official_url(
-        "https://github.com.evil.example/mattpainter701/legalapp/releases/latest/download/agent-update.json"
+        "https://github.com.evil.example/mattpainter701/lawhand/releases/latest/download/agent-update.json"
     )
     assert not updater._official_url(updater.RELEASE_ASSET_BASE + "0.15.0/other.exe")
 
@@ -77,7 +77,7 @@ def test_manifest_url_allowlist_is_exact():
 @pytest.mark.parametrize(
     "url",
     [
-        "http://github.com/mattpainter701/legalapp/releases/latest/download/agent-update.json",
+        "http://github.com/mattpainter701/lawhand/releases/latest/download/agent-update.json",
         "https://github.com.evil.example/update",
         "https://objects.githubusercontent.com/update#fragment",
         "https://user@release-assets.githubusercontent.com/update",

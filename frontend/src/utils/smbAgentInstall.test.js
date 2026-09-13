@@ -12,7 +12,7 @@ describe('file-share agent install command', () => {
     const command = buildWindowsInstallCommand('ABCD-EFGH-JKLM-NPQR')
 
     expect(command).toContain("$PairingCode = 'ABCD-EFGH-JKLM-NPQR'")
-    expect(command).toContain('https://github.com/mattpainter701/legalapp/releases/download/agent-v')
+    expect(command).toContain('https://github.com/mattpainter701/lawhand/releases/download/agent-v')
     expect(command).toContain('$Handler.AllowAutoRedirect = $false')
     expect(command).toContain('release-assets.githubusercontent.com')
     expect(command).toContain('$Redirect -le 5')

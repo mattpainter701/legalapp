@@ -1,6 +1,6 @@
 # Matter workspace remediation
 
-Implementation companion to the additive planning PR [#395](https://github.com/mattpainter701/legalapp/pull/395). The original plan remains unchanged and open for collaboration.
+Implementation companion to the additive planning PR [#395](https://github.com/mattpainter701/lawhand/pull/395). The original plan remains unchanged and open for collaboration.
 
 ## Attorney workflow
 
