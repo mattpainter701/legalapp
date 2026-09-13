@@ -16,7 +16,7 @@ LawHand backend -> authenticated SMTP submission -> transactional relay (Resend)
 
 | | Matter correspondence | System email |
 |---|---|---|
-| Sends as | The lawyer's or firm's mailbox | `support@getlawhand.com` |
+| Sends as | The lawyer's or firm's mailbox | `notifications@getlawhand.com` |
 | Transport | Microsoft Graph / Gmail OAuth (`connected_mail.py`) | SMTP relay (`email.py`) |
 | Failure is | Visible to the user who clicked send | Silent unless preflight catches it |
 
@@ -65,23 +65,30 @@ be a mailbox that exists. Domain verification is what authorizes sending: once
 domain whether or not a mailbox backs it. MX records stay on Microsoft 365, so
 whichever address is used still receives replies there.
 
-That makes the From address a product decision rather than a technical one, and
-the answer is `support@getlawhand.com`:
+That makes the From address a product decision rather than a technical one:
 
 | Address | Purpose | Sends via |
 |---|---|---|
-| `support@getlawhand.com` | Password reset, verification, human correspondence | Relay + M365 |
-| `notifications@getlawhand.com` | Product notifications, once they exist | Relay |
+| `notifications@getlawhand.com` | Password reset, verification, security notices | Relay |
+| `support@getlawhand.com` | Human correspondence | M365 |
 
-A `no-reply@` address buys nothing here. Reputation is carried by the domain
-and the DKIM key, not the local part, so a separate sending address does not
-isolate anything — and a reply to a no-reply mailbox either bounces or is
+Sending as `notifications@` keeps the support inbox for conversations people
+actually start, and keeps machine-sent mail identifiable at a glance.
+
+A `no-reply@` address would buy nothing over this. Reputation is carried by the
+domain and the DKIM key, not the local part, so a distinct sending address
+isolates nothing — and a reply to a no-reply mailbox either bounces or is
 silently discarded, which for account-recovery mail is precisely when a
-confused user is most likely to reply.
+confused user is most likely to reply. `notifications@` is therefore a real,
+monitored mailbox (see below), not a dead end.
 
-The split worth making later is by *purpose*, not by repliability: when product
-notifications are added, put them on `notifications@` so a user who filters or
-mutes them has not also filtered their own password reset.
+**One thing to revisit when product notifications are added.** The split worth
+keeping is by *purpose*: a user who filters or mutes "task due" and "document
+ready" mail must not thereby filter their own password reset. Today
+`notifications@` carries only security mail, so there is nothing to separate.
+When routine product mail is introduced, move it to its own address — or move
+auth mail to `security@` — rather than letting one address carry both. It is an
+`EMAIL_FROM` change plus a mailbox, not a rewrite.
 
 ## Manual setup steps
 
@@ -206,17 +213,19 @@ message is forwarded, so at `p=reject` forwarded staff mail would start being
 rejected outright. Enable DKIM for the domain in the Microsoft 365 Defender
 portal and add the two CNAMEs it issues before tightening past `quarantine`.
 
-### 3. Mailboxes
+### 3. M365 shared mailbox
 
-Nothing to do if system email sends as `support@getlawhand.com` — that mailbox
-already exists and already receives replies through the Microsoft 365 MX
-record.
+Sending as `notifications@getlawhand.com` works the moment the domain is
+verified, whether or not the mailbox exists. Create it anyway, so that replies
+land somewhere a human reads instead of bouncing:
 
-Only when `notifications@getlawhand.com` is introduced does a mailbox need
-creating: Microsoft 365 admin centre → **Teams & groups** → **Shared
-mailboxes**, forwarding to `support@`. No licence is needed (shared mailboxes
-allow 50 GB). Sending from it works the moment the domain is verified; the
-mailbox exists only so replies land somewhere a human reads.
+1. Microsoft 365 admin centre → **Teams & groups** → **Shared mailboxes** → add
+   `notifications@getlawhand.com`.
+2. Forward it to `support@getlawhand.com`.
+3. No licence is needed (shared mailboxes allow 50 GB).
+
+This is the step that separates `notifications@` from a no-reply address. Skip
+it and a user replying to their own password-reset mail gets a bounce.
 
 ### 4. Bounce webhook
 
@@ -252,7 +261,7 @@ EMAIL_HOST=smtp.resend.com
 EMAIL_PORT=587                   # STARTTLS; the client keys off 587 specifically
 EMAIL_USER=resend                # literal string, not an address
 EMAIL_PASS=<Resend API key>
-EMAIL_FROM=support@getlawhand.com
+EMAIL_FROM=notifications@getlawhand.com
 EMAIL_SUPPRESSION_ENABLED=true
 PLATFORM_EMAIL_WEBHOOK_SECRET=whsec_<from the Resend webhook endpoint>
 ```

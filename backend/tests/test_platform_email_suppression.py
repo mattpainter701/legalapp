@@ -38,7 +38,7 @@ def _email_settings(**overrides):
         "EMAIL_PORT": 587,
         "EMAIL_USER": "resend",
         "EMAIL_PASS": "re_relay_api_key",
-        "EMAIL_FROM": "support@getlawhand.com",
+        "EMAIL_FROM": "notifications@getlawhand.com",
         "PLATFORM_EMAIL_WEBHOOK_SECRET": "",
     }
     values.update(overrides)
