@@ -188,6 +188,17 @@ class MediationAsset(Base):
     sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    released_to_party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("mediation_parties.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    released_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     opposing_decision: Mapped[str | None] = mapped_column(
         String(30), nullable=True
     )  # approved | disputed

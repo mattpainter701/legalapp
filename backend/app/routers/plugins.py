@@ -41,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context
+from app.middleware.addon_guard import require_addon_workflow
 from app.middleware.tenant import get_current_user
 from app.models.conversation import UsageRecord
 from app.models.plugin import (
@@ -100,7 +101,21 @@ from app.utils.text_processing import extract_text
 from app.services.matter_number import assign_matter_number
 
 settings = get_settings()
-router = APIRouter(prefix="/plugins", tags=["plugins"])
+_commercial_access = require_addon_workflow("commercial-legal")
+
+
+async def _require_specialized_workspace(
+    request: Request, db: AsyncSession = Depends(get_db)
+):
+    if request.url.path.startswith("/api/plugins/commercial/renewals"):
+        await _commercial_access(request, db)
+
+
+router = APIRouter(
+    prefix="/plugins",
+    tags=["plugins"],
+    dependencies=[Depends(_require_specialized_workspace)],
+)
 logger = logging.getLogger(__name__)
 
 # Module-level singletons (same pattern as chat router)
@@ -258,9 +273,15 @@ def _entitlement_status(
 ) -> str:
     if entitlement is None:
         return "available"
-    # An expired trial reads as "available" again rather than staying active
-    # forever: expires_at used to be stored and never enforced.
-    if _entitlement_is_lapsed(entitlement, now=now):
+    current = now or datetime.now(timezone.utc)
+    if entitlement.status in {"disabled", "locked"}:
+        return entitlement.status
+    if _entitlement_is_lapsed(entitlement, now=current):
+        return "expired"
+    starts_at = _as_utc(entitlement.starts_at)
+    if starts_at is not None and starts_at > current:
+        return "scheduled"
+    if entitlement.status == "trial" and entitlement.expires_at is None:
         return "expired"
     return entitlement.status or "available"
 
@@ -293,11 +314,16 @@ def _assert_addon_runnable(
                 "An administrator can re-enable it in Add-on Modules."
             ),
         )
+    if status == "scheduled":
+        raise HTTPException(
+            status_code=402,
+            detail=f"The {display} add-on has not started yet.",
+        )
     if status == "expired":
         raise HTTPException(
             status_code=402,
             detail=(
-                f"The {display} trial has ended. "
+                f"The {display} add-on has expired or has no valid trial end date. "
                 "Purchase the add-on in Add-on Modules to keep using it."
             ),
         )

@@ -35,3 +35,34 @@ Session logs should be factual and consistent with confidentiality rules. Avoid 
 Account and invitation indicators help coordinate participation, but access must be intentional. Verify the recipient, party role, email, and permitted case scope before inviting anyone. Review documents and notes for audience suitability.
 
 Escalate uncertain neutrality, conflicts, confidentiality, authority, safeguarding, or enforceability questions to the responsible professional.
+
+## Review and release
+
+An authorized legal approver must approve a submitted financial disclosure before
+selecting **Release** and choosing its opposing-party recipient. Each asset row
+currently records one opposing-party decision; other case participants do not
+automatically receive it. The Assets table names the recipient. Old sent rows
+without recipient evidence remain visible to staff and their submitter; create
+a reviewed replacement to share them deliberately.
+
+Documents and approved proposals support selection of multiple individual
+recipients. A party sees its own submissions and records released specifically
+to it. Firm summaries, fees, internal work items, and native matter/contact IDs
+are omitted from the external case response. A party with retained submissions
+or release records cannot be deleted; revoke its invitation to remove portal
+access. Cases with reviewed or released records should be closed rather than
+deleted.
+
+## AI drafting workflows
+
+Mediation intake, mediation brief, settlement agreement, and caucus summary have
+dedicated drafting templates. Specify your role (party representative or neutral),
+the intended audience, sources, and any permitted disclosure. The templates ask
+for missing information and distinguish proposals from documented agreement.
+Caucus summaries default to private internal work. Review every output; these
+templates do not certify confidentiality, assent, enforceability, or neutrality.
+
+Generated settlement text is a working draft. Issue-by-issue acceptance, a
+versioned settlement packet, and a mediation-linked signature workflow are not
+implemented. Use the matter's reviewed document and signature process for final
+work, and do not treat generation or export as execution.

@@ -196,6 +196,10 @@ class AssetUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class AssetRelease(BaseModel):
+    party_id: str
+
+
 class AssetDecision(BaseModel):
     decision: str  # approved | disputed
     dispute_reason: Optional[str] = None
@@ -215,6 +219,7 @@ class AssetResponse(BaseModel):
     submitted_at: Optional[datetime] = None
     attorney_approved_at: Optional[datetime] = None
     sent_at: Optional[datetime] = None
+    released_to_party_id: Optional[str] = None
     opposing_decision: Optional[str] = None
     opposing_decided_at: Optional[datetime] = None
     dispute_reason: Optional[str] = None
@@ -298,8 +303,23 @@ class PortalAcceptResponse(BaseModel):
     kind: str
 
 
+class PortalCaseSummary(BaseModel):
+    """Public case context only; firm strategy, fees, and internal links stay private."""
+
+    id: str
+    case_name: str
+    party_a: Optional[str] = None
+    party_b: Optional[str] = None
+    dispute_type: Optional[str] = None
+    mediation_stage: Optional[str] = None
+    status: str
+    mediator: Optional[str] = None
+    scheduled_session: Optional[datetime] = None
+    confidentiality_signed: bool = False
+
+
 class PortalCaseView(BaseModel):
-    case: MediationCaseResponse
+    case: PortalCaseSummary
     party_role: str
     party_id: str
     my_assets: List[AssetResponse]

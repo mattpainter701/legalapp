@@ -19,6 +19,14 @@ icon: settings
 - **Available** modules may be eligible for purchase or enablement.
 - **Locked** modules are unavailable under the current plan, entitlement, or administrative policy.
 
+Expired and scheduled entitlements appear in Available with their actual status.
+A completed practice profile does not make an expired add-on active. Purchased
+modules needing configuration appear under Setup Required; empty categories
+remain selectable. Estate, family-law, and commercial-renewal workspaces reject
+explicit disabled, expired, future-dated, or malformed trial entitlements, as do
+skill execution and setup. Existing legacy provisioning policy still applies
+when a tenant has no entitlement record.
+
 Do not interpret a visible catalog card as permission to use a module for client work. Confirm entitlement, setup, firm procedure, and your role.
 
 ## Complete module setup

@@ -168,7 +168,7 @@ export default function MediationDetailPage() {
   const handleDelete = async () => {
     if (!await confirmAction({ title: 'Delete mediation case?', message: 'This case will be permanently deleted and cannot be restored.', confirmLabel: 'Delete case', destructive: true })) return
     setDeleting(true)
-    try { await deleteMediationCase(id); navigate('/plugins/mediation/cases') } catch { setDeleting(false) }
+    try { await deleteMediationCase(id); navigate('/plugins/mediation/cases') } catch (error) { setDeleting(false); toast.error('Case was not deleted', { message: error?.response?.data?.detail || 'Please try again.' }) }
   }
 
   const handleAdvance = async () => {
@@ -218,6 +218,9 @@ export default function MediationDetailPage() {
       if (releaseTarget.kind === 'document') {
         await releaseMediationDocument(id, releaseTarget.row.id, releasePartyIds)
         toast.success('Document released to selected parties')
+      } else if (releaseTarget.kind === 'asset') {
+        await sendMediationAsset(id, releaseTarget.row.id, releasePartyIds[0])
+        toast.success('Asset released to the selected opposing party')
       } else {
         await releaseMediationProposal(id, releaseTarget.row.id, releasePartyIds)
         toast.success('Approved proposal released to selected parties')
@@ -333,6 +336,7 @@ export default function MediationDetailPage() {
       { key: 'value', label: 'Value', render: (v) => <span className="font-medium">{v != null ? Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '—'}</span> },
       { key: 'owned_by', label: 'Owned By', render: (v) => <Pill>{v?.replace(/_/g, ' ')}</Pill> },
       { key: 'status', label: 'Status', render: (v) => <AssetStatusBadge status={v} /> },
+      { key: 'released_to_party_id', label: 'Portal Access', render: (v, row) => <span className="text-xs">{v ? `Released to ${parties.find((party) => party.id === v)?.name || 'selected party'}` : ['sent', 'opposing_approved', 'disputed'].includes(row.status) ? 'Legacy release: create a reviewed replacement' : 'Firm / submitter only'}</span> },
     ],
     fields: [
       { key: 'description', label: 'Description', type: 'text', required: true, half: true, placeholder: 'e.g., 123 Main St residence' },
@@ -344,7 +348,7 @@ export default function MediationDetailPage() {
     ],
     actions: [
       { label: 'Approve', icon: FileCheck, onClick: async (row) => { try { await approveMediationAsset(id, row.id); loadCase() } catch (error) { toast.error('Asset was not approved', { message: error?.response?.data?.detail || 'Please try again.' }) } }, condition: (row) => canApproveLegalWork && row.status === 'submitted' },
-      { label: 'Send', icon: Send, onClick: async (row) => { try { await sendMediationAsset(id, row.id); loadCase() } catch (error) { toast.error('Asset was not sent', { message: error?.response?.data?.detail || 'Please try again.' }) } }, condition: (row) => canApproveLegalWork && row.status === 'attorney_approved' },
+      { label: 'Release', icon: Send, onClick: (row) => openRelease('asset', row), condition: (row) => canApproveLegalWork && row.status === 'attorney_approved' },
     ],
     updateCondition: (row) => ['draft', 'submitted'].includes(row.status),
     deleteCondition: (row) => ['draft', 'submitted'].includes(row.status),
@@ -424,7 +428,8 @@ export default function MediationDetailPage() {
   const display = editing ? editData : mediation
   const releaseCandidates = releaseTarget
     ? parties.filter((party) => (
-      party.id !== releaseTarget.row.proposed_by_party_id
+      (releaseTarget.kind !== 'asset' || (party.role === 'opposing_party' && party.id !== releaseTarget.row.submitted_by_party_id))
+      && party.id !== releaseTarget.row.proposed_by_party_id
       && party.id !== releaseTarget.row.uploaded_by_party_id
       && !releaseTarget.row.recipient_party_ids?.includes(party.id)
     ))
@@ -699,10 +704,10 @@ export default function MediationDetailPage() {
           <div className="w-full max-w-lg rounded-2xl border border-brand-line bg-brand-surface shadow-xl">
             <div className="border-b border-brand-line px-6 py-5">
               <h2 id="mediation-release-title" className="font-serif text-xl font-bold text-brand-ink">
-                Release {releaseTarget.kind === 'document' ? 'document' : 'approved proposal'}
+                Release {releaseTarget.kind === 'document' ? 'document' : releaseTarget.kind === 'asset' ? 'approved asset' : 'approved proposal'}
               </h2>
               <p className="mt-1 text-sm leading-5 text-brand-muted">
-                Select each portal party who may receive “{releaseTarget.row.filename || releaseTarget.row.title}”. Existing access is not changed.
+                {releaseTarget.kind === 'asset' ? 'Select the opposing party who may review this financial disclosure' : 'Select each portal party who may receive this content'}: “{releaseTarget.row.filename || releaseTarget.row.title || releaseTarget.row.description}”. Existing access is not changed.
               </p>
             </div>
 
@@ -715,11 +720,12 @@ export default function MediationDetailPage() {
                 <label key={party.id} htmlFor={`release-party-${party.id}`} className="flex cursor-pointer items-start gap-3 rounded-xl border border-brand-line px-4 py-3 hover:bg-brand-bg-soft">
                   <input
                     id={`release-party-${party.id}`}
-                    type="checkbox"
+                    type={releaseTarget.kind === 'asset' ? 'radio' : 'checkbox'}
+                    name="release-party"
                     checked={releasePartyIds.includes(party.id)}
                     onChange={(event) => setReleasePartyIds((current) => (
                       event.target.checked
-                        ? [...current, party.id]
+                        ? releaseTarget.kind === 'asset' ? [party.id] : [...current, party.id]
                         : current.filter((partyId) => partyId !== party.id)
                     ))}
                     className="mt-0.5 h-4 w-4 rounded border-brand-line text-brand-ink focus:ring-brand-accent"
@@ -735,7 +741,7 @@ export default function MediationDetailPage() {
             <div className="border-t border-brand-line bg-brand-bg-soft/50 px-6 py-5">
               <p className="mb-4 flex items-start gap-2 text-xs leading-5 text-brand-ink-2">
                 <AlertTriangle size={15} className="mt-0.5 shrink-0 text-brand-amber" />
-                Release creates an auditable, party-specific access grant. The released content becomes immutable; corrections should be issued as a new document or proposal.
+                Release creates an auditable, party-specific access grant. The released content becomes immutable; corrections should be issued as a new record.
               </p>
               <div className="flex justify-end gap-3">
                 <button onClick={closeRelease} disabled={releasing} className="px-4 py-2 text-sm font-medium text-brand-ink-2 hover:text-brand-ink disabled:opacity-50">Cancel</button>

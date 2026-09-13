@@ -20,6 +20,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
+from app.middleware.addon_guard import require_addon_workflow
 from app.models.contact import Contact
 from app.models.estate import (
     EstateAccountingEntry,
@@ -63,7 +64,11 @@ from app.schemas.estate import (
     LiabilityUpdate,
 )
 
-router = APIRouter(prefix="/api/plugins/trust-estate", tags=["trust-estate"])
+router = APIRouter(
+    prefix="/api/plugins/trust-estate",
+    tags=["trust-estate"],
+    dependencies=[Depends(require_addon_workflow("trust-estate-legal"))],
+)
 
 _OPEN_STATUSES = ("complete", "na", "cancelled")
 
