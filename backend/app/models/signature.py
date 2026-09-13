@@ -16,6 +16,7 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -179,6 +180,10 @@ class SignatureSigner(Base):
     )
     signed_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     typed_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PNG the signer drew in the portal, stamped in place of the typed name.
+    drawn_signature_png: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True
+    )
     declined_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -249,6 +249,10 @@ async def test_install_adds_both_documents_as_unapproved_drafts():
     for row in db.added:
         assert row.tenant_id == tenant
         assert row.status == "draft"
+        # Listing the draft as generatable would only lead to the render
+        # gate's 409; it stays inactive until tested and published.
+        assert row.is_active is False
+        assert row.published_version_no is None
         assert row.approved_at is None
         assert row.format == "markdown"
         assert row.variable_schema["fields"]

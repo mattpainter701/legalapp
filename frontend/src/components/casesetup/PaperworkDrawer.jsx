@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
-import { FileText, LibraryBig, Upload, X } from 'lucide-react'
-import { getIntakeStarterPack, getMatterDocuments, previewMatterPaperwork, uploadMatterDocument } from '../../api'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { FileText, LibraryBig, PenLine, Upload, X } from 'lucide-react'
+import { getIntakeStarterPack, getMatterDocuments, getMatterDocumentSigningSource, previewMatterPaperwork, uploadMatterDocument } from '../../api'
 import { startMatterIntake } from '../MatterIntakePanel'
+import GeneratedSigningPlacementReview from '../templates/GeneratedSigningPlacementReview'
 import MatterTemplatePicker from '../templates/MatterTemplatePicker'
 import { emptyDraft, paperworkOptions } from './paperwork'
+
+// Intake addresses every signature request to the one portal signer.
+const INTAKE_SIGNER_ROLE = 'signer'
+const NO_PLACEMENTS = []
 
 const STEPS = ['Documents', 'Deadlines', 'Send']
 
@@ -24,6 +29,53 @@ const uploadControl = `${linkButton} cursor-pointer rounded focus-within:outline
 
 function isPdf(document) {
   return document.content_type === 'application/pdf' || document.filename?.toLowerCase().endsWith('.pdf')
+}
+
+function placedNote(placements) {
+  const count = (placements || []).length
+  return count ? `, ${count} placed field${count === 1 ? '' : 's'}` : ''
+}
+
+// The same placement review the E-Signature panel uses, for a PDF chosen in
+// this drawer. A form with no fillable fields and no printed line the server
+// can detect would otherwise reach the client as "cannot be filled in the
+// browser"; placing the signature block here gives it a clickable spot.
+function SigningPositions({ matterId, document, placements, open, onOpen, onClose, onChange, signerName }) {
+  const [source, setSource] = useState(null)
+  const [error, setError] = useState('')
+  // The review resets itself whenever its initial fields change identity, so
+  // it is handed the placements as they stood when it opened.
+  const [initialFields, setInitialFields] = useState(NO_PLACEMENTS)
+  useEffect(() => {
+    if (!open) { setSource(null); setError(''); return undefined }
+    let cancelled = false
+    setInitialFields(placements.length ? placements : NO_PLACEMENTS)
+    getMatterDocumentSigningSource(matterId, document.id)
+      .then(value => { if (!cancelled) setSource(value) })
+      .catch(() => { if (!cancelled) setError('The PDF could not be loaded for placement review.') })
+    return () => { cancelled = true }
+  }, [open, matterId, document.id])
+  const signerRoles = useMemo(() => [{ role: INTAKE_SIGNER_ROLE, name: signerName || '' }], [signerName])
+  const count = placements.length
+  return (
+    <div className="mt-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <button type="button" onClick={open ? onClose : onOpen} className={linkButton}>
+          <PenLine size={14} aria-hidden="true" /> {open ? 'Done placing signing positions' : 'Review signing positions'}
+        </button>
+        <span className="text-[12px] text-brand-muted">
+          {count > 0
+            ? `${count} signing field${count === 1 ? '' : 's'} placed on ${document.filename}`
+            : 'Optional: fields in the PDF and printed signature lines are detected automatically. Place a block here when the form has neither.'}
+        </span>
+      </div>
+      {open && (error
+        ? <p role="alert" className="mt-2 text-[12px] text-brand-rose">{error}</p>
+        : source
+          ? <div className="mt-3"><GeneratedSigningPlacementReview key={document.id} source={source} initialFields={initialFields} signerRoles={signerRoles} onChange={onChange} /></div>
+          : <p role="status" className="mt-2 text-[12px] text-brand-muted">Loading the PDF for placement review…</p>)}
+    </div>
+  )
 }
 
 const RENDER_CONTENT_TYPES = {
@@ -53,9 +105,9 @@ async function resolveRenderedDocument(matterId, response) {
 }
 
 const SUPPLIED_KEYS = {
-  agreement: ['agreementDocumentId', null],
-  intake: ['intakeFormDocumentId', 'intakeFormLabel'],
-  questionnaire: ['questionnaireDocumentId', 'questionnaireLabel'],
+  agreement: ['agreementDocumentId', null, 'agreementPlacements'],
+  intake: ['intakeFormDocumentId', 'intakeFormLabel', 'intakeFormPlacements'],
+  questionnaire: ['questionnaireDocumentId', 'questionnaireLabel', 'questionnairePlacements'],
 }
 
 function DueDate({ id, value, onChange, hint }) {
@@ -83,7 +135,7 @@ function DueDate({ id, value, onChange, hint }) {
 function DocumentCard({
   title, description, chooseLabel, noneLabel, prepareLabel, uploadLabel,
   accept = '.pdf,.docx,application/pdf', documents, value, onChoose, onPrepare,
-  onUpload, uploading, requiresSignature, onRequiresSignature,
+  onUpload, uploading, requiresSignature, onRequiresSignature, children,
 }) {
   return (
     <div className={card}>
@@ -118,6 +170,7 @@ function DocumentCard({
           Client signs this form
         </label>
       )}
+      {children}
     </div>
   )
 }
@@ -148,8 +201,19 @@ export default function PaperworkDrawer({
   const [uploadingAgreement, setUploadingAgreement] = useState(false)
   const [uploadingIntake, setUploadingIntake] = useState(false)
   const [uploadingQuestionnaire, setUploadingQuestionnaire] = useState(false)
+  // Which document's placement review is open: 'agreement', 'intake',
+  // 'questionnaire', or 'form:<document id>'. One at a time keeps the step
+  // readable and the PDF loads to a minimum.
+  const [placementTarget, setPlacementTarget] = useState(null)
 
   const set = (key, value) => setDraft(previous => ({ ...previous, [key]: value }))
+  const setAgreementPlacements = useCallback(value => set('agreementPlacements', value), [])
+  const setIntakeFormPlacements = useCallback(value => set('intakeFormPlacements', value), [])
+  const setQuestionnairePlacements = useCallback(value => set('questionnairePlacements', value), [])
+  const setFormPlacements = useCallback((documentId, value) => setDraft(previous => ({
+    ...previous,
+    forms: previous.forms.map(form => (form.documentId === documentId ? { ...form, placements: value } : form)),
+  })), [])
 
   // Documents prepared from a firm template or uploaded here are saved to the
   // matter and land in this list; merge them with the ones the matter already
@@ -215,25 +279,27 @@ export default function PaperworkDrawer({
   function attachDocument(document, target) {
     if (!document?.id) return
     setAttachedDocuments(current => [document, ...current.filter(item => item.id !== document.id)])
+    setPlacementTarget(null)
     setDraft(previous => {
       if (target === 'agreement') {
         return {
           ...previous,
           agreementDocumentId: document.id,
+          agreementPlacements: [],
           forms: previous.forms.filter(form => form.documentId !== document.id),
         }
       }
       if (target === 'intake') {
-        return { ...previous, intakeFormDocumentId: document.id, intakeFormLabel: document.filename, forms: previous.forms.filter(form => form.documentId !== document.id) }
+        return { ...previous, intakeFormDocumentId: document.id, intakeFormLabel: document.filename, intakeFormPlacements: [], forms: previous.forms.filter(form => form.documentId !== document.id) }
       }
       if (target === 'questionnaire') {
-        return { ...previous, questionnaireDocumentId: document.id, questionnaireLabel: document.filename, forms: previous.forms.filter(form => form.documentId !== document.id) }
+        return { ...previous, questionnaireDocumentId: document.id, questionnaireLabel: document.filename, questionnairePlacements: [], forms: previous.forms.filter(form => form.documentId !== document.id) }
       }
       return {
         ...previous,
         forms: [
           ...previous.forms.filter(form => form.documentId !== document.id),
-          { documentId: document.id, label: document.filename, requiresSignature: true, due: '' },
+          { documentId: document.id, label: document.filename, requiresSignature: true, due: '', placements: [] },
         ],
       }
     })
@@ -276,8 +342,9 @@ export default function PaperworkDrawer({
     && (!draft.channels.includes('sms') || draft.smsPermissionVerified) && hasItem
 
   function toggleForm(document, checked) {
+    if (!checked && placementTarget === `form:${document.id}`) setPlacementTarget(null)
     set('forms', checked
-      ? [...draft.forms, { documentId: document.id, label: document.filename, requiresSignature: isPdf(document), due: '' }]
+      ? [...draft.forms, { documentId: document.id, label: document.filename, requiresSignature: isPdf(document), due: '', placements: [] }]
       : draft.forms.filter(form => form.documentId !== document.id))
   }
 
@@ -290,13 +357,35 @@ export default function PaperworkDrawer({
   // fee agreement carries its own label server-side and so has none to set.
   function chooseSupplied(target, documentId) {
     const document = allDocuments.find(item => item.id === documentId)
-    const [idKey, labelKey] = SUPPLIED_KEYS[target]
+    const [idKey, labelKey, placementsKey] = SUPPLIED_KEYS[target]
+    if (placementTarget === target) setPlacementTarget(null)
     setDraft(previous => ({
       ...previous,
       [idKey]: documentId,
       ...(labelKey ? { [labelKey]: document?.filename || '' } : {}),
+      // Placements were reviewed on the previous PDF; they never carry over.
+      [placementsKey]: [],
       forms: documentId ? previous.forms.filter(form => form.documentId !== documentId) : previous.forms,
     }))
+  }
+
+  // The placement review for one of the three standard pieces, shown once a
+  // PDF is chosen and the client is to sign it.
+  function signingPositionsFor(target, documentId, requiresSignature, placements, onChange) {
+    const document = allDocuments.find(item => item.id === documentId)
+    if (!document || !isPdf(document) || requiresSignature === false) return null
+    return (
+      <SigningPositions
+        matterId={matterId}
+        document={document}
+        placements={placements || []}
+        open={placementTarget === target}
+        onOpen={() => setPlacementTarget(target)}
+        onClose={() => setPlacementTarget(null)}
+        onChange={onChange}
+        signerName={draft.email}
+      />
+    )
   }
 
   const practiceLabel = pack?.practice_label || 'this matter type'
@@ -404,7 +493,9 @@ export default function PaperworkDrawer({
                 onPrepare={() => setPickerTarget('agreement')}
                 onUpload={event => uploadFile(event, 'agreement', setUploadingAgreement)}
                 uploading={uploadingAgreement}
-              />
+              >
+                {signingPositionsFor('agreement', draft.agreementDocumentId, true, draft.agreementPlacements, setAgreementPlacements)}
+              </DocumentCard>
 
               <DocumentCard
                 title="Client intake form"
@@ -421,7 +512,9 @@ export default function PaperworkDrawer({
                 uploading={uploadingIntake}
                 requiresSignature={draft.intakeFormRequiresSignature}
                 onRequiresSignature={value => set('intakeFormRequiresSignature', value)}
-              />
+              >
+                {signingPositionsFor('intake', draft.intakeFormDocumentId, draft.intakeFormRequiresSignature, draft.intakeFormPlacements, setIntakeFormPlacements)}
+              </DocumentCard>
 
               <DocumentCard
                 title="Client questionnaire"
@@ -438,7 +531,9 @@ export default function PaperworkDrawer({
                 uploading={uploadingQuestionnaire}
                 requiresSignature={draft.questionnaireRequiresSignature}
                 onRequiresSignature={value => set('questionnaireRequiresSignature', value)}
-              />
+              >
+                {signingPositionsFor('questionnaire', draft.questionnaireDocumentId, draft.questionnaireRequiresSignature, draft.questionnairePlacements, setQuestionnairePlacements)}
+              </DocumentCard>
 
               <div className={card}>
                 <h3 className="mb-1 font-semibold text-brand-ink">Additional forms</h3>
@@ -477,6 +572,20 @@ export default function PaperworkDrawer({
                               <input type="checkbox" checked={chosen.requiresSignature} onChange={event => updateForm(document.id, { requiresSignature: event.target.checked })} />
                               Client signs this form
                             </label>
+                          )}
+                          {chosen && chosen.requiresSignature && isPdf(document) && (
+                            <div className="ml-6">
+                              <SigningPositions
+                                matterId={matterId}
+                                document={document}
+                                placements={chosen.placements || []}
+                                open={placementTarget === `form:${document.id}`}
+                                onOpen={() => setPlacementTarget(`form:${document.id}`)}
+                                onClose={() => setPlacementTarget(null)}
+                                onChange={value => setFormPlacements(document.id, value)}
+                                signerName={draft.email}
+                              />
+                            </div>
                           )}
                         </li>
                       )
@@ -595,12 +704,12 @@ export default function PaperworkDrawer({
               <div className={card}>
                 <h3 className="mb-2 font-semibold text-brand-ink">Going out now</h3>
                 <ul className="space-y-1 text-[13px] text-brand-ink-2">
-                  {hasAgreement && <li>Fee agreement (signature){draft.agreementDue ? ` — due ${draft.agreementDue}` : ''}</li>}
-                  {hasIntakeForm && <li>{draft.intakeFormLabel || 'Client intake form'}{draft.intakeFormRequiresSignature ? ' (signature)' : ''}{draft.intakeFormDue ? ` — due ${draft.intakeFormDue}` : ''}</li>}
-                  {hasQuestionnaire && <li>{draft.questionnaireLabel || 'Client questionnaire'}{draft.questionnaireRequiresSignature ? ' (signature)' : ''}{draft.questionnaireDue ? ` — due ${draft.questionnaireDue}` : ''}</li>}
+                  {hasAgreement && <li>Fee agreement (signature{placedNote(draft.agreementPlacements)}){draft.agreementDue ? ` — due ${draft.agreementDue}` : ''}</li>}
+                  {hasIntakeForm && <li>{draft.intakeFormLabel || 'Client intake form'}{draft.intakeFormRequiresSignature ? ` (signature${placedNote(draft.intakeFormPlacements)})` : ''}{draft.intakeFormDue ? ` — due ${draft.intakeFormDue}` : ''}</li>}
+                  {hasQuestionnaire && <li>{draft.questionnaireLabel || 'Client questionnaire'}{draft.questionnaireRequiresSignature ? ` (signature${placedNote(draft.questionnairePlacements)})` : ''}{draft.questionnaireDue ? ` — due ${draft.questionnaireDue}` : ''}</li>}
                   {draft.forms.map(form => (
                     <li key={form.documentId}>
-                      {form.label}{form.requiresSignature ? ' (signature)' : ''}{form.due ? ` — due ${form.due}` : ''}
+                      {form.label}{form.requiresSignature ? ` (signature${placedNote(form.placements)})` : ''}{form.due ? ` — due ${form.due}` : ''}
                     </li>
                   ))}
                   {hasUploads && <li>{uploadCount} requested record{uploadCount === 1 ? '' : 's'}{draft.uploadsDue ? ` — due ${draft.uploadsDue}` : ''}</li>}
