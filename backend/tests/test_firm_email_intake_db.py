@@ -25,7 +25,7 @@ async def test_real_review_creates_assigned_todo_once(db_session, test_user, tes
     matter = Matter(tenant_id=tid, user_id=uid, slug="smith", matter_name="Smith matter")
     db.add_all([colleague, matter]); await db.flush()
     cid, mid = colleague.id, matter.id
-    alias = FirmInboundEmailAlias(tenant_id=tid, 
+    alias = FirmInboundEmailAlias(tenant_id=tid,
         token_hash="a" * 64, encrypted_local_part="encrypted", status="active")
     db.add(alias); await db.flush()
     raw = b"From: staff@example.com\r\nSubject: [TASK] Jane, review this tomorrow\r\n\r\nClient request"
@@ -60,7 +60,7 @@ async def test_real_review_creates_assigned_todo_once(db_session, test_user, tes
 @pytest.mark.asyncio
 async def test_other_tenant_cannot_review_or_list_item(db_session, test_user):
     other_tid = uuid.uuid4()
-    alias = FirmInboundEmailAlias(tenant_id=other_tid, 
+    alias = FirmInboundEmailAlias(tenant_id=other_tid,
         token_hash="b" * 64, encrypted_local_part="encrypted", status="active")
     db_session.add(alias); await db_session.flush()
     item = InboundEmail(tenant_id=other_tid, firm_alias_id=alias.id, status="pending",
