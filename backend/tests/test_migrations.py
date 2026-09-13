@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["182_unpublished_tpl_inactive"]
+    assert heads == ["183_drawn_signature"]
 
 
 def test_intake_optional_agreement_migration_widens_and_restores_the_column():
@@ -845,3 +845,16 @@ def test_unpublished_templates_migration_only_deactivates_unpublished_rows():
     assert 'down_revision = "181_session_epoch"' in source
     assert "published_version_no IS NULL" in source
     assert "is_active = false" in source
+
+
+def test_drawn_signature_migration_adds_and_drops_the_column():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "183_drawn_signature.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "183_drawn_signature"' in source
+    assert 'down_revision = "182_unpublished_tpl_inactive"' in source
+    assert "drawn_signature_png" in source
+    assert "op.add_column" in source
+    assert "op.drop_column" in source

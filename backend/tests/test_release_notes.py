@@ -17,8 +17,8 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["id"] == LATEST_RELEASE_ID
     assert latest["version"] == LATEST_RELEASE_ID
     assert latest["is_recent"] is True
-    assert len(latest["highlights"]) == 4
-    assert latest["highlights"][0]["title"] == "Signed forms read as signed while filing"
+    assert len(latest["highlights"]) == 6
+    assert latest["highlights"][0]["title"] == "Draw your signature in the portal"
     history_ids = [release["id"] for release in catalog["release_notes"]]
     assert all(f"2026.09.07.{n}" in history_ids for n in (7, 8, 9))
     assert "2026.09.07.6" in history_ids

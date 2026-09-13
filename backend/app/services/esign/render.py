@@ -45,6 +45,9 @@ class Stamp:
     kind: str  # signature | initials | date
     text: str
     caption: str | None = None
+    #: A drawn signature (PNG bytes) painted in place of ``text`` for a
+    #: signature stamp; the text stays as the accessible fallback.
+    image: bytes | None = None
 
 
 def _register_unicode_font() -> str:
@@ -102,11 +105,21 @@ def _draw_stamp(overlay, stamp: Stamp) -> None:
     caption_band = CAPTION_FONT_SIZE + 3 if with_caption else 0.0
     baseline_y = bottom + STAMP_PADDING + caption_band + 1
     text_height = height - 2 * STAMP_PADDING - caption_band - 3
-    font = _font_for(text, SIGNATURE_FONT)
-    size = _fit_font_size(text, font, inner_width, text_height)
-    overlay.setFillColorRGB(0.05, 0.05, 0.25)
-    overlay.setFont(font, size)
-    overlay.drawString(left + STAMP_PADDING, baseline_y + 2, text)
+    if stamp.image and stamp.kind == "signature" and text_height > 4:
+        _draw_signature_image(
+            overlay,
+            stamp.image,
+            left + STAMP_PADDING,
+            baseline_y + 2,
+            inner_width,
+            text_height,
+        )
+    else:
+        font = _font_for(text, SIGNATURE_FONT)
+        size = _fit_font_size(text, font, inner_width, text_height)
+        overlay.setFillColorRGB(0.05, 0.05, 0.25)
+        overlay.setFont(font, size)
+        overlay.drawString(left + STAMP_PADDING, baseline_y + 2, text)
     overlay.setStrokeColorRGB(0.2, 0.2, 0.2)
     overlay.setLineWidth(0.5)
     overlay.line(
@@ -117,6 +130,30 @@ def _draw_stamp(overlay, stamp: Stamp) -> None:
         overlay.setFillColorRGB(0.3, 0.3, 0.3)
         overlay.setFont(_font_for(caption, DATE_FONT), CAPTION_FONT_SIZE)
         overlay.drawString(left + STAMP_PADDING, bottom + STAMP_PADDING, caption)
+
+
+def _draw_signature_image(
+    overlay, png: bytes, x: float, y: float, width: float, height: float
+) -> None:
+    """Fit the drawn signature into the box above the signature line.
+
+    The image keeps its aspect ratio and sits on the baseline at the left, so
+    a wide, short drawing fills the line and a tall one shrinks to fit. Alpha
+    is honoured so the page shows through around the strokes.
+    """
+    from reportlab.lib.utils import ImageReader
+
+    reader = ImageReader(io.BytesIO(png))
+    overlay.drawImage(
+        reader,
+        x,
+        y,
+        width=width,
+        height=height,
+        preserveAspectRatio=True,
+        anchor="sw",
+        mask="auto",
+    )
 
 
 def _acroform_values(field_values: dict[str, str]) -> dict[str, str]:

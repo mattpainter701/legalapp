@@ -4,10 +4,18 @@
     {
       "id": "2026.09.13.1",
       "version": "2026.09.13.1",
-      "title": "Signed paperwork shows as signed, and you hear about it",
+      "title": "Draw your signature, place signing spots, and hear when clients sign",
       "published_at": "2026-09-13",
-      "summary": "Signed forms no longer ask for a signature again while the signed copy is being filed, the sender gets an email as soon as the client signs, signature requests go out from your own mailbox, and starter templates say they need publishing.",
+      "summary": "Clients can draw their signature, paperwork forms get the E-Signature panel's signing-spot placement, signed forms read as signed while filing, you get an email when the client signs, and requests go out from your mailbox.",
       "highlights": [
+        {
+          "title": "Draw your signature in the portal",
+          "description": "Clients can now draw their signature with a mouse, pen or finger as well as type their name. The drawing is stamped on the signed copy; the typed name stays on the record."
+        },
+        {
+          "title": "Place signing spots on paperwork forms",
+          "description": "Send client paperwork now offers the same signing-position review as the E-Signature panel, so a PDF with no form fields still gets a clickable place to sign."
+        },
         {
           "title": "Signed forms read as signed while filing",
           "description": "When every signer has signed but the copy is still being filed to your storage, the client checklist and your paperwork strip say Signed, filing instead of asking again."

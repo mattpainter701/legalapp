@@ -1153,6 +1153,72 @@ async def test_start_plans_signature_placements_on_the_agreement(ctx, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_start_sends_placements_made_in_the_drawer_to_the_plan(ctx, monkeypatch):
+    c = ctx
+    planned = []
+
+    def plan(request, content, *, signers, placements, required_roles=None):
+        planned.append(placements)
+        request.positioned_fields = placements or None
+        request.signing_plan = {
+            "placement_source": "placed" if placements else "fallback"
+        }
+
+    monkeypatch.setattr("app.services.esign.plan.plan_request_placements", plan)
+    document = s.MatterDocument(
+        id=uuid.uuid4(),
+        tenant_id=c.user.tenant_id,
+        matter_id=c.matter.id,
+        filename="Agreement.pdf",
+        positioned_fields=[{"field_id": "stale", "role": "client"}],
+    )
+    c.db.rows[s.MatterDocument] = document
+    c.db.rows[s.MatterIntake] = None
+    placed = {
+        "field_id": "drawer-1",
+        "field_type": "signature",
+        "role": "client",
+        "page": 1,
+    }
+    body = start_body(
+        c, agreement_document_id=document.id, agreement_positioned_fields=[placed]
+    )
+    await s.start_packet(
+        c.db, c.user, c.matter, body, "Agreement.pdf", b"%PDF-reviewed"
+    )
+    # The drawer's placements win over ones stored on the document, and every
+    # intake placement is addressed to the single portal signer.
+    assert planned == [[{**placed, "role": "signer"}]]
+
+
+@pytest.mark.asyncio
+async def test_start_refuses_drawer_placements_that_do_not_fit_the_pdf(
+    ctx, monkeypatch
+):
+    from fastapi import HTTPException
+
+    from app.services.esign.placement import PlacementError
+
+    c = ctx
+
+    def plan(request, content, *, signers, placements, required_roles=None):
+        if placements:
+            raise PlacementError("stale")
+
+    monkeypatch.setattr("app.services.esign.plan.plan_request_placements", plan)
+    c.db.rows[s.MatterIntake] = None
+    body = start_body(
+        c, agreement_positioned_fields=[{"field_id": "drawer-1", "role": "client"}]
+    )
+    with pytest.raises(HTTPException) as caught:
+        await s.start_packet(
+            c.db, c.user, c.matter, body, "Agreement.pdf", b"%PDF-reviewed"
+        )
+    assert caught.value.status_code == 422
+    assert "signing positions" in caught.value.detail
+
+
+@pytest.mark.asyncio
 async def test_start_keeps_signing_possible_when_staff_placements_are_stale(
     ctx, monkeypatch
 ):

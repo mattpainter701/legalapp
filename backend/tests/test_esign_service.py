@@ -120,6 +120,28 @@ async def test_signature_audit_records_explicit_consent_and_client_evidence():
     assert signer.audit["consent_to_electronic_signature"] is True
     assert signer.audit["consent_text_version"] == "clarity-esign-consent-v1"
     assert signer.audit["user_agent"] == "Test Browser"
+    assert signer.audit["signature_method"] == "typed"
+    assert signer.audit["drawn_signature_sha256"] is None
+    assert signer.drawn_signature_png is None
+
+
+@pytest.mark.asyncio
+async def test_a_drawn_signature_is_retained_and_hashed_into_the_audit():
+    import hashlib
+
+    signer = _signer(0)
+    png = b"\x89PNG\r\n\x1a\nfake"
+    await record_portal_signature(
+        signer,
+        typed_signature="Signer 0",
+        ip="203.0.113.10",
+        consent_text_version="clarity-esign-consent-v1",
+        drawn_signature_png=png,
+    )
+    assert signer.drawn_signature_png == png
+    assert signer.typed_signature == "Signer 0"
+    assert signer.audit["signature_method"] == "drawn"
+    assert signer.audit["drawn_signature_sha256"] == hashlib.sha256(png).hexdigest()
 
 
 @pytest.mark.asyncio

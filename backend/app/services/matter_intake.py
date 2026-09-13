@@ -145,14 +145,19 @@ def due_iso(value):
     return value.astimezone(timezone.utc).isoformat() if value else None
 
 
-def plan_signing_placements(signature, content, *, signer_name, placements):
+def plan_signing_placements(
+    signature, content, *, signer_name, placements, strict=False
+):
     """Decide where the client signs, the same way the E-Signature panel does.
 
     Intake sends every signature request to a single ``signer`` role, so staff
     placements reviewed on the PDF are adopted when they exist and the plan
     otherwise finds (or falls back to) a signature line on the document.
-    Invalid staff placements are not fatal here: the plan still guarantees a
-    signature placement, and the reviewer's geometry is simply dropped.
+    Placements carried on the document from an earlier review may be stale
+    and are not fatal: the plan still guarantees a signature placement, and
+    the reviewer's geometry is simply dropped. Placements staff just made in
+    the paperwork drawer (``strict``) are the firm's explicit instruction, so
+    an invalid one is reported rather than silently replaced.
     """
     from types import SimpleNamespace
 
@@ -165,7 +170,13 @@ def plan_signing_placements(signature, content, *, signer_name, placements):
     ]
     try:
         plan_request_placements(signature, content, signers=signers, placements=usable)
-    except PlacementError:
+    except PlacementError as exc:
+        if strict:
+            raise HTTPException(
+                422,
+                f"The signing positions placed on {signature.source_document_filename or 'the document'} "
+                f"do not match the PDF being sent: {exc} Review them again before sending.",
+            ) from exc
         plan_request_placements(signature, content, signers=signers, placements=[])
 
 
@@ -490,7 +501,10 @@ async def start_packet(db, user, matter, body, filename, content):
             signature,
             content,
             signer_name=contact.display_name or str(body.email),
-            placements=document.positioned_fields or [],
+            placements=body.agreement_positioned_fields
+            or document.positioned_fields
+            or [],
+            strict=bool(body.agreement_positioned_fields),
         )
         db.add(signature)
         await db.flush()
@@ -609,7 +623,10 @@ async def start_packet(db, user, matter, body, filename, content):
                 extra,
                 attachment.content,
                 signer_name=contact.display_name or str(body.email),
-                placements=selected_doc.positioned_fields or [],
+                placements=selection.positioned_fields
+                or selected_doc.positioned_fields
+                or [],
+                strict=bool(selection.positioned_fields),
             )
             db.add(extra)
             await db.flush()

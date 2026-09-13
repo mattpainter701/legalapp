@@ -123,6 +123,9 @@ class SubmissionRejectRequest(BaseModel):
 
 class PortalSignRequest(BaseModel):
     typed_signature: str
+    # A PNG data URL (or bare base64) the signer drew; stamped instead of the
+    # typed name when present. The typed legal name is still required.
+    drawn_signature_png: str | None = Field(default=None, max_length=400_000)
     signer_id: str | None = None  # optional; defaults to next pending signer
     # ``{field_id: value}`` for the document's own inputs; checkbox values are
     # "true"/"false" and choice/radio values must be one of the options.

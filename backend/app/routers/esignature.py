@@ -53,6 +53,10 @@ from app.services.esign import (
     reject_submission,
     signer_can_act_now,
 )
+from app.services.esign.drawn_signature import (
+    DrawnSignatureError,
+    decode_drawn_signature,
+)
 from app.services.esign.followups import (
     close_signature_followup,
     ensure_signature_followup,
@@ -925,6 +929,10 @@ async def portal_sign(
     ctx = await get_client_portal_context(request, db)
     if not body.typed_signature or not body.typed_signature.strip():
         raise HTTPException(status_code=400, detail="A typed signature is required")
+    try:
+        drawn_signature = decode_drawn_signature(body.drawn_signature_png)
+    except DrawnSignatureError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if body.consent_to_electronic_signature is not True:
         raise HTTPException(
             status_code=422,
@@ -989,6 +997,7 @@ async def portal_sign(
             consent_text_version=body.consent_text_version,
             user_agent=request.headers.get("user-agent"),
             field_values=field_values,
+            drawn_signature_png=drawn_signature,
         )
 
     matter = await db.get(Matter, req.matter_id)
