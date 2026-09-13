@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.09.12.4",
-      "version": "2026.09.12.4",
+      "id": "2026.09.12.5",
+      "version": "2026.09.12.5",
       "title": "Rename your firm and edit its profile in one place",
       "published_at": "2026-09-12",
       "summary": "Administration has a Firm Profile tab. It renames the firm — including the name sign-up guessed from your email domain — and holds the contact details and branding that clients see on portal invitations, invoices and statements.",
@@ -15,6 +15,31 @@
         {
           "title": "Firm details moved out of the Settings tab",
           "description": "Firm name, contact details and branding were the fifth card inside Settings. They now have their own tab in Administration, next to Users."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.12.4",
+      "version": "2026.09.12.4",
+      "title": "Clearer signature placement for every signer",
+      "published_at": "2026-09-12",
+      "summary": "Signature, initials and date blocks are placed at a readable size, drawn the way a signer expects, and colour-coded per signer, with undo and remove. An invitation that did not reach the signer is reported instead of shown as sent.",
+      "highlights": [
+        {
+          "title": "Signing blocks you can read on the page",
+          "description": "Each block is sized like an e-signature service places it, with the signer's name above a ruled line. New blocks are laid out clear of each other, not stacked."
+        },
+        {
+          "title": "Undo, redo, and remove a placed field",
+          "description": "A block dragged to the wrong place can be undone, redone, or removed from the field itself, the toolbar, or the Delete key."
+        },
+        {
+          "title": "Each signer gets their own colour and fields",
+          "description": "Every signer has a row with their name, field count and colour, so a two-signer packet shows who signs where. Adding a signer picks a role nobody has taken."
+        },
+        {
+          "title": "An invitation that did not send says so",
+          "description": "When the email to a signer cannot be delivered, the request names the address and the reason instead of reporting that it was sent."
         }
       ]
     },
