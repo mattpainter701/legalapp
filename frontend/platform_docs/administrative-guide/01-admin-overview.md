@@ -18,7 +18,7 @@ The Administration portal controls tenant-wide access, commercial settings, inte
 - [Roles](/admin?tab=roles) — manage permission bundles and assignments.
 - [Licensing](/admin?tab=licensing) — allocate seats and premium AI access.
 - [Subscription](/admin?tab=billing) and [Usage](/admin?tab=usage) — review commercial status and consumption.
-- [Firm Profile](/admin?tab=firm) — the firm's name, contact details, currency, and branding, as clients see them.
+- [Firm Profile](/admin?tab=firm) — the firm's name, contact details, and branding, as clients see them.
 - [Tenant](/admin?tab=tenant) and [Settings](/admin?tab=settings) — review the organization record, and maintain defaults, alerts, and feature controls.
 - [Integrations](/admin?tab=integrations) — authorize cloud services and manage MCP servers, Cloud Search, file shares, collaboration, communications, and accounting connections in one place; [Prompts](/admin?tab=prompts) governs AI instructions.
 

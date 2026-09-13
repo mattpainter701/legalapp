@@ -9,10 +9,10 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 Released September 12, 2026.
 
-Administration has a Firm Profile tab. It renames the firm — including the name sign-up guessed from your email domain — and holds the contact details, currency and branding that clients see on portal invitations, invoices and statements.
+Administration has a Firm Profile tab. It renames the firm — including the name sign-up guessed from your email domain — and holds the contact details and branding that clients see on portal invitations, invoices and statements.
 
 - **Fix the firm name sign-up guessed from your domain.** Sign-up derived a firm name from your email domain and nothing could change it. Administration → Firm Profile now renames the firm everywhere clients see it.
-- **Firm details moved out of the Settings tab.** Firm name, contact details and branding were the fifth card inside Settings. They now have their own tab, with the currency used on invoices added alongside.
+- **Firm details moved out of the Settings tab.** Firm name, contact details and branding were the fifth card inside Settings. They now have their own tab in Administration, next to Users.
 
 ## 2026.09.12.3 — Matter folders carry the matter number; automations stay in scope
 

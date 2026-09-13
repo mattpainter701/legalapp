@@ -6,7 +6,6 @@ import { getFirmBranding, updateFirmBranding } from '../api'
 const FIELDS = [
   'tenant_name',
   'firm_name',
-  'firm_currency',
   'firm_logo_url',
   'firm_address',
   'firm_phone',
@@ -148,21 +147,6 @@ export default function FirmProfilePanel() {
               onChange={set('firm_name')}
               placeholder={form.tenant_name || 'Painter Law Group, PLLC'}
               className={INPUT_CLASS}
-            />
-          </Field>
-          <Field
-            id="firmprofile-currency"
-            label="Currency"
-            hint="ISO 4217 code used on invoices, trust statements, and portal payment screens. Defaults to USD."
-          >
-            <input
-              id="firmprofile-currency"
-              type="text"
-              value={form.firm_currency}
-              onChange={set('firm_currency')}
-              placeholder="USD"
-              maxLength={3}
-              className={`${INPUT_CLASS} uppercase`}
             />
           </Field>
           <Field

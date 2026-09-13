@@ -13,7 +13,7 @@ Tenant-wide settings shape the experience for every user. Make changes during a 
 
 ## Firm identity
 
-[Firm Profile](/admin?tab=firm) holds the firm's name, contact details, currency, and branding. It is the first thing to set on a new tenant.
+[Firm Profile](/admin?tab=firm) holds the firm's name, contact details, and branding. It is the first thing to set on a new tenant.
 
 **Account name** is the firm's name of record. Sign-up derives it from the email domain of the first account — a firm that signed up from `painterlaw.com` starts out named "Painterlaw" — so correcting it here is usually the first change a new tenant makes. The name flows to client portal invitations, engagement and intake email, invoices, trust statements, and any template mapped to a Firm profile field.
 
@@ -30,7 +30,8 @@ Renaming does not rewrite documents already generated or matter numbers already 
 Branding may flow into generated documents and customer-facing experiences. Use approved firm assets, accessible contrast, and current contact information. Preview a representative template after a branding change.
 
 Invoice and trust-statement PDFs use the Firm Profile name, logo URL,
-address, phone, email, website, currency, and optional PDF footer. Client portal invoice
+address, phone, email, website, and optional PDF footer. Amounts are
+rendered in USD. Client portal invoice
 downloads use the same settings. A logo that cannot be fetched or decoded does
 not block the PDF; the remaining firm identity is still rendered. The invoice
 download audit retains the branding values and content hash used for that

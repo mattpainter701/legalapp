@@ -14,7 +14,6 @@ const derived = {
   firm_name_override: null,
   tenant_name: 'Painterlaw',
   tenant_domain: 'painterlaw.com',
-  firm_currency: 'USD',
 }
 
 beforeEach(() => {
@@ -66,19 +65,26 @@ it('refuses to save a blank account name', async () => {
   expect(updateFirmBranding).not.toHaveBeenCalled()
 })
 
-it('sends the currency the API expects and surfaces its rejection', async () => {
+it('leaves currency alone rather than clearing what the API already holds', async () => {
   render(<FirmProfilePanel />)
-  await userEvent.clear(await screen.findByLabelText('Currency'))
-  await userEvent.type(screen.getByLabelText('Currency'), 'GBP')
+  await userEvent.type(await screen.findByLabelText('Display name'), 'Painter Law Group')
   await userEvent.click(screen.getByRole('button', { name: 'Save firm profile' }))
   await waitFor(() => expect(updateFirmBranding).toHaveBeenCalled())
-  expect(updateFirmBranding.mock.calls[0][0].firm_currency).toBe('GBP')
+  // The firm is US-only, so the panel shows no currency control. It must also
+  // not send the field: an omitted key leaves the stored value untouched,
+  // where a null would clear it.
+  expect(screen.queryByLabelText('Currency')).not.toBeInTheDocument()
+  expect(updateFirmBranding.mock.calls[0][0]).not.toHaveProperty('firm_currency')
+})
 
+it('surfaces an error the API returns', async () => {
+  render(<FirmProfilePanel />)
+  await screen.findByLabelText('Display name')
   updateFirmBranding.mockRejectedValueOnce({
-    response: { data: { detail: 'firm_currency must be a 3-letter ISO 4217 code' } },
+    response: { data: { detail: 'firm_name must be 300 characters or fewer' } },
   })
   await userEvent.click(screen.getByRole('button', { name: 'Save firm profile' }))
   expect(
-    await screen.findByText('firm_currency must be a 3-letter ISO 4217 code')
+    await screen.findByText('firm_name must be 300 characters or fewer')
   ).toBeInTheDocument()
 })
