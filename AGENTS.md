@@ -38,9 +38,11 @@ migrations, release notes, the CI workflow, or rebasing a feature branch.
 Dependabot PRs do not inherit the PR body template.  The merge-policy script
 (`verify_merge_policy.py`) and the CI workflow (`ci.yml`) now automatically
 exempt Dependabot PRs from the template attestation and SBOM staleness checks.
-A separate workflow (`.github/workflows/dependabot-auto-merge.yml`) approves
-and enables auto-merge for patches and minors once CI passes.  Major version
-bumps still require manual review.
+A separate workflow (`.github/workflows/dependabot-auto-merge.yml`) enables
+auto-merge for patches and minors once CI passes. Major version bumps still
+require manual review. `main` requires no approving review, so the workflow
+enables auto-merge without posting an approval; the repository's
+`can_approve_pull_request_reviews` setting stays off.
 
 ## 4. Rebase hygiene on this repo
 
