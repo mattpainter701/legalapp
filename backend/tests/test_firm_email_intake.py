@@ -59,6 +59,7 @@ def test_task_suggestions_are_plain_todos_and_timezone_aware():
     task = service.todo_suggestion("[TASK] Jane, review this tomorrow", now, "America/Chicago", [jane], jane.id)
     assert task == {"title": "review this", "due_date": "2026-09-13", "assigned_to_user_id": str(jane.id), "assignee_hint": "Jane"}
     assert service.todo_suggestion("[task] Review documents", now, "UTC", [jane], jane.id)["due_date"] is None
+    assert len(service.todo_suggestion("[TASK] " + "x" * 500, now, "UTC", [jane], jane.id)["title"]) == 300
     assert service.todo_suggestion("[TASK] Jane, review this", now, "UTC", [jane, staff()], jane.id)["assigned_to_user_id"] is None
     assert service.todo_suggestion("[TASK] Nobody, review this", now, "UTC", [jane], jane.id)["assigned_to_user_id"] is None
     assert service.todo_suggestion("[TASK] Jane Smith, review in two weeks", now, "UTC", [jane], jane.id)["due_date"] == "2026-09-27"
@@ -119,7 +120,7 @@ async def test_firm_settings_enable_rotate_disable_and_timezone(context, monkeyp
     db = FakeDB(FakeResult(), FakeResult(), FakeResult())
     await routes.configure_intake(routes.IntakeSettings(action="enable", timezone="America/Chicago"), None, db)
     alias = db.added[0]
-    assert alias.kind == "firm" and alias.matter_id is None and alias.tenant_id == context.tenant_id
+    assert alias.tenant_id == context.tenant_id
     assert alias.encrypted_local_part.startswith("f-")
     assert db.added[1].custom_config["firm_email_timezone"] == "America/Chicago"
     for action in ["rotate", "disable", "settings", "enable"]:

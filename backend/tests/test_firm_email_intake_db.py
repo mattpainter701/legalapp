@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.models.inbound_email import InboundEmail, InboundEmailAlias
+from app.models.inbound_email import InboundEmail, FirmInboundEmailAlias
 from app.models.plugin import Matter
 from app.models.task import Task
 from app.models.user import User
@@ -25,7 +25,7 @@ async def test_real_review_creates_assigned_todo_once(db_session, test_user, tes
     matter = Matter(tenant_id=tid, user_id=uid, slug="smith", matter_name="Smith matter")
     db.add_all([colleague, matter]); await db.flush()
     cid, mid = colleague.id, matter.id
-    alias = InboundEmailAlias(tenant_id=tid, kind="firm", matter_id=None,
+    alias = FirmInboundEmailAlias(tenant_id=tid, 
         token_hash="a" * 64, encrypted_local_part="encrypted", status="active")
     db.add(alias); await db.flush()
     raw = b"From: staff@example.com\r\nSubject: [TASK] Jane, review this tomorrow\r\n\r\nClient request"
@@ -33,7 +33,7 @@ async def test_real_review_creates_assigned_todo_once(db_session, test_user, tes
     iid = uuid.uuid4()
     path = storage.quarantine_path(tid, iid)
     storage.write_quarantined_message(path, raw)
-    item = InboundEmail(id=iid, tenant_id=tid, alias_id=alias.id, matter_id=None, status="pending",
+    item = InboundEmail(id=iid, tenant_id=tid, firm_alias_id=alias.id, matter_id=None, status="pending",
         envelope_sender=test_user.email, recipient="firm@example.com", subject="[TASK] Jane, review this tomorrow",
         message_sha256=hashlib.sha256(raw).hexdigest(), raw_size=len(raw), raw_storage_path=str(path),
         occurred_at=datetime.now(timezone.utc))
@@ -60,10 +60,10 @@ async def test_real_review_creates_assigned_todo_once(db_session, test_user, tes
 @pytest.mark.asyncio
 async def test_other_tenant_cannot_review_or_list_item(db_session, test_user):
     other_tid = uuid.uuid4()
-    alias = InboundEmailAlias(tenant_id=other_tid, kind="firm", matter_id=None,
+    alias = FirmInboundEmailAlias(tenant_id=other_tid, 
         token_hash="b" * 64, encrypted_local_part="encrypted", status="active")
     db_session.add(alias); await db_session.flush()
-    item = InboundEmail(tenant_id=other_tid, alias_id=alias.id, status="pending",
+    item = InboundEmail(tenant_id=other_tid, firm_alias_id=alias.id, status="pending",
         envelope_sender="staff@other.com", recipient="firm@example.com", subject="[TASK] private",
         message_sha256="c" * 64, raw_size=1, occurred_at=datetime.now(timezone.utc))
     db_session.add(item); await db_session.flush()

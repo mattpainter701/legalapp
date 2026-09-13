@@ -105,7 +105,7 @@ def todo_suggestion(subject, received_at, timezone_name, staff, submitter_id):
         return None
     # These are ordinary to-dos, even when their title contains "file" or "call".
     return {
-        "title": title,
+        "title": title[:300],
         "due_date": suggestion.due_date.isoformat() if suggestion.due_date else None,
         "assigned_to_user_id": str(assignee_id) if assignee_id else None,
         "assignee_hint": assignee_hint,

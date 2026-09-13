@@ -2,7 +2,7 @@
 
 ## Firm-wide to-do intake
 
-Migration `184_firm_email_intake` extends the existing tenant-scoped alias and quarantine tables to support a firm address (`f-` plus a random token), with one active firm alias per tenant. Matter aliases keep the `m-` prefix and their current workflow. Deploy the updated Email Worker before enabling firm addresses; older Workers reject the new prefix. Use the existing intake domain, catch-all routing, webhook secret, and upload storage. No customer MX changes are required.
+Migration `184_firm_email_intake` adds the tenant-scoped `firm_inbound_email_aliases` registry and a separate firm-alias reference on the existing quarantine table to support a firm address (`f-` plus a random token), with one active firm alias per tenant. Matter aliases keep the `m-` prefix and their current workflow. Deploy the updated Email Worker before enabling firm addresses; older Workers reject the new prefix. Use the existing intake domain, catch-all routing, webhook secret, and upload storage. No customer MX changes are required.
 
 Firm addresses are managed in **Administration → Integrations → Email intake**. Active human staff can retrieve the address and review the tenant's queue. Administration controls enable/replace/disable and the IANA time zone used for relative dates. Pending requests survive replacement and disablement. Routes are under `/api/firm-email-intake`; mailbox routing remains under the existing signed `/api/inbound-email/cloudflare` endpoint.
 

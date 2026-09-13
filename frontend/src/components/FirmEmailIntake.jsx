@@ -40,7 +40,7 @@ function AddressActions({ address, onError }) {
 function ReviewCard({ item, matters, staff, onDone }) {
   const suggestion = item.suggestion || {}
   const todo = suggestion.task || {}
-  const [title, setTitle] = useState(todo.title || item.subject)
+  const [title, setTitle] = useState((todo.title || item.subject).slice(0, 300))
   const [matterId, setMatterId] = useState(suggestion.matters?.length === 1 ? suggestion.matters[0].id : '')
   const [assignee, setAssignee] = useState(todo.assigned_to_user_id || '')
   const [due, setDue] = useState(todo.due_date || '')

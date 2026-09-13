@@ -141,6 +141,7 @@ _PURGE_ONLY_TABLES = {
     "work_artifact_approval",
     "work_artifact_delivery",
     "inbound_email_aliases",
+    "firm_inbound_email_aliases",
     "inbound_emails",
     "intake_call_drafts",
     "intake_forms",
@@ -276,6 +277,7 @@ SENSITIVE_NEVER_CLONE = frozenset(
     {
         "external_system_connections",
         "inbound_email_aliases",
+        "firm_inbound_email_aliases",
         "inbound_emails",
         "mcp_product_keys",
         "native_identity_mappings",

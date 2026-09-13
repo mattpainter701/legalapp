@@ -188,6 +188,10 @@
   ],
   "admin_integration_sections": [
     {
+      "section": "email-intake",
+      "chapter": "email-intake"
+    },
+    {
       "section": "cloud",
       "chapter": "integrations"
     },

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user, require_admin
-from app.models.inbound_email import InboundEmail, InboundEmailAlias
+from app.models.inbound_email import InboundEmail, FirmInboundEmailAlias
 from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
 from app.routers.matters_correspondence import (
@@ -47,10 +47,9 @@ async def staff_context(request, db):
 async def active_alias(db, tenant_id):
     return (
         await db.execute(
-            select(InboundEmailAlias).where(
-                InboundEmailAlias.tenant_id == tenant_id,
-                InboundEmailAlias.kind == "firm",
-                InboundEmailAlias.status == "active",
+            select(FirmInboundEmailAlias).where(
+                FirmInboundEmailAlias.tenant_id == tenant_id,
+                FirmInboundEmailAlias.status == "active",
             )
         )
     ).scalar_one_or_none()
@@ -79,10 +78,12 @@ async def get_intake(request: Request, db: AsyncSession = Depends(get_db)):
     result["pending_count"] = await db.scalar(
         select(func.count())
         .select_from(InboundEmail)
-        .join(InboundEmailAlias, InboundEmail.alias_id == InboundEmailAlias.id)
+        .join(
+            FirmInboundEmailAlias,
+            InboundEmail.firm_alias_id == FirmInboundEmailAlias.id,
+        )
         .where(
             InboundEmail.tenant_id == user.tenant_id,
-            InboundEmailAlias.kind == "firm",
             InboundEmail.status == "pending",
         )
     )
@@ -119,10 +120,8 @@ async def configure_intake(
     if row is None and body.action in {"enable", "rotate"}:
         local_part = "f-" + generate_alias_local_part()[2:]
         db.add(
-            InboundEmailAlias(
+            FirmInboundEmailAlias(
                 tenant_id=admin.tenant_id,
-                matter_id=None,
-                kind="firm",
                 token_hash=alias_lookup_hash(local_part),
                 encrypted_local_part=encrypt_token(local_part),
                 created_by_user_id=admin.id,
@@ -154,10 +153,12 @@ async def queue(
         (
             await db.execute(
                 select(InboundEmail)
-                .join(InboundEmailAlias, InboundEmail.alias_id == InboundEmailAlias.id)
+                .join(
+                    FirmInboundEmailAlias,
+                    InboundEmail.firm_alias_id == FirmInboundEmailAlias.id,
+                )
                 .where(
                     InboundEmail.tenant_id == user.tenant_id,
-                    InboundEmailAlias.kind == "firm",
                     InboundEmail.status == "pending",
                 )
                 .order_by(InboundEmail.created_at, InboundEmail.id)
@@ -206,11 +207,13 @@ async def pending_item(db, tenant_id, item_id):
     row = (
         await db.execute(
             select(InboundEmail)
-            .join(InboundEmailAlias, InboundEmail.alias_id == InboundEmailAlias.id)
+            .join(
+                FirmInboundEmailAlias,
+                InboundEmail.firm_alias_id == FirmInboundEmailAlias.id,
+            )
             .where(
                 InboundEmail.id == item_id,
                 InboundEmail.tenant_id == tenant_id,
-                InboundEmailAlias.kind == "firm",
             )
             .with_for_update(of=InboundEmail)
         )

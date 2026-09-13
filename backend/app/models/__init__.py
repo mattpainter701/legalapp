@@ -172,7 +172,11 @@ from app.models.document_storage_operation import DocumentStorageOperation
 from app.models.document_integrity_event import DocumentIntegrityEvent
 from app.models.stripe_webhook_event import StripeWebhookEvent
 from app.models.esign_webhook_event import ESignWebhookEvent
-from app.models.inbound_email import InboundEmail, InboundEmailAlias
+from app.models.inbound_email import (
+    InboundEmail,
+    InboundEmailAlias,
+    FirmInboundEmailAlias,
+)
 from app.models.prospect_follow_through import (
     ProspectFollowThrough,
     EngagementPacket,
@@ -404,6 +408,7 @@ __all__ = [
     "ESignWebhookEvent",
     "InboundEmail",
     "InboundEmailAlias",
+    "FirmInboundEmailAlias",
     "ProspectFollowThrough",
     "EngagementPacket",
     "ProspectContactEvent",
