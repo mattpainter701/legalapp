@@ -6,6 +6,13 @@
 - Make the review multi-signer. `signerRoles` now accepts `{ role, name }` rows, and each signer gets a toolbar row with their name, colour, field count and Signature/Initials/Date buttons, plus a list of roles with no fields yet. `SignatureRequestsPanel` passes the signer behind each role, defaults an added signer to a role nobody has taken, and warns when two signers share one — previously every added signer defaulted to `client`, which left one indistinguishable chip and a request the API rejected for having two signers on one role.
 - Stop reporting an undelivered invitation as sent. `signatureSendNotice()` reads the per-signer `invitation_delivery_status` the send and resend endpoints already return and names the address and the reason (delivery disabled, incomplete settings, mailbox reauthorization, rejected recipient, mail-server failure) instead of the unconditional green "Signature request sent"; a failed status in the request queue is now amber rather than muted grey.
 - Release note 2026.09.12.4.
+## Unreleased — One way to choose each piece of client paperwork
+
+- Unify the three standard pieces in the Send client paperwork drawer behind a single `DocumentCard`. The fee agreement, the client intake form and the client questionnaire each asked which document the piece is, but through differently ordered controls with three wordings for the same labels. Every card now reads: the chosen matter document, then the two ways to add one — prepare from a firm template, upload a file — in that order.
+- Fix the fee agreement answering that question twice at once. Its file input held the file in local React state and never reached the select above it, so uploading one left the select reading "Do not include a fee agreement" beside an input naming the file. The upload now goes through `uploadMatterDocument` like the other two pieces, so every path writes one `agreement_document_id` and the raw `agreement` file is gone from the drawer's send. A fee agreement uploaded here is therefore saved to the matter when it is chosen, not only when the packet is sent; `POST /matters/{id}/intake` still accepts a raw `agreement` file for `MatterIntakePanel`.
+- Replace the native file inputs on the Documents step with a label over a hidden input. The browser's own "No file chosen" sat directly under a dropdown that already named a chosen document, which read as two controls contradicting each other.
+- Stop the fee agreement list offering the document already chosen as the intake form or questionnaire; the intake and questionnaire lists already excluded each other and the agreement.
+
 
 ## Unreleased — Hotfix: automation scope, matter-folder naming note, oversized intake answers
 
