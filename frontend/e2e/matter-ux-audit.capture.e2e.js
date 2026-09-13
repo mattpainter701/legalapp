@@ -76,7 +76,7 @@ test('UX audit: matter onboarding journey capture', async ({ page, browser }) =>
   await page.getByRole('button', { name: 'Close preview', exact: true }).click()
   await page.getByRole('button', { name: 'Overview', exact: true }).click()
   await page.getByRole('button', { name: 'Send client paperwork', exact: true }).click()
-  await page.getByRole('combobox', { name: 'From matter documents' }).selectOption(fee.id)
+  await page.getByRole('combobox', { name: 'Choose the fee agreement' }).selectOption(fee.id)
   await labelled(page, 'General intake form.pdf').check()
   await page.getByLabel('One question per line').fill('Describe your matter')
   await page.getByLabel('Requested client uploads — one per line').fill('Marriage certificate')
