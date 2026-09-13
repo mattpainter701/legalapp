@@ -1810,9 +1810,12 @@ async def reset_password(
     email = None
 
     if redis:
-        email_bytes = await redis.get(_reset_key(body.token))
-        if email_bytes:
-            email = email_bytes.decode("utf-8")
+        # ``_redis_text`` rather than a bare ``.decode``: this was the one Redis
+        # read in this module that assumed a bytes-returning client, so it broke
+        # outright under a client configured with ``decode_responses=True``.
+        stored = await redis.get(_reset_key(body.token))
+        if stored:
+            email = _redis_text(stored)
             await redis.delete(_reset_key(body.token))
     else:
         entry = _fallback_reset_tokens.pop(body.token, None)
