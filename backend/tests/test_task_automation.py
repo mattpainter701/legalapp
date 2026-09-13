@@ -40,6 +40,27 @@ def _approved_actor_has_legal_approval_capability(monkeypatch):
     monkeypatch.setattr(task_automation, "_actor_can_approve_legal_work", allow)
 
 
+@pytest.fixture(autouse=True)
+def _client_mail_smtp_fallback_enabled(monkeypatch):
+    """Keep the legacy SMTP transport open for this module.
+
+    Client correspondence sends from the firm's own connected mailbox and no
+    longer falls back to the platform relay unless an operator opts in. The
+    fixture tenant here has no cloud-mail grant, so without this every send
+    would report UNCONFIGURED.
+
+    That refusal is the point of the gate and is pinned in
+    ``test_connected_mail.py``. This module tests task-automation delivery
+    semantics — queueing, idempotency, kill switches, recipient rebinding,
+    audit records — for which the transport is incidental, so it opts in once
+    here rather than in each of the twenty-five tests that would otherwise
+    need it.
+    """
+    monkeypatch.setattr(
+        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
+    )
+
+
 class _RecordingSender:
     """Stand-in for EmailService.send_email that counts real sends."""
 
@@ -172,12 +193,6 @@ async def test_approving_a_drafted_email_sends_it_once(
 ):
     sender = _RecordingSender()
     monkeypatch.setattr(task_automation, "email_service", sender)
-    # The fixture tenant has no cloud-mail grant, and client mail no longer
-    # falls back to the platform relay unless an operator opts in. This test is
-    # about delivery semantics, not transport, so keep that path open.
-    monkeypatch.setattr(
-        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
-    )
     matter = await _matter(db_session, test_tenant, test_user)
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
     approved_snapshot = dict(task.pending_action)
@@ -266,12 +281,6 @@ async def test_sent_delivery_audit_prevents_task_deletion(
 ):
     sender = _RecordingSender()
     monkeypatch.setattr(task_automation, "email_service", sender)
-    # The fixture tenant has no cloud-mail grant, and client mail no longer
-    # falls back to the platform relay unless an operator opts in. These
-    # tests are about delivery semantics, not transport.
-    monkeypatch.setattr(
-        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
-    )
     matter = await _matter(db_session, test_tenant, test_user)
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
@@ -1943,12 +1952,6 @@ async def test_the_worker_delivers_a_queued_send(
 ):
     sender = _RecordingSender()
     monkeypatch.setattr(task_automation, "email_service", sender)
-    # The fixture tenant has no cloud-mail grant, and client mail no longer
-    # falls back to the platform relay unless an operator opts in. These
-    # tests are about delivery semantics, not transport.
-    monkeypatch.setattr(
-        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
-    )
     matter = await _matter(db_session, test_tenant, test_user)
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
@@ -2167,9 +2170,6 @@ async def test_stale_approval_conflict_includes_immutable_delivery_evidence(
     """A racing tab must learn that the reviewed email was actually sent."""
     sender = _RecordingSender()
     monkeypatch.setattr(task_automation, "email_service", sender)
-    monkeypatch.setattr(
-        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
-    )
     matter = await _matter(db_session, test_tenant, test_user)
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
     reviewed_version = task.version
