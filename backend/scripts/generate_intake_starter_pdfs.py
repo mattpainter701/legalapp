@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from math import ceil
 from pathlib import Path
 
 from reportlab.lib.colors import Color, black
@@ -33,11 +34,21 @@ PAGE_WIDTH, PAGE_HEIGHT = letter
 BODY = ("Helvetica", 9.5)
 BODY_BOLD = ("Helvetica-Bold", 9.5)
 LEADING = 13.0
+#: An inline box must be shorter than the line advance, or boxes on
+#: consecutive lines overlap and the form looks double-ruled.
+INLINE_HEIGHT = 12.0
+BLOCK_MIN_HEIGHT = 40.0
+BLOCK_LINE_HEIGHT = 11.5
+#: Below this, squeezing a box to fill a line looks worse than wrapping it.
+MIN_INLINE_WIDTH = 70.0
 FIELD_BORDER = Color(0.45, 0.5, 0.58)
 FIELD_FILL = Color(0.95, 0.96, 0.98)
 RULE = Color(0.78, 0.80, 0.84)
+_MAXLEN = 2000
 
-#: Placeholders whose answer is a paragraph, not a line.
+#: Placeholders whose answer is a paragraph, not a line. The last three are
+#: standalone paragraphs in the North Dakota agreement whose default is a
+#: sentence or more; they read as text if they are not given a block.
 MULTILINE = {
     "scope_of_representation",
     "excluded_matters",
@@ -53,6 +64,10 @@ MULTILINE = {
     "flat_fee_payment_terms",
     "authorized_disclosure_contacts",
     "known_deadlines",
+    "late_charge_terms",
+    "representation_limits",
+    "signing_authority_terms",
+    "additional_terms",
 }
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
@@ -67,10 +82,17 @@ _RUN = re.compile(r"(\{\{\s*[^}]+?\s*\}\}|\*\*)")
 class Sheet:
     """A paginated canvas that can place text and form fields as it goes."""
 
-    def __init__(self, path: Path, title: str, labels: dict[str, str]):
+    def __init__(
+        self,
+        path: Path,
+        title: str,
+        labels: dict[str, str],
+        defaults: dict[str, str] | None = None,
+    ):
         self.canvas = canvas.Canvas(str(path), pagesize=letter)
         self.canvas.setTitle(title)
         self.labels = labels
+        self.defaults = defaults or {}
         self.placed: set[str] = set()
         self.y = PAGE_HEIGHT - MARGIN
         self.page = 1
@@ -112,7 +134,14 @@ class Sheet:
         self.y -= 6
 
     def field(
-        self, name: str, x: float, y: float, width: float, *, multiline: bool = False
+        self,
+        name: str,
+        x: float,
+        y: float,
+        width: float,
+        *,
+        multiline: bool = False,
+        height: float | None = None,
     ) -> None:
         """Place one AcroForm field.
 
@@ -121,18 +150,26 @@ class Sheet:
         signature line — so both get a field of that name. PDF viewers keep
         same-named fields in sync, which is the behavior a reader expects, and
         Template Studio still discovers one logical field.
+
+        A field with a declared default is pre-filled with it. A jurisdiction or
+        a settled convention decides those terms, so printing the default shows
+        the firm the wording it is expected to accept, while the box stays
+        editable.
         """
 
-        height = 40.0 if multiline else 15.0
+        if height is None:
+            height = BLOCK_MIN_HEIGHT if multiline else INLINE_HEIGHT
         self.placed.add(name)
         self.canvas.acroForm.textfield(
             name=name,
+            value=self.defaults.get(name, ""),
             tooltip=self.labels.get(name, name),
             x=x,
             y=y,
             width=width,
             height=height,
             fontSize=9,
+            maxlen=_MAXLEN,
             borderWidth=0.6,
             borderColor=FIELD_BORDER,
             fillColor=FIELD_FILL,
@@ -143,14 +180,21 @@ class Sheet:
     def block_field(self, name: str, indent: float = 0.0) -> None:
         """Place a paragraph-sized answer box below the current line.
 
-        An AcroForm field is positioned by its bottom edge, so the cursor drops
-        the full height of the box plus a gap before it is drawn; otherwise the
-        box rides up over the question it belongs to.
+        The box grows to hold a declared default, so a sentence-sized default
+        such as the North Dakota representation limit is readable instead of
+        squeezed into a single line. An AcroForm field is positioned by its
+        bottom edge, so the cursor drops the full height of the box plus a gap
+        before it is drawn; otherwise the box rides up over the question it
+        belongs to.
         """
 
-        self.space(58)
-        self.y -= 46
-        self.field(name, MARGIN + indent, self.y, self.width - indent, multiline=True)
+        width = self.width - indent
+        default = self.defaults.get(name, "")
+        lines = max(2, ceil(len(default) / max(1.0, width / 4.6))) if default else 3
+        height = max(BLOCK_MIN_HEIGHT, lines * BLOCK_LINE_HEIGHT + 6)
+        self.space(height + 14)
+        self.y -= height + 6
+        self.field(name, MARGIN + indent, self.y, width, multiline=True, height=height)
         self.y -= 8
 
     def signature(self, label: str) -> None:
@@ -209,35 +253,77 @@ class Sheet:
         self.y -= LEADING
         x = left
         just_wrapped = False
-        for kind, value in tokens:
+        index = 0
+        total = len(tokens)
+        while index < total:
+            kind, value = tokens[index]
             if kind != "field" and just_wrapped and not value.strip(".,;:"):
                 # Punctuation orphaned onto its own line by the paragraph-sized
                 # field above it; the sentence reads correctly without it.
+                index += 1
                 continue
             just_wrapped = False
             if kind == "field":
-                multiline = value in MULTILINE
-                width = self.width - indent if multiline else 150.0
-                if multiline:
+                if value in MULTILINE:
                     if x > left:
                         self.y -= LEADING
                     self.block_field(value, indent)
                     x = left
                     just_wrapped = True
+                    index += 1
                     continue
-                if x + width > limit:
-                    self.y -= LEADING
-                    self.space(LEADING)
-                    x = left
+                # Measure any trailing punctuation as part of the box so a full
+                # stop never wraps to a line of its own at the right margin.
+                tail = 0.0
+                cursor = index + 1
+                while cursor < total:
+                    next_kind, next_value = tokens[cursor]
+                    if next_kind == "field" or next_value.strip(".,;:·-—|)"):
+                        break
+                    tail += self.canvas.stringWidth(next_value + " ", *BODY)
+                    cursor += 1
+                preferred = 150.0
+                default = self.defaults.get(value, "")
+                if default:
+                    preferred = max(
+                        preferred,
+                        self.canvas.stringWidth(default, "Helvetica", 9) + 12,
+                    )
+                # Punctuation sits tight against the box; a word gets a gap.
+                gap_after = (
+                    0.0
+                    if index + 1 < total
+                    and tokens[index + 1][0] != "field"
+                    and not tokens[index + 1][1].strip(".,;:·-—|)")
+                    else 4.0
+                )
+                available = limit - x - tail - gap_after
+                if available < preferred:
+                    if not default and available >= MIN_INLINE_WIDTH:
+                        # Fill the rest of the line rather than push a stub box
+                        # to the next one; the sentence keeps its shape.
+                        width = available
+                    else:
+                        # A box holding a default wraps instead of being
+                        # clipped, so the whole term stays readable.
+                        self.y -= LEADING
+                        self.space(LEADING)
+                        x = left
+                        width = min(preferred, limit - x - tail - gap_after)
+                else:
+                    width = preferred
                 self.field(value, x, self.y - 3.5, width)
-                x += width + 4
+                x += width
                 if caption:
                     label = self.labels.get(value, value)
                     self.canvas.setFont("Helvetica", 7.5)
                     self.canvas.setFillColor(Color(0.42, 0.45, 0.5))
-                    self.canvas.drawString(x, self.y, label)
+                    self.canvas.drawString(x + 4, self.y, label)
                     self.canvas.setFillColor(black)
-                    x += self.canvas.stringWidth(label, "Helvetica", 7.5) + 10
+                    x += 4 + self.canvas.stringWidth(label, "Helvetica", 7.5) + 10
+                else:
+                    x += gap_after
+                index += 1
                 continue
             font = BODY_BOLD if kind == "bold" else BODY
             word = value + " "
@@ -246,9 +332,15 @@ class Sheet:
                 self.y -= LEADING
                 self.space(LEADING)
                 x = left
+            if x == left and not value.strip(".,;:·-—|)"):
+                # A separator that wrapped to the margin reads as a mistake;
+                # drop it rather than open a line with it.
+                index += 1
+                continue
             self.canvas.setFont(*font)
             self.canvas.drawString(x, self.y, word)
             x += advance
+            index += 1
         self.y -= gap
 
     def row(self, label: str, body: str) -> None:
@@ -277,6 +369,11 @@ class Sheet:
             x += width
 
     def save(self) -> None:
+        # Declared defaults are pre-filled as field values, but reportlab writes
+        # no appearance stream for them. Without this a viewer that does not
+        # regenerate appearances shows the boxes empty; with it every reader
+        # draws the value where the client expects to see it.
+        self.canvas.acroForm.extras["NeedAppearances"] = b"true"
         self.canvas.save()
 
 
@@ -284,10 +381,14 @@ def _labels(document) -> dict[str, str]:
     return {field.name: field.label for field in document.fields}
 
 
+def _defaults(document) -> dict[str, str]:
+    return {field.name: field.default for field in document.fields if field.default}
+
+
 def render_document(document, path: Path) -> Path:
     """Render one starter template, following its markdown structure."""
 
-    sheet = Sheet(path, document.title, _labels(document))
+    sheet = Sheet(path, document.title, _labels(document), _defaults(document))
     in_table = False
     prose: list[str] = []
 
