@@ -16,7 +16,7 @@ LawHand backend -> authenticated SMTP submission -> transactional relay (Resend)
 
 | | Matter correspondence | System email |
 |---|---|---|
-| Sends as | The lawyer's or firm's mailbox | `no-reply@getlawhand.com` |
+| Sends as | The lawyer's or firm's mailbox | `support@getlawhand.com` |
 | Transport | Microsoft Graph / Gmail OAuth (`connected_mail.py`) | SMTP relay (`email.py`) |
 | Failure is | Visible to the user who clicked send | Silent unless preflight catches it |
 
@@ -59,22 +59,29 @@ handshake this endpoint does not implement.
 
 ## Sending and receiving are independent
 
-The relay handles **sending only**. MX records stay on Microsoft 365, so
-`no-reply@getlawhand.com` can still be a mailbox that receives replies. Make it
-a **shared mailbox** (free in M365, no licence required) and forward it to
-`support@getlawhand.com`, so a client who replies to a reset email reaches a
-human instead of a black hole.
+The relay handles **sending only**, and it does not require the From address to
+be a mailbox that exists. Domain verification is what authorizes sending: once
+`getlawhand.com` is DKIM-verified, Resend will send as any address at that
+domain whether or not a mailbox backs it. MX records stay on Microsoft 365, so
+whichever address is used still receives replies there.
 
-Recommended addresses:
+That makes the From address a product decision rather than a technical one, and
+the answer is `support@getlawhand.com`:
 
 | Address | Purpose | Sends via |
 |---|---|---|
-| `no-reply@getlawhand.com` | Password reset, verification, security notices | Relay |
-| `support@getlawhand.com` | Human correspondence | M365 |
-| `notifications@getlawhand.com` | Product notifications (optional) | Relay |
+| `support@getlawhand.com` | Password reset, verification, human correspondence | Relay + M365 |
+| `notifications@getlawhand.com` | Product notifications, once they exist | Relay |
 
-Keeping security mail on its own address means a user who mutes product
-notifications has not also muted their password reset.
+A `no-reply@` address buys nothing here. Reputation is carried by the domain
+and the DKIM key, not the local part, so a separate sending address does not
+isolate anything — and a reply to a no-reply mailbox either bounces or is
+silently discarded, which for account-recovery mail is precisely when a
+confused user is most likely to reply.
+
+The split worth making later is by *purpose*, not by repliability: when product
+notifications are added, put them on `notifications@` so a user who filters or
+mutes them has not also filtered their own password reset.
 
 ## Manual setup steps
 
@@ -151,16 +158,65 @@ Two notes on the current zone:
   target, so publishing DMARC at `p=none` and ratcheting up is worth doing on
   its own merits.
 
-Ratchet DMARC from `p=none` to `p=quarantine` to `p=reject` once the aggregate
-reports show only legitimate sources passing — M365, Resend, and the Cloudflare
-Email Routing sender on `intake`.
+#### Building the DMARC record
 
-### 3. M365 shared mailbox
+Start in monitor mode. `p=none` changes nothing about how mail is delivered; it
+only asks receiving providers to send daily reports on what they saw claiming
+to be `getlawhand.com`.
 
-1. Microsoft 365 admin centre → **Teams & groups** → **Shared mailboxes** → add
-   `no-reply@getlawhand.com`.
-2. Add a forwarding rule to `support@getlawhand.com`.
-3. No licence is needed (shared mailboxes allow 50 GB).
+```
+Type:    TXT
+Name:    _dmarc
+Content: v=DMARC1; p=none; rua=mailto:<report address>
+Proxy:   DNS only
+```
+
+That is the whole record. Three deliberate omissions:
+
+- **No `ruf=`** (per-message failure reports). Microsoft and Google largely do
+  not send them, and where they are sent they can include message content and
+  recipient addresses — an unnecessary disclosure surface for a legal platform.
+- **No `adkim=`/`aspf=`.** Both default to relaxed, which is what is wanted.
+  Setting `aspf=s` (strict) would actively break alignment here, because SPF is
+  evaluated against the `send.getlawhand.com` Return-Path rather than the root.
+- **No `pct=`/`sp=`.** Neither does anything at `p=none`.
+
+Aggregate reports arrive as gzipped XML, several a day, and are unreadable by
+hand. Point `rua` at a free DMARC analyzer rather than a human mailbox; if you
+prefer to self-host the reports, create `dmarc@getlawhand.com` as a shared
+mailbox first, because the volume will bury `support@`. When the analyzer's
+address is on its own domain, that domain has to authorize your reports with a
+`getlawhand.com._report._dmarc.<analyzer-domain>` TXT record — analyzers
+publish this themselves, but it is the first thing to check if reports never
+arrive.
+
+#### Ratcheting up
+
+Leave `p=none` for two to four weeks and confirm from the reports that all
+three senders pass and align: Microsoft 365, Resend, and Cloudflare Email
+Routing on `intake`. Then `p=quarantine` (optionally `pct=25` first), then
+`p=reject`.
+
+One prerequisite before `p=reject`: **Microsoft 365 DKIM is not currently
+enabled** for this domain. The zone has no `selector1._domainkey` or
+`selector2._domainkey` CNAME, which means M365 mail is signed with the tenant's
+`onmicrosoft.com` key — that does not align with `getlawhand.com`, so M365 mail
+passes DMARC on SPF alignment alone today. SPF alignment breaks whenever a
+message is forwarded, so at `p=reject` forwarded staff mail would start being
+rejected outright. Enable DKIM for the domain in the Microsoft 365 Defender
+portal and add the two CNAMEs it issues before tightening past `quarantine`.
+
+### 3. Mailboxes
+
+Nothing to do if system email sends as `support@getlawhand.com` — that mailbox
+already exists and already receives replies through the Microsoft 365 MX
+record.
+
+Only when `notifications@getlawhand.com` is introduced does a mailbox need
+creating: Microsoft 365 admin centre → **Teams & groups** → **Shared
+mailboxes**, forwarding to `support@`. No licence is needed (shared mailboxes
+allow 50 GB). Sending from it works the moment the domain is verified; the
+mailbox exists only so replies land somewhere a human reads.
 
 ### 4. Bounce webhook
 
@@ -196,7 +252,7 @@ EMAIL_HOST=smtp.resend.com
 EMAIL_PORT=587                   # STARTTLS; the client keys off 587 specifically
 EMAIL_USER=resend                # literal string, not an address
 EMAIL_PASS=<Resend API key>
-EMAIL_FROM=no-reply@getlawhand.com
+EMAIL_FROM=support@getlawhand.com
 EMAIL_SUPPRESSION_ENABLED=true
 PLATFORM_EMAIL_WEBHOOK_SECRET=whsec_<from the Resend webhook endpoint>
 ```
