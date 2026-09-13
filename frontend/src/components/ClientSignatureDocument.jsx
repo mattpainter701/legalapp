@@ -14,6 +14,7 @@ import {
   SIGNED_COPY_RECEIVED_MESSAGE,
   signedOutcomeMessage,
 } from './portal/signingMessages'
+import SignaturePad from './portal/SignaturePad'
 
 // Fields the client types into and that travel to the server as `field_values`.
 // Signature, initials and date fields are stamped server-side from the adopted
@@ -72,7 +73,7 @@ function todayLabel() {
   return new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-function FieldOverlay({ field, rect, value, adopted, typedName, onChange, onAdopt }) {
+function FieldOverlay({ field, rect, value, adopted, typedName, drawnSignature, onChange, onAdopt }) {
   const label = fieldLabel(field)
   const style = {
     left: rect.x,
@@ -112,7 +113,9 @@ function FieldOverlay({ field, rect, value, adopted, typedName, onChange, onAdop
         className={`${base} flex items-center justify-start overflow-hidden rounded border-2 border-dashed px-2 text-left transition-colors ${signed ? 'border-brand-green bg-brand-green/5' : 'border-brand-accent bg-brand-accent/10 hover:bg-brand-accent/20'}`}
       >
         {signed
-          ? <span className="font-serif italic leading-none whitespace-nowrap" style={SIGNATURE_FONT}>{isInitials ? initialsFor(typedName) : typedName.trim()}</span>
+          ? (!isInitials && drawnSignature
+            ? <img src={drawnSignature} alt={`Your drawn signature for ${label}`} className="h-full max-w-full object-contain object-left" />
+            : <span className="font-serif italic leading-none whitespace-nowrap" style={SIGNATURE_FONT}>{isInitials ? initialsFor(typedName) : typedName.trim()}</span>)
           : <span className="text-[11px] font-semibold uppercase tracking-wide text-brand-accent">{isInitials ? 'Click to initial' : 'Click to sign'}</span>}
       </button>
     )
@@ -189,7 +192,7 @@ function FieldOverlay({ field, rect, value, adopted, typedName, onChange, onAdop
 
 // One rendered page with its overlays. The viewport pdf.js reports after the
 // draw is what turns PDF points into canvas pixels, and it is per page.
-function SigningPage({ document, page, zoom, fields, interactive, onError, values, adopted, typedName, onChange, onAdopt }) {
+function SigningPage({ document, page, zoom, fields, interactive, onError, values, adopted, typedName, drawnSignature, onChange, onAdopt }) {
   const [viewport, setViewport] = useState(null)
   const onViewport = useCallback((value) => setViewport(value), [])
   const rotated = Math.abs((page.rotation || 0) % 180) === 90
@@ -210,6 +213,7 @@ function SigningPage({ document, page, zoom, fields, interactive, onError, value
           value={values[field.field_id]}
           adopted={Boolean(adopted[field.field_id])}
           typedName={typedName}
+          drawnSignature={drawnSignature}
           onChange={onChange}
           onAdopt={onAdopt}
         />
@@ -268,9 +272,9 @@ function PaperPath({ request, busy, onUpload, prominent }) {
 /**
  * The client's in-document signing form: every page of the PDF drawn in a
  * continuous scroll, the request's fields laid over their rects as live inputs,
- * and the typed legal name adopted as the signature at each signature field.
- * `onChanged(result)` fires after a successful sign or upload so the host can
- * reload the request list.
+ * and the typed legal name (or a signature drawn on the pad) adopted as the
+ * signature at each signature field. `onChanged(result)` fires after a
+ * successful sign or upload so the host can reload the request list.
  */
 export default function ClientSignatureDocument({ request, onChanged, onSessionError }) {
   const [source, setSource] = useState(null)
@@ -281,6 +285,11 @@ export default function ClientSignatureDocument({ request, onChanged, onSessionE
   const [values, setValues] = useState({})
   const [adopted, setAdopted] = useState({})
   const [typedName, setTypedName] = useState('')
+  // 'typed' stamps the name in the signature font; 'drawn' stamps the PNG
+  // from the pad. The legal name is required either way: it is what the
+  // evidence certificate records.
+  const [signatureMode, setSignatureMode] = useState('typed')
+  const [drawnSignature, setDrawnSignature] = useState('')
   const [consent, setConsent] = useState(false)
   const [hint, setHint] = useState('')
   const [error, setError] = useState('')
@@ -360,7 +369,9 @@ export default function ClientSignatureDocument({ request, onChanged, onSessionE
   }
   const completedCount = requiredFields.filter(isComplete).length
   const fieldsReady = !fillMode || completedCount === requiredFields.length
-  const canSign = fieldsReady && !manifestLoading && Boolean(typedName.trim()) && consent && !busy
+  const drawn = signatureMode === 'drawn' ? drawnSignature : ''
+  const signatureReady = signatureMode !== 'drawn' || Boolean(drawnSignature)
+  const canSign = fieldsReady && !manifestLoading && Boolean(typedName.trim()) && signatureReady && consent && !busy
 
   const widestPage = pages.reduce((widest, page) => {
     const rotated = Math.abs((page.rotation || 0) % 180) === 90
@@ -394,6 +405,7 @@ export default function ClientSignatureDocument({ request, onChanged, onSessionE
         consent_to_electronic_signature: true,
         consent_text_version: CONSENT_TEXT_VERSION,
         field_values,
+        ...(drawn ? { drawn_signature_png: drawn } : {}),
       })
       setOutcome({ kind: 'signed', result })
       await onChanged?.(result)
@@ -448,7 +460,7 @@ export default function ClientSignatureDocument({ request, onChanged, onSessionE
           {manifest?.fill_supported === false || manifestFailed
             ? 'This form cannot be filled in the browser.'
             : 'The document could not be displayed in the browser.'}{' '}
-          Download it, complete and sign it, then upload the signed copy — or type your legal name below to sign electronically.
+          Download it, complete and sign it, then upload the signed copy — or type your legal name (or draw your signature) below to sign electronically.
         </p>
       )}
 
@@ -482,6 +494,7 @@ export default function ClientSignatureDocument({ request, onChanged, onSessionE
                 values={values}
                 adopted={adopted}
                 typedName={typedName}
+                drawnSignature={drawn}
                 onChange={changeValue}
                 onAdopt={adopt}
               />
@@ -505,9 +518,32 @@ export default function ClientSignatureDocument({ request, onChanged, onSessionE
           placeholder="e.g. Jane A. Smith"
           className={INPUT_CLASS}
         />
+        <div role="radiogroup" aria-label="Signature style" className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-brand-ink-2">Sign by:</span>
+          {[['typed', 'Typing my name'], ['drawn', 'Drawing my signature']].map(([mode, text]) => (
+            <button
+              key={mode}
+              type="button"
+              role="radio"
+              aria-checked={signatureMode === mode}
+              onClick={() => setSignatureMode(mode)}
+              className={`rounded-full border px-3 py-1 font-semibold transition-colors ${signatureMode === mode ? 'border-brand-ink bg-brand-ink text-white' : 'border-brand-line text-brand-ink-2 hover:text-brand-ink'}`}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+        {signatureMode === 'drawn' && (
+          <div className="mt-3">
+            <SignaturePad value={drawnSignature} onChange={setDrawnSignature} disabled={Boolean(busy)} />
+          </div>
+        )}
         {typedName.trim() && (
           <p className="mt-2 text-xs text-brand-ink-2">
-            Your signature: <span className="font-serif italic text-xl text-brand-ink" style={SIGNATURE_FONT}>{typedName.trim()}</span>
+            Your signature:{' '}
+            {drawn
+              ? <img src={drawn} alt="Your drawn signature" className="inline-block h-10 align-middle" />
+              : <span className="font-serif italic text-xl text-brand-ink" style={SIGNATURE_FONT}>{typedName.trim()}</span>}
             {fillMode && requiredFields.some((field) => SIGNING_KINDS.has(field.kind) && !adopted[field.field_id]) && ' — click each signature field on the document to place it.'}
           </p>
         )}
@@ -519,7 +555,7 @@ export default function ClientSignatureDocument({ request, onChanged, onSessionE
           <p className="text-sm text-brand-ink-2" aria-live="polite">
             {fillMode
               ? `${completedCount} of ${requiredFields.length} required fields complete`
-              : manifestLoading ? 'Preparing your form…' : 'Your typed name is adopted as your signature.'}
+              : manifestLoading ? 'Preparing your form…' : drawn ? 'Your drawn signature is adopted as your signature.' : 'Your typed name is adopted as your signature.'}
           </p>
           <button type="button" onClick={sign} disabled={!canSign} className={`w-full sm:w-auto ${PRIMARY_BUTTON}`}>
             {busy === 'signing' ? 'Recording your signature…' : 'Sign document'}

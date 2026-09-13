@@ -2,6 +2,39 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.13.1",
+      "version": "2026.09.13.1",
+      "title": "Draw your signature, place signing spots, and hear when clients sign",
+      "published_at": "2026-09-13",
+      "summary": "Clients can draw their signature, paperwork forms get the E-Signature panel's signing-spot placement, signed forms read as signed while filing, you get an email when the client signs, and requests go out from your mailbox.",
+      "highlights": [
+        {
+          "title": "Draw your signature in the portal",
+          "description": "Clients can now draw their signature with a mouse, pen or finger as well as type their name. The drawing is stamped on the signed copy; the typed name stays on the record."
+        },
+        {
+          "title": "Place signing spots on paperwork forms",
+          "description": "Send client paperwork now offers the same signing-position review as the E-Signature panel, so a PDF with no form fields still gets a clickable place to sign."
+        },
+        {
+          "title": "Signed forms read as signed while filing",
+          "description": "When every signer has signed but the copy is still being filed to your storage, the client checklist and your paperwork strip say Signed, filing instead of asking again."
+        },
+        {
+          "title": "An email when the client signs",
+          "description": "Whoever sent a document for signature gets an email the moment the last signer signs, before the copy is filed, so a storage problem cannot hide that the client acted."
+        },
+        {
+          "title": "Signature requests come from your mailbox",
+          "description": "Invitations and reminders to sign now leave through the sending user's connected Google or Microsoft mailbox, as intake paperwork does, so your sent folder keeps the record."
+        },
+        {
+          "title": "Starter templates say what they need",
+          "description": "The starter fee agreement and intake forms are drafts until an attorney tests and publishes them. They no longer show as ready, and using one says to publish it first."
+        }
+      ]
+    },
+    {
       "id": "2026.09.12.7",
       "version": "2026.09.12.7",
       "title": "Rename your firm and edit its profile in one place",

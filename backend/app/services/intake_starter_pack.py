@@ -922,6 +922,10 @@ async def install(db: AsyncSession, tenant_id: UUID) -> list[dict[str, Any]]:
             description=document.description,
             visibility="tenant",
             status="draft",
+            # The column defaults to active, which would list the draft as
+            # generatable while the render gate still refuses it for lacking a
+            # published version. A draft is inactive until it is published.
+            is_active=False,
             format="markdown",
             kind="client_intake",
             jurisdiction=document.jurisdiction or None,

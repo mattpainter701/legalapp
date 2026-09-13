@@ -199,6 +199,99 @@ describe('ClientSignatureDocument', () => {
     await waitFor(() => expect(signClientPortalSignature).toHaveBeenCalledWith('req-1', expect.objectContaining({ typed_signature: 'Jane Smith', field_values: {} })))
   })
 
+  it('stamps a drawn signature at the signature fields and sends it with the typed name', async () => {
+    const user = userEvent.setup()
+    const drawn = 'data:image/png;base64,iVBORw0KGgo='
+    const context = { scale: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), clearRect: vi.fn() }
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+    const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(drawn)
+    getClientPortalSignatureFields.mockResolvedValue({
+      ...manifest(),
+      fields: manifest().fields.filter((field) => ['acroform:client_signature', 'acroform:client_initials', 'field-0-0'].includes(field.field_id)),
+    })
+    signClientPortalSignature.mockResolvedValue({ id: 'req-1', status: 'completed', completion_pending: false })
+    try {
+      render(<ClientSignatureDocument request={request()} onChanged={vi.fn()} />)
+      const signatureField = await screen.findByRole('button', { name: 'Client signature' })
+
+      await user.click(screen.getByRole('radio', { name: 'Drawing my signature' }))
+      const pad = screen.getByRole('img', { name: 'Draw your signature' })
+      // The signer cannot sign with an empty pad even once the name is typed.
+      await user.type(screen.getByLabelText(/Type your full legal name/), 'Jane Quinn Smith')
+      await user.click(screen.getByRole('checkbox', { name: /I consent/ }))
+      expect(screen.getByRole('button', { name: 'Sign document' })).toBeDisabled()
+
+      fireEvent.pointerDown(pad, { clientX: 20, clientY: 80, pointerId: 1 })
+      fireEvent.pointerMove(pad, { clientX: 120, clientY: 40, pointerId: 1 })
+      fireEvent.pointerUp(pad, { clientX: 120, clientY: 40, pointerId: 1 })
+      expect(context.lineTo).toHaveBeenCalled()
+      expect(toDataURL).toHaveBeenCalledWith('image/png')
+
+      await user.click(signatureField)
+      await user.click(screen.getByRole('button', { name: 'Client initials' }))
+      // The drawing appears at the signature line; initials stay typed.
+      expect(within(signatureField).getByRole('img', { name: /Your drawn signature/ })).toHaveAttribute('src', drawn)
+      expect(screen.getByRole('button', { name: 'Client initials' })).toHaveTextContent('JQS')
+
+      const sign = screen.getByRole('button', { name: 'Sign document' })
+      expect(sign).toBeEnabled()
+      await user.click(sign)
+      await waitFor(() => expect(signClientPortalSignature).toHaveBeenCalledWith('req-1', expect.objectContaining({
+        typed_signature: 'Jane Quinn Smith',
+        drawn_signature_png: drawn,
+      })))
+
+      // Clearing the pad drops the drawing and the typed name takes over again.
+    } finally {
+      getContext.mockRestore()
+      toDataURL.mockRestore()
+    }
+  })
+
+  it('clearing the pad falls back to the typed name and sends no drawing', async () => {
+    const user = userEvent.setup()
+    const context = { scale: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), clearRect: vi.fn() }
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+    const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,iVBORw0KGgo=')
+    getClientPortalSignatureFields.mockResolvedValue({ ...manifest(), fill_supported: false })
+    signClientPortalSignature.mockResolvedValue({ id: 'req-1', status: 'completed' })
+    try {
+      render(<ClientSignatureDocument request={request()} />)
+      await screen.findByText(/This form cannot be filled in the browser/)
+      await user.click(screen.getByRole('radio', { name: 'Drawing my signature' }))
+      const pad = screen.getByRole('img', { name: 'Draw your signature' })
+      fireEvent.pointerDown(pad, { clientX: 20, clientY: 80, pointerId: 1 })
+      fireEvent.pointerUp(pad, { clientX: 60, clientY: 40, pointerId: 1 })
+      await user.click(screen.getByRole('button', { name: 'Clear' }))
+      expect(context.clearRect).toHaveBeenCalled()
+      await user.type(screen.getByLabelText(/Type your full legal name/), 'Jane Smith')
+      await user.click(screen.getByRole('checkbox', { name: /I consent/ }))
+      // An empty pad in draw mode blocks signing; switching back to typing does not.
+      expect(screen.getByRole('button', { name: 'Sign document' })).toBeDisabled()
+      await user.click(screen.getByRole('radio', { name: 'Typing my name' }))
+      await user.click(screen.getByRole('button', { name: 'Sign document' }))
+      await waitFor(() => expect(signClientPortalSignature).toHaveBeenCalledWith('req-1', expect.objectContaining({ typed_signature: 'Jane Smith' })))
+      expect(signClientPortalSignature.mock.calls[0][1]).not.toHaveProperty('drawn_signature_png')
+    } finally {
+      getContext.mockRestore()
+      toDataURL.mockRestore()
+    }
+  })
+
+  it('says so when the browser cannot draw and keeps the typed path', async () => {
+    const user = userEvent.setup()
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    try {
+      render(<ClientSignatureDocument request={request()} />)
+      await screen.findByLabelText('Client name')
+      await user.click(screen.getByRole('radio', { name: 'Drawing my signature' }))
+      expect(screen.getByRole('status')).toHaveTextContent('Drawing is not available in this browser')
+      expect(screen.queryByRole('img', { name: 'Draw your signature' })).not.toBeInTheDocument()
+    } finally {
+      getContext.mockRestore()
+    }
+  })
+
   it('never dead-ends when the field manifest cannot be loaded', async () => {
     getClientPortalSignatureFields.mockRejectedValue(new Error('offline'))
     render(<ClientSignatureDocument request={request()} />)

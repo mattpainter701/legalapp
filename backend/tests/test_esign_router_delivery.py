@@ -51,7 +51,7 @@ async def test_resend_open_request_notifies_actionable_signers(monkeypatch):
     async def load(*args):
         return row
 
-    async def notify(req):
+    async def notify(_db, req):
         notified.append(req)
 
     async def response(_db, req):
@@ -124,7 +124,7 @@ async def test_send_dispatches_provider_and_signer_invitation(monkeypatch):
     async def unchanged(*args):
         return True
 
-    async def notify(request):
+    async def notify(_db, request):
         notified.append(request)
 
     async def response(_db, request):

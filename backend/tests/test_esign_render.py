@@ -120,3 +120,74 @@ def test_values_that_cannot_fit_their_widget_are_reported_not_truncated():
             field_values={"acroform:client_name": "x" * 5000},
             stamps=[],
         )
+
+
+def _signature_png(width=300, height=90) -> bytes:
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.line(
+        [(10, 70), (90, 20), (150, 75), (280, 15)], fill=(20, 20, 80, 255), width=5
+    )
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _images_on_page(page) -> list:
+    resources = page.get("/Resources") or {}
+    xobjects = resources.get("/XObject") or {}
+    return [
+        name
+        for name, ref in xobjects.items()
+        if ref.get_object().get("/Subtype") == "/Image"
+    ]
+
+
+def test_a_drawn_signature_is_painted_as_an_image_with_the_caption():
+    source = flat_agreement_pdf()
+    output = render_executed_pdf(
+        source,
+        field_values={},
+        stamps=[
+            Stamp(
+                1,
+                (156.0, 196.0, 356.0, 224.0),
+                "signature",
+                "Jane Client",
+                CAPTION,
+                image=_signature_png(),
+            ),
+            Stamp(1, (400.0, 196.0, 500.0, 224.0), "date", "September 12, 2026"),
+        ],
+    )
+
+    reader = _open_pdf(output)
+    assert _images_on_page(reader.pages[0])
+    text = _text(output)
+    # The drawing replaces the typed name on the line; the evidence caption stays.
+    assert "Jane Client" not in text
+    assert "Signed electronically" in text
+    assert "September 12, 2026" in text
+
+
+def test_initials_keep_the_typed_form_even_when_a_drawing_exists():
+    source = flat_agreement_pdf()
+    output = render_executed_pdf(
+        source,
+        field_values={},
+        stamps=[
+            Stamp(
+                1,
+                (400.0, 300.0, 460.0, 330.0),
+                "initials",
+                "JC",
+                None,
+                image=_signature_png(),
+            )
+        ],
+    )
+    reader = _open_pdf(output)
+    assert not _images_on_page(reader.pages[0])
+    assert "JC" in _text(output)

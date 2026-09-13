@@ -17,6 +17,9 @@ class IntakeDocumentSelection(BaseModel):
     label: str = Field(min_length=1, max_length=200)
     requires_signature: bool = True
     due_at: datetime | None = None
+    # Signing blocks staff placed on this PDF in the paperwork drawer, in the
+    # same shape the E-Signature panel sends. Empty means detect them.
+    positioned_fields: list[dict] = Field(default_factory=list, max_length=100)
 
 
 class IntakeUploadRequirement(BaseModel):
@@ -28,6 +31,9 @@ class IntakeUploadRequirement(BaseModel):
 
 class IntakeStart(BaseModel):
     agreement_document_id: uuid.UUID | None = None
+    agreement_positioned_fields: list[dict] = Field(
+        default_factory=list, max_length=100
+    )
     selected_documents: list[IntakeDocumentSelection] = Field(
         default_factory=list, max_length=10
     )

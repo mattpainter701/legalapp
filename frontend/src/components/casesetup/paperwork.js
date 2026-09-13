@@ -95,6 +95,8 @@ export function requirementState(requirement, key = '') {
     return { label: requirement.kind ? 'Received' : 'Complete', tone: 'done' }
   }
   if (requirement.submitted_document_id) return { label: 'Awaiting review', tone: 'review' }
+  // Every signer signed; the executed copy is still being filed to storage.
+  if (requirement.signed_pending_filing) return { label: 'Signed — filing', tone: 'waiting' }
   return { label: signed ? 'Needs signature' : 'Outstanding', tone: 'waiting' }
 }
 
@@ -150,6 +152,9 @@ export function paperworkOptions(draft, timeZone) {
     sms_permission_verified: draft.smsPermissionVerified,
     sms_case_updates_verified: Boolean(draft.smsCaseUpdatesVerified),
     agreement_document_id: draft.agreementDocumentId || null,
+    // Signing blocks staff placed on the PDF in the drawer; empty means the
+    // server detects the signature line itself.
+    agreement_positioned_fields: draft.agreementDocumentId ? (draft.agreementPlacements || []) : [],
     agreement_due_at: dueDateToIso(draft.agreementDue, timeZone),
     questionnaire_due_at: null,
     include_questionnaire: false,
@@ -161,18 +166,21 @@ export function paperworkOptions(draft, timeZone) {
         label: draft.intakeFormLabel || 'Client intake form',
         requires_signature: draft.intakeFormRequiresSignature !== false,
         due_at: dueDateToIso(draft.intakeFormDue, timeZone),
+        positioned_fields: draft.intakeFormRequiresSignature !== false ? (draft.intakeFormPlacements || []) : [],
       }] : []),
       ...(draft.questionnaireDocumentId ? [{
         document_id: draft.questionnaireDocumentId,
         label: draft.questionnaireLabel || 'Client questionnaire',
         requires_signature: draft.questionnaireRequiresSignature !== false,
         due_at: dueDateToIso(draft.questionnaireDue, timeZone),
+        positioned_fields: draft.questionnaireRequiresSignature !== false ? (draft.questionnairePlacements || []) : [],
       }] : []),
       ...forms.map(form => ({
         document_id: form.documentId,
         label: form.label,
         requires_signature: form.requiresSignature,
         due_at: dueDateToIso(form.due, timeZone),
+        positioned_fields: form.requiresSignature ? (form.placements || []) : [],
       })),
     ],
     // Records are an explicit opt-in; an unticked section sends nothing even
@@ -191,14 +199,17 @@ export function paperworkOptions(draft, timeZone) {
 
 export const emptyDraft = {
   agreementDocumentId: '',
+  agreementPlacements: [],
   agreementDue: '',
   intakeFormDocumentId: '',
   intakeFormLabel: '',
   intakeFormRequiresSignature: true,
+  intakeFormPlacements: [],
   intakeFormDue: '',
   questionnaireDocumentId: '',
   questionnaireLabel: '',
   questionnaireRequiresSignature: true,
+  questionnairePlacements: [],
   questionnaireDue: '',
   forms: [],
   requestUploads: false,
