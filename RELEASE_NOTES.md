@@ -16,6 +16,15 @@ Signed forms no longer ask for a signature again while the signed copy is being 
 - **Signature requests come from your mailbox.** Invitations and reminders to sign now leave through the sending user's connected Google or Microsoft mailbox, as intake paperwork does, so your sent folder keeps the record.
 - **Starter templates say what they need.** The starter fee agreement and intake forms are drafts until an attorney tests and publishes them. They no longer show as ready, and using one says to publish it first.
 
+## 2026.09.12.6 — Answers keep running when you leave the chat
+
+Released September 12, 2026.
+
+A long answer no longer disappears when you open another part of LawHand while it is being written. It keeps going, and it is there when you come back to the conversation.
+
+- **Leave the chat without losing the answer.** Opening matters, invoices or any other screen mid-answer used to cancel it. The answer now finishes and is saved to the conversation.
+- **Pick the answer back up where it got to.** Reopen the conversation while it is still being written and the answer carries on in front of you instead of showing only your question.
+
 ## 2026.09.12.5 — Sessions that end when you end them
 
 Released September 12, 2026.
