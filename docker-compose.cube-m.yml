@@ -70,12 +70,23 @@ services:
     environment:
       # The host env file has never set these, so every process ran the code
       # default of 5 + 5 connections and the scheduler starved its pool on
-      # 2026-09-11. Pin the reviewed production pool. Budget: 2 backend workers
-      # x 16 + scheduler 16 = 48 pooled connections against PostgreSQL's
-      # default max_connections of 100, leaving room for the migrator, the
-      # scheduler's unpooled advisory locks, backups and operator sessions.
-      DATABASE_POOL_SIZE: "8"
-      DATABASE_MAX_OVERFLOW: "8"
+      # 2026-09-11. Pin the reviewed production pool. Budget: every process
+      # opens the request pool AND the generation pool, so it is
+      # 2 backend workers x (6 + 6 + 3 + 2) + scheduler 17 = 51 pooled
+      # connections against PostgreSQL's default max_connections of 100,
+      # leaving room for the migrator, the scheduler's unpooled advisory
+      # locks, backups and operator sessions. The request half shrank from
+      # 8 + 8 because chat turns no longer contend for it: an ordinary request
+      # holds a connection for milliseconds, a chat turn for the length of an
+      # LLM call, and only the latter needed the headroom.
+      DATABASE_POOL_SIZE: "6"
+      DATABASE_MAX_OVERFLOW: "6"
+      # Chat turns pin one connection each for the whole turn, so they get
+      # their own pool: a burst of chat then cannot starve ordinary matter,
+      # task and document reads. 3 + 2 per worker is 10 concurrent turns on
+      # this two-worker profile.
+      DATABASE_GENERATION_POOL_SIZE: "3"
+      DATABASE_GENERATION_MAX_OVERFLOW: "2"
     deploy:
       resources:
         limits:
@@ -84,9 +95,14 @@ services:
 
   scheduler:
     environment:
-      # Same reviewed pool as the backend; see the budget note above.
-      DATABASE_POOL_SIZE: "8"
-      DATABASE_MAX_OVERFLOW: "8"
+      # Same reviewed pool as the backend; see the budget note above. The
+      # scheduler serves no chat traffic, so its generation pool stays idle —
+      # SQLAlchemy opens connections lazily — but it is pinned here so the
+      # connection budget holds even if a scheduled job ever takes a lease.
+      DATABASE_POOL_SIZE: "6"
+      DATABASE_MAX_OVERFLOW: "6"
+      DATABASE_GENERATION_POOL_SIZE: "3"
+      DATABASE_GENERATION_MAX_OVERFLOW: "2"
     deploy:
       resources:
         limits:

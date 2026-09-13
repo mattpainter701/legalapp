@@ -1861,8 +1861,16 @@ def test_cube_m_pins_database_pool_within_the_postgres_connection_budget() -> No
         environment = services[service]["environment"]
         pool = int(environment["DATABASE_POOL_SIZE"])
         overflow = int(environment["DATABASE_MAX_OVERFLOW"])
-        assert (pool, overflow) == (8, 8), service
-        per_process[service] = pool + overflow
+        assert (pool, overflow) == (6, 6), service
+        # Chat turns draw from a second, separate pool so a burst of
+        # generation cannot starve ordinary reads. Every process opens both,
+        # so both count against max_connections and both must be pinned here —
+        # leaving the generation pool at the code default would silently widen
+        # the budget this test exists to hold.
+        generation_pool = int(environment["DATABASE_GENERATION_POOL_SIZE"])
+        generation_overflow = int(environment["DATABASE_GENERATION_MAX_OVERFLOW"])
+        assert (generation_pool, generation_overflow) == (3, 2), service
+        per_process[service] = pool + overflow + generation_pool + generation_overflow
 
     backend_workers = int(
         services["backend"]["command"].rsplit("--workers", 1)[1].split()[0]

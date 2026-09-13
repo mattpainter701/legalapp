@@ -26,11 +26,12 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from sqlalchemy import exists, select, func, text
+from sqlalchemy.exc import TimeoutError as SQLAlchemyPoolTimeout
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.research_metadata import research_source_metadata as _research_source_metadata
 from app.config import get_settings
-from app.database import get_db, set_tenant_context
+from app.database import get_db, get_generation_engine, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Document
@@ -1413,6 +1414,10 @@ _GENERATION_BUSY_DETAIL = (
     "A response is already being generated for this conversation. "
     "Wait for it to finish before sending or deleting."
 )
+_GENERATION_CAPACITY_DETAIL = (
+    "The assistant is at capacity right now. Retry this message in a moment — "
+    "nothing was lost."
+)
 _MATTER_RELINK_FORBIDDEN_DETAIL = (
     "A conversation with messages or attachments cannot be moved to a different "
     "matter. Start a new conversation for the target matter."
@@ -1544,14 +1549,34 @@ async def _try_conversation_generation_lease(
     bind = db.bind
     if bind is None:
         raise RuntimeError("Chat database session is not bound to an engine")
-    lock_engine = bind.engine if isinstance(bind, AsyncConnection) else bind
+    request_engine = bind.engine if isinstance(bind, AsyncConnection) else bind
+    # Draw the pinned turn connection from the generation pool, not the pool
+    # serving ordinary requests. The lock is session-level and held for the
+    # whole turn, so without the split a burst of concurrent chats would hold
+    # every request slot on the worker and time out unrelated reads.
+    lock_engine = get_generation_engine(request_engine)
 
     # The initial ownership lookup used the request session. End that read
     # transaction before pinning the turn connection so an active response
     # consumes exactly one pool slot rather than retaining both.
     await db.rollback()
 
-    connection = await lock_engine.connect()
+    try:
+        connection = await lock_engine.connect()
+    except SQLAlchemyPoolTimeout as exc:
+        # SQLAlchemy raises its own TimeoutError here, not the builtin.
+        # Every generation slot on this worker is on an in-flight turn. That is
+        # a capacity signal about the server, not about this conversation, so
+        # it is not the 409 a lock conflict returns.
+        logger.warning(
+            "Conversation generation pool exhausted conversation_id=%s",
+            conversation_id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=_GENERATION_CAPACITY_DETAIL,
+            headers={"Retry-After": "5"},
+        ) from exc
     lease_session = AsyncSession(
         bind=connection,
         expire_on_commit=False,
