@@ -95,7 +95,7 @@ def test_release_workflow_requires_and_verifies_windows_signatures():
     assert "-SkipExe" in workflow
     assert "environment:" in workflow and "name: agent-release" in workflow
     assert "deployment: false" in workflow
-    assert "repo:mattpainter701/legalapp:environment:agent-release" in workflow
+    assert "repo:mattpainter701/lawhand:environment:agent-release" in workflow
     assert "needs: [windows-sign, linux]" in workflow
     assert "lawhand-agent-windows-unsigned" in workflow
     assert "Upload unsigned executable handoff" in workflow

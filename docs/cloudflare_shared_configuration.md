@@ -18,7 +18,7 @@ The generic Cloudflare variables are synchronized to these active web repositori
 - `mattpainter701/perevagagroup`
 - `mattpainter701/cybersafeadvisor.com`
 - `mattpainter701/circuit-weaver-website`
-- `mattpainter701/legalapp`
+- `mattpainter701/lawhand`
 
 Do not infer that a newly created repository belongs on this list. Confirm its deployment model and least-privilege needs first.
 
@@ -33,7 +33,7 @@ These nonsecret variables may be used by every repository in the web allowlist:
 
 ## LawHand-only variables
 
-These nonsecret variables are scoped to `mattpainter701/legalapp`:
+These nonsecret variables are scoped to `mattpainter701/lawhand`:
 
 | Variable | Purpose |
 | --- | --- |
@@ -51,7 +51,7 @@ These nonsecret variables are scoped to `mattpainter701/legalapp`:
 
 ## LawHand inbound email resources
 
-These resources belong only to `mattpainter701/legalapp`. They are not shared
+These resources belong only to `mattpainter701/lawhand`. They are not shared
 with the generic web repository allowlist.
 
 | Resource | Canonical value | Purpose |
@@ -149,7 +149,7 @@ variables as part of QA setup.
 
 ## Change record
 
-On 2026-08-22, the generic variables were synchronized to the five repositories above, and the LawHand-only variables were added to `mattpainter701/legalapp`. No Cloudflare token or R2 credential was committed to Git or stored in an Actions variable.
+On 2026-08-22, the generic variables were synchronized to the five repositories above, and the LawHand-only variables were added to `mattpainter701/lawhand`. No Cloudflare token or R2 credential was committed to Git or stored in an Actions variable.
 
 On 2026-08-24, `intake.getlawhand.com` was onboarded to Email Routing, its
 catch-all was attached to `lawhand-inbound-email`, and the encrypted delivery

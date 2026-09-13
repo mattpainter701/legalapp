@@ -34,7 +34,7 @@ MANIFEST_PATH = Path(__file__).with_name("authority_manifest.json")
 DEFAULT_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 DEFAULT_USER_AGENT = (
     "LegalApp-AuthoritySync/0.1 "
-    "(+https://github.com/mattpainter701/legalapp; public legal-data research)"
+    "(+https://github.com/mattpainter701/lawhand; public legal-data research)"
 )
 SAFE_LOCAL_STORAGE_LICENSES = {
     "federal_public_domain",

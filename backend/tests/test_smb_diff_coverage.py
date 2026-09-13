@@ -115,7 +115,7 @@ async def test_register_agent_returns_cached_and_maps_failure(monkeypatch):
 def test_manifest_redirect_parser_rejects_bad_port_and_query():
     assert not smb._is_official_manifest_redirect("https://github.com:bad/path")
     assert not smb._is_official_manifest_redirect(
-        "https://github.com/mattpainter701/legalapp/releases/download/agent-v0.15.0/agent-update.json?x=1"
+        "https://github.com/mattpainter701/lawhand/releases/download/agent-v0.15.0/agent-update.json?x=1"
     )
 
 

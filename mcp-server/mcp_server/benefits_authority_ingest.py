@@ -27,7 +27,7 @@ from .database import connect
 from .loader import init_schema
 from .source_catalog import load_catalog, seed_catalog
 
-USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or "LegalApp-BenefitsAuthoritySync/0.1 (+https://github.com/mattpainter701/legalapp)"
+USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or "LegalApp-BenefitsAuthoritySync/0.1 (+https://github.com/mattpainter701/lawhand)"
 MAX_BYTES = 24 * 1024 * 1024
 DEFAULT_DELAY_SECONDS = 1.0
 ALLOWED_HOSTS = {"www.medicaid.gov", "medicaid.gov", "secure.ssa.gov", "www.ssa.gov", "ssa.gov"}

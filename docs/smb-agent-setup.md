@@ -291,7 +291,7 @@ manual bootstrap, portal updates are available.
 ```bash
 set -euo pipefail
 LAWHAND_UPDATE_DIR="$(mktemp -d)"
-LAWHAND_RELEASE_BASE="https://github.com/mattpainter701/legalapp/releases/latest/download"
+LAWHAND_RELEASE_BASE="https://github.com/mattpainter701/lawhand/releases/latest/download"
 curl --fail --location "$LAWHAND_RELEASE_BASE/lawhand-agent-linux-x86_64.tar.gz" \
   --output "$LAWHAND_UPDATE_DIR/lawhand-agent-linux-x86_64.tar.gz"
 curl --fail --location "$LAWHAND_RELEASE_BASE/SHA256SUMS.txt" \
