@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.12.6",
+      "version": "2026.09.12.6",
+      "title": "Answers keep running when you leave the chat",
+      "published_at": "2026-09-12",
+      "summary": "A long answer no longer disappears when you open another part of LawHand while it is being written. It keeps going, and it is there when you come back to the conversation.",
+      "highlights": [
+        {
+          "title": "Leave the chat without losing the answer",
+          "description": "Opening matters, invoices or any other screen mid-answer used to cancel it. The answer now finishes and is saved to the conversation."
+        },
+        {
+          "title": "Pick the answer back up where it got to",
+          "description": "Reopen the conversation while it is still being written and the answer carries on in front of you instead of showing only your question."
+        }
+      ]
+    },
+    {
       "id": "2026.09.12.5",
       "version": "2026.09.12.5",
       "title": "Sessions that end when you end them",

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { reportError } from '../utils/reportError'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppShell } from '../components/AppShell'
@@ -18,6 +18,20 @@ import {
   getLegalSourceHealth,
   updateMe,
 } from '../api'
+import {
+  GENERATION_ABORTED,
+  GENERATION_COMPLETE,
+  GENERATION_ERROR,
+  GENERATION_STREAMING,
+  abortChatGeneration,
+  beginChatGeneration,
+  countStreamingChatGenerations,
+  getChatGeneration,
+  patchChatGeneration,
+  releaseChatGeneration,
+  settleChatGeneration,
+  subscribeToChatGenerations,
+} from '../chatGenerations'
 import { AlertBanner } from '../components/ui'
 import { Briefcase, ChevronDown, ExternalLink, Link2, Search, Unlink } from 'lucide-react'
 
@@ -160,6 +174,56 @@ export function mergeRefreshedTranscript(serverMessages, optimisticUserMessage, 
   }
 
   return attachTurnReferences(next)
+}
+
+/**
+ * Render a registry generation into the transcript on screen.
+ *
+ * The first call for a turn places the streaming pair against whatever the
+ * server already holds — the page may have mounted after the turn began, in
+ * which case the persisted user message is already there and must not be
+ * duplicated. Later calls replace the streamed turn in place.
+ */
+export function upsertGenerationTurn(messages, generation) {
+  const next = Array.isArray(messages) ? [...messages] : []
+  const { userMessage, assistantMessage } = generation
+  const assistantIndex = next.findIndex((message) => message.id === assistantMessage.id)
+  if (assistantIndex >= 0) {
+    next[assistantIndex] = { ...next[assistantIndex], ...assistantMessage }
+    const userIndex = assistantIndex - 1
+    if (userIndex >= 0 && next[userIndex].role === 'user' && userMessage.referenceContext) {
+      next[userIndex] = { ...next[userIndex], referenceContext: userMessage.referenceContext }
+    }
+    return next
+  }
+
+  const merged = mergeRefreshedTranscript(next, userMessage, assistantMessage)
+  if (merged.some((message) => message.id === assistantMessage.id)) return merged
+
+  // mergeRefreshedTranscript reconciles finished turns, so it only splices an
+  // assistant that already carries text. A turn that has only just started has
+  // none yet and still needs its placeholder mounted: that placeholder is what
+  // shows retrieval progress, and what a failure before the first token is
+  // reported in.
+  let userIndex = merged.findIndex((message) => message.id === userMessage.id)
+  if (userIndex < 0) {
+    for (let index = merged.length - 1; index >= 0; index -= 1) {
+      if (merged[index].role === 'user' && merged[index].content === userMessage.content) {
+        userIndex = index
+        break
+      }
+    }
+  }
+  if (userIndex < 0) return [...merged, assistantMessage]
+
+  // Never add a second answer to a turn the server has already answered.
+  let insertAt = userIndex + 1
+  while (insertAt < merged.length && merged[insertAt].role !== 'user') {
+    if (merged[insertAt].role === 'assistant') return merged
+    insertAt += 1
+  }
+  merged.splice(insertAt, 0, assistantMessage)
+  return merged
 }
 
 function deriveKeyphrases(text) {
@@ -339,8 +403,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isLoadingMessages, setIsLoadingMessages] = useState(false)
-  const [isSending, setIsSending] = useState(false)
-  const [generationCount, setGenerationCount] = useState(0)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [generationVersion, setGenerationVersion] = useState(0)
   const [includePublic, setIncludePublic] = useState(true)
   const [usePremium, setUsePremium] = useState(false)
   const [activeConvTitle, setActiveConvTitle] = useState('')
@@ -362,11 +426,25 @@ export default function ChatPage() {
   const loadingConversationIdRef = useRef(null)
   const conversationLoadRequestRef = useRef(0)
   const streamRequestRef = useRef(0)
-  const activeStreamAbortRef = useRef(null)
-  const streamControllersRef = useRef(new Map())
   const metadataRefreshContextRef = useRef(null)
   const metadataRefreshRequestRef = useRef(0)
   const metadataRefreshRetryingRef = useRef(false)
+  const settledGenerationsRef = useRef(new Set())
+
+  // Generations live in module scope so that they survive this page. Re-render
+  // on every registry mutation; the derived values below are the only readers.
+  useEffect(() => subscribeToChatGenerations(
+    () => setGenerationVersion((version) => version + 1),
+  ), [])
+
+  // The registry is the real dependency of both; the version counter is how it
+  // reports a change.
+  const liveGeneration = useMemo(
+    () => getChatGeneration(activeConvId),
+    [activeConvId, generationVersion],
+  )
+  const generationCount = useMemo(() => countStreamingChatGenerations(), [generationVersion])
+  const isSending = isSubmitting || liveGeneration?.status === GENERATION_STREAMING
 
   useEffect(() => {
     activeConvIdRef.current = activeConvId
@@ -404,21 +482,19 @@ export default function ChatPage() {
     }
   }, [privacySaving, refreshUser, showErrorNotice, user?.demo, user?.privacy_mode])
 
-  const cancelActiveStream = useCallback(({ abort = false, conversationId = null } = {}) => {
+  // Unbind this page from the turn it started without touching the read itself:
+  // a detached generation keeps draining in the registry so the server still
+  // commits the answer.
+  const detachActiveStream = useCallback(() => {
     streamRequestRef.current += 1
-    if (abort) {
-      for (const [controller, controllerConversationId] of streamControllersRef.current) {
-        if (!conversationId || controllerConversationId === conversationId) controller.abort()
-      }
-    }
-    activeStreamAbortRef.current = null
-    setIsSending(false)
   }, [])
 
+  // Leaving Chat must not cancel an answer. The server persists a streamed turn
+  // only once the read reaches [STREAM_COMPLETE]; aborting here made it record an
+  // interruption instead, so opening another menu lost the response outright.
+  // The read and its partial answer live in the generation registry, which
+  // outlives this page — detach UI state and let the read finish.
   useEffect(() => () => {
-    for (const controller of streamControllersRef.current.keys()) controller.abort()
-    streamControllersRef.current.clear()
-    activeStreamAbortRef.current = null
     conversationLoadRequestRef.current += 1
     streamRequestRef.current += 1
     metadataRefreshRequestRef.current += 1
@@ -476,9 +552,7 @@ export default function ChatPage() {
     const conversationChanged = Boolean(
       activeConvIdRef.current && activeConvIdRef.current !== id
     )
-    if (activeStreamAbortRef.current) {
-      cancelActiveStream()
-    }
+    detachActiveStream()
     if (conversationChanged) {
       setPendingAttachments([])
     }
@@ -502,7 +576,16 @@ export default function ChatPage() {
       ) return
 
       loadedConversationIdRef.current = id
-      setMessages(attachTurnReferences(data.messages || []))
+      // Reattach on arrival rather than waiting for the next token: a generation
+      // this page left behind may still be running, and its turn belongs back in
+      // view as soon as the saved transcript is.
+      const loaded = attachTurnReferences(data.messages || [])
+      const live = getChatGeneration(id)
+      setMessages(
+        live && live.status !== GENERATION_ABORTED
+          ? upsertGenerationTurn(loaded, live)
+          : loaded
+      )
       setActiveConvTitle(data.conversation?.title || 'Untitled')
       if (data.conversation) {
         setConversations((prev) =>
@@ -539,7 +622,7 @@ export default function ChatPage() {
         setIsLoadingMessages(false)
       }
     }
-  }, [cancelActiveStream, navigate, setActiveConvId, setConversations, showErrorNotice])
+  }, [detachActiveStream, navigate, setActiveConvId, setConversations, showErrorNotice])
 
   useEffect(() => {
     getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
@@ -596,7 +679,7 @@ export default function ChatPage() {
 
   const handleNewConversation = useCallback(async () => {
     try {
-      cancelActiveStream()
+      detachActiveStream()
       conversationLoadRequestRef.current += 1
       const conv = await createConversation()
       setConversations((prev) => [conv, ...prev])
@@ -616,7 +699,7 @@ export default function ChatPage() {
       reportError('Failed to create conversation', err)
       showErrorNotice('Conversation could not be created', 'Please try again.', err)
     }
-  }, [cancelActiveStream, navigate, setConversations, setActiveConvId, showErrorNotice])
+  }, [detachActiveStream, navigate, setConversations, setActiveConvId, showErrorNotice])
 
   const handleConversationDeleted = useCallback(
     (id) => {
@@ -624,13 +707,9 @@ export default function ChatPage() {
       // here we additionally clear local thread state if it was active.
       // A detached response for a conversation that no longer exists must not
       // keep consuming model time or attempt a late persistence write.
-      if (activeConvIdRef.current !== id) {
-        for (const [controller, controllerConversationId] of streamControllersRef.current) {
-          if (controllerConversationId === id) controller.abort()
-        }
-      }
+      abortChatGeneration(id)
       if (activeConvIdRef.current === id) {
-        cancelActiveStream({ abort: true, conversationId: id })
+        detachActiveStream()
         conversationLoadRequestRef.current += 1
         activeConvIdRef.current = null
         loadedConversationIdRef.current = null
@@ -646,7 +725,7 @@ export default function ChatPage() {
         navigate('/chat', { replace: true })
       }
     },
-    [cancelActiveStream, navigate, setActiveConvId]
+    [detachActiveStream, navigate, setActiveConvId]
   )
 
   const handleRailDeleteConversation = useCallback(
@@ -773,7 +852,7 @@ export default function ChatPage() {
       })
       return
     }
-    if (streamControllersRef.current.size > 0) {
+    if (countStreamingChatGenerations() > 0) {
       setNotice({
         type: 'info',
         kind: 'background-generation',
@@ -783,106 +862,120 @@ export default function ChatPage() {
       return
     }
 
+    setIsSubmitting(true)
+    let generation = null
     let convId = activeConvIdRef.current
+    let clientTurnId = null
+    let assistantMsgId = null
+    let attachmentIds = []
 
-    if (!convId) {
-      try {
-        const conv = await createConversation(content.slice(0, 60))
-        setConversations((prev) => [conv, ...prev])
-        activeConvIdRef.current = conv.id
-        loadedConversationIdRef.current = conv.id
-        setActiveConvId(conv.id)
-        setActiveConvTitle(conv.title || 'New Conversation')
-        navigate(`/chat?conv=${conv.id}`)
-        convId = conv.id
-        // Brief pause to let DB commit settle before the streaming read
-        await new Promise(r => setTimeout(r, 150))
-        // Creating a conversation is the only send path with an await before
-        // the optimistic turn is mounted. If the user selected another thread
-        // during that window, do not append this turn to (or send it from) the
-        // newly selected conversation.
-        if (activeConvIdRef.current !== convId) return
-      } catch (err) {
-        reportError('Failed to create conversation', err)
-        showErrorNotice('Conversation could not be created', 'Your message was not sent. Try again after starting a new conversation.', err)
-        return
+    try {
+      if (!convId) {
+        try {
+          const conv = await createConversation(content.slice(0, 60))
+          setConversations((prev) => [conv, ...prev])
+          activeConvIdRef.current = conv.id
+          loadedConversationIdRef.current = conv.id
+          setActiveConvId(conv.id)
+          setActiveConvTitle(conv.title || 'New Conversation')
+          navigate(`/chat?conv=${conv.id}`)
+          convId = conv.id
+          // Brief pause to let DB commit settle before the streaming read
+          await new Promise(r => setTimeout(r, 150))
+          // Creating a conversation is the only send path with an await before
+          // the optimistic turn is mounted. If the user selected another thread
+          // during that window, do not append this turn to (or send it from) the
+          // newly selected conversation.
+          if (activeConvIdRef.current !== convId) return
+        } catch (err) {
+          reportError('Failed to create conversation', err)
+          showErrorNotice('Conversation could not be created', 'Your message was not sent. Try again after starting a new conversation.', err)
+          return
+        }
       }
+
+      attachmentIds = pendingAttachments.map((a) => a.id)
+      const initialProgress = initialStreamProgress(content, attachmentIds.length)
+      const initialReferenceContext = buildReferenceContext({ progress: initialProgress })
+      clientTurnId = globalThis.crypto?.randomUUID?.()
+        || `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const knownServerMessageIds = messagesRef.current
+        .map((message) => String(message?.id || ''))
+        .filter((id) => id && !/^(temp|stream|err)-/.test(id))
+      assistantMsgId = `stream-${clientTurnId}`
+
+      metadataRefreshContextRef.current = null
+      metadataRefreshRequestRef.current += 1
+      metadataRefreshRetryingRef.current = false
+      setMetadataRefreshRetrying(false)
+      setNotice((current) => current?.kind === 'metadata' ? null : current)
+      setInputValue('')
+      setPendingAttachments([])
+
+      // The registry — not this component — owns the turn from here on, so the
+      // optimistic pair is registered rather than pushed into `messages`. An
+      // effect renders whichever generation belongs to the conversation on
+      // screen, which is what lets a page that mounts later pick this one up.
+      streamRequestRef.current += 1
+      generation = beginChatGeneration({
+        conversationId: convId,
+        clientTurnId,
+        controller: new AbortController(),
+        userMessage: {
+          id: `temp-${clientTurnId}`,
+          role: 'user',
+          content,
+          sources: [],
+          referenceContext: initialReferenceContext,
+          client_turn_id: clientTurnId,
+          _known_server_message_ids: knownServerMessageIds,
+          created_at: new Date().toISOString(),
+        },
+        assistantMessage: {
+          id: assistantMsgId,
+          role: 'assistant',
+          content: '',
+          sources: [],
+          progress: initialProgress,
+          referenceContext: initialReferenceContext,
+          client_turn_id: clientTurnId,
+          created_at: new Date().toISOString(),
+        },
+      })
+    } finally {
+      setIsSubmitting(false)
     }
 
-    const attachmentIds = pendingAttachments.map((a) => a.id)
-    let streamProgress = initialStreamProgress(content, attachmentIds.length)
-    const initialReferenceContext = buildReferenceContext({ progress: streamProgress })
-    const clientTurnId = globalThis.crypto?.randomUUID?.()
-      || `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    const knownServerMessageIds = messagesRef.current
-      .map((message) => String(message?.id || ''))
-      .filter((id) => id && !/^(temp|stream|err)-/.test(id))
-    const userMessage = {
-      id: `temp-${clientTurnId}`,
-      role: 'user',
-      content,
-      sources: [],
-      referenceContext: initialReferenceContext,
-      client_turn_id: clientTurnId,
-      _known_server_message_ids: knownServerMessageIds,
-      created_at: new Date().toISOString(),
-    }
-    const assistantMsgId = `stream-${clientTurnId}`
-    const assistantMsg = {
-      id: assistantMsgId,
-      role: 'assistant',
-      content: '',
-      sources: [],
-      progress: streamProgress,
-      referenceContext: initialReferenceContext,
-      client_turn_id: clientTurnId,
-      created_at: new Date().toISOString(),
-    }
-    const streamAbortController = new AbortController()
-    const streamRequestId = streamRequestRef.current + 1
-    streamRequestRef.current = streamRequestId
-    activeStreamAbortRef.current?.abort()
-    activeStreamAbortRef.current = streamAbortController
-    streamControllersRef.current.set(streamAbortController, convId)
-    setGenerationCount(streamControllersRef.current.size)
-    const isCurrentStream = () => (
+    if (!generation) return
+
+    const streamRequestId = streamRequestRef.current
+    // Whether a page is still bound to this turn. A failure seen while bound is
+    // shown in place; once detached, the server's persisted interruption is the
+    // truth and gets re-read instead.
+    const isAttached = () => (
       streamRequestRef.current === streamRequestId
       && activeConvIdRef.current === convId
     )
+    const publish = (assistant, user = null) => {
+      patchChatGeneration(convId, clientTurnId, { assistant, user })
+    }
 
-    metadataRefreshContextRef.current = null
-    metadataRefreshRequestRef.current += 1
-    metadataRefreshRetryingRef.current = false
-    setMetadataRefreshRetrying(false)
-    setNotice((current) => current?.kind === 'metadata' ? null : current)
-    setMessages((prev) => [...prev, userMessage])
-    setInputValue('')
-    setPendingAttachments([])
-    setIsSending(true)
+    let streamProgress = generation.assistantMessage.progress
+    let accumulatedText = ''
+    let streamError = null
+    let sawStreamComplete = false
+    let streamedSources = []
+    let streamedCitationAnnotations = []
 
     try {
-      setMessages((prev) => [...prev, assistantMsg])
-
-      let accumulatedText = ''
-      let streamError = null
-      let sawStreamComplete = false
-      let streamedSources = []
-      let streamedCitationAnnotations = []
-
       for await (const token of streamMessage(
         convId,
         content,
         includePublic,
         usePremium,
         attachmentIds,
-        { signal: streamAbortController.signal },
+        { signal: generation.controller.signal },
       )) {
-        // Conversation navigation invalidates this UI request but deliberately
-        // keeps draining the response. The server persisted the user message
-        // before generation began; cancelling here can strand a user-only turn.
-        // Draining is detached from UI state, so switching remains immediate
-        // and no token from this conversation can leak into another one.
-        if (!isCurrentStream()) continue
         if (token?.type === 'progress' && token.event === 'citation_metadata') {
           streamedSources = token.sources || []
           streamedCitationAnnotations = token.citation_annotations || []
@@ -897,32 +990,18 @@ export default function ChatPage() {
             sources: streamedSources,
             citedCount: streamedSources.length,
           })
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMsgId
-                ? {
-                    ...msg,
-                    sources: streamedSources,
-                    citation_annotations: streamedCitationAnnotations,
-                    progress: streamProgress,
-                    referenceContext,
-                  }
-                : msg
-            )
-          )
+          publish({
+            sources: streamedSources,
+            citation_annotations: streamedCitationAnnotations,
+            progress: streamProgress,
+            referenceContext,
+          })
           continue
         }
         if (token?.type === 'progress' && token.event === 'action_proposal') {
           // Reviewable work the assistant proposed. Attached to the message
           // rather than merged into progress, since it outlives the stream.
-          const proposals = token.proposed_actions || []
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMsgId
-                ? { ...msg, proposed_actions: proposals }
-                : msg
-            )
-          )
+          publish({ proposed_actions: token.proposed_actions || [] })
           continue
         }
         if (token?.type === 'progress') {
@@ -932,26 +1011,12 @@ export default function ChatPage() {
             sources: streamedSources,
             citedCount: streamedSources.length,
           })
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMsgId
-                ? { ...msg, progress: streamProgress, referenceContext }
-                : msg.id === userMessage.id
-                  ? { ...msg, referenceContext }
-                  : msg
-            )
-          )
+          publish({ progress: streamProgress, referenceContext }, { referenceContext })
           continue
         }
         if (token?.type === 'artifacts') {
           const streamArtifacts = Array.isArray(token.artifacts) ? token.artifacts : []
-          if (streamArtifacts.length > 0) {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantMsgId ? { ...msg, artifacts: streamArtifacts } : msg
-              )
-            )
-          }
+          if (streamArtifacts.length > 0) publish({ artifacts: streamArtifacts })
           continue
         }
         if (token === '[STREAM_COMPLETE]') {
@@ -966,40 +1031,17 @@ export default function ChatPage() {
             sources: streamedSources,
             citedCount: streamedSources.length,
           })
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMsgId
-                ? { ...msg, progress: streamProgress, referenceContext }
-                : msg.id === userMessage.id
-                  ? { ...msg, referenceContext }
-                : msg
-            )
-          )
+          publish({ progress: streamProgress, referenceContext }, { referenceContext })
           break
         } else if (typeof token === 'string' && token.startsWith('[ERROR]')) {
           streamError = token.slice(7)
           break
         } else if (typeof token === 'string') {
           accumulatedText += token
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMsgId
-                ? { ...msg, content: accumulatedText }
-                : msg
-            )
-          )
+          publish({ content: accumulatedText })
         }
       }
 
-      if (!isCurrentStream()) {
-        // If the user returned to this conversation while its detached stream
-        // finished, reload the now-persisted assistant turn. Never refresh over
-        // a newer active stream in the same conversation.
-        if (activeConvIdRef.current === convId && !activeStreamAbortRef.current) {
-          await loadConversation(convId)
-        }
-        return
-      }
       if (!streamError && !sawStreamComplete) {
         streamError = 'The assistant stream ended before completion. Please retry.'
       }
@@ -1007,118 +1049,163 @@ export default function ChatPage() {
         streamError = 'The assistant completed without a visible answer. Please retry.'
       }
 
-      if (streamError) {
-        const failedProgress = { ...streamProgress, complete: true, status: 'Response failed' }
+      settleChatGeneration(convId, clientTurnId, {
+        status: streamError ? GENERATION_ERROR : GENERATION_COMPLETE,
+        error: streamError,
+        errorSource: streamError ? 'stream' : null,
+        attached: isAttached(),
+        assistant: {
+          content: accumulatedText,
+          sources: streamedSources,
+          citation_annotations: streamedCitationAnnotations,
+          progress: { ...streamProgress, complete: true },
+        },
+      })
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        // Only a deleted conversation aborts a read, and its transcript is gone.
+        releaseChatGeneration(convId, clientTurnId)
+        return
+      }
+      reportError('Failed to send message', err)
+      settleChatGeneration(convId, clientTurnId, {
+        status: GENERATION_ERROR,
+        error: err?.response?.data?.detail || err?.message || 'Please try again.',
+        errorSource: 'request',
+        attached: isAttached(),
+        assistant: { content: accumulatedText, progress: streamProgress },
+      })
+    }
+  }, [inputValue, isSending, includePublic, usePremium, conversations, pendingAttachments, setConversations, setActiveConvId, showErrorNotice, navigate])
+
+  // A generation outlives this page, so the transcript renders from the registry
+  // rather than from the send handler: whichever ChatPage is mounted when tokens
+  // arrive shows them, including one that mounted after the user came back from
+  // another menu. Keying on the conversation on screen is also what keeps a
+  // detached generation's tokens out of the thread the user moved to.
+  useEffect(() => {
+    if (!liveGeneration || !activeConvId) return
+    if (liveGeneration.conversationId !== activeConvId) return
+    if (liveGeneration.status === GENERATION_ABORTED) return
+    // `isLoadingMessages` is a dependency, not just a guard: the transcript this
+    // splices into arrives asynchronously, and a ref would not re-run the effect
+    // once it did.
+    if (isLoadingMessages || loadedConversationIdRef.current !== activeConvId) return
+    setMessages((prev) => upsertGenerationTurn(prev, liveGeneration))
+  }, [liveGeneration, activeConvId, isLoadingMessages])
+
+  const settleGeneration = useCallback(async (generation) => {
+    const {
+      conversationId,
+      clientTurnId,
+      userMessage,
+      assistantMessage,
+      status,
+      error,
+      errorSource,
+      attached,
+    } = generation
+    try {
+      if (!attached) {
+        // The page let go of this turn before it ended — another thread was
+        // opened, or Chat was left and reopened. Either way the server finished
+        // the read and persisted the outcome, so re-read rather than reconcile
+        // against an optimistic turn this page may no longer be showing.
+        await loadConversation(conversationId)
+        return
+      }
+
+      if (status === GENERATION_ERROR) {
+        // This page watched the turn fail, so fail its placeholder in place.
+        // Re-reading the conversation would only swap one terminal message for
+        // the interruption marker the server just wrote.
+        const failedProgress = { ...assistantMessage.progress, complete: true, status: 'Response failed' }
         const failedReferenceContext = buildReferenceContext({ progress: failedProgress })
         setMessages((prev) =>
           prev.map((msg) =>
-            msg.id === assistantMsgId
+            msg.id === assistantMessage.id
               ? {
                   ...msg,
-                  content: `An error occurred: ${streamError}`,
+                  content: `An error occurred: ${error}`,
                   progress: failedProgress,
                   referenceContext: failedReferenceContext,
                 }
               : msg.id === userMessage.id
                 ? { ...msg, referenceContext: failedReferenceContext }
-              : msg
+                : msg
           )
         )
-        setNotice({
-          type: 'error',
-          title: 'Response could not be completed',
-          message: streamError || 'The assistant stopped before finishing the response.',
-        })
-      } else {
-        const fallbackAssistantMessage = {
-          ...assistantMsg,
-          content: accumulatedText,
-          sources: streamedSources,
-          citation_annotations: streamedCitationAnnotations,
-          progress: { ...streamProgress, complete: true },
-          referenceContext: buildReferenceContext({
-            progress: { ...streamProgress, complete: true },
-            sources: streamedSources,
-            citedCount: streamedSources.length,
-          }),
-        }
-        try {
-          const refreshed = await getConversation(convId)
-          if (!isCurrentStream()) return
-          const nextMessages = mergeRefreshedTranscript(
-            refreshed.messages,
-            userMessage,
-            fallbackAssistantMessage,
-          )
-          applyRefreshedConversation(convId, refreshed, nextMessages)
-          metadataRefreshContextRef.current = null
-        } catch (refreshErr) {
-          if (!isCurrentStream()) return
-          reportError('Failed to refresh streamed message metadata', refreshErr)
-          metadataRefreshContextRef.current = {
-            conversationId: convId,
-            userMessage,
-            fallbackAssistantMessage,
-          }
+        if (errorSource === 'request') {
+          showErrorNotice('Message could not be sent', 'Please try again.', { message: error })
+        } else {
           setNotice({
-            type: 'warning',
-            kind: 'metadata',
-            title: 'Source metadata could not be verified',
-            message: 'The answer text is shown, but its persisted citation links and proposed actions could not be refreshed. Retry before relying on it.',
+            type: 'error',
+            title: 'Response could not be completed',
+            message: error || 'The assistant stopped before finishing the response.',
           })
-        }
-      }
-
-      if (isCurrentStream()) {
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === convId ? { ...c, updated_at: new Date().toISOString() } : c
-          )
-        )
-      }
-    } catch (err) {
-      if (!isCurrentStream()) {
-        // Navigation detaches the network read from UI state. If the user came
-        // back before that read failed, refresh the persisted interruption
-        // marker just as the detached-success path refreshes the final answer.
-        if (
-          err?.name !== 'AbortError'
-          && activeConvIdRef.current === convId
-          && !activeStreamAbortRef.current
-        ) {
-          await loadConversation(convId)
         }
         return
       }
-      if (err?.name === 'AbortError') return
-      reportError('Failed to send message', err)
-      const errorMessage = err?.response?.data?.detail || err?.message || 'Please try again.'
-      const failedProgress = { ...streamProgress, complete: true, status: 'Response failed' }
-      const failedReferenceContext = buildReferenceContext({ progress: failedProgress })
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMsgId
-            ? {
-                ...msg,
-                content: `An error occurred: ${errorMessage}`,
-                progress: failedProgress,
-                referenceContext: failedReferenceContext,
-              }
-            : msg.id === userMessage.id
-              ? { ...msg, referenceContext: failedReferenceContext }
-              : msg
+
+      const fallbackAssistantMessage = {
+        ...assistantMessage,
+        referenceContext: buildReferenceContext({
+          progress: assistantMessage.progress,
+          sources: assistantMessage.sources,
+          citedCount: (assistantMessage.sources || []).length,
+        }),
+      }
+      try {
+        const refreshed = await getConversation(conversationId)
+        if (activeConvIdRef.current !== conversationId) return
+        applyRefreshedConversation(
+          conversationId,
+          refreshed,
+          mergeRefreshedTranscript(refreshed.messages, userMessage, fallbackAssistantMessage),
+        )
+        metadataRefreshContextRef.current = null
+      } catch (refreshErr) {
+        if (activeConvIdRef.current !== conversationId) return
+        reportError('Failed to refresh streamed message metadata', refreshErr)
+        metadataRefreshContextRef.current = {
+          conversationId,
+          userMessage,
+          fallbackAssistantMessage,
+        }
+        setNotice({
+          type: 'warning',
+          kind: 'metadata',
+          title: 'Source metadata could not be verified',
+          message: 'The answer text is shown, but its persisted citation links and proposed actions could not be refreshed. Retry before relying on it.',
+        })
+      }
+      setConversations((prev) =>
+        prev.map((conv) =>
+          conv.id === conversationId ? { ...conv, updated_at: new Date().toISOString() } : conv
         )
       )
-      showErrorNotice('Message could not be sent', 'Please try again.', err)
     } finally {
-      streamControllersRef.current.delete(streamAbortController)
-      setGenerationCount(streamControllersRef.current.size)
-      if (streamRequestRef.current === streamRequestId) {
-        activeStreamAbortRef.current = null
-        setIsSending(false)
-      }
+      releaseChatGeneration(conversationId, clientTurnId)
     }
-  }, [inputValue, isSending, includePublic, usePremium, conversations, pendingAttachments, setConversations, setActiveConvId, showErrorNotice, navigate, applyRefreshedConversation, loadConversation])
+  }, [applyRefreshedConversation, loadConversation, setConversations, showErrorNotice])
+
+  // Reconcile a finished turn against the saved transcript here rather than in
+  // the send handler, so the page that is mounted — not the one that started the
+  // answer — is the one that settles it.
+  useEffect(() => {
+    if (!liveGeneration || !activeConvId) return
+    if (liveGeneration.conversationId !== activeConvId) return
+    if (liveGeneration.status === GENERATION_STREAMING) return
+    if (liveGeneration.status === GENERATION_ABORTED) {
+      releaseChatGeneration(liveGeneration.conversationId, liveGeneration.clientTurnId)
+      return
+    }
+    if (isLoadingMessages || loadedConversationIdRef.current !== activeConvId) return
+    const turnKey = `${liveGeneration.conversationId}:${liveGeneration.clientTurnId}`
+    if (settledGenerationsRef.current.has(turnKey)) return
+    settledGenerationsRef.current.add(turnKey)
+    settleGeneration(liveGeneration)
+  }, [liveGeneration, activeConvId, isLoadingMessages, settleGeneration])
 
   const handleExportConversation = () => {
     if (messages.length === 0) {
