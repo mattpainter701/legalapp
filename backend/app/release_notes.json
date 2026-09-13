@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.09.13.1",
-      "version": "2026.09.13.1",
+      "id": "2026.09.13.3",
+      "version": "2026.09.13.3",
       "title": "Password reset emails that actually arrive",
       "published_at": "2026-09-13",
       "summary": "LawHand now sends its own account emails — password resets and address verification — through a dedicated mail service, from an address reserved for security messages.",
@@ -19,6 +19,73 @@
         {
           "title": "Addresses that stop working are noticed",
           "description": "When an address permanently rejects mail, LawHand records it and stops sending there, instead of quietly retrying an inbox that no longer exists."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.13.2",
+      "version": "2026.09.13.2",
+      "title": "Forward email into matter to-dos",
+      "published_at": "2026-09-13",
+      "summary": "Save one LawHand contact on your phone, forward a client email with [TASK], then confirm its matter, owner and optional date in Needs review.",
+      "highlights": [
+        {
+          "title": "One forwarding contact for your firm",
+          "description": "Administrators can enable a firm address and staff can save the LawHand contact from Matters. Forward with [TASK] Jane, review this tomorrow."
+        },
+        {
+          "title": "Review the details and create a matter to-do",
+          "description": "Confirm the suggested matter, colleague and date before creating work. The source email stays with the matter. User and admin guides explain setup and review."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.13.1",
+      "version": "2026.09.13.1",
+      "title": "Draw your signature, place signing spots, and hear when clients sign",
+      "published_at": "2026-09-13",
+      "summary": "Clients can draw their signature, paperwork forms get the E-Signature panel's signing-spot placement, signed forms read as signed while filing, you get an email when the client signs, and requests go out from your mailbox.",
+      "highlights": [
+        {
+          "title": "Draw your signature in the portal",
+          "description": "Clients can now draw their signature with a mouse, pen or finger as well as type their name. The drawing is stamped on the signed copy; the typed name stays on the record."
+        },
+        {
+          "title": "Place signing spots on paperwork forms",
+          "description": "Send client paperwork now offers the same signing-position review as the E-Signature panel, so a PDF with no form fields still gets a clickable place to sign."
+        },
+        {
+          "title": "Signed forms read as signed while filing",
+          "description": "When every signer has signed but the copy is still being filed to your storage, the client checklist and your paperwork strip say Signed, filing instead of asking again."
+        },
+        {
+          "title": "An email when the client signs",
+          "description": "Whoever sent a document for signature gets an email the moment the last signer signs, before the copy is filed, so a storage problem cannot hide that the client acted."
+        },
+        {
+          "title": "Signature requests come from your mailbox",
+          "description": "Invitations and reminders to sign now leave through the sending user's connected Google or Microsoft mailbox, as intake paperwork does, so your sent folder keeps the record."
+        },
+        {
+          "title": "Starter templates say what they need",
+          "description": "The starter fee agreement and intake forms are drafts until an attorney tests and publishes them. They no longer show as ready, and using one says to publish it first."
+        }
+      ]
+    },
+    {
+      "id": "2026.09.12.7",
+      "version": "2026.09.12.7",
+      "title": "Rename your firm and edit its profile in one place",
+      "published_at": "2026-09-12",
+      "summary": "Administration has a Firm Profile tab. It renames the firm — including the name sign-up guessed from your email domain — and holds the contact details and branding that clients see on portal invitations, invoices and statements.",
+      "highlights": [
+        {
+          "title": "Fix the firm name sign-up guessed from your domain",
+          "description": "Sign-up derived a firm name from your email domain and nothing could change it. Administration → Firm Profile now renames the firm everywhere clients see it."
+        },
+        {
+          "title": "Firm details moved out of the Settings tab",
+          "description": "Firm name, contact details and branding were the fifth card inside Settings. They now have their own tab in Administration, next to Users."
         }
       ]
     },

@@ -1,53 +1,223 @@
 {
   "user_modules": [
-    { "id": "assistant", "route": "/chat", "chapter": "assistant-and-add-ons" },
-    { "id": "matters", "route": "/matters", "chapter": "matters-and-documents" },
-    { "id": "research-workspace", "route": "/matters/research", "chapter": "matters-and-documents" },
-    { "id": "document-revisions", "route": "/matters/documents/revisions", "chapter": "matters-and-documents" },
-    { "id": "document-revise", "route": "/matters/documents/revise", "chapter": "matters-and-documents" },
-    { "id": "brief-check", "route": "/matters/brief-check", "chapter": "matters-and-documents" },
-    { "id": "firm-memory", "route": "/firm-memory", "chapter": "matters-and-documents" },
-    { "id": "calendar", "route": "/calendar", "chapter": "tasks-calendar-communications" },
-    { "id": "teams", "route": "/teams", "chapter": "teams-and-client-portals" },
-    { "id": "communications", "route": "/communications", "chapter": "tasks-calendar-communications" },
-    { "id": "time-tracking", "route": "/time-tracking", "chapter": "time-billing-and-reports" },
-    { "id": "invoices", "route": "/invoices", "chapter": "time-billing-and-reports" },
-    { "id": "reports", "route": "/reports", "chapter": "time-billing-and-reports" },
-    { "id": "trust-accounting", "route": "/trust", "chapter": "time-billing-and-reports" },
-    { "id": "document-automation", "route": "/templates", "chapter": "document-automation-and-esignature" },
-    { "id": "contacts", "route": "/contacts", "chapter": "contacts-and-client-relationships" },
-    { "id": "conflict-search", "route": "/conflicts", "chapter": "contacts-and-client-relationships" },
-    { "id": "clients", "route": "/clients", "chapter": "contacts-and-client-relationships" },
-    { "id": "tasks", "route": "/tasks", "chapter": "tasks-calendar-communications" },
-    { "id": "client-intake", "route": "/intake", "chapter": "intake-and-call-reception" },
-    { "id": "call-intake", "route": "/intake/dashboard", "chapter": "intake-and-call-reception" },
-    { "id": "add-on-catalog", "route": "/plugins", "chapter": "add-on-module-management" },
-    { "id": "profile", "route": "/profile", "chapter": "account-safety-and-support" },
-    { "id": "commercial-renewals", "route": "/plugins/commercial/renewals", "chapter": "commercial-renewals" },
-    { "id": "trust-estate", "route": "/plugins/trust-estate/estates", "chapter": "trust-and-estate-workflows" },
-    { "id": "domestic-relations", "route": "/plugins/domestic/cases", "chapter": "domestic-relations-workflows" },
-    { "id": "mediation", "route": "/plugins/mediation/cases", "chapter": "mediation-workflows" }
+    {
+      "id": "assistant",
+      "route": "/chat",
+      "chapter": "assistant-and-add-ons"
+    },
+    {
+      "id": "matters",
+      "route": "/matters",
+      "chapter": "matters-and-documents"
+    },
+    {
+      "id": "research-workspace",
+      "route": "/matters/research",
+      "chapter": "matters-and-documents"
+    },
+    {
+      "id": "document-revisions",
+      "route": "/matters/documents/revisions",
+      "chapter": "matters-and-documents"
+    },
+    {
+      "id": "document-revise",
+      "route": "/matters/documents/revise",
+      "chapter": "matters-and-documents"
+    },
+    {
+      "id": "brief-check",
+      "route": "/matters/brief-check",
+      "chapter": "matters-and-documents"
+    },
+    {
+      "id": "firm-memory",
+      "route": "/firm-memory",
+      "chapter": "matters-and-documents"
+    },
+    {
+      "id": "calendar",
+      "route": "/calendar",
+      "chapter": "tasks-calendar-communications"
+    },
+    {
+      "id": "teams",
+      "route": "/teams",
+      "chapter": "teams-and-client-portals"
+    },
+    {
+      "id": "communications",
+      "route": "/communications",
+      "chapter": "tasks-calendar-communications"
+    },
+    {
+      "id": "time-tracking",
+      "route": "/time-tracking",
+      "chapter": "time-billing-and-reports"
+    },
+    {
+      "id": "invoices",
+      "route": "/invoices",
+      "chapter": "time-billing-and-reports"
+    },
+    {
+      "id": "reports",
+      "route": "/reports",
+      "chapter": "time-billing-and-reports"
+    },
+    {
+      "id": "trust-accounting",
+      "route": "/trust",
+      "chapter": "time-billing-and-reports"
+    },
+    {
+      "id": "document-automation",
+      "route": "/templates",
+      "chapter": "document-automation-and-esignature"
+    },
+    {
+      "id": "contacts",
+      "route": "/contacts",
+      "chapter": "contacts-and-client-relationships"
+    },
+    {
+      "id": "conflict-search",
+      "route": "/conflicts",
+      "chapter": "contacts-and-client-relationships"
+    },
+    {
+      "id": "clients",
+      "route": "/clients",
+      "chapter": "contacts-and-client-relationships"
+    },
+    {
+      "id": "tasks",
+      "route": "/tasks",
+      "chapter": "tasks-calendar-communications"
+    },
+    {
+      "id": "client-intake",
+      "route": "/intake",
+      "chapter": "intake-and-call-reception"
+    },
+    {
+      "id": "call-intake",
+      "route": "/intake/dashboard",
+      "chapter": "intake-and-call-reception"
+    },
+    {
+      "id": "add-on-catalog",
+      "route": "/plugins",
+      "chapter": "add-on-module-management"
+    },
+    {
+      "id": "profile",
+      "route": "/profile",
+      "chapter": "account-safety-and-support"
+    },
+    {
+      "id": "commercial-renewals",
+      "route": "/plugins/commercial/renewals",
+      "chapter": "commercial-renewals"
+    },
+    {
+      "id": "trust-estate",
+      "route": "/plugins/trust-estate/estates",
+      "chapter": "trust-and-estate-workflows"
+    },
+    {
+      "id": "domestic-relations",
+      "route": "/plugins/domestic/cases",
+      "chapter": "domestic-relations-workflows"
+    },
+    {
+      "id": "mediation",
+      "route": "/plugins/mediation/cases",
+      "chapter": "mediation-workflows"
+    }
   ],
   "admin_tabs": [
-    { "tab": "users", "chapter": "users-roles-and-licensing" },
-    { "tab": "guide", "chapter": "admin-overview" },
-    { "tab": "roles", "chapter": "users-roles-and-licensing" },
-    { "tab": "licensing", "chapter": "users-roles-and-licensing" },
-    { "tab": "billing", "chapter": "subscription-usage-alerts" },
-    { "tab": "usage", "chapter": "subscription-usage-alerts" },
-    { "tab": "tenant", "chapter": "tenant-settings-and-branding" },
-    { "tab": "prompts", "chapter": "prompt-management" },
-    { "tab": "integrations", "chapter": "integrations" },
-    { "tab": "settings", "chapter": "tenant-settings-and-branding" },
-    { "tab": "support", "chapter": "support-and-escalation" }
+    {
+      "tab": "users",
+      "chapter": "users-roles-and-licensing"
+    },
+    {
+      "tab": "firm",
+      "chapter": "tenant-settings-and-branding"
+    },
+    {
+      "tab": "guide",
+      "chapter": "admin-overview"
+    },
+    {
+      "tab": "roles",
+      "chapter": "users-roles-and-licensing"
+    },
+    {
+      "tab": "licensing",
+      "chapter": "users-roles-and-licensing"
+    },
+    {
+      "tab": "billing",
+      "chapter": "subscription-usage-alerts"
+    },
+    {
+      "tab": "usage",
+      "chapter": "subscription-usage-alerts"
+    },
+    {
+      "tab": "tenant",
+      "chapter": "tenant-settings-and-branding"
+    },
+    {
+      "tab": "prompts",
+      "chapter": "prompt-management"
+    },
+    {
+      "tab": "integrations",
+      "chapter": "integrations"
+    },
+    {
+      "tab": "settings",
+      "chapter": "tenant-settings-and-branding"
+    },
+    {
+      "tab": "support",
+      "chapter": "support-and-escalation"
+    }
   ],
   "admin_integration_sections": [
-    { "section": "cloud", "chapter": "integrations" },
-    { "section": "cloud-search", "chapter": "cloud-search-operations" },
-    { "section": "file-shares", "chapter": "file-share-operations" },
-    { "section": "teams", "chapter": "microsoft-teams-administration" },
-    { "section": "zoom", "chapter": "zoom-phone-administration" },
-    { "section": "quickbooks", "chapter": "quickbooks-administration" },
-    { "section": "mcp", "chapter": "mcp-server-operations" }
+    {
+      "section": "email-intake",
+      "chapter": "email-intake"
+    },
+    {
+      "section": "cloud",
+      "chapter": "integrations"
+    },
+    {
+      "section": "cloud-search",
+      "chapter": "cloud-search-operations"
+    },
+    {
+      "section": "file-shares",
+      "chapter": "file-share-operations"
+    },
+    {
+      "section": "teams",
+      "chapter": "microsoft-teams-administration"
+    },
+    {
+      "section": "zoom",
+      "chapter": "zoom-phone-administration"
+    },
+    {
+      "section": "quickbooks",
+      "chapter": "quickbooks-administration"
+    },
+    {
+      "section": "mcp",
+      "chapter": "mcp-server-operations"
+    }
   ]
 }

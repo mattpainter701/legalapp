@@ -68,11 +68,18 @@ export default function CaseSetupCard({ matterId, matter, onPacketChange }) {
     setPacket(null)
     setLoading(true)
     load()
-    // A packet changes when the client acts, not when the firm does, so the
-    // strip refreshes on its own rather than waiting for a reload.
+  }, [load])
+
+  // A packet changes when the client acts, not when the firm does, so the
+  // strip refreshes on its own rather than waiting for a reload. A matter
+  // with no packet has nothing to watch: only the firm can start one, and the
+  // drawer reports it here when it does, so polling would just answer 404.
+  const hasPacket = Boolean(packet)
+  useEffect(() => {
+    if (!hasPacket) return undefined
     const timer = setInterval(load, 30000)
     return () => clearInterval(timer)
-  }, [load])
+  }, [hasPacket, load])
 
   // Matter documents back the drawer's pickers and the verification of
   // paperwork that arrived outside the portal. Neither exists on a matter with

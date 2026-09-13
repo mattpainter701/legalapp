@@ -1233,7 +1233,7 @@ function SignaturesTab({ onSessionError, onChanged }) {
           <LockKeyhole size={22} className="text-brand-accent mt-0.5" />
           <div>
             <p className="text-sm font-semibold text-brand-ink">Sign your documents here</p>
-            <p className="text-sm text-brand-ink-2 mt-1">Fill in any fields on the document, type your legal name to adopt it as your signature, and click each signature line to place it. We record the time, portal identity, IP address, and document hashes in an evidence certificate filed with the signed copy.</p>
+            <p className="text-sm text-brand-ink-2 mt-1">Fill in any fields on the document, type your legal name or draw your signature, and click each signature line to place it. We record the time, portal identity, IP address, and document hashes in an evidence certificate filed with the signed copy.</p>
           </div>
         </div>
       </Card>

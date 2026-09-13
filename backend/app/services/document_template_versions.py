@@ -145,7 +145,10 @@ async def get_version(
 async def published_template_view(db, template):
     """Read-only release view; draft edits/test failures never change this content."""
     if not template.is_active or not template.published_version_no:
-        raise ValueError("Publish a tested version before generating documents.")
+        raise ValueError(
+            "This template is still a draft. Publish a tested version from "
+            "Templates before generating documents with it."
+        )
     version = await get_version(
         db,
         tenant_id=template.tenant_id,

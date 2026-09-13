@@ -1,7 +1,7 @@
 """Platform-wide outbound email suppression list and provider webhook receipts.
 
-Revision ID: 182_platform_email_suppression
-Revises: 181_session_epoch
+Revision ID: 185_platform_email_suppression
+Revises: 184_firm_email_intake
 
 Both tables are deliberately platform-scoped and carry no RLS policy, matching
 the precedent set by ``stripe_webhook_events``: a bounce is keyed on the
@@ -12,8 +12,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-revision = "182_platform_email_suppression"
-down_revision = "181_session_epoch"
+revision = "185_platform_email_suppression"
+down_revision = "184_firm_email_intake"
 branch_labels = None
 depends_on = None
 

@@ -81,11 +81,65 @@ class InboundEmailAlias(Base):
     )
 
 
+class FirmInboundEmailAlias(Base):
+    """An additive address registry; existing matter aliases keep their contract."""
+
+    __tablename__ = "firm_inbound_email_aliases"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'revoked')", name="ck_firm_inbound_alias_status"
+        ),
+        Index(
+            "uq_firm_inbound_alias_active",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    encrypted_local_part: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active", server_default="active"
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    last_received_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+
+
 class InboundEmail(Base):
     """A delivered raw email waiting for explicit filing or rejection."""
 
     __tablename__ = "inbound_emails"
     __table_args__ = (
+        CheckConstraint(
+            "(alias_id IS NOT NULL AND firm_alias_id IS NULL AND matter_id IS NOT NULL) OR (alias_id IS NULL AND firm_alias_id IS NOT NULL)",
+            name="ck_inbound_alias_source",
+        ),
+        UniqueConstraint(
+            "firm_alias_id", "message_sha256", name="uq_inbound_email_firm_sha256"
+        ),
+        CheckConstraint(
+            "status != 'accepted' OR matter_id IS NOT NULL",
+            name="ck_inbound_accepted_matter",
+        ),
         CheckConstraint(
             "status IN ('pending', 'accepted', 'rejected')",
             name="ck_inbound_email_status",
@@ -105,15 +159,20 @@ class InboundEmail(Base):
         server_default="gen_random_uuid()",
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    alias_id: Mapped[uuid.UUID] = mapped_column(
+    alias_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("inbound_email_aliases.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
-    matter_id: Mapped[uuid.UUID] = mapped_column(
+    firm_alias_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("firm_inbound_email_aliases.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    matter_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("matters.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", server_default="pending"

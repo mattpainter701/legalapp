@@ -113,13 +113,16 @@ as a source-backed template. Regenerate after changing any template body or
 question; `backend/tests/unit/test_intake_starter_pdfs.py` fails if the printed
 form and the template stop agreeing.
 
-Two differences from the rendered markdown are deliberate. The fee agreement's
+Three differences from the rendered markdown are deliberate. The fee agreement's
 conditional fee sections (`{{#if hourly_rate}}` and the rest) all print, since a
 paper form has no renderer to choose between them — strike the arrangements that
-do not apply. And signature lines are printed as ruled lines with a
-"Signature" (or "Client signature") and "Date" label, exactly the shape the
-portal's signature-line detection looks for, so the client's electronic
-signature lands on the printed line when the form is sent for signature.
+do not apply. A placeholder with a declared `default` is pre-filled with it, so a
+jurisdiction-settled term such as the North Dakota billing increment is visible
+on the form rather than hidden in an empty box. And signature lines are printed
+as ruled lines with a "Signature" (or "Client signature") and "Date" label,
+exactly the shape the portal's signature-line detection looks for, so the
+client's electronic signature lands on the printed line when the form is sent for
+signature.
 
 ## A completed sample for review
 

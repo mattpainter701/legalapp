@@ -45,6 +45,77 @@ def test_a_printed_questionnaire_uses_the_question_keys(generator, tmp_path, pra
     }
 
 
+def _widgets(path):
+    """Every widget's page, field name, and rectangle, for geometry checks."""
+
+    reader = PdfReader(path)
+    widgets = []
+    for page_number, page in enumerate(reader.pages):
+        for annotation in page.get("/Annots") or []:
+            widget = annotation.get_object()
+            name, rect = widget.get("/T"), widget.get("/Rect")
+            if name is None or rect is None:
+                continue
+            widgets.append((page_number, str(name), [float(v) for v in rect]))
+    return reader, widgets
+
+
+def _assert_no_overlap(path):
+    reader, widgets = _widgets(path)
+    by_page: dict[int, list] = {}
+    for page_number, name, rect in widgets:
+        by_page.setdefault(page_number, []).append((name, rect))
+    for page_number, items in by_page.items():
+        media = reader.pages[page_number].mediabox
+        for name, rect in items:
+            assert media.bottom <= rect[1] and rect[3] <= media.top
+            assert media.left <= rect[0] and rect[2] <= media.right
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                left = max(items[i][1][0], items[j][1][0])
+                right = min(items[i][1][2], items[j][1][2])
+                bottom = max(items[i][1][1], items[j][1][1])
+                top = min(items[i][1][3], items[j][1][3])
+                overlap = max(0.0, right - left) * max(0.0, top - bottom)
+                # Fields on consecutive lines used to overlap by a hair, which
+                # reads as a double rule; nothing may cross by more than that.
+                assert overlap <= 1.0, (page_number, items[i][0], items[j][0])
+
+
+@pytest.mark.parametrize("document", pack.documents(), ids=lambda d: d.key)
+def test_a_printed_template_has_no_overlapping_fields(generator, tmp_path, document):
+    """Boxes that touch or cross look broken on paper; none may overlap."""
+
+    path = generator.render_document(document, tmp_path / f"{document.key}.pdf")
+
+    _assert_no_overlap(path)
+
+
+@pytest.mark.parametrize("practice", pack.practices(), ids=lambda p: p.slug)
+def test_a_printed_questionnaire_has_no_overlapping_fields(
+    generator, tmp_path, practice
+):
+    path = generator.render_questionnaire(practice, tmp_path / f"{practice.slug}.pdf")
+
+    _assert_no_overlap(path)
+
+
+def test_a_declared_default_is_prefilled_into_the_printed_field(generator, tmp_path):
+    """A jurisdiction-settled term must show, not sit in an empty box."""
+
+    path = generator.render_document(
+        pack.HOURLY_FEE_AGREEMENT_ND, tmp_path / "fee-nd.pdf"
+    )
+    fields = PdfReader(path).get_fields() or {}
+    default = next(
+        field.default
+        for field in pack.HOURLY_FEE_AGREEMENT_ND.fields
+        if field.name == "billing_increment"
+    )
+
+    assert fields["billing_increment"]["/V"] == default
+
+
 def test_conditional_fee_sections_are_all_printed(generator, tmp_path):
     """A form has no renderer to choose one fee arrangement, so it shows each."""
 

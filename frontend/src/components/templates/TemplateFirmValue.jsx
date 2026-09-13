@@ -21,6 +21,6 @@ export default function TemplateFirmValue({ field }) {
       : !profile ? <p role="status" className="mt-2">Loading firm details…</p>
         : <><p className="mt-2 text-xs text-brand-muted">{value ? 'Configured' : 'Not configured'}</p><p className="mt-1 whitespace-pre-wrap break-words">{value || `Ask a firm administrator to add ${field.label.toLowerCase()}.`}</p></>}
     <p className="mt-3 text-brand-muted">Every template mapped to this source uses your firm’s current profile when Smart Fill runs, in any matter. Previously saved documents keep their original values.</p>
-    <p className="mt-2 text-brand-muted">Administrators can update the shared value in <Link to="/admin?tab=settings#firm-branding" className="underline">Firm settings</Link>. Editing a value while filling one document does not change the profile.</p>
+    <p className="mt-2 text-brand-muted">Administrators can update the shared value in <Link to="/admin?tab=firm" className="underline">Firm settings</Link>. Editing a value while filling one document does not change the profile.</p>
   </section>
 }

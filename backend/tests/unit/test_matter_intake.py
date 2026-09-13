@@ -1111,6 +1111,27 @@ async def test_reconcile_mirrors_an_uploaded_copy_until_staff_decide(ctx):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_mirrors_a_signed_request_whose_copy_is_not_filed_yet(ctx):
+    c = ctx
+    c.signature.status = "partially_signed"
+    c.signature.signers = [
+        s.SignatureSigner(id=uuid.uuid4(), sign_order=1, status="signed")
+    ]
+
+    await s.mirror_submissions(c.db, c.packet)
+    agreement = c.packet.requirements["fee_agreement"]
+    assert agreement["signed_pending_filing"] is True
+    assert agreement["completed"] is False
+    shown = s.public_packet(c.packet, client=True)["requirements"]["fee_agreement"]
+    assert shown["signed_pending_filing"] is True
+
+    # Filed: completion marks the requirement itself, so the interim flag goes.
+    c.signature.status = "completed"
+    await s.mirror_submissions(c.db, c.packet)
+    assert "signed_pending_filing" not in c.packet.requirements["fee_agreement"]
+
+
+@pytest.mark.asyncio
 async def test_start_plans_signature_placements_on_the_agreement(ctx, monkeypatch):
     c = ctx
     planned = []
@@ -1129,6 +1150,72 @@ async def test_start_plans_signature_placements_on_the_agreement(ctx, monkeypatc
     assert planned == [(b"%PDF-reviewed", ["signer"], [])]
     assert request.positioned_fields == [{"field_id": "auto:sig:1"}]
     assert request.signing_plan == {"signature_fields_count": 1}
+
+
+@pytest.mark.asyncio
+async def test_start_sends_placements_made_in_the_drawer_to_the_plan(ctx, monkeypatch):
+    c = ctx
+    planned = []
+
+    def plan(request, content, *, signers, placements, required_roles=None):
+        planned.append(placements)
+        request.positioned_fields = placements or None
+        request.signing_plan = {
+            "placement_source": "placed" if placements else "fallback"
+        }
+
+    monkeypatch.setattr("app.services.esign.plan.plan_request_placements", plan)
+    document = s.MatterDocument(
+        id=uuid.uuid4(),
+        tenant_id=c.user.tenant_id,
+        matter_id=c.matter.id,
+        filename="Agreement.pdf",
+        positioned_fields=[{"field_id": "stale", "role": "client"}],
+    )
+    c.db.rows[s.MatterDocument] = document
+    c.db.rows[s.MatterIntake] = None
+    placed = {
+        "field_id": "drawer-1",
+        "field_type": "signature",
+        "role": "client",
+        "page": 1,
+    }
+    body = start_body(
+        c, agreement_document_id=document.id, agreement_positioned_fields=[placed]
+    )
+    await s.start_packet(
+        c.db, c.user, c.matter, body, "Agreement.pdf", b"%PDF-reviewed"
+    )
+    # The drawer's placements win over ones stored on the document, and every
+    # intake placement is addressed to the single portal signer.
+    assert planned == [[{**placed, "role": "signer"}]]
+
+
+@pytest.mark.asyncio
+async def test_start_refuses_drawer_placements_that_do_not_fit_the_pdf(
+    ctx, monkeypatch
+):
+    from fastapi import HTTPException
+
+    from app.services.esign.placement import PlacementError
+
+    c = ctx
+
+    def plan(request, content, *, signers, placements, required_roles=None):
+        if placements:
+            raise PlacementError("stale")
+
+    monkeypatch.setattr("app.services.esign.plan.plan_request_placements", plan)
+    c.db.rows[s.MatterIntake] = None
+    body = start_body(
+        c, agreement_positioned_fields=[{"field_id": "drawer-1", "role": "client"}]
+    )
+    with pytest.raises(HTTPException) as caught:
+        await s.start_packet(
+            c.db, c.user, c.matter, body, "Agreement.pdf", b"%PDF-reviewed"
+        )
+    assert caught.value.status_code == 422
+    assert "signing positions" in caught.value.detail
 
 
 @pytest.mark.asyncio

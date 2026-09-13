@@ -111,6 +111,7 @@ def user_and_matter():
 
 def alias_row(user, matter):
     return SimpleNamespace(
+        kind="matter",
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
         matter_id=matter.id,

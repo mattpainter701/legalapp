@@ -305,6 +305,7 @@ jobs:
         working-directory: backend
         run: alembic upgrade head
       - name: Provision a production-shaped runtime role
+        # Firm intake uses the same migrated database and checks a NOLOGIN role.
         env:
           PGPASSWORD: test
         run: |
@@ -316,6 +317,8 @@ jobs:
           GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO comp09_runtime;
           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO comp09_runtime;
           SQL
+      - name: Rehearse firm email intake constraints and tenant isolation
+        run: python scripts/rehearse_firm_email_intake.py
       - name: Rehearse tenant isolation, integrity, immutability, and concurrency
         run: python scripts/rehearse_configurable_workflows.py
       - name: Rehearse artifact review and delivery evidence

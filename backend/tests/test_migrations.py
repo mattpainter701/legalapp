@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["182_platform_email_suppression"]
+    assert heads == ["185_platform_email_suppression"]
 
 
 def test_intake_optional_agreement_migration_widens_and_restores_the_column():
@@ -848,11 +848,11 @@ def test_platform_email_suppression_migration_is_platform_scoped():
         backend_dir
         / "migrations"
         / "versions"
-        / "182_platform_email_suppression.py"
+        / "185_platform_email_suppression.py"
     ).read_text(encoding="utf-8")
 
-    assert 'revision = "182_platform_email_suppression"' in source
-    assert 'down_revision = "181_session_epoch"' in source
+    assert 'revision = "185_platform_email_suppression"' in source
+    assert 'down_revision = "184_firm_email_intake"' in source
     assert "ROW LEVEL SECURITY" not in source
     assert "current_setting" not in source
     # Both halves of the feature: the list itself and the replay guard that
@@ -864,3 +864,28 @@ def test_platform_email_suppression_migration_is_platform_scoped():
     # Additive only — the gate rejects destructive upgrades, and a downgrade
     # must still be able to remove what this added.
     assert "op.drop_table(\"email_suppressions\")" in source
+
+
+def test_unpublished_templates_migration_only_deactivates_unpublished_rows():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "182_unpublished_tpl_inactive.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "182_unpublished_tpl_inactive"' in source
+    assert 'down_revision = "181_session_epoch"' in source
+    assert "published_version_no IS NULL" in source
+    assert "is_active = false" in source
+
+
+def test_drawn_signature_migration_adds_and_drops_the_column():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "183_drawn_signature.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "183_drawn_signature"' in source
+    assert 'down_revision = "182_unpublished_tpl_inactive"' in source
+    assert "drawn_signature_png" in source
+    assert "op.add_column" in source
+    assert "op.drop_column" in source

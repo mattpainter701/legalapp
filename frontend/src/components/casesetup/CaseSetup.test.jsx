@@ -5,15 +5,27 @@ import CaseSetupCard from './CaseSetupCard'
 import PaperworkDrawer from './PaperworkDrawer'
 import { dueDateToIso, orderedRequirements, paperworkOptions, requirementState } from './paperwork'
 import api, {
-  getAdminUsers, getIntakeStarterPack, getMatterDocuments, getMatterPaperwork, matterPaperworkAction, previewMatterPaperwork, uploadMatterDocument,
+  getAdminUsers, getIntakeStarterPack, getMatterDocuments, getMatterDocumentSigningSource, getMatterPaperwork, matterPaperworkAction, previewMatterPaperwork, uploadMatterDocument,
 } from '../../api'
 
 vi.mock('../../api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
   getMatterPaperwork: vi.fn(), matterPaperworkAction: vi.fn(), previewMatterPaperwork: vi.fn(),
-  getMatterDocuments: vi.fn(),
+  getMatterDocuments: vi.fn(), getMatterDocumentSigningSource: vi.fn(),
   getAdminUsers: vi.fn(), getContacts: vi.fn(), getIntakeStarterPack: vi.fn(),
   uploadMatterDocument: vi.fn(),
+}))
+
+// The placement review renders the PDF with pdf.js; stand in for it with the
+// same contract: reports placed fields through onChange for the roles given.
+const PLACED_FIELD = { field_id: 'manual-1', field_type: 'signature', role: 'signer', page: 1, rect: [72, 100, 302, 156], page_width: 612, page_height: 792, source_sha256: 'verified' }
+vi.mock('../templates/GeneratedSigningPlacementReview', () => ({
+  default: ({ signerRoles, onChange }) => (
+    <div>
+      <p>Placement review for {signerRoles.map(signer => signer.role).join(', ')}</p>
+      <button type="button" onClick={() => onChange([PLACED_FIELD])}>Place a signature block</button>
+    </div>
+  ),
 }))
 
 // The real picker lazy-loads the Template Studio render modal. Stand in for it
@@ -82,6 +94,7 @@ it('builds the full intake request from a complete draft', () => {
     sms_permission_verified: false,
     sms_case_updates_verified: false,
     agreement_document_id: 'agreement',
+    agreement_positioned_fields: [],
     agreement_due_at: '2026-09-15T17:00:00.000Z',
     // The server's free-text questionnaire is never requested any more: the
     // questionnaire is a PDF the firm supplies, sent like any other form.
@@ -90,9 +103,10 @@ it('builds the full intake request from a complete draft', () => {
     questions: [],
     portal_after_signing: true,
     selected_documents: [
-      { document_id: 'intake', label: 'Client intake form.pdf', requires_signature: true, due_at: '2026-09-16T17:00:00.000Z' },
-      { document_id: 'questionnaire', label: 'Family questionnaire.pdf', requires_signature: false, due_at: '2026-09-18T17:00:00.000Z' },
-      { document_id: 'form', label: 'Retainer addendum', requires_signature: true, due_at: '2026-09-20T17:00:00.000Z' },
+      { document_id: 'intake', label: 'Client intake form.pdf', requires_signature: true, due_at: '2026-09-16T17:00:00.000Z', positioned_fields: [] },
+      // An unsigned form carries no signing positions even if some were placed.
+      { document_id: 'questionnaire', label: 'Family questionnaire.pdf', requires_signature: false, due_at: '2026-09-18T17:00:00.000Z', positioned_fields: [] },
+      { document_id: 'form', label: 'Retainer addendum', requires_signature: true, due_at: '2026-09-20T17:00:00.000Z', positioned_fields: [] },
     ],
     upload_requirements: [
       { key: 'upload_1', label: 'Marriage certificate', required: true, due_at: '2026-09-25T17:00:00.000Z' },
@@ -100,6 +114,21 @@ it('builds the full intake request from a complete draft', () => {
     ],
     confirm_send: true,
   })
+})
+
+it('sends the signing positions placed on each signed PDF and none for an unsigned one', () => {
+  const placed = [{ field_id: 'manual-1', role: 'signer' }]
+  const options = paperworkOptions({
+    email: 'jane@example.com', channels: ['email'],
+    agreementDocumentId: 'agreement', agreementPlacements: placed,
+    intakeFormDocumentId: 'intake', intakeFormLabel: 'Intake.pdf', intakeFormRequiresSignature: false, intakeFormPlacements: placed,
+    forms: [{ documentId: 'form', label: 'Addendum', requiresSignature: true, due: '', placements: placed }],
+  }, 'UTC')
+  expect(options.agreement_positioned_fields).toEqual(placed)
+  expect(options.selected_documents).toEqual([
+    expect.objectContaining({ document_id: 'intake', requires_signature: false, positioned_fields: [] }),
+    expect.objectContaining({ document_id: 'form', requires_signature: true, positioned_fields: placed }),
+  ])
 })
 
 it('sends no records unless the section is switched on', () => {
@@ -120,6 +149,7 @@ it('labels each requirement by how the client completes it', () => {
   expect(requirementState({ completed: false, kind: 'signature' }, 'document_1')).toMatchObject({ label: 'Needs signature' })
   expect(requirementState({ completed: false, kind: 'signature', submitted_document_id: 'copy' }, 'document_1')).toMatchObject({ label: 'Awaiting review' })
   expect(requirementState({ completed: true, kind: 'signature' }, 'document_1')).toMatchObject({ label: 'Signed' })
+  expect(requirementState({ completed: false, kind: 'signature', signed_pending_filing: true }, 'document_1')).toMatchObject({ label: 'Signed — filing' })
   expect(requirementState({ completed: false, kind: 'upload' }, 'upload_1')).toMatchObject({ label: 'Outstanding' })
   expect(requirementState({ completed: true, kind: 'upload' }, 'upload_1')).toMatchObject({ label: 'Received' })
   expect(requirementState({ completed: true, kind: 'document' }, 'document_2')).toMatchObject({ label: 'Received' })
@@ -221,6 +251,80 @@ it('sends the chosen documents and their deadlines from the drawer', async () =>
   expect(options.include_questionnaire).toBe(false)
   expect(options.questions).toEqual([])
   expect(onSent).toHaveBeenCalledOnce()
+})
+
+it('lets the firm place signing positions on a chosen PDF and sends them with the packet', async () => {
+  const user = userEvent.setup()
+  getMatterDocumentSigningSource.mockResolvedValue(new Blob(['%PDF-final']))
+  render(<PaperworkDrawer
+    matterId="matter"
+    documents={[
+      { id: 'agreement', filename: 'Fee agreement.pdf', content_type: 'application/pdf' },
+      { id: 'form', filename: 'Consent form.pdf', content_type: 'application/pdf' },
+    ]}
+    clientEmail="jane@example.com"
+    timeZone="UTC"
+    onClose={vi.fn()}
+    onSent={vi.fn()}
+  />)
+  // No review is offered until a PDF is chosen.
+  expect(screen.queryByRole('button', { name: 'Review signing positions' })).not.toBeInTheDocument()
+
+  await user.selectOptions(screen.getByLabelText('Choose the fee agreement'), 'agreement')
+  await user.click(screen.getByRole('button', { name: 'Review signing positions' }))
+  await waitFor(() => expect(getMatterDocumentSigningSource).toHaveBeenCalledWith('matter', 'agreement'))
+  // Intake has one portal signer, so the review is addressed to that role.
+  expect(await screen.findByText('Placement review for signer')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Place a signature block' }))
+  expect(screen.getByText('1 signing field placed on Fee agreement.pdf')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Done placing signing positions' }))
+
+  // An additional signed form gets its own review, and an unsigned one none.
+  await user.click(screen.getByLabelText(/Consent form\.pdf/))
+  const formRow = within(screen.getByLabelText(/Consent form\.pdf/).closest('li'))
+  await user.click(formRow.getByRole('button', { name: 'Review signing positions' }))
+  await user.click(await formRow.findByRole('button', { name: 'Place a signature block' }))
+  expect(formRow.getByText('1 signing field placed on Consent form.pdf')).toBeInTheDocument()
+  await user.click(formRow.getByRole('checkbox', { name: 'Client signs this form' }))
+  expect(formRow.queryByRole('button', { name: /signing positions/ })).not.toBeInTheDocument()
+  await user.click(formRow.getByRole('checkbox', { name: 'Client signs this form' }))
+
+  await user.click(screen.getByRole('button', { name: '3. Send' }))
+  expect(screen.getByText(/Fee agreement \(signature, 1 placed field\)/)).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
+  const [, body] = api.post.mock.calls.at(-1)
+  const options = JSON.parse(body.get('options'))
+  expect(options.agreement_positioned_fields).toEqual([PLACED_FIELD])
+  expect(options.selected_documents).toEqual([
+    expect.objectContaining({ document_id: 'form', requires_signature: true, positioned_fields: [PLACED_FIELD] }),
+  ])
+})
+
+it('drops placements when a different fee agreement is chosen', async () => {
+  const user = userEvent.setup()
+  getMatterDocumentSigningSource.mockResolvedValue(new Blob(['%PDF-final']))
+  render(<PaperworkDrawer
+    matterId="matter"
+    documents={[
+      { id: 'agreement', filename: 'Fee agreement.pdf', content_type: 'application/pdf' },
+      { id: 'other', filename: 'Other agreement.pdf', content_type: 'application/pdf' },
+    ]}
+    clientEmail="jane@example.com"
+    timeZone="UTC"
+    onClose={vi.fn()}
+    onSent={vi.fn()}
+  />)
+  await user.selectOptions(screen.getByLabelText('Choose the fee agreement'), 'agreement')
+  await user.click(screen.getByRole('button', { name: 'Review signing positions' }))
+  await user.click(await screen.findByRole('button', { name: 'Place a signature block' }))
+  expect(screen.getByText(/1 signing field placed/)).toBeInTheDocument()
+  await user.selectOptions(screen.getByLabelText('Choose the fee agreement'), 'other')
+  expect(screen.queryByText(/signing field placed/)).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Place a signature block' })).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '3. Send' }))
+  await user.click(screen.getByRole('button', { name: 'Send paperwork' }))
+  const [, body] = api.post.mock.calls.at(-1)
+  expect(JSON.parse(body.get('options')).agreement_positioned_fields).toEqual([])
 })
 
 it('prepares the fee agreement from a firm template and sends it', async () => {
@@ -338,7 +442,7 @@ it('sends without a fee agreement when another standard piece is included', asyn
   const options = JSON.parse(body.get('options'))
   expect(options.agreement_document_id).toBeNull()
   expect(options.selected_documents).toEqual([
-    { document_id: 'questionnaire', label: 'Family questionnaire.pdf', requires_signature: true, due_at: null },
+    { document_id: 'questionnaire', label: 'Family questionnaire.pdf', requires_signature: true, due_at: null , positioned_fields: [] },
   ])
   expect(onSent).toHaveBeenCalledOnce()
 })
@@ -379,7 +483,7 @@ it('sends the client intake form signed by default, or unsigned when the toggle 
   const [, body] = api.post.mock.calls.at(-1)
   const options = JSON.parse(body.get('options'))
   expect(options.selected_documents).toEqual([
-    { document_id: 'intake', label: 'Client intake form.pdf', requires_signature: false, due_at: '2026-09-16T17:00:00.000Z' },
+    { document_id: 'intake', label: 'Client intake form.pdf', requires_signature: false, due_at: '2026-09-16T17:00:00.000Z' , positioned_fields: [] },
   ])
 })
 
@@ -402,7 +506,7 @@ it('prepares the questionnaire from a firm template and sends it as a signed for
   const options = JSON.parse(body.get('options'))
   expect(options.include_questionnaire).toBe(false)
   expect(options.selected_documents).toEqual([
-    { document_id: 'rendered-doc', label: 'Engagement Letter.pdf', requires_signature: true, due_at: '2026-09-18T17:00:00.000Z' },
+    { document_id: 'rendered-doc', label: 'Engagement Letter.pdf', requires_signature: true, due_at: '2026-09-18T17:00:00.000Z' , positioned_fields: [] },
   ])
 })
 

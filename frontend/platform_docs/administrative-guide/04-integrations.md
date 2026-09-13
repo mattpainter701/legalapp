@@ -9,6 +9,8 @@ icon: plug
 
 # Integrations
 
+**Email intake** provides one firm-wide forwarding contact for matter to-dos. Configure it under [Integrations → Email intake](/admin?tab=integrations&integration=email-intake), then read the **Firm email intake** chapter in this Admin Guide for sender requirements and rollout checks.
+
 An integration extends the tenant's data boundary. Connect only approved organization accounts, request the minimum scopes required by the intended workflow, and identify an owner who can maintain consent and respond to failures.
 
 ## Integration readiness

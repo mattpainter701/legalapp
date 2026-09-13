@@ -90,6 +90,7 @@ from app.routers.matter_document_folders import (
 from app.routers.matters_correspondence import (
     router as matters_correspondence_router,
 )
+from app.routers.firm_email_intake import router as firm_email_intake_router
 from app.routers.reports import router as reports_router
 from app.routers.calendar import router as calendar_router
 from app.routers.document_templates import router as document_templates_router
@@ -519,6 +520,7 @@ app.include_router(client_intake_router)
 app.include_router(intake_starter_pack_router)
 app.include_router(matter_document_folders_router)
 app.include_router(matters_correspondence_router)
+app.include_router(firm_email_intake_router)
 app.include_router(reports_router)
 app.include_router(calendar_router)
 app.include_router(matters_router)

@@ -143,6 +143,7 @@ async def record_portal_signature(
     consent_text_version: str,
     user_agent: str | None = None,
     field_values: dict[str, str] | None = None,
+    drawn_signature_png: bytes | None = None,
 ) -> None:
     """Mark a single signer as signed in the document (does not commit)."""
     now = datetime.now(timezone.utc)
@@ -150,6 +151,7 @@ async def record_portal_signature(
     signer.signed_at = now
     signer.signed_ip = ip
     signer.typed_signature = typed_signature
+    signer.drawn_signature_png = drawn_signature_png or None
     signer.field_values = dict(field_values or {})
     signer.method = "portal_inline"
     signer.audit = {
@@ -157,6 +159,14 @@ async def record_portal_signature(
         "signed_at": now.isoformat(),
         "ip": ip,
         "typed_signature": typed_signature,
+        # The drawing is evidence too: its hash binds the stamped image to
+        # this signing, and the certificate carries the audit verbatim.
+        "signature_method": "drawn" if drawn_signature_png else "typed",
+        "drawn_signature_sha256": (
+            hashlib.sha256(drawn_signature_png).hexdigest()
+            if drawn_signature_png
+            else None
+        ),
         "method": "portal_inline",
         "field_count": len(signer.field_values),
         "consent_to_electronic_signature": True,
@@ -368,7 +378,18 @@ def stamps_for(
                 f"{str(request_id).replace('-', '')[:8]}"
             )
         if text:
-            stamps.append(Stamp(item.page, item.rect, item.kind, text, caption))
+            stamps.append(
+                Stamp(
+                    item.page,
+                    item.rect,
+                    item.kind,
+                    text,
+                    caption,
+                    image=(
+                        signer.drawn_signature_png if item.kind == "signature" else None
+                    ),
+                )
+            )
     return stamps
 
 

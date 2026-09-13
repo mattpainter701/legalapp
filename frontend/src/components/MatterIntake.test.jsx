@@ -59,6 +59,22 @@ it('keeps signature outstanding after a legacy questionnaire is answered', async
   await user.click(screen.getByRole('button', { name: 'Open and sign' }))
   expect(onSign).toHaveBeenCalledOnce()
 })
+it('shows a signed form as being filed rather than asking for the signature again', async () => {
+  const onSign = vi.fn()
+  getClientIntake.mockResolvedValue({
+    ...packet(),
+    questions: [],
+    requirements: {
+      fee_agreement: { completed: false, signed_pending_filing: true },
+      document_a: { kind: 'signature', label: 'Client intake form', completed: false, document_id: 'doc-a', signature_id: 'sig-a' },
+    },
+  })
+  render(<ClientIntakeChecklist onSign={onSign} />)
+  expect(await screen.findByText('Fee agreement')).toBeInTheDocument()
+  expect(screen.getByText('Signed — filing')).toBeInTheDocument()
+  expect(screen.getAllByText('Needs your signature')).toHaveLength(1)
+  expect(screen.getAllByRole('button', { name: 'Open and sign' })).toHaveLength(1)
+})
 it('groups forms to sign apart from records to send, with a status on each', async () => {
   const user = userEvent.setup(); const onSign = vi.fn()
   getClientIntake.mockResolvedValue({

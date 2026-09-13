@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.database import async_session_maker, set_tenant_context
@@ -95,6 +96,7 @@ def public_packet(packet, *, client=False):
                     "required",
                     "submitted_document_id",
                     "submitted_at",
+                    "signed_pending_filing",
                     "declined",
                     "declined_at",
                     "decline_reason",
@@ -143,14 +145,19 @@ def due_iso(value):
     return value.astimezone(timezone.utc).isoformat() if value else None
 
 
-def plan_signing_placements(signature, content, *, signer_name, placements):
+def plan_signing_placements(
+    signature, content, *, signer_name, placements, strict=False
+):
     """Decide where the client signs, the same way the E-Signature panel does.
 
     Intake sends every signature request to a single ``signer`` role, so staff
     placements reviewed on the PDF are adopted when they exist and the plan
     otherwise finds (or falls back to) a signature line on the document.
-    Invalid staff placements are not fatal here: the plan still guarantees a
-    signature placement, and the reviewer's geometry is simply dropped.
+    Placements carried on the document from an earlier review may be stale
+    and are not fatal: the plan still guarantees a signature placement, and
+    the reviewer's geometry is simply dropped. Placements staff just made in
+    the paperwork drawer (``strict``) are the firm's explicit instruction, so
+    an invalid one is reported rather than silently replaced.
     """
     from types import SimpleNamespace
 
@@ -163,7 +170,13 @@ def plan_signing_placements(signature, content, *, signer_name, placements):
     ]
     try:
         plan_request_placements(signature, content, signers=signers, placements=usable)
-    except PlacementError:
+    except PlacementError as exc:
+        if strict:
+            raise HTTPException(
+                422,
+                f"The signing positions placed on {signature.source_document_filename or 'the document'} "
+                f"do not match the PDF being sent: {exc} Review them again before sending.",
+            ) from exc
         plan_request_placements(signature, content, signers=signers, placements=[])
 
 
@@ -488,7 +501,10 @@ async def start_packet(db, user, matter, body, filename, content):
             signature,
             content,
             signer_name=contact.display_name or str(body.email),
-            placements=document.positioned_fields or [],
+            placements=body.agreement_positioned_fields
+            or document.positioned_fields
+            or [],
+            strict=bool(body.agreement_positioned_fields),
         )
         db.add(signature)
         await db.flush()
@@ -607,7 +623,10 @@ async def start_packet(db, user, matter, body, filename, content):
                 extra,
                 attachment.content,
                 signer_name=contact.display_name or str(body.email),
-                placements=selected_doc.positioned_fields or [],
+                placements=selection.positioned_fields
+                or selected_doc.positioned_fields
+                or [],
+                strict=bool(selection.positioned_fields),
             )
             db.add(extra)
             await db.flush()
@@ -698,7 +717,15 @@ async def cancel_packet(db, packet, reason):
 
 
 async def mirror_submissions(db, packet):
-    """Copy each open request's uploaded-copy state onto its requirement."""
+    """Copy each open request's client-visible signing state onto its requirement.
+
+    Two states are mirrored: an uploaded copy awaiting staff review, and a
+    request every signer has signed whose executed copy is not filed yet
+    (storage refused it and the scheduler retries). Without the second the
+    checklist keeps asking for a signature the client already gave.
+    """
+    from app.services.esign.service import completion_pending
+
     targets = []
     if packet.signature_id and packet.requirements.get("fee_agreement"):
         targets.append(("fee_agreement", packet.signature_id))
@@ -713,7 +740,9 @@ async def mirror_submissions(db, packet):
         if not requirement or requirement.get("completed"):
             continue
         request = await db.scalar(
-            select(SignatureRequest).where(
+            select(SignatureRequest)
+            .options(selectinload(SignatureRequest.signers))
+            .where(
                 SignatureRequest.id == request_id,
                 SignatureRequest.tenant_id == packet.tenant_id,
                 SignatureRequest.matter_id == packet.matter_id,
@@ -721,6 +750,7 @@ async def mirror_submissions(db, packet):
         )
         if request is None:
             continue
+        pending_filing = completion_pending(request)
         submitted_id = (
             str(request.submitted_document_id)
             if request.submitted_document_id and request.status != "completed"
@@ -734,16 +764,20 @@ async def mirror_submissions(db, packet):
         if (
             requirement.get("submitted_document_id") == submitted_id
             and requirement.get("submitted_at") == submitted_at
+            and bool(requirement.get("signed_pending_filing")) == pending_filing
         ):
             continue
         updated = {
             key_: value
             for key_, value in requirement.items()
-            if key_ not in ("submitted_document_id", "submitted_at")
+            if key_
+            not in ("submitted_document_id", "submitted_at", "signed_pending_filing")
         }
         if submitted_id:
             updated["submitted_document_id"] = submitted_id
             updated["submitted_at"] = submitted_at
+        if pending_filing:
+            updated["signed_pending_filing"] = True
         packet.requirements = {**packet.requirements, key: updated}
 
 
@@ -967,6 +1001,10 @@ async def reconcile(db, packet):
             await close_task(db, packet, f"due:{key}", f"{label} received")
         elif requirement.get("declined"):
             await close_task(db, packet, f"due:{key}", f"{label} declined")
+        elif requirement.get("signed_pending_filing"):
+            # The client has done their part; only the firm's storage is
+            # outstanding, and the signature panel reports that separately.
+            await close_task(db, packet, f"due:{key}", f"{label} signed")
         else:
             await ensure_task(
                 db,

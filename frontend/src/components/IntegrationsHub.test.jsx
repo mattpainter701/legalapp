@@ -21,6 +21,7 @@ describe('IntegrationsHub', () => {
     const sections = availableIntegrationSections({ role: 'admin', plan: 'professional' })
 
     expect(sections.map((section) => section.id)).toEqual([
+      'email-intake',
       'cloud',
       'cloud-search',
       'file-shares',
@@ -47,12 +48,12 @@ describe('IntegrationsHub', () => {
     expect(screen.getByText('Every external connection, in one place.')).toBeInTheDocument()
     expect(screen.getByText('Connect Microsoft 365 or Google Workspace, choose where matter documents live, and manage approved imports.')).toBeInTheDocument()
 
-    const details = screen.getAllByText('Permissions & setup')[0]
+    const details = screen.getAllByText('Permissions & setup')[1]
     await userEvent.click(details)
     expect(screen.getByText('Directory profiles for user provisioning')).toBeVisible()
     expect(screen.getByRole('link', { name: /Integration setup guide/ })).toHaveAttribute('href', '/guide/integrations')
 
-    await userEvent.click(screen.getAllByText('Open configuration')[0])
+    await userEvent.click(screen.getAllByText('Open configuration')[1])
     expect(onSectionChange).toHaveBeenCalledWith('cloud')
   })
 

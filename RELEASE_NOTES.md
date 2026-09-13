@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.13.1 — Password reset emails that actually arrive
+## 2026.09.13.3 — Password reset emails that actually arrive
 
 Released September 13, 2026.
 
@@ -14,6 +14,37 @@ LawHand now sends its own account emails — password resets and address verific
 - **Reset your password without waiting on email that never comes.** Account emails are sent through a service built for them, so a reset link reaches your inbox instead of being filtered on the way.
 - **Security email kept apart from everyday notifications.** Password resets arrive from a separate address to task and document notifications, so filtering the everyday mail cannot hide the message you need to get back into your account.
 - **Addresses that stop working are noticed.** When an address permanently rejects mail, LawHand records it and stops sending there, instead of quietly retrying an inbox that no longer exists.
+
+## 2026.09.13.2 — Forward email into matter to-dos
+
+Released September 13, 2026.
+
+Save one LawHand contact on your phone, forward a client email with [TASK], then confirm its matter, owner and optional date in Needs review.
+
+- **One forwarding contact for your firm.** Administrators can enable a firm address and staff can save the LawHand contact from Matters. Forward with [TASK] Jane, review this tomorrow.
+- **Review the details and create a matter to-do.** Confirm the suggested matter, colleague and date before creating work. The source email stays with the matter. User and admin guides explain setup and review.
+
+## 2026.09.13.1 — Draw your signature, place signing spots, and hear when clients sign
+
+Released September 13, 2026.
+
+Clients can draw their signature, paperwork forms get the E-Signature panel's signing-spot placement, signed forms read as signed while filing, you get an email when the client signs, and requests go out from your mailbox.
+
+- **Draw your signature in the portal.** Clients can now draw their signature with a mouse, pen or finger as well as type their name. The drawing is stamped on the signed copy; the typed name stays on the record.
+- **Place signing spots on paperwork forms.** Send client paperwork now offers the same signing-position review as the E-Signature panel, so a PDF with no form fields still gets a clickable place to sign.
+- **Signed forms read as signed while filing.** When every signer has signed but the copy is still being filed to your storage, the client checklist and your paperwork strip say Signed, filing instead of asking again.
+- **An email when the client signs.** Whoever sent a document for signature gets an email the moment the last signer signs, before the copy is filed, so a storage problem cannot hide that the client acted.
+- **Signature requests come from your mailbox.** Invitations and reminders to sign now leave through the sending user's connected Google or Microsoft mailbox, as intake paperwork does, so your sent folder keeps the record.
+- **Starter templates say what they need.** The starter fee agreement and intake forms are drafts until an attorney tests and publishes them. They no longer show as ready, and using one says to publish it first.
+
+## 2026.09.12.7 — Rename your firm and edit its profile in one place
+
+Released September 12, 2026.
+
+Administration has a Firm Profile tab. It renames the firm — including the name sign-up guessed from your email domain — and holds the contact details and branding that clients see on portal invitations, invoices and statements.
+
+- **Fix the firm name sign-up guessed from your domain.** Sign-up derived a firm name from your email domain and nothing could change it. Administration → Firm Profile now renames the firm everywhere clients see it.
+- **Firm details moved out of the Settings tab.** Firm name, contact details and branding were the fifth card inside Settings. They now have their own tab in Administration, next to Users.
 
 ## 2026.09.12.6 — Answers keep running when you leave the chat
 

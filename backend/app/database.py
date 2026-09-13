@@ -203,7 +203,7 @@ async def set_inbound_email_route_lookup(
     """Briefly permit opaque inbound-alias resolution before tenant binding.
 
     The corresponding RLS policy is SELECT-only and exists solely on
-    ``inbound_email_aliases``. Callers must authenticate the delivery before
+    ``inbound_email_aliases`` and ``firm_inbound_email_aliases``. Callers must authenticate the delivery before
     enabling it and bind the resolved tenant immediately afterward.
     """
     await session.execute(
