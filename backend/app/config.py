@@ -489,6 +489,13 @@ class Settings(BaseSettings):
     # notifications has not thereby filtered their own password reset. Empty
     # falls back to EMAIL_FROM, which keeps a single-identity deployment valid.
     EMAIL_FROM_SECURITY: str = ""
+    # Client correspondence falls back to the platform relay when a tenant has
+    # no Microsoft/Google mail grant. That is only ever correct on a
+    # single-firm deployment where EMAIL_* points at the firm's OWN mail
+    # server: on the hosted product EMAIL_* is LawHand's relay, so the fallback
+    # would send a client's matter correspondence from a LawHand address.
+    # Off by default so enabling system email cannot silently turn it on.
+    CLIENT_MAIL_SMTP_FALLBACK_ENABLED: bool = False
     MARKETING_LEAD_EMAIL: str = "support@getlawhand.com"
     SLACK_WEBHOOK_URL: str = ""  # Optional: Slack incoming webhook URL
     # Deployments that carry real users must refuse to boot with system email

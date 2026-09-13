@@ -25,6 +25,21 @@ vendor. A password reset must *not* come from the firm's mailbox: it would tie
 account recovery for every LawHand user to one customer's OAuth grant, and that
 grant expires.
 
+The lanes must not leak into each other, and there is one place they could.
+`connected_mail.send_client_email` historically fell back to platform SMTP when
+a tenant had no Microsoft or Google grant, on the assumption that `EMAIL_*`
+might be the firm's own mail server. There is no per-tenant SMTP configuration,
+so on the hosted product `EMAIL_*` is LawHand's relay — and that fallback would
+put a LawHand address on a client's matter correspondence. Worse, it was inert
+only because outbound email was disabled: switching the relay on would have
+activated it silently.
+
+It is now gated behind `CLIENT_MAIL_SMTP_FALLBACK_ENABLED`, off by default.
+With it off, a firm with no connected mailbox gets a typed failure telling them
+to connect one, instead of a letter going out under the wrong identity. Turn it
+on only for a single-firm deployment whose `EMAIL_*` really is that firm's own
+mail server.
+
 ## Why a transactional relay rather than Microsoft 365 or self-hosted SMTP
 
 - **Not an app registration on the M365 tenant.** Graph `Mail.Send` as an
@@ -271,6 +286,7 @@ EMAIL_USER=resend                # literal string, not an address
 EMAIL_PASS=<Resend API key>
 EMAIL_FROM=notifications@getlawhand.com
 EMAIL_FROM_SECURITY=security@getlawhand.com
+CLIENT_MAIL_SMTP_FALLBACK_ENABLED=false
 EMAIL_SUPPRESSION_ENABLED=true
 PLATFORM_EMAIL_WEBHOOK_SECRET=whsec_<from the Resend webhook endpoint>
 ```

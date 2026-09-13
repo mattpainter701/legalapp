@@ -24,6 +24,7 @@ from app.models.task import Task, TaskAutomationRun
 from app.models.tenant import TenantSettings
 from app.models.user import User
 from app.services import task_automation
+from app.services import connected_mail
 from app.services.connected_mail import ConnectedMailDelivery
 from app.services.email import EmailDeliveryResult
 from app.services.matter_file_store import StorageResult
@@ -171,6 +172,12 @@ async def test_approving_a_drafted_email_sends_it_once(
 ):
     sender = _RecordingSender()
     monkeypatch.setattr(task_automation, "email_service", sender)
+    # The fixture tenant has no cloud-mail grant, and client mail no longer
+    # falls back to the platform relay unless an operator opts in. This test is
+    # about delivery semantics, not transport, so keep that path open.
+    monkeypatch.setattr(
+        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
+    )
     matter = await _matter(db_session, test_tenant, test_user)
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
     approved_snapshot = dict(task.pending_action)
@@ -2148,6 +2155,9 @@ async def test_stale_approval_conflict_includes_immutable_delivery_evidence(
     """A racing tab must learn that the reviewed email was actually sent."""
     sender = _RecordingSender()
     monkeypatch.setattr(task_automation, "email_service", sender)
+    monkeypatch.setattr(
+        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
+    )
     matter = await _matter(db_session, test_tenant, test_user)
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
     reviewed_version = task.version

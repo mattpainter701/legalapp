@@ -1,3 +1,10 @@
+## Unreleased — Client correspondence can no longer fall back to the platform relay
+
+- Gate `connected_mail.send_client_email`'s SMTP fallback behind `CLIENT_MAIL_SMTP_FALLBACK_ENABLED`, off by default. The fallback assumed `EMAIL_*` might be a firm's own mail server, but there is no per-tenant SMTP configuration: on the hosted product `EMAIL_*` is LawHand's relay, so a tenant with no Microsoft or Google grant would have had a client's matter correspondence sent from a LawHand address.
+- It was inert only because outbound email was disabled. Turning the relay on for system email would have silently activated a client-mail path that sends under the wrong identity — a regression introduced by enabling something unrelated, which is why this is gated rather than documented.
+- With the gate off, a firm with no connected mailbox now receives `UNCONFIGURED` and a message telling them to connect one, instead of a letter going out as LawHand. Turn it on only for a single-firm deployment whose `EMAIL_*` really is that firm's own mail server.
+- Tests: `test_connected_mail.py` pins both halves — that the platform relay is never used for client mail by default, and that an operator who opts in still gets the legacy path. The two `test_task_automation.py` cases that reached SMTP through the fixture tenant's missing grant now opt in explicitly, since they are about delivery semantics rather than transport.
+
 ## Unreleased — Separate sending identities for security and notification mail
 
 - Add `EmailCategory` and `EMAIL_FROM_SECURITY`. Account-security mail (password reset in `routers/auth.py`, address verification in `routers/user_aliases.py`) now sends from `security@getlawhand.com` while every other system message sends from `notifications@getlawhand.com`. The split is by purpose and it is the whole point of having two addresses: a user who filters or mutes "task due" and "document ready" mail must not thereby filter their own password reset.
