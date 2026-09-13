@@ -82,7 +82,32 @@ These are done in provider consoles, not in this repository.
 
 ### 1. Relay account
 
-1. Create a Resend account and add `getlawhand.com` under **Domains**.
+1. Create a Resend account and add `getlawhand.com` under **Domains**. Use the
+   root domain, not a subdomain, so DKIM aligns on `getlawhand.com` itself.
+   Settings that matter:
+
+   | Option | Value | Why |
+   |---|---|---|
+   | Region | `us-east-1` | Matches where this deployment and its users sit. |
+   | Custom Return-Path | `send` | Keeps SPF off the root record — see DNS below. |
+   | Click tracking | **off** | See below. Not optional for this app. |
+   | Open tracking | **off** | Needless tracking pixel on security mail. |
+
+   **Click tracking must stay off.** It rewrites every URL in the message to
+   route through the tracking subdomain, which for this application means the
+   password-reset token would travel through a third-party redirect and be
+   recorded in the relay's click log. A reset token is a bearer credential; it
+   belongs in the recipient's mailbox and nowhere else. Rewritten links also
+   render as an opaque `links.getlawhand.com/...` redirect rather than a
+   recognizable `getlawhand.com/reset-password` URL, which is precisely the
+   pattern that trains users to click phishing links — a poor trade for a legal
+   platform. With click tracking off, the tracking subdomain is unused and
+   needs no DNS record.
+
+   Open tracking is off for a smaller reason: Resend's own interface warns the
+   numbers are unreliable, and there is no operational question about a
+   password reset that "was it opened" answers.
+
 2. Create an API key with **Sending access**. The SMTP username is the literal
    string `resend`; the API key is the password.
 3. Under **Webhooks**, copy the **signing secret** (`whsec_...`). It is shown
@@ -179,6 +204,24 @@ PLATFORM_EMAIL_WEBHOOK_SECRET=whsec_<from the Resend webhook endpoint>
 The webhook secret is issued by Resend, not generated here. Startup rejects a
 value that is not decodable base64 of at least 24 bytes, because such a secret
 would fail every signature check at runtime and reject every bounce silently.
+
+### Ordering: credentials before deploy
+
+`EMAIL_REQUIRED` is opt-in through `.env` and the Compose files default it to
+`false`, deliberately. It is a fail-closed check, so a deployment that turns it
+on without a working relay does not start — and defaulting it to `true` in
+Compose would mean any host whose `.env` predates this variable refuses to boot
+on the first deploy of this change.
+
+So the safe order on an existing host is:
+
+1. Put `EMAIL_ENABLED=true`, the relay credentials, and `EMAIL_REQUIRED=true`
+   into the production host's `.env`.
+2. Deploy.
+
+Deploying first and editing `.env` afterwards leaves system email disabled in
+the meantime, which is survivable; turning `EMAIL_REQUIRED=true` on a host that
+has no credentials yet is not, and is the one sequence to avoid.
 
 `EMAIL_REQUIRED=true` makes the process refuse to start unless delivery is
 enabled and authenticated. Without it, a missing relay degrades to a silent
