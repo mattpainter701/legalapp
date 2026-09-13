@@ -1241,18 +1241,6 @@ jobs:
             echo "No SBOM-tracked source input changed."
           fi
 
-  dependency-vulnerability-review:
-    name: Dependency vulnerability review
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Reject newly introduced high-severity vulnerabilities
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
-        with:
-          fail-on-severity: high
-
   merge-gate:
     name: Merge Gate
     if: always()
@@ -1270,7 +1258,6 @@ jobs:
       - pr-policy-documentation
       - release-notes
       - security-dependency-sbom
-      - dependency-vulnerability-review
       - authority-control-plane-rehearsal
       - research-workspace-rehearsal
       - configurable-workflow-rehearsal

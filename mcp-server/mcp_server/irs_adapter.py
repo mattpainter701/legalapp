@@ -19,7 +19,7 @@ from .authority_ingest import html_main_text
 
 IRB_INDEX_URL = "https://www.irs.gov/internal-revenue-bulletins"
 ESTATE_FORMS_INDEX_URL = "https://www.irs.gov/businesses/small-businesses-self-employed/forms-and-publications-estate-and-gift-tax"
-USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or "LegalApp-IRSSync/0.1 (+https://github.com/mattpainter701/legalapp; official legal-data retrieval)"
+USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or "LegalApp-IRSSync/0.1 (+https://github.com/mattpainter701/lawhand; official legal-data retrieval)"
 MAX_BYTES = 32 * 1024 * 1024
 PRODUCTS = {"56", "2848", "4506", "706", "709", "8971", "1041", "4768", "559", "230"}
 IRB_LINK = re.compile(r"/irb/(?P<issue>20\d{2}-\d{2})_IRB/?$", re.I)

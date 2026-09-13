@@ -115,7 +115,7 @@ AGENT_UPDATE_TASK_KIND = "agent_update"
 AGENT_OFFLINE_AFTER_SECONDS = 900
 AGENT_PORTAL_UPDATE_MIN_VERSION = (0, 15, 0)
 AGENT_UPDATE_TIMEOUT_SECONDS = 30 * 60
-OFFICIAL_AGENT_MANIFEST_URL = "https://github.com/mattpainter701/legalapp/releases/latest/download/agent-update.json"
+OFFICIAL_AGENT_MANIFEST_URL = "https://github.com/mattpainter701/lawhand/releases/latest/download/agent-update.json"
 AGENT_UPDATE_MANIFEST_MAX_BYTES = 16 * 1024
 _manifest_cache: tuple[float, dict] | None = None
 _manifest_failure_until = 0.0
@@ -134,7 +134,7 @@ OFFICIAL_MANIFEST_REDIRECT_HOSTS = {
     "github-releases.githubusercontent.com",
 }
 _GITHUB_MANIFEST_REDIRECT_PATH = re.compile(
-    r"^/mattpainter701/legalapp/releases/(?:latest/download/agent-update\.json|"
+    r"^/mattpainter701/lawhand/releases/(?:latest/download/agent-update\.json|"
     r"download/agent-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)/"
     r"(?:agent-update\.json|lawhand-agent-x64\.msi|"
     r"lawhand-agent-linux-x86_64\.tar\.gz))$"

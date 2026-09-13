@@ -89,7 +89,7 @@ jobs:
       name: agent-release
       deployment: false
       # Federated credential subject (exact; no preview wildcard):
-      # repo:mattpainter701/legalapp:environment:agent-release
+      # repo:mattpainter701/lawhand:environment:agent-release
     permissions:
       actions: read
       contents: read

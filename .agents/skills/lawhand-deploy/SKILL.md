@@ -70,7 +70,7 @@ fresh preflight.
 ## Commands
 
 ```bash
-REPO=mattpainter701/legalapp
+REPO=mattpainter701/lawhand
 SHA=$(git rev-parse origin/main)
 
 # CI evidence for the exact commit

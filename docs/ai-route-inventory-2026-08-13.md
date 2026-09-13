@@ -9,7 +9,7 @@ URLs, prompts, responses, or customer content.
 ## Proven production state
 
 - GitHub production verification run:
-  `https://github.com/mattpainter701/legalapp/actions/runs/31748121309`
+  `https://github.com/mattpainter701/lawhand/actions/runs/31748121309`
 - Runner: `skynet-lawhand-prod`
 - Deployed and available main commit:
   `3c8a31258543982a7c5c2823e439a31c7642aaa7`

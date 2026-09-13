@@ -59,7 +59,7 @@ Do not move DNS when any item below is true:
 3. Register the repository runner under that account with labels
    `ionos,lawhand-prod`. Registration tokens are one-time values; do not record
    them in shell history or files.
-4. Clone `mattpainter701/legalapp` to `/srv/lawhand/app` as `lawhandadmin`.
+4. Clone `mattpainter701/lawhand` to `/srv/lawhand/app` as `lawhandadmin`.
    Keep the checkout free of tracked host edits.
 5. Install the fixed root boundary and its single-command sudo policy:
 
