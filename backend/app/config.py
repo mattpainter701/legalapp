@@ -1326,14 +1326,27 @@ def validate_platform_email_settings(settings: Settings) -> None:
         if settings.EMAIL_SUPPRESSION_ENABLED and not settings.EMAIL_ENABLED:
             raise ValueError("EMAIL_SUPPRESSION_ENABLED requires EMAIL_ENABLED")
 
-    secret = settings.PLATFORM_EMAIL_WEBHOOK_SECRET
+    secret = settings.PLATFORM_EMAIL_WEBHOOK_SECRET.strip()
     if secret:
-        if len(secret) < 32:
-            raise ValueError(
-                "PLATFORM_EMAIL_WEBHOOK_SECRET must be at least 32 characters"
-            )
         if _looks_like_placeholder(secret):
             raise ValueError("PLATFORM_EMAIL_WEBHOOK_SECRET is still a placeholder")
+        # Resend signs with Svix, whose signing secrets are base64 and are
+        # published with a "whsec_" prefix. The HMAC key is the decoded bytes,
+        # so a value that cannot be decoded would fail every signature check at
+        # runtime and reject every bounce silently.
+        encoded = secret[len("whsec_") :] if secret.startswith("whsec_") else secret
+        try:
+            key_bytes = base64.b64decode(encoded, validate=True)
+        except ValueError:
+            raise ValueError(
+                "PLATFORM_EMAIL_WEBHOOK_SECRET must be the base64 Svix signing "
+                "secret issued by Resend (it normally starts with 'whsec_')"
+            )
+        if len(key_bytes) < 24:
+            raise ValueError(
+                "PLATFORM_EMAIL_WEBHOOK_SECRET decodes to fewer than 24 bytes; "
+                "this is not a Resend webhook signing secret"
+            )
 
 
 def validate_inbound_email_settings(settings: Settings) -> None:

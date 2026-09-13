@@ -7,9 +7,9 @@ covered by [inbound matter email](inbound_email_setup.md) and the connected-mail
 service.
 
 ```text
-LawHand backend -> authenticated SMTP submission -> transactional relay (Postmark)
+LawHand backend -> authenticated SMTP submission -> transactional relay (Resend)
                 -> recipient
-                <- bounce / spam-complaint webhook -> suppression list
+                <- Svix-signed bounce / complaint webhook -> suppression list
 ```
 
 ## Why the two lanes are separate
@@ -44,10 +44,18 @@ grant expires.
   egress is often blocked, and it means owning rDNS, TLS, feedback loops, and
   blocklist delisting forever.
 
-Postmark is the configured default. SES and Mailgun expose the same SMTP
-submission interface and equivalent bounce webhooks; swapping providers is a
-credential change plus a mapping change in
+Resend is the configured default. It is built on SES, so deliverability is
+effectively SES's without the sandbox-exit and SNS plumbing, its free tier
+covers this volume outright, and its webhooks are HMAC-signed (Svix) rather
+than authenticated by a bare shared secret. Postmark, SES and Mailgun expose
+the same SMTP submission interface and equivalent bounce webhooks; swapping
+providers is a credential change plus a mapping change in
 `backend/app/routers/platform_email_webhooks.py`.
+
+Sending straight through SES is cheaper still ($0.10 per 1,000) and is the
+right move at high volume, but it requires requesting production access out of
+the sandbox and receiving bounces over SNS — whose subscription-confirmation
+handshake this endpoint does not implement.
 
 ## Sending and receiving are independent
 
@@ -74,32 +82,53 @@ These are done in provider consoles, not in this repository.
 
 ### 1. Relay account
 
-1. Create a Postmark server and a **Transactional** message stream.
-2. Add `getlawhand.com` as a sender signature / verified domain.
-3. Copy the server API token — it is used as **both** the SMTP username and
-   password.
+1. Create a Resend account and add `getlawhand.com` under **Domains**.
+2. Create an API key with **Sending access**. The SMTP username is the literal
+   string `resend`; the API key is the password.
+3. Under **Webhooks**, copy the **signing secret** (`whsec_...`). It is shown
+   once.
 
 ### 2. DNS (Cloudflare)
 
-Configure a **custom Return-Path** on a subdomain (Postmark calls this the
-bounce domain, e.g. `pm-bounces.getlawhand.com`). This is the detail worth
-getting right: SPF is then evaluated against the bounce subdomain, so the root
-SPF record stays pointed at M365 and is never widened, while DKIM still aligns
-on the root domain and DMARC passes on DKIM alignment.
+Resend publishes the exact records to add when you verify the domain; they
+include a **custom Return-Path** on a subdomain (`send.getlawhand.com` by
+default). This is the detail worth getting right: SPF is then evaluated against
+that subdomain, so the root SPF record stays pointed at M365 and is never
+widened, while DKIM still aligns on the root domain and DMARC passes on DKIM
+alignment.
 
-| Record | Name | Value |
-|---|---|---|
-| TXT (SPF, unchanged) | `getlawhand.com` | `v=spf1 include:spf.protection.outlook.com -all` |
-| CNAME (DKIM) | provider selector, e.g. `20260913._domainkey` | provider value |
-| CNAME (Return-Path) | `pm-bounces` | provider value |
-| TXT (DMARC) | `_dmarc` | `v=DMARC1; p=none; rua=mailto:dmarc@getlawhand.com` |
+| Record | Name | Value | Status |
+|---|---|---|---|
+| TXT (SPF) | `getlawhand.com` | `v=spf1 include:spf.protection.outlook.com ~all` | **unchanged** |
+| MX | `getlawhand.com` | `getlawhand-com.mail.protection.outlook.com` | **unchanged** |
+| TXT (DKIM) | `resend._domainkey` | provider value | add |
+| MX + TXT (Return-Path) | `send` | provider values | add |
+| TXT (DMARC) | `_dmarc` | `v=DMARC1; p=none; rua=mailto:dmarc@getlawhand.com` | add |
+
+Every record Resend asks for must be **DNS only** (grey cloud), never proxied.
+MX and TXT cannot be proxied at all, but if the Return-Path is issued as a
+CNAME, an orange cloud on it silently breaks bounce handling.
 
 Leave the existing `intake.getlawhand.com` MX and SPF records alone — those
-serve the inbound Email Worker and are isolated by design.
+serve the inbound Email Worker and are isolated by design. The `send` label is
+free, and the `resend._domainkey` selector does not collide with the existing
+`cf2024-1._domainkey` record used by Cloudflare Email Routing.
+
+Two notes on the current zone:
+
+- The root SPF ends in `~all` (softfail), not `-all`. Nothing here requires
+  changing that, and it should not be tightened before DMARC reporting shows
+  which senders are live — a hardfail on an incomplete record bounces
+  legitimate mail.
+- There is **no `_dmarc` record today**. That means adding Resend cannot break
+  DMARC alignment, but it also means the domain currently has no anti-spoofing
+  policy at all. Password reset mail for a legal platform is a prime phishing
+  target, so publishing DMARC at `p=none` and ratcheting up is worth doing on
+  its own merits.
 
 Ratchet DMARC from `p=none` to `p=quarantine` to `p=reject` once the aggregate
-reports show only legitimate sources passing. Password reset mail for a legal
-platform is a prime phishing target, so reaching `p=reject` matters.
+reports show only legitimate sources passing — M365, Resend, and the Cloudflare
+Email Routing sender on `intake`.
 
 ### 3. M365 shared mailbox
 
@@ -110,34 +139,46 @@ platform is a prime phishing target, so reaching `p=reject` matters.
 
 ### 4. Bounce webhook
 
-In the Postmark server's webhook settings, point **Bounce** and **Spam
-Complaint** at:
+In Resend → **Webhooks**, add an endpoint at:
 
 ```
-https://<backend-host>/api/platform/email/webhook/postmark
+https://<backend-host>/api/platform/email/webhook/resend
 ```
 
-with an `Authorization: Bearer <PLATFORM_EMAIL_WEBHOOK_SECRET>` header.
+subscribed to `email.bounced` and `email.complained`. No custom header is
+needed: Resend signs every delivery with Svix and the endpoint verifies that
+signature. Set `PLATFORM_EMAIL_WEBHOOK_SECRET` to the endpoint's signing
+secret.
+
+The signature is an HMAC-SHA256 over `svix-id.svix-timestamp.body`, so it
+covers the payload rather than merely proving the caller knows a secret, and
+deliveries outside a five-minute window are refused. Rotating the secret is
+safe while both signatures are live — the endpoint accepts any one match.
+
+At the edge, the endpoint has its own `location` block in both nginx server
+contexts, capped at 256k and on the dedicated 60r/m `webhook` zone. That is
+load-bearing rather than tidiness: the relay sends no session cookie, so the
+per-caller `api` zone key would collapse to the source address and put provider
+ingest in the wider anonymous bucket. `scripts/test_nginx_webhook_ingress.sh`
+asserts both blocks.
 
 ## Application configuration
 
 ```bash
 EMAIL_ENABLED=true
 EMAIL_REQUIRED=true              # refuse to boot without a working relay
-EMAIL_HOST=smtp.postmarkapp.com
+EMAIL_HOST=smtp.resend.com
 EMAIL_PORT=587                   # STARTTLS; the client keys off 587 specifically
-EMAIL_USER=<server API token>
-EMAIL_PASS=<same token>
+EMAIL_USER=resend                # literal string, not an address
+EMAIL_PASS=<Resend API key>
 EMAIL_FROM=no-reply@getlawhand.com
 EMAIL_SUPPRESSION_ENABLED=true
-PLATFORM_EMAIL_WEBHOOK_SECRET=<32+ random characters>
+PLATFORM_EMAIL_WEBHOOK_SECRET=whsec_<from the Resend webhook endpoint>
 ```
 
-Generate the webhook secret with:
-
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
+The webhook secret is issued by Resend, not generated here. Startup rejects a
+value that is not decodable base64 of at least 24 bytes, because such a secret
+would fail every signature check at runtime and reject every bounce silently.
 
 `EMAIL_REQUIRED=true` makes the process refuse to start unless delivery is
 enabled and authenticated. Without it, a missing relay degrades to a silent
@@ -153,15 +194,21 @@ enforced before every send. Continuing to mail an address that has permanently
 failed is what destroys a sending domain's reputation, which would take down
 password reset for every customer at once.
 
-- Transient failures (full mailbox, greylisting, temporary DNS) are **never**
-  suppressed — a momentary outage at a user's mail host must not cost them
-  account recovery.
+- Only `bounce.type == "Permanent"` suppresses. Transient and Undetermined
+  failures (full mailbox, greylisting, temporary DNS) are **never** suppressed
+  — a momentary outage at a user's mail host must not cost them account
+  recovery.
+- An event naming more than one recipient suppresses nobody: it does not say
+  which address failed, and suppressing all of them would lock working
+  mailboxes out over somebody else's dead address.
 - The lookup **fails open**: if the table is unreachable, the message is sent.
 - The table is platform-scoped and carries no RLS policy, matching
   `stripe_webhook_events`. A bounce is keyed on the mailbox and arrives before
   any tenant can be resolved.
-- Redelivered webhooks are deduplicated on `(provider, event_id)`, so a retry
-  cannot re-suppress an address an operator has since released.
+- Redelivered webhooks are deduplicated on `(provider, event_id)` using the
+  Svix message id, so a retry cannot re-suppress an address an operator has
+  since released. Resend's own `email_id` is deliberately not used: a bounce
+  and a later complaint for the same message share it.
 
 To release an address after a customer fixes their mailbox, call
 `app.services.email_suppression.release_suppression`. The row is retained with
@@ -183,6 +230,10 @@ curl -X POST https://<backend-host>/api/auth/forgot-password \
   -d '{"email":"you@example.com"}'
 ```
 
-Then check the provider's message stream for the delivery event. Confirm in the
-headers of the received message that SPF, DKIM, and DMARC all pass and that
-DKIM aligns on `getlawhand.com` rather than the bounce subdomain.
+Then check the Resend dashboard's **Emails** view for the delivery event.
+Confirm in the headers of the received message that SPF, DKIM, and DMARC all
+pass and that DKIM aligns on `getlawhand.com` rather than the Return-Path
+subdomain.
+
+To exercise the bounce path end to end, send to Resend's simulator address
+`bounced@resend.dev` and confirm a row appears in `email_suppressions`.
