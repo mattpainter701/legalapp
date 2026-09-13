@@ -4,6 +4,10 @@ Branding is stored per-tenant on ``TenantSettings``. ``firm_name`` and
 ``firm_address`` fall back to ``Tenant.name`` / ``Tenant.address`` when the
 tenant-specific override is unset, so a firm gets sensible defaults without
 configuring anything.
+
+The PUT also accepts ``tenant_name``, which renames the tenant record itself
+rather than layering an override over it — the escape hatch for the name
+sign-up derived from the account's email domain.
 """
 
 from fastapi import APIRouter, Depends, Request
@@ -61,6 +65,27 @@ async def get_firm_branding(db: AsyncSession, tenant: Tenant) -> dict:
     return branding
 
 
+async def _response(
+    db: AsyncSession, branding: dict, tenant: Tenant
+) -> FirmBrandingResponse:
+    """Pair resolved branding with the tenant identity behind its fallbacks.
+
+    ``firm_name_override`` is the stored value before the ``Tenant.name``
+    fallback is applied. An editor needs it to tell "no override set" apart
+    from "override happens to match the account name" — without it, merely
+    opening the form and saving would silently freeze the fallback into place.
+    """
+    override = await db.scalar(
+        select(TenantSettings.firm_name).where(TenantSettings.tenant_id == tenant.id)
+    )
+    return FirmBrandingResponse(
+        **branding,
+        firm_name_override=override,
+        tenant_name=tenant.name,
+        tenant_domain=tenant.domain,
+    )
+
+
 @router.get("/branding")
 async def get_branding(
     request: Request,
@@ -73,8 +98,7 @@ async def get_branding(
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
     tenant = tenant_result.scalar_one()
 
-    branding = await get_firm_branding(db, tenant)
-    return FirmBrandingResponse(**branding)
+    return await _response(db, await get_firm_branding(db, tenant), tenant)
 
 
 @router.put("/branding")
@@ -99,11 +123,16 @@ async def update_branding(
         db.add(settings_row)
 
     update_data = body.model_dump(exclude_unset=True)
+    # The tenant's own name is not a TenantSettings column — it lives on the
+    # tenant record and is what every unset branding field falls back to.
+    tenant_name = update_data.pop("tenant_name", None)
+    if tenant_name:
+        tenant.name = tenant_name
     for field, value in update_data.items():
         setattr(settings_row, field, value)
 
     await db.commit()
     await db.refresh(settings_row)
+    await db.refresh(tenant)
 
-    branding = await get_firm_branding(db, tenant)
-    return FirmBrandingResponse(**branding)
+    return await _response(db, await get_firm_branding(db, tenant), tenant)

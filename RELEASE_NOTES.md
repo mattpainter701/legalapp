@@ -18,6 +18,15 @@ Clients can draw their signature, paperwork forms get the E-Signature panel's si
 - **Signature requests come from your mailbox.** Invitations and reminders to sign now leave through the sending user's connected Google or Microsoft mailbox, as intake paperwork does, so your sent folder keeps the record.
 - **Starter templates say what they need.** The starter fee agreement and intake forms are drafts until an attorney tests and publishes them. They no longer show as ready, and using one says to publish it first.
 
+## 2026.09.12.7 — Rename your firm and edit its profile in one place
+
+Released September 12, 2026.
+
+Administration has a Firm Profile tab. It renames the firm — including the name sign-up guessed from your email domain — and holds the contact details and branding that clients see on portal invitations, invoices and statements.
+
+- **Fix the firm name sign-up guessed from your domain.** Sign-up derived a firm name from your email domain and nothing could change it. Administration → Firm Profile now renames the firm everywhere clients see it.
+- **Firm details moved out of the Settings tab.** Firm name, contact details and branding were the fifth card inside Settings. They now have their own tab in Administration, next to Users.
+
 ## 2026.09.12.6 — Answers keep running when you leave the chat
 
 Released September 12, 2026.
