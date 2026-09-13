@@ -38,10 +38,19 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     # Short-lived access token; pair with rotating refresh tokens (see auth router).
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    # Refresh-token lifetime. Refresh tokens are rotating + single-use; Redis
-    # retains consumed-token family tombstones only through original expiry so
-    # replay can revoke the live family across every worker.
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+    # ── Session lifetime ─────────────────────────────────────────────────────
+    # Two independent bounds; see app/services/session_policy.py for why one
+    # cannot express the other. Refresh tokens are rotating + single-use, and
+    # Redis retains consumed-token family tombstones only through original
+    # expiry so replay can revoke the live family across every worker.
+    #
+    # Idle is the TTL on each rotating refresh token, so every rotation restarts
+    # it: how long a session may sit unused before signing in again. Absolute
+    # caps the rotation chain itself, however continuously it is used. Both are
+    # hours/days rather than months because these sessions reach privileged
+    # client matter data.
+    SESSION_IDLE_TIMEOUT_HOURS: int = 12
+    SESSION_ABSOLUTE_TIMEOUT_HOURS: int = 24 * 30
 
     # ── Auth cookies ─────────────────────────────────────────────────────────
     # When unset (None), Secure/SameSite are derived from BACKEND_URL scheme.
@@ -1507,6 +1516,20 @@ def validate_template_studio_settings(settings: Settings) -> None:
             raise ValueError("TEMPLATE_STUDIO_RENDER_PROFILES_JSON is invalid")
 
 
+def validate_session_lifetimes(settings: Settings) -> None:
+    """Reject session bounds that would silently disable one another."""
+    if not 1 <= settings.SESSION_IDLE_TIMEOUT_HOURS <= 24 * 14:
+        raise ValueError("SESSION_IDLE_TIMEOUT_HOURS must be between 1 and 336")
+    if not 1 <= settings.SESSION_ABSOLUTE_TIMEOUT_HOURS <= 24 * 365:
+        raise ValueError("SESSION_ABSOLUTE_TIMEOUT_HOURS must be between 1 and 8760")
+    if settings.SESSION_ABSOLUTE_TIMEOUT_HOURS < settings.SESSION_IDLE_TIMEOUT_HOURS:
+        raise ValueError(
+            "SESSION_ABSOLUTE_TIMEOUT_HOURS must be at least "
+            "SESSION_IDLE_TIMEOUT_HOURS; an absolute bound shorter than the idle "
+            "bound silently replaces it, which is never what was intended"
+        )
+
+
 def validate_worker_settings(settings: Settings) -> None:
     if not 1 <= settings.DURABLE_JOB_TENANT_CONCURRENCY <= 16:
         raise ValueError("DURABLE_JOB_TENANT_CONCURRENCY must be between 1 and 16")
@@ -1527,5 +1550,6 @@ def get_settings() -> Settings:
     validate_template_ocr_settings(settings)
     validate_template_studio_settings(settings)
     validate_worker_settings(settings)
+    validate_session_lifetimes(settings)
     validate_dev_mode_urls(settings)
     return settings

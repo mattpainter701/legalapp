@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { reportError } from '../utils/reportError'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
-import { ArrowRight, BookOpen, Briefcase, Clock, DollarSign, Building, ShieldCheck } from 'lucide-react'
-import { getMyMatters, getTimeEntries, getWorkspaceMcpGrants, updateMe } from '../api'
+import { ArrowRight, BookOpen, Briefcase, Clock, DollarSign, Building, ShieldCheck, LogOut } from 'lucide-react'
+import { getMyMatters, getTimeEntries, getWorkspaceMcpGrants, revokeAllSessions, updateMe } from '../api'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import WorkspaceMcpGrantsPanel from '../components/WorkspaceMcpGrantsPanel'
 
@@ -27,6 +27,8 @@ function mcpBlockedReason(user) {
 
 export default function ProfilePage() {
   const { user, refreshUser } = useAuth()
+  const [sessionsRevoking, setSessionsRevoking] = useState(false)
+  const [sessionsStatus, setSessionsStatus] = useState('')
   const [myMatters, setMyMatters] = useState([])
   const [timeEntries, setTimeEntries] = useState([])
   const [loading, setLoading] = useState(true)
@@ -100,6 +102,21 @@ export default function ProfilePage() {
       setContextStatus(err?.response?.data?.detail || 'Your profile context could not be saved. Please try again.')
     } finally {
       setContextSaving(false)
+    }
+  }
+
+  const signOutEverywhereElse = async () => {
+    if (sessionsRevoking) return
+    if (!window.confirm('Sign out of every other device?\n\nAnyone signed in as you elsewhere — another computer, a phone, a browser you forgot — is signed out immediately. You stay signed in here.\n\nConnected assistants are not disconnected by this; revoke those separately below, or reset your password to end everything at once.')) return
+    setSessionsRevoking(true)
+    setSessionsStatus('')
+    try {
+      await revokeAllSessions()
+      setSessionsStatus('Every other session was signed out. This device stays signed in.')
+    } catch (err) {
+      setSessionsStatus(err?.response?.data?.detail || 'Those sessions could not be signed out. Please try again.')
+    } finally {
+      setSessionsRevoking(false)
     }
   }
 
@@ -225,8 +242,36 @@ export default function ProfilePage() {
         </p>
       </section>
 
+      <section style={{ background: '#fff', border: '1px solid #E1D9C9', borderRadius: 8, padding: 20, marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <LogOut size={19} color="#426146" aria-hidden="true" />
+          <div style={{ flex: 1 }}>
+            <h2 style={{ margin: 0, fontSize: 17 }}>Signed in elsewhere</h2>
+            <p style={{ margin: '4px 0 0', color: '#6A7587', fontSize: 13 }}>
+              Signing in leaves a session on that device until it is used, or until it reaches its maximum age. If you have left yourself signed in somewhere you no longer control, end those sessions here. This signs out browsers only — connected assistants keep their own access, and are listed below. Resetting your password ends both.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={signOutEverywhereElse}
+            disabled={sessionsRevoking}
+            style={{ border: '1px solid #9C4F3F', borderRadius: 6, background: '#fff', color: '#9C4F3F', fontSize: 13, fontWeight: 600, padding: '8px 14px', cursor: sessionsRevoking ? 'wait' : 'pointer', opacity: sessionsRevoking ? 0.65 : 1, whiteSpace: 'nowrap' }}
+          >
+            {sessionsRevoking ? 'Signing out…' : 'Sign out everywhere else'}
+          </button>
+        </div>
+        {sessionsStatus && (
+          <p role="status" style={{ margin: '12px 0 0', color: sessionsStatus.includes('could not') ? '#9C4F3F' : '#426146', fontSize: 13 }}>
+            {sessionsStatus}
+          </p>
+        )}
+      </section>
+
       <div style={{ marginBottom: 24 }}>
-        <WorkspaceMcpGrantsPanel blockedReason={mcpBlockedReason(user)} />
+        <WorkspaceMcpGrantsPanel
+          blockedReason={mcpBlockedReason(user)}
+          pendingReconnect={user?.workspace_mcp_reconnect || []}
+        />
       </div>
 
       <ReleaseInfoPanel className="mb-6" />

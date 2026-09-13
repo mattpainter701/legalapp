@@ -277,6 +277,14 @@ class TestAuthMe:
                 assert refreshed_user is user
                 events.append("refresh")
 
+            async def scalars(self, _statement):
+                # Building the response now reads this user's revoked grants to
+                # report any assistant still waiting to be reconnected. Deliberately
+                # not recorded in ``events``: this test pins the RLS-context
+                # ordering around the commit, and a read that does not touch that
+                # ordering must not be able to fail the assertion below.
+                return SimpleNamespace(all=lambda: [])
+
         async def current_user(_request, _db):
             return user
 

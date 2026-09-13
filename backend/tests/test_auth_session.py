@@ -10,6 +10,7 @@ needs Postgres (unavailable here); its Redis-rotation invariants are covered at
 the helper level below.
 """
 
+import time as _time
 import types
 import uuid
 
@@ -19,6 +20,7 @@ from jose import jwt
 
 from app.config import get_settings
 from app.routers import auth as auth_mod
+from app.services import session_policy
 from app.schemas.auth import TokenResponse
 
 settings = get_settings()
@@ -261,3 +263,75 @@ async def test_create_refresh_token_no_redis_is_not_persisted():
     token = await auth_mod._create_refresh_token(request, _fake_user())
     # Without Redis a token is returned but nothing is stored (refresh disabled).
     assert isinstance(token, str) and token
+
+
+# ── Rotation carries the chain's origin ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_new_chain_stamps_its_origin():
+    redis = FakeRedis()
+    request = _fake_request(redis)
+    before = _time.time()
+    token = await auth_mod._create_refresh_token(request, _fake_user())
+    payload = auth_mod._json.loads(redis.kv[auth_mod._refresh_key(token)])
+    assert before <= payload["family_issued_at"] <= _time.time()
+
+
+@pytest.mark.asyncio
+async def test_rotation_preserves_the_origin_rather_than_renewing_it():
+    """The absolute bound only works if rotation cannot reset the clock."""
+    redis = FakeRedis()
+    request = _fake_request(redis)
+    user = _fake_user()
+
+    first = await auth_mod._create_refresh_token(request, user)
+    payload = auth_mod._json.loads(redis.kv[auth_mod._refresh_key(first)])
+    family, origin = payload["family"], payload["family_issued_at"]
+
+    # Two further rotations, as the endpoint performs them.
+    token = first
+    for _ in range(2):
+        await auth_mod._consume_refresh_token(request, token)
+        token = await auth_mod._create_refresh_token(
+            request, user, family=family, family_issued_at=origin
+        )
+
+    rotated = auth_mod._json.loads(redis.kv[auth_mod._refresh_key(token)])
+    assert rotated["family"] == family
+    assert rotated["family_issued_at"] == origin
+
+
+@pytest.mark.asyncio
+async def test_idle_ttl_is_restarted_by_every_rotation():
+    """Idle and absolute are different bounds; this is the idle one."""
+    redis = FakeRedis()
+    request = _fake_request(redis)
+    user = _fake_user()
+
+    first = await auth_mod._create_refresh_token(request, user)
+    payload = auth_mod._json.loads(redis.kv[auth_mod._refresh_key(first)])
+    assert redis.ttls[auth_mod._refresh_key(first)] == auth_mod._REFRESH_TTL
+
+    await auth_mod._consume_refresh_token(request, first)
+    successor = await auth_mod._create_refresh_token(
+        request,
+        user,
+        family=payload["family"],
+        family_issued_at=payload["family_issued_at"] - 3600,
+    )
+    assert redis.ttls[auth_mod._refresh_key(successor)] == auth_mod._REFRESH_TTL
+
+
+def test_refresh_ttl_tracks_the_configured_idle_window():
+    assert auth_mod._REFRESH_TTL == settings.SESSION_IDLE_TIMEOUT_HOURS * 3600
+
+
+def test_every_refusal_reason_has_a_message():
+    """A reason with no entry would raise KeyError inside the 401 path."""
+    for reason in (
+        session_policy.SESSION_REVOKED,
+        session_policy.ABSOLUTE_LIFETIME_EXCEEDED,
+        session_policy.ORIGIN_UNKNOWN,
+    ):
+        assert auth_mod._REFRESH_REFUSAL_DETAIL[reason]
