@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.12.4 — Answers keep running when you leave the chat
+## 2026.09.12.5 — Answers keep running when you leave the chat
 
 Released September 12, 2026.
 
@@ -13,6 +13,17 @@ A long answer no longer disappears when you open another part of LawHand while i
 
 - **Leave the chat without losing the answer.** Opening matters, invoices or any other screen mid-answer used to cancel it. The answer now finishes and is saved to the conversation.
 - **Pick the answer back up where it got to.** Reopen the conversation while it is still being written and the answer carries on in front of you instead of showing only your question.
+
+## 2026.09.12.4 — Clearer signature placement for every signer
+
+Released September 12, 2026.
+
+Signature, initials and date blocks are placed at a readable size, drawn the way a signer expects, and colour-coded per signer, with undo and remove. An invitation that did not reach the signer is reported instead of shown as sent.
+
+- **Signing blocks you can read on the page.** Each block is sized like an e-signature service places it, with the signer's name above a ruled line. New blocks are laid out clear of each other, not stacked.
+- **Undo, redo, and remove a placed field.** A block dragged to the wrong place can be undone, redone, or removed from the field itself, the toolbar, or the Delete key.
+- **Each signer gets their own colour and fields.** Every signer has a row with their name, field count and colour, so a two-signer packet shows who signs where. Adding a signer picks a role nobody has taken.
+- **An invitation that did not send says so.** When the email to a signer cannot be delivered, the request names the address and the reason instead of reporting that it was sent.
 
 ## 2026.09.12.3 — Matter folders carry the matter number; automations stay in scope
 
