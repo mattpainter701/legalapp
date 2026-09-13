@@ -62,6 +62,15 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    # Every credential this user holds that was minted before this instant is
+    # void: access tokens by their ``iat``, refresh chains by their origin. Set
+    # on password reset and on "sign out everywhere", which are the two moments
+    # a duration bound cannot help with — see app/services/session_policy.py.
+    # NULL means the user has never ended a session, not that sessions are
+    # unbounded; the idle and absolute bounds always apply.
+    sessions_valid_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # License (Sprint 8) — whether this user consumes a license seat
     license_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"

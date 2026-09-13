@@ -14,11 +14,53 @@ function isActiveGrant(grant) {
   return !grant?.revoked_at
 }
 
-export default function WorkspaceMcpGrantsPanel({ blockedReason = '' }) {
-  return <ConfirmProvider><WorkspaceMcpGrantsPanelContent blockedReason={blockedReason} /></ConfirmProvider>
+export const WORKSPACE_MCP_URL = 'https://mcp.getlawhand.com/api/mcp/workspace'
+
+// ``pendingReconnect`` is passed in rather than read from auth context: this
+// panel is embedded in more than one place, and a component that hard-requires
+// AuthProvider to render a list of grants is harder to reuse than one handed
+// its data.
+export default function WorkspaceMcpGrantsPanel({ blockedReason = '', pendingReconnect = [] }) {
+  return <ConfirmProvider><WorkspaceMcpGrantsPanelContent blockedReason={blockedReason} pendingReconnect={pendingReconnect} /></ConfirmProvider>
 }
 
-function WorkspaceMcpGrantsPanelContent({ blockedReason = '' }) {
+// Reconnecting is an OAuth flow the assistant starts, so there is no button
+// here that can do it for them. What removes the friction is the part people
+// actually get stuck on: knowing which assistants dropped, and having the
+// server URL to hand without hunting through docs for it.
+function ReconnectCard({ pending }) {
+  const [copied, setCopied] = useState(false)
+  if (!pending.length) return null
+
+  const copyUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(WORKSPACE_MCP_URL)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard access can be refused; the URL is selectable on screen.
+    }
+  }
+
+  return <div role="region" aria-labelledby="workspace-mcp-reconnect-heading" className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950">
+    <h4 id="workspace-mcp-reconnect-heading" className="font-sans text-sm font-bold">Waiting to be reconnected</h4>
+    <p className="mt-1 text-xs leading-5">Your password reset disconnected {pending.length === 1 ? 'this assistant' : 'these assistants'}. That is what a reset is for — it cuts off anything holding access to your account. Reconnecting is done from the assistant, not from here.</p>
+    <ul className="mt-2 space-y-1">{pending.map((item) => (
+      <li key={item.client_id} className="text-xs font-semibold">{item.client_name || item.client_id}</li>
+    ))}</ul>
+    <ol className="mt-3 space-y-1 text-xs leading-5 list-decimal list-inside">
+      <li>Open the assistant and add or re-authorize the LawHand connector.</li>
+      <li>Paste the server URL below when it asks for one.</li>
+      <li>Approve the LawHand consent screen — it will list exactly what you are granting.</li>
+    </ol>
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <code className="rounded bg-white/70 px-2 py-1 text-[11px] break-all">{WORKSPACE_MCP_URL}</code>
+      <button type="button" onClick={copyUrl} className="rounded-lg border border-amber-400 px-2.5 py-1 text-[11px] font-semibold hover:bg-amber-100">{copied ? 'Copied' : 'Copy URL'}</button>
+    </div>
+  </div>
+}
+
+function WorkspaceMcpGrantsPanelContent({ blockedReason = '', pendingReconnect = [] }) {
   const confirm = useConfirm()
   const [grants, setGrants] = useState([])
   const [loading, setLoading] = useState(true)
@@ -74,6 +116,7 @@ function WorkspaceMcpGrantsPanelContent({ blockedReason = '' }) {
     </div>
     {blockedReason && <div role="status" className="mt-4 px-3 py-2 bg-amber-50 border border-amber-300 rounded-lg text-amber-950 text-xs font-semibold leading-5">Connected assistants are currently blocked. {blockedReason}</div>}
     {error && <div role="alert" className="mt-4 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs font-medium">{error}</div>}
+    <ReconnectCard pending={pendingReconnect} />
     {loading ? <div className="py-8 text-center text-sm text-brand-muted">Loading connected assistants.</div> :
       grants.length === 0 ? <div className="mt-5 rounded-lg bg-brand-bg px-4 py-5 text-sm text-brand-ink-2">No active Workspace MCP assistants are connected.</div> :
       <div className="mt-5 space-y-3">{grants.map((grant) => {

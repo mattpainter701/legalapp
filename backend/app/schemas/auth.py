@@ -73,6 +73,12 @@ class OAuthCallbackExchangeResponse(TokenResponse):
     return_to: Optional[str] = None
 
 
+class WorkspaceMcpReconnect(BaseModel):
+    client_id: str
+    client_name: str
+    disconnected_at: str
+
+
 class UserInfo(BaseModel):
     hidden_matter_panels: list[str] = Field(default_factory=list)
     id: str
@@ -108,6 +114,10 @@ class UserInfo(BaseModel):
     primary_jurisdictions: list[str] = Field(default_factory=list)
     privacy_mode: bool = False
     workspace_mcp_enabled: bool = True
+    # Assistants a password reset disconnected that have not been reconnected.
+    # Reconnecting is an OAuth flow only the assistant can start, so naming them
+    # here is what turns "my assistant stopped working" into one clear action.
+    workspace_mcp_reconnect: list[WorkspaceMcpReconnect] = Field(default_factory=list)
     demo: Optional[DemoInfo] = None
 
     model_config = {"from_attributes": True}

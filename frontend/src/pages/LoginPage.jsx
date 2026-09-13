@@ -48,8 +48,13 @@ export default function LoginPage() {
   const { login: authLogin } = useAuth()
   const navigate = useNavigate()
   const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:support@getlawhand.com'
-  const requestedPath = new URLSearchParams(window.location.search).get('return_to')
+  const searchParams = new URLSearchParams(window.location.search)
+  const requestedPath = searchParams.get('return_to')
   const internalDestination = isSafeInternalReturnTo(requestedPath) ? requestedPath : null
+  // Sessions end on an idle window, an absolute maximum age, or a sign-out
+  // everywhere. Saying so turns an unexplained bounce back to this page into an
+  // expected step, so nobody reports it as the app losing their work.
+  const sessionExpired = searchParams.get('reason') === 'session_expired'
 
   const handleEmailLogin = async (e) => {
     e.preventDefault()
@@ -96,6 +101,16 @@ export default function LoginPage() {
             Your firm’s source of truth for matters, documents, deadlines, and next actions.
           </p>
         </div>
+
+        {sessionExpired && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-6 rounded-lg border border-brand-line bg-brand-bg-soft px-4 py-3 text-sm text-brand-ink font-sans"
+          >
+            Your session ended. Sign in again to pick up where you left off.
+          </div>
+        )}
 
         {/* OAuth buttons */}
         <div className="space-y-4">

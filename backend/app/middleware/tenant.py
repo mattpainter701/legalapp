@@ -11,6 +11,7 @@ from jose import JWTError, jwt
 
 from app.database import get_db
 from app.config import get_settings
+from app.services import session_policy
 from app.services.tenant_state import require_active_tenant
 
 settings = get_settings()
@@ -114,6 +115,10 @@ class TenantMiddleware(BaseHTTPMiddleware):
             # with authoritative database state before any side effect.
             request.state.signed_plan = payload.get("plan")
             request.state.signed_billing_tier = payload.get("billing_tier")
+            # Placing the token in time is what lets get_current_user compare it
+            # with the user's session epoch, which only it can load. Stamped here
+            # so the token is decoded once per request rather than twice.
+            request.state.token_issued_at = payload.get("iat")
 
             if tenant_id:
                 request.state.tenant_id = tenant_id
@@ -166,6 +171,7 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
             tenant_id = payload.get("tenant_id")
             request.state.signed_plan = payload.get("plan")
             request.state.signed_billing_tier = payload.get("billing_tier")
+            request.state.token_issued_at = payload.get("iat")
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -186,6 +192,16 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User account is inactive")
+    # A password reset or a "sign out everywhere" stamps an epoch that voids
+    # every credential minted before it. Checked here, next to the other
+    # authority the database (not the token) is the truth for, so a token
+    # revoked on one worker is dead on all of them from the next request.
+    epoch_refusal = session_policy.access_token_refusal_reason(
+        issued_at=getattr(request.state, "token_issued_at", None),
+        sessions_valid_after=user.sessions_valid_after,
+    )
+    if epoch_refusal:
+        raise HTTPException(status_code=401, detail="Session ended; sign in again")
     require_active_tenant(user.tenant)
     if not user.license_active and not _is_license_exempt(request):
         raise HTTPException(status_code=403, detail="Standard license required")
