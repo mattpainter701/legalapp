@@ -340,10 +340,10 @@ def test_manifest_redirect_allowlist_rejects_downgrade_and_untrusted_hosts():
         "https://release-assets.githubusercontent.com/release/asset"
     )
     assert smb._is_official_manifest_redirect(
-        "https://github.com/mattpainter701/legalapp/releases/download/agent-v0.15.0/agent-update.json"
+        "https://github.com/mattpainter701/lawhand/releases/download/agent-v0.15.0/agent-update.json"
     )
     assert not smb._is_official_manifest_redirect(
-        "https://github.com/mattpainter701/legalapp/other"
+        "https://github.com/mattpainter701/lawhand/other"
     )
 
 

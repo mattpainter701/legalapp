@@ -33,7 +33,7 @@ SOURCE_KEY = "federal:us-code"
 PARSER_VERSION = "uslm-section-v1"
 USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or (
     "LegalApp-USCodeSync/0.1 "
-    "(+https://github.com/mattpainter701/legalapp; official legal-data retrieval)"
+    "(+https://github.com/mattpainter701/lawhand; official legal-data retrieval)"
 )
 _XML_TITLE_RE = re.compile(
     r"^releasepoints/us/pl/(?P<congress>\d+)/(?P<law>\d+)/"

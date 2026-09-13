@@ -23,7 +23,7 @@ COVERAGE_API = "https://api.coverage.cms.gov/v1/data"
 REPORT_API = "https://api.coverage.cms.gov/v1/reports"
 MANUALS_URL = "https://www.cms.gov/medicare/regulations-guidance/manuals/internet-only-manuals-ioms"
 TRANSMITTALS_URL = "https://www.cms.gov/medicare/regulations-guidance/transmittals"
-USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or "LegalApp-CMSSync/0.1 (+https://github.com/mattpainter701/legalapp)"
+USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or "LegalApp-CMSSync/0.1 (+https://github.com/mattpainter701/lawhand)"
 # These fields can contain AMA, ADA, AHA or other licensed code descriptions.  Filtering
 # is deliberately conservative: an adapter must never obtain a license token itself.
 LICENSED_FIELD_PARTS = ("cpt", "cdt", "hcpcs", "code_description", "codedescription", "shortdescription", "longdescription", "ama", "ada", "aha")

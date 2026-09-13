@@ -24,7 +24,7 @@
 
 ## Run from a phone
 
-1. Open `mattpainter701/legalapp` in GitHub.
+1. Open `mattpainter701/lawhand` in GitHub.
 2. Open **Actions**.
 3. If the QA gate is enabled, choose **QA acceptance** first, keep the branch
    set to `main`, and enter that exact full SHA. It deploys the isolated dev1
@@ -135,7 +135,7 @@ and [pull requests](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-reque
 The acceptance workflow uses the successful Git-ref update response as its
 release-marker evidence. If an older run reports a tag-recording failure after
 the IONOS acceptance job has passed, first read
-`repos/mattpainter701/legalapp/git/ref/tags/production`. If it already resolves
+`repos/mattpainter701/lawhand/git/ref/tags/production`. If it already resolves
 to the accepted SHA and `main` is unchanged, rerun **Production acceptance**
 for that exact SHA to obtain a clean, idempotent record. Do not move the tag by
 hand or accept a different SHA.
@@ -163,13 +163,13 @@ command. The acceptance workflow cannot run until this host copy includes the
 Codex or a terminal can dispatch the same workflow:
 
 ```bash
-gh workflow run deploy-ionos-candidate.yml --repo mattpainter701/legalapp \
+gh workflow run deploy-ionos-candidate.yml --repo mattpainter701/lawhand \
   --ref main -f operation=verify
-gh workflow run qa-acceptance.yml --repo mattpainter701/legalapp \
+gh workflow run qa-acceptance.yml --repo mattpainter701/lawhand \
   --ref main -f release_sha=<full-current-main-sha>
-gh workflow run deploy-ionos-candidate.yml --repo mattpainter701/legalapp \
+gh workflow run deploy-ionos-candidate.yml --repo mattpainter701/lawhand \
   --ref main -f operation=stage -f confirmation=STAGE-IONOS-CANDIDATE
-gh workflow run production-acceptance.yml --repo mattpainter701/legalapp \
+gh workflow run production-acceptance.yml --repo mattpainter701/lawhand \
   --ref main -f release_sha=<full-staged-main-sha>
 ```
 
