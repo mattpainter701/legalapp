@@ -96,7 +96,7 @@ describe('document template workflow', () => {
     await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
     expect(screen.getByRole('link', { name: 'Open matter details (new tab)' })).toHaveAttribute('href', '/matters/matter-1')
     const firmLink = screen.getByRole('link', { name: 'Open firm settings (new tab)' })
-    expect(firmLink).toHaveAttribute('href', '/admin?tab=settings#firm-branding')
+    expect(firmLink).toHaveAttribute('href', '/admin?tab=firm')
     expect(firmLink).toHaveAttribute('target', '_blank')
     expect(firmLink).toHaveAttribute('rel', 'noreferrer')
     expect(screen.getByText('Required — missing')).toBeVisible()

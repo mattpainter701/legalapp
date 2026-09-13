@@ -11,18 +11,27 @@ icon: settings
 
 Tenant-wide settings shape the experience for every user. Make changes during a communicated window when they alter navigation, billing behavior, generated documents, notifications, or AI routing.
 
-## Tenant identity
+## Firm identity
 
-Use [Tenant](/admin?tab=tenant) to review the organization record and plan context. Keep the tenant name and operational contact information current. Confirm the tenant before any bulk or integration action.
+[Firm Profile](/admin?tab=firm) holds the firm's name, contact details, and branding. It is the first thing to set on a new tenant.
+
+**Account name** is the firm's name of record. Sign-up derives it from the email domain of the first account — a firm that signed up from `painterlaw.com` starts out named "Painterlaw" — so correcting it here is usually the first change a new tenant makes. The name flows to client portal invitations, engagement and intake email, invoices, trust statements, and any template mapped to a Firm profile field.
+
+**Display name** is optional and overrides the account name wherever clients see it. Set it only when the letterhead name differs from the name of record; leave it blank and the account name is used.
+
+Renaming does not rewrite documents already generated or matter numbers already issued — both keep the values they were created with.
+
+[Tenant](/admin?tab=tenant) remains the read-only view of the organization record and plan context. Confirm the tenant there before any bulk or integration action.
 
 ## General settings
 
-[Settings](/admin?tab=settings) contains defaults, alert configuration, branding, feature flags, and other controls. Read the description and current value before changing a field. If a control is unfamiliar, test it in a non-production tenant or obtain product guidance first.
+[Settings](/admin?tab=settings) contains defaults, alert configuration, feature flags, and other controls. Read the description and current value before changing a field. If a control is unfamiliar, test it in a non-production tenant or obtain product guidance first.
 
 Branding may flow into generated documents and customer-facing experiences. Use approved firm assets, accessible contrast, and current contact information. Preview a representative template after a branding change.
 
-Invoice and trust-statement PDFs use the configured firm name, logo URL,
-address, phone, email, website, and optional PDF footer. Client portal invoice
+Invoice and trust-statement PDFs use the Firm Profile name, logo URL,
+address, phone, email, website, and optional PDF footer. Amounts are
+rendered in USD. Client portal invoice
 downloads use the same settings. A logo that cannot be fetched or decoded does
 not block the PDF; the remaining firm identity is still rendered. The invoice
 download audit retains the branding values and content hash used for that

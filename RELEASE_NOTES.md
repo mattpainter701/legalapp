@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.12.7 — Rename your firm and edit its profile in one place
+
+Released September 12, 2026.
+
+Administration has a Firm Profile tab. It renames the firm — including the name sign-up guessed from your email domain — and holds the contact details and branding that clients see on portal invitations, invoices and statements.
+
+- **Fix the firm name sign-up guessed from your domain.** Sign-up derived a firm name from your email domain and nothing could change it. Administration → Firm Profile now renames the firm everywhere clients see it.
+- **Firm details moved out of the Settings tab.** Firm name, contact details and branding were the fifth card inside Settings. They now have their own tab in Administration, next to Users.
+
 ## 2026.09.12.6 — Answers keep running when you leave the chat
 
 Released September 12, 2026.
