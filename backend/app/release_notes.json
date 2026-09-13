@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.13.1",
+      "version": "2026.09.13.1",
+      "title": "Password reset emails that actually arrive",
+      "published_at": "2026-09-13",
+      "summary": "LawHand now sends its own account emails — password resets and address verification — through a dedicated mail service, from an address reserved for security messages.",
+      "highlights": [
+        {
+          "title": "Reset your password without waiting on email that never comes",
+          "description": "Account emails are sent through a service built for them, so a reset link reaches your inbox instead of being filtered on the way."
+        },
+        {
+          "title": "Security email kept apart from everyday notifications",
+          "description": "Password resets arrive from a separate address to task and document notifications, so filtering the everyday mail cannot hide the message you need to get back into your account."
+        },
+        {
+          "title": "Addresses that stop working are noticed",
+          "description": "When an address permanently rejects mail, LawHand records it and stops sending there, instead of quietly retrying an inbox that no longer exists."
+        }
+      ]
+    },
+    {
       "id": "2026.09.12.6",
       "version": "2026.09.12.6",
       "title": "Answers keep running when you leave the chat",
