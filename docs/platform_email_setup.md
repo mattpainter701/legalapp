@@ -313,6 +313,23 @@ Deploying first and editing `.env` afterwards leaves system email disabled in
 the meantime, which is survivable; turning `EMAIL_REQUIRED=true` on a host that
 has no credentials yet is not, and is the one sequence to avoid.
 
+### The production preflight pins both addresses
+
+`scripts/prod_env_preflight.sh` validates the deployed `.env` before a release.
+It previously pinned `EMAIL_FROM` to `support@getlawhand.com` through the same
+`operator_email` variable that pins `VITE_CONTACT_URL` — one value doing double
+duty as the public contact address and the system-mail sender. With two
+identities that conflation is wrong, and it fails closed: a host configured with
+`EMAIL_FROM=notifications@getlawhand.com` is rejected.
+
+The preflight now requires `EMAIL_FROM=notifications@getlawhand.com`,
+`EMAIL_FROM_SECURITY=security@getlawhand.com`, and that the two differ — equal
+values would silently collapse the split back to one address.
+`VITE_CONTACT_URL` stays pinned to `support@`, which is still the public contact
+address. `scripts/production_check.sh` also folds `EMAIL_FROM_SECURITY` into the
+runtime fingerprint the backend and scheduler must agree on, so the two
+processes cannot end up sending password resets from different addresses.
+
 `EMAIL_REQUIRED=true` makes the process refuse to start unless delivery is
 enabled and authenticated. Without it, a missing relay degrades to a silent
 no-op: `POST /api/auth/forgot-password` still answers "If that email exists, a

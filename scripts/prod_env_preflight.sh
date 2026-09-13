@@ -30,7 +30,7 @@ required=(
   MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD WORKSPACE_MCP_ENABLED
   LITELLM_DATABASE_URL UPLOADS_HOST_DIR HOST_STATUS_HOST_DIR HOST_DISK_STATUS_FILE HEALTH_HOST_DISK_MAX_AGE_SECONDS BACKUP_STATUS_FILE HEALTH_BACKUP_MAX_AGE_SECONDS OFFSITE_BACKUP_REQUIRED
   TEMPLATE_STUDIO_RENDER_ENABLED
-  EMAIL_ENABLED EMAIL_FROM ORIGIN_TLS_SERVER_NAME ORIGIN_TLS_CA_FILE CLOUDFLARED_CONFIG_FILE CLOUDFLARED_BIN
+  EMAIL_ENABLED EMAIL_FROM EMAIL_FROM_SECURITY ORIGIN_TLS_SERVER_NAME ORIGIN_TLS_CA_FILE CLOUDFLARED_CONFIG_FILE CLOUDFLARED_BIN
   QBO_CLIENT_ID QBO_CLIENT_SECRET QBO_REDIRECT_URI QBO_ENVIRONMENT
 )
 
@@ -96,6 +96,7 @@ if [[ -z "$opencode_zen_key" || "$opencode_zen_lowered" == *change_me* || "$open
   errors+=("OPENCODE_ZEN_API_KEY (or a supported legacy OpenCode key) must be configured with a non-placeholder value")
 fi
 check_nonplaceholder EMAIL_FROM
+check_nonplaceholder EMAIL_FROM_SECURITY
 check_nonplaceholder QBO_CLIENT_ID
 check_nonplaceholder QBO_CLIENT_SECRET
 
@@ -139,6 +140,12 @@ expected_public_site_url="https://$(get_env DOMAIN)"
 [[ "$normalized_public_site_url" == "$expected_public_site_url" ]] \
   || errors+=("VITE_PUBLIC_SITE_URL must exactly match https://DOMAIN (an optional trailing slash is normalized)")
 operator_email="support@getlawhand.com"
+# System mail no longer sends as the public contact address. Routine product
+# notifications and account-security mail carry separate identities so that a
+# user who filters or mutes the former has not also filtered their own
+# password reset.
+notification_email="notifications@getlawhand.com"
+security_email="security@getlawhand.com"
 [[ "$(get_env VITE_CONTACT_URL)" == "mailto:$operator_email" ]] || errors+=("VITE_CONTACT_URL must be mailto:$operator_email")
 [[ "$(get_env DOMAIN)" != *yourdomain* && "$(get_env DOMAIN)" != *localhost* ]] || errors+=("DOMAIN is a placeholder")
 [[ "$(get_env APP_DATABASE_URL)" == *://clarity_app:* ]] || errors+=("APP_DATABASE_URL must use the clarity_app runtime role")
@@ -244,7 +251,13 @@ disk_max_percent="${disk_max_percent:-85}"
   && (( disk_max_percent >= 1 && disk_max_percent <= 100 )) \
   || errors+=("DISK_MAX_PERCENT must be an integer from 1 to 100")
 
-[[ "$(get_env EMAIL_FROM)" == "$operator_email" ]] || errors+=("EMAIL_FROM must be $operator_email")
+[[ "$(get_env EMAIL_FROM)" == "$notification_email" ]] \
+  || errors+=("EMAIL_FROM must be $notification_email")
+[[ "$(get_env EMAIL_FROM_SECURITY)" == "$security_email" ]] \
+  || errors+=("EMAIL_FROM_SECURITY must be $security_email")
+# Equal identities would silently collapse the split back to one address.
+[[ "$(get_env EMAIL_FROM)" != "$(get_env EMAIL_FROM_SECURITY)" ]] \
+  || errors+=("EMAIL_FROM and EMAIL_FROM_SECURITY must be different addresses")
 
 zoom_required_tenant_id="$(get_env ZOOM_REQUIRED_TENANT_ID)"
 if [[ -z "$zoom_required_tenant_id" ]]; then
