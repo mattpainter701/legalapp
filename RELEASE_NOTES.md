@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.13.1 — Signed paperwork shows as signed, and you hear about it
+
+Released September 13, 2026.
+
+Signed forms no longer ask for a signature again while the signed copy is being filed, the sender gets an email as soon as the client signs, signature requests go out from your own mailbox, and starter templates say they need publishing.
+
+- **Signed forms read as signed while filing.** When every signer has signed but the copy is still being filed to your storage, the client checklist and your paperwork strip say Signed, filing instead of asking again.
+- **An email when the client signs.** Whoever sent a document for signature gets an email the moment the last signer signs, before the copy is filed, so a storage problem cannot hide that the client acted.
+- **Signature requests come from your mailbox.** Invitations and reminders to sign now leave through the sending user's connected Google or Microsoft mailbox, as intake paperwork does, so your sent folder keeps the record.
+- **Starter templates say what they need.** The starter fee agreement and intake forms are drafts until an attorney tests and publishes them. They no longer show as ready, and using one says to publish it first.
+
 ## 2026.09.12.5 — Sessions that end when you end them
 
 Released September 12, 2026.

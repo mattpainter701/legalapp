@@ -2,6 +2,31 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.13.1",
+      "version": "2026.09.13.1",
+      "title": "Signed paperwork shows as signed, and you hear about it",
+      "published_at": "2026-09-13",
+      "summary": "Signed forms no longer ask for a signature again while the signed copy is being filed, the sender gets an email as soon as the client signs, signature requests go out from your own mailbox, and starter templates say they need publishing.",
+      "highlights": [
+        {
+          "title": "Signed forms read as signed while filing",
+          "description": "When every signer has signed but the copy is still being filed to your storage, the client checklist and your paperwork strip say Signed, filing instead of asking again."
+        },
+        {
+          "title": "An email when the client signs",
+          "description": "Whoever sent a document for signature gets an email the moment the last signer signs, before the copy is filed, so a storage problem cannot hide that the client acted."
+        },
+        {
+          "title": "Signature requests come from your mailbox",
+          "description": "Invitations and reminders to sign now leave through the sending user's connected Google or Microsoft mailbox, as intake paperwork does, so your sent folder keeps the record."
+        },
+        {
+          "title": "Starter templates say what they need",
+          "description": "The starter fee agreement and intake forms are drafts until an attorney tests and publishes them. They no longer show as ready, and using one says to publish it first."
+        }
+      ]
+    },
+    {
       "id": "2026.09.12.5",
       "version": "2026.09.12.5",
       "title": "Sessions that end when you end them",
