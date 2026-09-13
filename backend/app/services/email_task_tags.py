@@ -206,6 +206,7 @@ async def add_tagged_email_task(
     external_ref: str | None,
     original_subject: str,
     received_at: datetime,
+    assigned_to_user_id: uuid.UUID | None = None,
 ) -> Task:
     """Add an assigned task and audit events to the caller's transaction."""
 
@@ -228,7 +229,7 @@ async def add_tagged_email_task(
         priority=suggestion.priority,
         due_date=suggestion.due_date,
         matter_id=matter_id,
-        assigned_to_user_id=actor_user_id,
+        assigned_to_user_id=assigned_to_user_id or actor_user_id,
         created_by_user_id=actor_user_id,
         source="email_subject_tag",
         external_ref=external_ref,
@@ -248,6 +249,6 @@ async def add_tagged_email_task(
         task,
         event_type="assigned",
         actor_user_id=actor_user_id,
-        metadata={"assigned_to_user_id": str(actor_user_id)},
+        metadata={"assigned_to_user_id": str(assigned_to_user_id or actor_user_id)},
     )
     return task

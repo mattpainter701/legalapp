@@ -80,6 +80,9 @@ test.describe('/demo customer entry', () => {
       if (sessionCreated && path === '/api/matters/my' && request.method() === 'GET') {
         return json(route, [])
       }
+      if (sessionCreated && path === '/api/firm-email-intake' && request.method() === 'GET') {
+        return json(route, { enabled: false, alias: null, pending_count: 0, staff: [] })
+      }
       // AppShell loads these collections as soon as the protected workspace
       // mounts. Keep the synthetic demo fixture authenticated for those
       // reads too; an unmocked 401 would invoke the real refresh interceptor

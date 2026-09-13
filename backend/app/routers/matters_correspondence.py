@@ -22,7 +22,11 @@ from app.database import (
 )
 from app.middleware.tenant import get_current_user
 from app.models.communication_log import CommunicationLog
-from app.models.inbound_email import InboundEmail, InboundEmailAlias
+from app.models.inbound_email import (
+    InboundEmail,
+    InboundEmailAlias,
+    FirmInboundEmailAlias,
+)
 from app.models.matter_document import MatterDocument
 from app.models.billing import Expense
 from app.models.plugin import Matter
@@ -193,11 +197,13 @@ async def receive_cloudflare_inbound_email(
         return {"accepted": True}
 
     # The signed route may select only the alias table before tenant binding.
+    is_firm = local_part.startswith("f-")
+    alias_model = FirmInboundEmailAlias if is_firm else InboundEmailAlias
     await set_inbound_email_route_lookup(db, enabled=True)
     alias_result = await db.execute(
-        select(InboundEmailAlias).where(
-            InboundEmailAlias.token_hash == alias_lookup_hash(local_part),
-            InboundEmailAlias.status == "active",
+        select(alias_model).where(
+            alias_model.token_hash == alias_lookup_hash(local_part),
+            alias_model.status == "active",
         )
     )
     alias = alias_result.scalar_one_or_none()
@@ -207,19 +213,21 @@ async def receive_cloudflare_inbound_email(
 
     await set_tenant_context(db, str(alias.tenant_id))
     await set_inbound_email_route_lookup(db, enabled=False)
-    matter_result = await db.execute(
-        select(Matter).where(
-            Matter.id == alias.matter_id,
-            Matter.tenant_id == alias.tenant_id,
+    if not is_firm:
+        matter_result = await db.execute(
+            select(Matter).where(
+                Matter.id == alias.matter_id,
+                Matter.tenant_id == alias.tenant_id,
+            )
         )
-    )
-    if matter_result.scalar_one_or_none() is None:
-        return {"accepted": True}
+        if matter_result.scalar_one_or_none() is None:
+            return {"accepted": True}
 
     message_sha256 = hashlib.sha256(raw_message).hexdigest()
+    alias_column = InboundEmail.firm_alias_id if is_firm else InboundEmail.alias_id
     duplicate = await db.execute(
         select(InboundEmail.id).where(
-            InboundEmail.alias_id == alias.id,
+            alias_column == alias.id,
             InboundEmail.message_sha256 == message_sha256,
         )
     )
@@ -227,6 +235,42 @@ async def receive_cloudflare_inbound_email(
         return {"accepted": True}
 
     parsed = parse_raw_email(raw_message)
+    if is_firm:
+        from app.routers.firm_email_intake import intake_timezone
+        from app.services.firm_email_intake import (
+            active_staff,
+            authenticated_submitter,
+            suggest_matters,
+            todo_suggestion,
+        )
+
+        sender = parsed["participants"]["from"]
+        submitter = await authenticated_submitter(
+            db, alias.tenant_id, raw_message, sender
+        )
+        if submitter is None:
+            raise HTTPException(403, "Staff sender verification failed")
+        received_at = datetime.now(timezone.utc)
+        tz = await intake_timezone(db, alias.tenant_id)
+        parsed["occurred_at"] = received_at
+        parsed["authentication_results"]["firm_intake"] = {
+            "submitter_id": str(submitter.id),
+            "sender": sender,
+            "timezone": tz,
+            "task": todo_suggestion(
+                parsed["subject"],
+                received_at,
+                tz,
+                await active_staff(db, alias.tenant_id),
+                submitter.id,
+            ),
+            "matters": await suggest_matters(
+                db,
+                alias.tenant_id,
+                raw_message,
+                parsed["subject"] + " " + (parsed["body_preview"] or ""),
+            ),
+        }
     inbound_id = uuid.uuid4()
     path = quarantine_path(alias.tenant_id, inbound_id)
     try:
@@ -234,8 +278,9 @@ async def receive_cloudflare_inbound_email(
         item = InboundEmail(
             id=inbound_id,
             tenant_id=alias.tenant_id,
-            alias_id=alias.id,
-            matter_id=alias.matter_id,
+            alias_id=None if is_firm else alias.id,
+            firm_alias_id=alias.id if is_firm else None,
+            matter_id=None if is_firm else alias.matter_id,
             status="pending",
             envelope_sender=envelope_sender[:320],
             recipient=recipient,

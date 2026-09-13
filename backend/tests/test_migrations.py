@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["183_drawn_signature"]
+    assert heads == ["184_firm_email_intake"]
 
 
 def test_intake_optional_agreement_migration_widens_and_restores_the_column():

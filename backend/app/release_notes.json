@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.09.13.2",
+      "version": "2026.09.13.2",
+      "title": "Forward email into matter to-dos",
+      "published_at": "2026-09-13",
+      "summary": "Save one LawHand contact on your phone, forward a client email with [TASK], then confirm its matter, owner and optional date in Needs review.",
+      "highlights": [
+        {
+          "title": "One forwarding contact for your firm",
+          "description": "Administrators can enable a firm address and staff can save the LawHand contact from Matters. Forward with [TASK] Jane, review this tomorrow."
+        },
+        {
+          "title": "Review the details and create a matter to-do",
+          "description": "Confirm the suggested matter, colleague and date before creating work. The source email stays with the matter. User and admin guides explain setup and review."
+        }
+      ]
+    },
+    {
       "id": "2026.09.13.1",
       "version": "2026.09.13.1",
       "title": "Draw your signature, place signing spots, and hear when clients sign",
