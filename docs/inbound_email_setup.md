@@ -1,5 +1,17 @@
 # Inbound matter email setup
 
+## Firm-wide to-do intake
+
+Migration `184_firm_email_intake` extends the existing tenant-scoped alias and quarantine tables to support a firm address (`f-` plus a random token), with one active firm alias per tenant. Matter aliases keep the `m-` prefix and their current workflow. Deploy the updated Email Worker before enabling firm addresses; older Workers reject the new prefix. Use the existing intake domain, catch-all routing, webhook secret, and upload storage. No customer MX changes are required.
+
+Firm addresses are managed in **Administration → Integrations → Email intake**. Active human staff can retrieve the address and review the tenant's queue. Administration controls enable/replace/disable and the IANA time zone used for relative dates. Pending requests survive replacement and disablement. Routes are under `/api/firm-email-intake`; mailbox routing remains under the existing signed `/api/inbound-email/cloudflare` endpoint.
+
+The backend verifies each firm forward's DKIM signature with dkimpy, requiring RSA-SHA256, an exact From-domain signing match, signed From and Subject, and a full-body signature without `l=`. It checks the registered active human staff address within the routed tenant; it never trusts caller-supplied Authentication-Results. DNS verification is bounded and runs off the event loop. Mail without supported signing is rejected with an SMTP explanation from the Worker. Configure custom-domain DKIM in Microsoft 365 or the sending provider and test before customer rollout.
+
+All firm requests wait for staff review. Matching uses original-sender hints in plain/HTML forward headers or attached `.eml` messages, plus case numbers; hints cannot grant access or execute instructions. Review revalidates the tenant's open matter and active staff assignee under a row lock. Filing uses the existing atomic correspondence/task path, retains the source, and creates an ordinary to-do. This path does not dispatch email or calendar notifications. Duplicate bytes per alias are ignored; edited resubmissions can produce another review request.
+
+Test: enable the firm address, save the vCard on a phone, forward `[TASK] Jane, review this tomorrow` from an authorized signed mailbox, confirm it appears in Needs review, then verify the created matter task, owner, and retained email. Also check unknown senders, ambiguous matches, and a rotated address. The [admin guide](../frontend/platform_docs/administrative-guide/20-email-intake.md) covers staff setup and troubleshooting.
+
 LawHand accepts opaque per-matter addresses at `intake.getlawhand.com`. Incoming
 messages are quarantined for review; they are not matter correspondence until a
 firm user selects **File to matter**.

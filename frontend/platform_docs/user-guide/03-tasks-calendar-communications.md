@@ -9,6 +9,8 @@ icon: checklist
 
 # Tasks, calendar & communications
 
+For a simple phone workflow, see [Email to-dos](/guide/email-intake): save one LawHand contact, forward with `[TASK]`, then confirm the matter and owner in Needs review.
+
 Tasks answer **who owns the next action**. Calendar answers **when something happens**. Communications preserve **what was said**. Use all three deliberately rather than treating any one of them as a complete case history.
 
 ![How task requests become authoritative work and calendar projections](/guide-assets/customer-data-task-lifecycle.svg)

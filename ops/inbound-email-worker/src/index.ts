@@ -6,7 +6,7 @@ interface Env {
 }
 
 const encoder = new TextEncoder()
-const MATTER_ALIAS = /^m-[a-z2-7]{26}$/
+const MATTER_ALIAS = /^[mf]-[a-z2-7]{26}$/
 
 function toHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes))
@@ -68,6 +68,10 @@ export default {
 
     if (response.status === 413) {
       message.setReject('Message exceeds the accepted size')
+      return
+    }
+    if (response.status === 403) {
+      message.setReject('Forward from your registered LawHand staff email with DKIM signing enabled')
       return
     }
     if (!response.ok) {

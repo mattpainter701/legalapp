@@ -668,6 +668,13 @@
     },
     {
       "ecosystem": "pypi",
+      "name": "dkimpy",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==1.1.8"
+    },
+    {
+      "ecosystem": "pypi",
       "name": "email-validator",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",

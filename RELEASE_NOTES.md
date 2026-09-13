@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.13.2 — Forward email into matter to-dos
+
+Released September 13, 2026.
+
+Save one LawHand contact on your phone, forward a client email with [TASK], then confirm its matter, owner and optional date in Needs review.
+
+- **One forwarding contact for your firm.** Administrators can enable a firm address and staff can save the LawHand contact from Matters. Forward with [TASK] Jane, review this tomorrow.
+- **Review the details and create a matter to-do.** Confirm the suggested matter, colleague and date before creating work. The source email stays with the matter. User and admin guides explain setup and review.
+
 ## 2026.09.13.1 — Draw your signature, place signing spots, and hear when clients sign
 
 Released September 13, 2026.

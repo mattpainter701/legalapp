@@ -25,7 +25,16 @@ class InboundEmailAlias(Base):
 
     __tablename__ = "inbound_email_aliases"
     __table_args__ = (
-        CheckConstraint("kind = 'matter'", name="ck_inbound_alias_kind"),
+        CheckConstraint(
+            "(kind = 'matter' AND matter_id IS NOT NULL) OR (kind = 'firm' AND matter_id IS NULL)",
+            name="ck_inbound_alias_kind",
+        ),
+        Index(
+            "uq_inbound_alias_active_firm",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("status = 'active' AND kind = 'firm'"),
+        ),
         CheckConstraint(
             "status IN ('active', 'revoked')", name="ck_inbound_alias_status"
         ),
@@ -47,10 +56,10 @@ class InboundEmailAlias(Base):
         server_default="gen_random_uuid()",
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    matter_id: Mapped[uuid.UUID] = mapped_column(
+    matter_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("matters.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     kind: Mapped[str] = mapped_column(
         String(20), nullable=False, default="matter", server_default="matter"
@@ -110,10 +119,10 @@ class InboundEmail(Base):
         ForeignKey("inbound_email_aliases.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    matter_id: Mapped[uuid.UUID] = mapped_column(
+    matter_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("matters.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", server_default="pending"

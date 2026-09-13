@@ -20,8 +20,18 @@ import QBOPanel from './QBOPanel'
 import MCPPage from '../pages/MCPPage'
 import CloudSearchAdmin from '../pages/CloudSearchAdmin'
 import SmbAdminPage from '../pages/SmbAdminPage'
+import FirmEmailIntake from './FirmEmailIntake'
 
 export const INTEGRATION_SECTIONS = [
+  {
+    id: 'email-intake', label: 'Email intake', shortLabel: 'Email intake', icon: MessageSquare,
+    eyebrow: 'Email to matter to-dos', audience: 'admin',
+    description: 'Give staff one LawHand contact for forwarding email into matter to-dos.',
+    permissions: ['Accepts registered staff senders with verified DKIM signatures', 'Staff review the matter, owner and date before filing'],
+    setup: ['Enable the firm address and choose the firm time zone', 'Save the LawHand contact on staff phones', 'Forward a test email with [TASK] at the start of its subject'],
+    guide: '/guide/email-intake', guideLabel: 'Email to-dos user guide',
+    render: () => <FirmEmailIntake admin />,
+  },
   {
     id: 'cloud',
     label: 'Cloud accounts & storage',

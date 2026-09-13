@@ -39,7 +39,7 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 matter_file_store = MatterFileStore()
 
-ALIAS_LOCAL_PART_RE = re.compile(r"^m-[a-z2-7]{26}$")
+ALIAS_LOCAL_PART_RE = re.compile(r"^[mf]-[a-z2-7]{26}$")
 MAX_HEADER_VALUE_CHARS = 2_000
 MAX_PREVIEW_CHARS = 4_000
 
@@ -315,6 +315,8 @@ async def file_inbound_email(
     item: InboundEmail,
     matter: Matter,
     reviewed_by_user_id: uuid.UUID,
+    task_suggestion=None,
+    assigned_to_user_id: uuid.UUID | None = None,
 ) -> FiledInboundEmail:
     """File a reviewed message and any explicit subject-tag task atomically."""
     tenant_id = item.tenant_id
@@ -431,7 +433,7 @@ async def file_inbound_email(
                 )
             )
         await db.flush()
-        suggestion = parse_email_task_tag(
+        suggestion = task_suggestion or parse_email_task_tag(
             item.subject,
             received_at=item.occurred_at,
         )
@@ -446,6 +448,7 @@ async def file_inbound_email(
                 external_ref=f"inbound-email:{item.id}",
                 original_subject=item.subject,
                 received_at=item.occurred_at,
+                assigned_to_user_id=assigned_to_user_id,
             )
         item.status = "accepted"
         item.reviewed_by_user_id = reviewed_by_user_id

@@ -1,5 +1,7 @@
 # Forward email to a matter
 
+For the simpler firm-wide phone workflow, see the [Email to-dos user guide](../frontend/platform_docs/user-guide/17-email-intake.md). Save one LawHand contact, forward with `[TASK] Jane, review this tomorrow`, and confirm the matter and owner in **Needs review**. The matter-specific addresses described below remain available.
+
 Each matter can have its own opaque forwarding address at
 `intake.getlawhand.com`. Use it when a message should go directly to one
 matter without relying on sender-address matching. Mail sent to the address

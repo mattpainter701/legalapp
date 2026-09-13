@@ -207,14 +207,15 @@ async def receive_cloudflare_inbound_email(
 
     await set_tenant_context(db, str(alias.tenant_id))
     await set_inbound_email_route_lookup(db, enabled=False)
-    matter_result = await db.execute(
-        select(Matter).where(
-            Matter.id == alias.matter_id,
-            Matter.tenant_id == alias.tenant_id,
+    if alias.kind != "firm":
+        matter_result = await db.execute(
+            select(Matter).where(
+                Matter.id == alias.matter_id,
+                Matter.tenant_id == alias.tenant_id,
+            )
         )
-    )
-    if matter_result.scalar_one_or_none() is None:
-        return {"accepted": True}
+        if matter_result.scalar_one_or_none() is None:
+            return {"accepted": True}
 
     message_sha256 = hashlib.sha256(raw_message).hexdigest()
     duplicate = await db.execute(
@@ -227,6 +228,42 @@ async def receive_cloudflare_inbound_email(
         return {"accepted": True}
 
     parsed = parse_raw_email(raw_message)
+    if alias.kind == "firm":
+        from app.routers.firm_email_intake import intake_timezone
+        from app.services.firm_email_intake import (
+            active_staff,
+            authenticated_submitter,
+            suggest_matters,
+            todo_suggestion,
+        )
+
+        sender = parsed["participants"]["from"]
+        submitter = await authenticated_submitter(
+            db, alias.tenant_id, raw_message, sender
+        )
+        if submitter is None:
+            raise HTTPException(403, "Staff sender verification failed")
+        received_at = datetime.now(timezone.utc)
+        tz = await intake_timezone(db, alias.tenant_id)
+        parsed["occurred_at"] = received_at
+        parsed["authentication_results"]["firm_intake"] = {
+            "submitter_id": str(submitter.id),
+            "sender": sender,
+            "timezone": tz,
+            "task": todo_suggestion(
+                parsed["subject"],
+                received_at,
+                tz,
+                await active_staff(db, alias.tenant_id),
+                submitter.id,
+            ),
+            "matters": await suggest_matters(
+                db,
+                alias.tenant_id,
+                raw_message,
+                parsed["subject"] + " " + (parsed["body_preview"] or ""),
+            ),
+        }
     inbound_id = uuid.uuid4()
     path = quarantine_path(alias.tenant_id, inbound_id)
     try:
