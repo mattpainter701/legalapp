@@ -25,9 +25,9 @@ and can be built locally (see **Building installers** below).
 
 Stable latest-release assets are:
 
-- `https://github.com/mattpainter701/legalapp/releases/latest/download/lawhand-agent-x64.msi`
-- `https://github.com/mattpainter701/legalapp/releases/latest/download/lawhand-agent-linux-x86_64.tar.gz`
-- `https://github.com/mattpainter701/legalapp/releases/latest/download/SHA256SUMS.txt`
+- `https://github.com/mattpainter701/lawhand/releases/latest/download/lawhand-agent-x64.msi`
+- `https://github.com/mattpainter701/lawhand/releases/latest/download/lawhand-agent-linux-x86_64.tar.gz`
+- `https://github.com/mattpainter701/lawhand/releases/latest/download/SHA256SUMS.txt`
 
 The release workflow publishes these aliases only after Windows and Linux
 builds/tests both pass, verifies their checksums exist, and then probes the
@@ -174,7 +174,7 @@ existing `/etc/lawhand-agent` enrollment, key, and ledger remain in place.
 ```bash
 set -euo pipefail
 LAWHAND_UPDATE_DIR="$(mktemp -d)"
-LAWHAND_RELEASE_BASE="https://github.com/mattpainter701/legalapp/releases/latest/download"
+LAWHAND_RELEASE_BASE="https://github.com/mattpainter701/lawhand/releases/latest/download"
 curl --fail --location "$LAWHAND_RELEASE_BASE/lawhand-agent-linux-x86_64.tar.gz" \
   --output "$LAWHAND_UPDATE_DIR/lawhand-agent-linux-x86_64.tar.gz"
 curl --fail --location "$LAWHAND_RELEASE_BASE/SHA256SUMS.txt" \
@@ -322,7 +322,10 @@ The signing job is the only job granted `id-token: write`. It uses the protected
 `agent-release` environment with deployment creation disabled; restrict that
 environment to tags matching `agent-v*`. Its Azure federated credential must
 match this exact OIDC subject (with no wildcard):
-`repo:mattpainter701/legalapp:environment:agent-release`.
+`repo:mattpainter701/lawhand:environment:agent-release`. The subject embeds the
+repository slug, so a future repository rename requires updating that federated
+credential in Azure before the next `agent-v*` tag; otherwise the signing job's
+OIDC login fails and no release is published.
 
 ## Tests
 

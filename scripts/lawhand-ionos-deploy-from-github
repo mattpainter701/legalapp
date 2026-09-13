@@ -10,7 +10,10 @@ readonly DEPLOY_USER="lawhandadmin"
 readonly DEPLOY_HOME="/home/lawhandadmin"
 readonly DEPLOY_UID="$(id -u "$DEPLOY_USER")"
 readonly DEPLOY_RUNTIME_DIR="/run/user/$DEPLOY_UID"
-readonly EXPECTED_ORIGIN="https://github.com/mattpainter701/legalapp.git"
+readonly EXPECTED_ORIGIN="https://github.com/mattpainter701/lawhand.git"
+# Transitional: a checkout cloned under the former repository name still
+# reports the old origin until migrated. Remove once all hosts use lawhand.
+readonly LEGACY_ORIGIN="https://github.com/mattpainter701/legalapp.git"
 readonly LOCK_FILE="/run/lock/lawhand-ionos-production-deploy.lock"
 
 operation="${1:-}"
@@ -35,7 +38,8 @@ as_deploy_user() {
     "$@"
 }
 
-[[ "$(as_deploy_user git -C "$APP_DIR" remote get-url origin)" == "$EXPECTED_ORIGIN" ]] || {
+[[ "$(as_deploy_user git -C "$APP_DIR" remote get-url origin)" == "$EXPECTED_ORIGIN" \
+  || "$(as_deploy_user git -C "$APP_DIR" remote get-url origin)" == "$LEGACY_ORIGIN" ]] || {
   echo "ERROR: unexpected IONOS Git origin" >&2
   exit 3
 }
