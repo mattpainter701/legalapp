@@ -5,7 +5,7 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.09.12.5 — Answers keep running when you leave the chat
+## 2026.09.12.6 — Answers keep running when you leave the chat
 
 Released September 12, 2026.
 
@@ -13,6 +13,17 @@ A long answer no longer disappears when you open another part of LawHand while i
 
 - **Leave the chat without losing the answer.** Opening matters, invoices or any other screen mid-answer used to cancel it. The answer now finishes and is saved to the conversation.
 - **Pick the answer back up where it got to.** Reopen the conversation while it is still being written and the answer carries on in front of you instead of showing only your question.
+
+## 2026.09.12.5 — Sessions that end when you end them
+
+Released September 12, 2026.
+
+Resetting your password now signs out everyone using your account and disconnects your AI assistants, and the app tells you which ones to reconnect. Unused sessions sign out after 12 hours.
+
+- **A password reset signs out everyone.** Resetting your password now ends every session on your account, on every device. Before, it changed the password and left anyone already signed in where they were.
+- **It disconnects your assistants too.** A reset now cuts off Claude, ChatGPT, Codex and any other connected assistant. The app then names each one and shows you how to reconnect it.
+- **Sign out your other devices.** A new control on your profile ends every other session on your account. The device you are using stays signed in.
+- **Unused sessions end on their own.** A session left alone for 12 hours signs out, and none stays signed in beyond 30 days. You will be asked to sign in more often than before.
 
 ## 2026.09.12.4 — Clearer signature placement for every signer
 

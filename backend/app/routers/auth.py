@@ -27,6 +27,7 @@ from app.services.navigation import resolve_navigation
 from app.services.module_visibility import resolve_enabled_modules, resolve_plan_meta
 from app.services.plugin_entitlements import active_plugin_names
 from app.services.rbac_service import get_user_capabilities
+from app.services import session_policy, workspace_mcp_revocation
 from app.services.llm_routing import resolve_llm_route, route_matter_context_allowed
 from app.services.office_access import (
     require_office_globally_enabled,
@@ -489,7 +490,20 @@ def _refresh_family_revoked_key(family: str) -> str:
     return f"refresh_family_revoked:{family}"
 
 
-_REFRESH_TTL = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+# The idle bound: a rotating token's TTL, restarted by every rotation. The
+# absolute bound cannot be a TTL for exactly that reason, so it is carried on
+# the chain itself and checked in :func:`refresh` — see session_policy.
+_REFRESH_TTL = session_policy.idle_ttl_seconds()
+
+# What the person sees. The reason is logged for an operator; the response says
+# only that the session ended, since the distinction between "you signed out
+# everywhere", "this session hit its maximum age" and "this chain predates the
+# policy" changes nothing about what they must now do.
+_REFRESH_REFUSAL_DETAIL = {
+    session_policy.SESSION_REVOKED: "Session ended; sign in again",
+    session_policy.ABSOLUTE_LIFETIME_EXCEEDED: "Session expired; sign in again",
+    session_policy.ORIGIN_UNKNOWN: "Session expired; sign in again",
+}
 
 # Consuming a token and writing its family tombstone must be one Redis operation.
 # Otherwise two simultaneous refreshes can both observe the token as live before
@@ -578,7 +592,10 @@ async def _consume_refresh_token(request: Request, token: str) -> tuple[str, str
 
 
 async def _create_refresh_token(
-    request: Request, user: User, family: str | None = None
+    request: Request,
+    user: User,
+    family: str | None = None,
+    family_issued_at: float | None = None,
 ) -> str:
     """Mint a new opaque refresh token, persisted in Redis and tracked by family.
 
@@ -588,7 +605,8 @@ async def _create_refresh_token(
     us revoke the whole chain on token-reuse detection.
 
     Redis layout:
-      ``refresh:{token}``         -> JSON {"user_id", "family"}, TTL = REFRESH_TTL
+      ``refresh:{token}``         -> JSON {"user_id", "family", "family_issued_at"},
+                                     TTL = REFRESH_TTL
       ``refresh_family:{family}`` -> SET of live tokens in the chain, TTL = REFRESH_TTL
       ``refresh_used:{token}``    -> family id, TTL = consumed token's remaining TTL
       ``refresh_family_revoked:*`` prevents a revoked chain from being reissued
@@ -600,6 +618,11 @@ async def _create_refresh_token(
     token = secrets.token_urlsafe(48)
     if family is None:
         family = str(uuid.uuid4())
+    if family_issued_at is None:
+        # A new chain starts now; a rotation passes its predecessor's origin
+        # through unchanged, which is what makes the absolute bound survive
+        # rotation instead of being renewed by it.
+        family_issued_at = _time.time()
 
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
@@ -609,7 +632,13 @@ async def _create_refresh_token(
         )
         return token
 
-    payload = _json.dumps({"user_id": str(user.id), "family": family})
+    payload = _json.dumps(
+        {
+            "user_id": str(user.id),
+            "family": family,
+            "family_issued_at": family_issued_at,
+        }
+    )
     issued = await redis.eval(
         _ISSUE_REFRESH_SCRIPT,
         3,
@@ -1781,9 +1810,12 @@ async def reset_password(
     email = None
 
     if redis:
-        email_bytes = await redis.get(_reset_key(body.token))
-        if email_bytes:
-            email = email_bytes.decode("utf-8")
+        # ``_redis_text`` rather than a bare ``.decode``: this was the one Redis
+        # read in this module that assumed a bytes-returning client, so it broke
+        # outright under a client configured with ``decode_responses=True``.
+        stored = await redis.get(_reset_key(body.token))
+        if stored:
+            email = _redis_text(stored)
             await redis.delete(_reset_key(body.token))
     else:
         entry = _fallback_reset_tokens.pop(body.token, None)
@@ -1804,7 +1836,34 @@ async def reset_password(
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
     user.password_hash = _hash_password(body.password)
+    # A reset is the action people take when they believe someone else is in
+    # their account. Changing the hash alone left that someone's rotating chain
+    # renewing itself for its full idle window, so stamp the epoch that voids
+    # every credential minted before now: access tokens by ``iat``, refresh
+    # chains by their origin. Rotation and request authorisation both consult
+    # it, so this holds across every worker without needing to find the keys.
+    user.sessions_valid_after = session_policy.session_epoch_now()
+
+    # Sessions are only half of it. A Workspace MCP access token authenticates
+    # with its own audience-bound credential, so a connected assistant would
+    # survive the reset and stay reachable by whoever prompted it. Serialize
+    # against concurrent consent creation the same way Privacy Mode does.
+    await lock_tenant_workspace_mcp_policy(db, user.tenant_id)
+    revoked_grants = await workspace_mcp_revocation.revoke_user_workspace_grants(
+        db,
+        request,
+        user=user,
+        reason=workspace_mcp_revocation.PASSWORD_RESET_REASON,
+    )
     await db.commit()
+    await workspace_mcp_revocation.cleanup_revoked_grant_runtime(
+        request, revoked_grants
+    )
+    logger.info(
+        "Password reset ended all sessions for user_id=%s and revoked %d assistant(s)",
+        user.id,
+        len(revoked_grants),
+    )
 
     return {"message": "Password reset successfully"}
 
@@ -1881,6 +1940,69 @@ async def logout(request: Request, response: Response):
     return {"message": "Logged out successfully"}
 
 
+@router.post("/sessions/revoke-all", response_model=TokenResponse)
+async def revoke_all_sessions(
+    request: Request, response: Response, db: AsyncSession = Depends(get_db)
+):
+    """End every session this user holds, then re-establish the calling one.
+
+    This is the self-service counterpart to the epoch a password reset stamps:
+    the answer to "I left myself signed in somewhere". Every access token and
+    rotation chain minted before now is void, on every device and every worker,
+    without having to enumerate credentials that live in Redis under keys only
+    the holder's token can name.
+
+    The caller is deliberately re-issued rather than signed out with everyone
+    else — being logged out of the device you are asking from is a surprising
+    way to answer "sign out my other devices", and makes the control something
+    people avoid using.
+    """
+    user = await get_current_user(request, db)
+
+    user.sessions_valid_after = session_policy.session_epoch_now()
+    await db.commit()
+
+    # The caller's own chain is revoked outright as well as voided by the epoch,
+    # so the token in the cookie about to be replaced is dead immediately rather
+    # than at its next rotation attempt.
+    presented = request.cookies.get("refresh_token")
+    if presented:
+        redis = getattr(request.app.state, "redis", None)
+        if redis:
+            try:
+                raw = await redis.get(_refresh_key(presented))
+                if raw:
+                    data = _json.loads(
+                        raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                    )
+                    family = data.get("family")
+                    if family:
+                        await _revoke_refresh_family(request, family)
+            except Exception:
+                # The epoch has already been committed, which is what actually
+                # ends the sessions. Failing to also tidy Redis must not fail
+                # the request and leave the user thinking nothing happened.
+                logger.exception(
+                    "Could not revoke the calling refresh family for user_id=%s",
+                    user.id,
+                )
+
+    await set_tenant_context(db, str(user.tenant_id))
+    tenant = user.tenant
+    access_token = await _issue_access_token(db, user, tenant)
+    new_refresh = await _create_refresh_token(request, user)
+    _set_auth_cookies(response, access_token, new_refresh)
+    logger.info("User user_id=%s ended all other sessions", user.id)
+
+    return TokenResponse(
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        role=user.role,
+        email=user.email,
+        full_name=user.full_name,
+    )
+
+
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(
     request: Request, response: Response, db: AsyncSession = Depends(get_db)
@@ -1896,6 +2018,11 @@ async def refresh(
     atomically revokes the live family. Once the original credential would have
     expired, its tombstone also expires and later submissions are simply invalid.
     Redis is required; without it refresh is disabled.
+
+    Rotation is also where the two bounds a renewable TTL cannot express are
+    enforced: the chain's absolute lifetime, and the user's session epoch. A
+    chain refused for either reason is revoked outright rather than merely
+    declined, so its live successor cannot be rotated from another device.
     """
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
@@ -1933,6 +2060,17 @@ async def refresh(
             await _revoke_refresh_family(request, family)
         raise HTTPException(status_code=401, detail="User not found or inactive")
 
+    family_issued_at = data.get("family_issued_at")
+    refusal = session_policy.rotation_refusal_reason(
+        family_issued_at=family_issued_at,
+        sessions_valid_after=user.sessions_valid_after,
+    )
+    if refusal:
+        if family:
+            await _revoke_refresh_family(request, family)
+        logger.info("Refresh refused for user_id=%s reason=%s", user.id, refusal)
+        raise HTTPException(status_code=401, detail=_REFRESH_REFUSAL_DETAIL[refusal])
+
     tenant = user.tenant
     try:
         require_active_tenant(tenant)
@@ -1941,7 +2079,9 @@ async def refresh(
             await _revoke_refresh_family(request, family)
         raise
     access_token = await _issue_access_token(db, user, tenant)
-    new_refresh = await _create_refresh_token(request, user, family=family)
+    new_refresh = await _create_refresh_token(
+        request, user, family=family, family_issued_at=family_issued_at
+    )
     _set_auth_cookies(response, access_token, new_refresh)
 
     return TokenResponse(
@@ -1971,6 +2111,7 @@ async def get_me(
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
     demo_session = await _active_demo_session(db, user.tenant_id)
     standard_context_allowed = await _standard_matter_context_policy(db, user.tenant_id)
+    reconnect = await workspace_mcp_revocation.pending_reconnect_clients(db, user)
     return UserInfo(
         id=str(user.id),
         tenant_id=str(user.tenant_id),
@@ -2002,6 +2143,7 @@ async def get_me(
         primary_jurisdictions=user.primary_jurisdictions or [],
         privacy_mode=user.privacy_mode,
         workspace_mcp_enabled=getattr(user, "workspace_mcp_enabled", True),
+        workspace_mcp_reconnect=reconnect,
         demo=(
             {
                 "session_id": str(demo_session.id),
@@ -2043,60 +2185,23 @@ async def update_me(
     revoked_workspace_grants: list[WorkspaceMCPGrant] = []
     if enabling_privacy_mode:
         # Privacy Mode must take effect immediately—not only on the next MCP
-        # request. Revoke every active Workspace MCP grant for this user;
-        # Research MCP only accesses public authority and remains a separate
-        # product with its own connection controls.
-        revoked_workspace_grants = list(
-            (
-                await db.scalars(
-                    select(WorkspaceMCPGrant)
-                    .where(
-                        WorkspaceMCPGrant.tenant_id == user.tenant_id,
-                        WorkspaceMCPGrant.user_id == user.id,
-                        WorkspaceMCPGrant.client_id.not_like("research.%"),
-                        WorkspaceMCPGrant.status == "active",
-                        WorkspaceMCPGrant.revoked_at.is_(None),
-                    )
-                    .with_for_update()
-                )
-            ).all()
+        # request. Shares its revocation path with a password reset so the two
+        # cannot drift; Research MCP only accesses public authority and remains
+        # a separate product with its own connection controls.
+        revoked_workspace_grants = (
+            await workspace_mcp_revocation.revoke_user_workspace_grants(
+                db,
+                request,
+                user=user,
+                reason=workspace_mcp_revocation.PRIVACY_MODE_REASON,
+            )
         )
-        if revoked_workspace_grants:
-            from app.services.workspace_mcp_oauth import append_workspace_mcp_audit
-
-            revoked_at = datetime.now(timezone.utc)
-            for grant in revoked_workspace_grants:
-                grant.status = "revoked"
-                grant.revoked_at = revoked_at
-                grant.revoked_by_user_id = user.id
-                grant.revocation_reason = "Privacy Mode enabled"
-                await append_workspace_mcp_audit(
-                    db,
-                    request,
-                    tenant_id=user.tenant_id,
-                    user_id=user.id,
-                    grant_id=grant.id,
-                    client_id=grant.client_id,
-                    event_type="grant_revoked",
-                    outcome="success",
-                    metadata={"reason": grant.revocation_reason},
-                )
     await db.commit()
-    if revoked_workspace_grants:
-        # The database grant is authoritative. Redis cleanup is best effort so
-        # an unavailable cache cannot prevent the privacy-policy change.
-        from app.services.workspace_mcp_oauth import (
-            revoke_workspace_grant_runtime,
-        )
-
-        for grant in revoked_workspace_grants:
-            try:
-                await revoke_workspace_grant_runtime(request, grant.id)
-            except Exception:
-                logger.exception(
-                    "Workspace MCP runtime credential cleanup failed after Privacy Mode enable",
-                    extra={"grant_id": str(grant.id)},
-                )
+    # The database grant is authoritative. Redis cleanup is best effort so an
+    # unavailable cache cannot prevent the privacy-policy change.
+    await workspace_mcp_revocation.cleanup_revoked_grant_runtime(
+        request, revoked_workspace_grants
+    )
     # SET LOCAL tenant context ends at commit. Restore it before the refresh
     # and every subsequent RLS-protected query in this transaction.
     await set_tenant_context(db, str(user.tenant_id))
@@ -2142,6 +2247,12 @@ async def update_me(
         primary_jurisdictions=user.primary_jurisdictions or [],
         privacy_mode=user.privacy_mode,
         workspace_mcp_enabled=getattr(user, "workspace_mcp_enabled", True),
+        # Turning Privacy Mode off is precisely when a suppressed reconnect
+        # prompt becomes relevant again, and this response is what the UI
+        # refreshes from — so it has to carry the list too.
+        workspace_mcp_reconnect=await workspace_mcp_revocation.pending_reconnect_clients(
+            db, user
+        ),
     )
 
 

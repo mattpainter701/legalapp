@@ -29,6 +29,21 @@ describe('login', () => {
     expect(await axe(container)).toHaveNoViolations()
   })
 
+  it('explains an ended session instead of bouncing people here silently', () => {
+    // Sessions now end on an idle window, an absolute maximum age, or a sign-out
+    // everywhere, so this redirect is routine — and an unexplained one reads as
+    // the app having lost their work.
+    window.history.pushState({}, '', '/login?reason=session_expired')
+    render(<MemoryRouter><LoginPage /></MemoryRouter>)
+    expect(screen.getByRole('status')).toHaveTextContent(/session ended/i)
+    window.history.pushState({}, '', '/login')
+  })
+
+  it('shows no session notice on an ordinary visit', () => {
+    render(<MemoryRouter><LoginPage /></MemoryRouter>)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
   it('presents LawHand as the firm source of truth', () => {
     render(<MemoryRouter><LoginPage /></MemoryRouter>)
     expect(screen.getByText(/LawHand™/i)).toBeInTheDocument()
