@@ -7,7 +7,7 @@ if [[ $EUID -ne 0 || $# -ne 0 ]]; then
     exit 2
 fi
 
-MANIFEST_URL="https://github.com/mattpainter701/legalapp/releases/latest/download/agent-update.json"
+MANIFEST_URL="https://github.com/mattpainter701/lawhand/releases/latest/download/agent-update.json"
 ASSET_NAME="lawhand-agent-linux-x86_64.tar.gz"
 CONFIG_DIR="/etc/lawhand-agent"
 UPDATER_CONFIG_DIR="/etc/lawhand-agent-updater"
@@ -67,7 +67,7 @@ allowed_hosts = {
     "github-releases.githubusercontent.com",
 }
 github_path = re.compile(
-    r"^/mattpainter701/legalapp/releases/(?:latest/download/agent-update\.json|"
+    r"^/mattpainter701/lawhand/releases/(?:latest/download/agent-update\.json|"
     r"download/agent-v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)/"
     r"(?:agent-update\.json|lawhand-agent-x64\.msi|"
     r"lawhand-agent-linux-x86_64\.tar\.gz))$"
@@ -308,7 +308,7 @@ PY
 )"
 
 ARCHIVE="$TMP/$ASSET_NAME"
-ASSET_URL="https://github.com/mattpainter701/legalapp/releases/download/agent-v${TARGET}/${ASSET_NAME}"
+ASSET_URL="https://github.com/mattpainter701/lawhand/releases/download/agent-v${TARGET}/${ASSET_NAME}"
 download_official "$ASSET_URL" "$ARCHIVE" $((512 * 1024 * 1024))
 [[ $(stat -c '%s' "$ARCHIVE") -le $((512 * 1024 * 1024)) ]] || { UPDATE_ERROR="Update archive exceeds 512 MiB"; exit 1; }
 echo "$DIGEST  $ARCHIVE" | sha256sum --check --status

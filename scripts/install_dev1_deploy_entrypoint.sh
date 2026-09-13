@@ -12,7 +12,7 @@ id -u "$runner_user" >/dev/null
 
 install -d -m 0750 -o "$deploy_user" -g "$deploy_user" "$app_dir"
 if [[ ! -d "$app_dir/.git" ]]; then
-  runuser -u "$deploy_user" -- git clone https://github.com/mattpainter701/legalapp.git "$app_dir"
+  runuser -u "$deploy_user" -- git clone https://github.com/mattpainter701/lawhand.git "$app_dir"
 fi
 
 tmp="$(mktemp)"
@@ -23,7 +23,8 @@ set -Eeuo pipefail
 umask 077
 readonly APP_DIR=/home/varta/legalapp-dev1
 readonly DEPLOY_USER=varta
-readonly EXPECTED_ORIGIN=https://github.com/mattpainter701/legalapp.git
+readonly EXPECTED_ORIGIN=https://github.com/mattpainter701/lawhand.git
+readonly LEGACY_ORIGIN=https://github.com/mattpainter701/legalapp.git
 readonly LOCK_FILE=/run/lock/lawhand-dev1-deploy.lock
 operation="${1:-}"
 requested_sha="${2:-}"
@@ -35,7 +36,8 @@ flock -n 9 || { echo "ERROR: another dev1 operation is running" >&2; exit 75; }
 as_deploy_user() {
   runuser -u "$DEPLOY_USER" -- env HOME="/home/$DEPLOY_USER" USER="$DEPLOY_USER" LOGNAME="$DEPLOY_USER" "$@"
 }
-[[ "$(as_deploy_user git -C "$APP_DIR" remote get-url origin)" == "$EXPECTED_ORIGIN" ]]
+[[ "$(as_deploy_user git -C "$APP_DIR" remote get-url origin)" == "$EXPECTED_ORIGIN" \
+  || "$(as_deploy_user git -C "$APP_DIR" remote get-url origin)" == "$LEGACY_ORIGIN" ]]
 [[ -z "$(as_deploy_user git -C "$APP_DIR" status --porcelain --untracked-files=no)" ]] || {
   echo "ERROR: dev1 checkout has tracked local changes" >&2; exit 3;
 }

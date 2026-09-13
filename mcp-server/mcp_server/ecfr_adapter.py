@@ -26,7 +26,7 @@ FULL_XML_URL = "https://www.ecfr.gov/api/versioner/v1/full/{issue_date}/title-{t
 TITLES_URL = "https://www.ecfr.gov/api/versioner/v1/titles"
 GOVINFO_BULK_XML_URL = "https://www.govinfo.gov/bulkdata/ECFR/title-{title}/ECFR-title{title}.xml"
 DEFAULT_TITLES = tuple(title for title in range(1, 51) if title != 35)
-USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or "LegalApp-eCFRSync/0.1 (+https://github.com/mattpainter701/legalapp)"
+USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or "LegalApp-eCFRSync/0.1 (+https://github.com/mattpainter701/lawhand)"
 MAX_XML_BYTES = 256 * 1024 * 1024
 TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 

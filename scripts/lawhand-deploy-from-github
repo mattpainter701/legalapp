@@ -9,7 +9,11 @@ readonly APP_DIR="/home/varta/legalapp"
 readonly DEPLOY_USER="varta"
 readonly DEPLOY_UID="$(id -u "$DEPLOY_USER")"
 readonly DEPLOY_RUNTIME_DIR="/run/user/$DEPLOY_UID"
-readonly EXPECTED_ORIGIN="https://github.com/mattpainter701/legalapp.git"
+readonly EXPECTED_ORIGIN="https://github.com/mattpainter701/lawhand.git"
+# A production checkout cloned under the repository's former name keeps that
+# origin until it is migrated. Accept it during the rename so a deploy never
+# hard-fails on the transition; remove once every host reports lawhand.
+readonly LEGACY_ORIGIN="https://github.com/mattpainter701/legalapp.git"
 readonly PUBLIC_ORIGIN="https://getlawhand.com"
 readonly LOCK_FILE="/run/lock/lawhand-production-deploy.lock"
 
@@ -48,7 +52,7 @@ as_deploy_user() {
 }
 
 origin_url="$(as_deploy_user git -C "$APP_DIR" remote get-url origin)"
-[[ "$origin_url" == "$EXPECTED_ORIGIN" ]] || {
+[[ "$origin_url" == "$EXPECTED_ORIGIN" || "$origin_url" == "$LEGACY_ORIGIN" ]] || {
   echo "ERROR: unexpected production Git origin: $origin_url" >&2
   exit 3
 }

@@ -1,0 +1,100 @@
+# =============================================================================
+# Security scanners — free replacements for CodeQL and dependency review
+# =============================================================================
+# CodeQL (code scanning) and actions/dependency-review-action require a paid
+# GitHub Code Security license on private repositories. These jobs run
+# first-party tools inside the runner with no extra license, so the security
+# signal survives if this repository is made private again.
+#
+# Rollout: the scan steps are deliberately `continue-on-error` while the
+# existing backlog is triaged, so a finding is visible but does not block a
+# merge. Ratchet by first clearing each report, then removing the matching
+# `continue-on-error` and adding the job check name to the required status
+# checks on main.
+# =============================================================================
+
+name: Security scanners
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scanners-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    branches: [main]
+  # Kept in step with ci.yml so these checks also report for a merge queue.
+  merge_group:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sast:
+    name: SAST — Bandit and Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3 (Node.js 24)
+        with:
+          python-version: "3.11"
+
+      - name: Install scanners
+        run: pip install bandit==1.9.4 semgrep==1.177.0
+
+      - name: Bandit (Python, high severity)
+        # Advisory until the existing backlog is cleared. See the header.
+        continue-on-error: true
+        run: >-
+          bandit -r backend/app mcp-server agent
+          --severity-level high --confidence-level high -f txt
+
+      - name: Semgrep (Python, JavaScript, TypeScript)
+        # Advisory until the existing backlog is cleared. See the header.
+        continue-on-error: true
+        run: >-
+          semgrep scan --metrics=off --error --severity ERROR
+          --config p/python --config p/javascript --config p/typescript
+
+  dependency-audit:
+    name: Dependency audit — pip-audit and npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3 (Node.js 24)
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.10.1
+
+      - name: Audit Python requirements
+        # Advisory until the existing backlog is cleared. See the header.
+        continue-on-error: true
+        run: |
+          for req in backend/requirements.txt backend/requirements-dev.txt \
+                     mcp-server/requirements.txt; do
+            echo "::group::pip-audit $req"
+            pip-audit -r "$req" --progress-spinner off
+            echo "::endgroup::"
+          done
+
+      - name: Audit frontend and add-in dependencies
+        # Advisory until the existing backlog is cleared. See the header.
+        continue-on-error: true
+        run: |
+          for dir in frontend office-addin; do
+            echo "::group::npm audit $dir"
+            (cd "$dir" && npm audit --audit-level=high)
+            echo "::endgroup::"
+          done

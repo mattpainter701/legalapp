@@ -250,7 +250,7 @@ date in the competitive claims register.
 Prerequisites: Git, Docker Engine, and Docker Compose v2.
 
 ```bash
-git clone https://github.com/mattpainter701/legalapp
+git clone https://github.com/mattpainter701/lawhand
 cd legalapp
 ```
 

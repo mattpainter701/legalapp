@@ -59,7 +59,7 @@ was `42b486e791d182010f4e476dd9df293fb9ccd206`. The merges after COMP-04 were
 therefore not deployed at this snapshot; green merge CI must not be described as
 production rollout evidence. The current ledger baseline is `7a29f551`; no later
 production verification is recorded here. Verification run:
-<https://github.com/mattpainter701/legalapp/actions/runs/33319412188>.
+<https://github.com/mattpainter701/lawhand/actions/runs/33319412188>.
 
 ## Evidence references
 
