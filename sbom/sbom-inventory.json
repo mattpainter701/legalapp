@@ -95,7 +95,7 @@
     },
     {
       "image": "legalapp-backend:${APP_COMMIT:-dev}",
-      "line": 170,
+      "line": 174,
       "pinned_by_digest": false,
       "source": "docker-compose.yml"
     },
@@ -155,7 +155,7 @@
     },
     {
       "image": "legalapp-backend:${APP_COMMIT:-dev}",
-      "line": 227,
+      "line": 231,
       "pinned_by_digest": false,
       "source": "docker-compose.hypervisor.yml"
     },
