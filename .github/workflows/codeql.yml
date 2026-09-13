@@ -3,6 +3,9 @@ name: CodeQL security analysis
 on:
   pull_request:
     branches: [main]
+  # CodeQL's two checks are required on main; without this trigger they never
+  # report for a queued group and the merge queue times the PR out.
+  merge_group:
   push:
     branches: [main]
   schedule:
