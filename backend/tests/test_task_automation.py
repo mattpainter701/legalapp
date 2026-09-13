@@ -24,6 +24,7 @@ from app.models.task import Task, TaskAutomationRun
 from app.models.tenant import TenantSettings
 from app.models.user import User
 from app.services import task_automation
+from app.services import connected_mail
 from app.services.connected_mail import ConnectedMailDelivery
 from app.services.email import EmailDeliveryResult
 from app.services.matter_file_store import StorageResult
@@ -37,6 +38,27 @@ def _approved_actor_has_legal_approval_capability(monkeypatch):
         return True
 
     monkeypatch.setattr(task_automation, "_actor_can_approve_legal_work", allow)
+
+
+@pytest.fixture(autouse=True)
+def _client_mail_smtp_fallback_enabled(monkeypatch):
+    """Keep the legacy SMTP transport open for this module.
+
+    Client correspondence sends from the firm's own connected mailbox and no
+    longer falls back to the platform relay unless an operator opts in. The
+    fixture tenant here has no cloud-mail grant, so without this every send
+    would report UNCONFIGURED.
+
+    That refusal is the point of the gate and is pinned in
+    ``test_connected_mail.py``. This module tests task-automation delivery
+    semantics — queueing, idempotency, kill switches, recipient rebinding,
+    audit records — for which the transport is incidental, so it opts in once
+    here rather than in each of the twenty-five tests that would otherwise
+    need it.
+    """
+    monkeypatch.setattr(
+        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
+    )
 
 
 class _RecordingSender:

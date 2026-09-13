@@ -3,7 +3,11 @@
 Attorney-approved email should normally come from the attorney who approved it,
 not from a platform-wide SMTP identity. This module prefers that user's
 delegated Microsoft or Google grant, then a tenant-wide firm mailbox grant. It
-falls back to SMTP only when the tenant has no cloud-mail grant at all.
+falls back to SMTP only when the tenant has no cloud-mail grant at all, and
+only where an operator has opted into that fallback
+(``CLIENT_MAIL_SMTP_FALLBACK_ENABLED``). SMTP is platform-wide configuration
+with no per-tenant form, so on the hosted product that fallback would put a
+LawHand address on a firm's client correspondence.
 
 Once a cloud provider is selected, provider failure is terminal for that
 attempt. Falling through to a second transport after an ambiguous response can
@@ -21,6 +25,7 @@ from email.message import EmailMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import set_tenant_context
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
@@ -34,6 +39,7 @@ from app.services.provider_http import ProviderAuthError, ProviderError
 from app.services.token_vault import get_fresh_token, get_fresh_user_token
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 MICROSOFT_MAIL_SEND_SCOPE = "Mail.Send"
 GOOGLE_MAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
@@ -419,8 +425,22 @@ async def send_client_email(
             delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
 
-    # Backward compatibility for firms that intentionally configured SMTP and
-    # have no Microsoft/Google mail grant. Cloud failure never reaches here.
+    # Backward compatibility for a single-firm deployment whose EMAIL_* points
+    # at that firm's OWN mail server. There is no per-tenant SMTP config, so on
+    # the hosted product EMAIL_* is the platform relay and this path would send
+    # a client's matter correspondence from a LawHand address. Gated off by
+    # default precisely so that enabling system email cannot silently start
+    # sending client mail from the wrong identity.
+    # Cloud failure never reaches here.
+    if not settings.CLIENT_MAIL_SMTP_FALLBACK_ENABLED:
+        return ConnectedMailDelivery(
+            EmailDeliveryResult.UNCONFIGURED,
+            "Connect a Microsoft 365 or Google mailbox in Integrations to send "
+            "client email. Client correspondence is sent from the firm's own "
+            "mailbox, not from a LawHand address.",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+
     result = await smtp_service.send_email(
         to=to,
         subject=subject,

@@ -15,7 +15,11 @@ from app.middleware.tenant import require_admin
 from app.models.user import User
 from app.models.user_alias import UserAliasAddress
 from app.models.tenant import Tenant
-from app.services.email import EmailDeliveryResult, email_service
+from app.services.email import (
+    EmailCategory,
+    EmailDeliveryResult,
+    email_service,
+)
 
 router = APIRouter(prefix="/admin/users", tags=["user-aliases"])
 settings = get_settings()
@@ -126,6 +130,7 @@ async def add_user_alias(
             "Verify your LawHand email alias",
             f'<p>Verify this address for LawHand: <a href="{backend}/api/auth/verify-alias?tenant_id={user.tenant_id}&token={raw_token}">Verify email address</a></p>',
             f"Verify this address for LawHand: {backend}/api/auth/verify-alias?tenant_id={user.tenant_id}&token={raw_token}",
+            category=EmailCategory.SECURITY,
         )
         if result != EmailDeliveryResult.SENT:
             await db.rollback()

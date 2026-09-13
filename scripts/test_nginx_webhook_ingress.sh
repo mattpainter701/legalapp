@@ -86,6 +86,11 @@ assert_location_policy "$PROD_CONFIG" "= /api/integrations/teams/voice/webhook" 
 assert_location_policy "$PROD_CONFIG" "^~ /api/integrations/teams/voice/webhook/" 2 1
 assert_location_policy "$DEV_CONFIG" "= /api/integrations/teams/voice/webhook" 1 0
 assert_location_policy "$DEV_CONFIG" "^~ /api/integrations/teams/voice/webhook/" 1 0
+# Resend posts bounce and complaint events with no session cookie, so the
+# body cap and the dedicated webhook zone are what keep it off the general
+# API upload allowance and out of the shared anonymous api bucket.
+assert_location_policy "$PROD_CONFIG" "= /api/platform/email/webhook/resend" 2 1
+assert_location_policy "$DEV_CONFIG" "= /api/platform/email/webhook/resend" 1 0
 
 # The shared API proxy snippet is the source of backend routing, forwarded
 # client/protocol headers, and bounded upstream timeouts for every location.

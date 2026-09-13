@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.09.13.3 — Password reset emails that actually arrive
+
+Released September 13, 2026.
+
+LawHand now sends its own account emails — password resets and address verification — through a dedicated mail service, from an address reserved for security messages.
+
+- **Reset your password without waiting on email that never comes.** Account emails are sent through a service built for them, so a reset link reaches your inbox instead of being filtered on the way.
+- **Security email kept apart from everyday notifications.** Password resets arrive from a separate address to task and document notifications, so filtering the everyday mail cannot hide the message you need to get back into your account.
+- **Addresses that stop working are noticed.** When an address permanently rejects mail, LawHand records it and stops sending there, instead of quietly retrying an inbox that no longer exists.
+
 ## 2026.09.13.2 — Forward email into matter to-dos
 
 Released September 13, 2026.

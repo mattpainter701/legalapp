@@ -24,6 +24,28 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+class EmailCategory(str, Enum):
+    """Which platform identity a system message is sent from.
+
+    Account-security mail is deliberately separable from routine product
+    notifications: a user who filters or mutes "task due" and "document ready"
+    mail must not thereby filter their own password reset. The two categories
+    collapse to one address when ``EMAIL_FROM_SECURITY`` is left empty.
+    """
+
+    SECURITY = "security"
+    NOTIFICATION = "notification"
+
+
+def sender_for(category: "EmailCategory") -> str:
+    """Resolve the From address for a category, falling back to EMAIL_FROM."""
+    if category is EmailCategory.SECURITY:
+        security_sender = (settings.EMAIL_FROM_SECURITY or "").strip()
+        if security_sender:
+            return security_sender
+    return settings.EMAIL_FROM
+
+
 class EmailDeliveryResult(str, Enum):
     """Machine-readable result for every attempted email delivery.
 
@@ -40,6 +62,10 @@ class EmailDeliveryResult(str, Enum):
     UNCONFIGURED = "unconfigured"
     REAUTHORIZATION_REQUIRED = "reauthorization_required"
     INVALID_RECIPIENT = "invalid_recipient"
+    # Every recipient is on the platform suppression list after a hard bounce
+    # or spam complaint. Not a configuration error and not a provider failure:
+    # the message was deliberately withheld and retrying will not help.
+    SUPPRESSED = "suppressed"
     FAILED = "failed"
 
     def __bool__(self) -> bool:
@@ -78,6 +104,13 @@ def email_delivery_http_error(
         )
     if result == EmailDeliveryResult.INVALID_RECIPIENT:
         return 422, f"{action} requires a valid email recipient."
+    if result == EmailDeliveryResult.SUPPRESSED:
+        return (
+            422,
+            f"{action} was not completed because that address previously "
+            "returned a permanent delivery failure or spam complaint. Confirm "
+            "the address, then ask an administrator to clear the suppression.",
+        )
     return (
         502,
         f"{action} was not completed because the email provider did not accept "
@@ -452,6 +485,8 @@ class EmailService:
         text_body: str = "",
         attachment: MailAttachment | None = None,
         attachments: list[MailAttachment] | None = None,
+        db=None,
+        category: EmailCategory = EmailCategory.NOTIFICATION,
     ) -> EmailDeliveryResult:
         """
         Send an email to one or more recipients.
@@ -459,6 +494,14 @@ class EmailService:
         Returns a typed result so disabled/unconfigured delivery can never be
         reported as success. Message content is not logged when delivery is
         unavailable.
+
+        Recipients on the platform suppression list are dropped before
+        submission. Pass ``db`` when the caller already holds a session; the
+        suppression lookup opens its own otherwise.
+
+        ``category`` selects the From identity. It defaults to NOTIFICATION;
+        account-security mail must pass SECURITY explicitly, so a new caller
+        cannot silently borrow the security identity for routine mail.
         """
         if not to:
             logger.warning("send_email called with empty recipient list — skipping")
@@ -473,10 +516,23 @@ class EmailService:
             )
             return configuration_status
 
+        # Imported here rather than at module scope: this module is imported by
+        # config-only code paths that must not pull in the database engine.
+        from app.services.email_suppression import filter_suppressed
+
+        to, suppressed = await filter_suppressed(to, db=db)
+        if suppressed:
+            logger.info(
+                "Withheld email from suppressed recipients (count=%d)",
+                len(suppressed),
+            )
+        if not to:
+            return EmailDeliveryResult.SUPPRESSED
+
         try:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
-            msg["From"] = settings.EMAIL_FROM
+            msg["From"] = sender_for(category)
             msg["To"] = ", ".join(to)
 
             if text_body:

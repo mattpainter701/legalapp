@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["184_firm_email_intake"]
+    assert heads == ["185_platform_email_suppression"]
 
 
 def test_intake_optional_agreement_migration_widens_and_restores_the_column():
@@ -833,6 +833,37 @@ def test_tenant_guc_nullif_migration_rewrites_only_known_unsafe_policies():
     # Policies that were born safe must never be touched by the downgrade.
     assert "tenant_isolation_storage_migrations" not in source
     assert "contacts_tenant_isolation" not in source
+
+
+def test_platform_email_suppression_migration_is_platform_scoped():
+    """The suppression tables intentionally carry no RLS policy.
+
+    A bounce is keyed on the recipient mailbox and arrives before any tenant can
+    be resolved, and the same address may belong to users in several tenants —
+    the same reasoning that makes ``stripe_webhook_events`` platform-scoped. A
+    tenant predicate here would silently stop suppressions from ever matching.
+    """
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir
+        / "migrations"
+        / "versions"
+        / "185_platform_email_suppression.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "185_platform_email_suppression"' in source
+    assert 'down_revision = "184_firm_email_intake"' in source
+    assert "ROW LEVEL SECURITY" not in source
+    assert "current_setting" not in source
+    # Both halves of the feature: the list itself and the replay guard that
+    # keeps a redelivered webhook from re-suppressing a released address.
+    assert "email_suppressions" in source
+    assert "platform_email_webhook_events" in source
+    assert "uq_email_suppressions_email" in source
+    assert "uq_platform_email_webhook_provider_event" in source
+    # Additive only — the gate rejects destructive upgrades, and a downgrade
+    # must still be able to remove what this added.
+    assert "op.drop_table(\"email_suppressions\")" in source
 
 
 def test_unpublished_templates_migration_only_deactivates_unpublished_rows():

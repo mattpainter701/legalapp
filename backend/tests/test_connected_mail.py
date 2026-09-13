@@ -272,9 +272,39 @@ async def test_tenant_firm_mailbox_is_used_when_approver_has_no_personal_grant(
 
 
 @pytest.mark.asyncio
-async def test_smtp_remains_available_when_tenant_has_no_cloud_mail_grant(
-    db_session, test_tenant, test_user
+async def test_no_cloud_grant_never_sends_client_mail_from_the_platform_relay(
+    db_session, test_tenant, test_user, monkeypatch
 ):
+    """A client letter must come from the firm, never from a LawHand address.
+
+    SMTP is platform-wide configuration with no per-tenant form, so on the
+    hosted product EMAIL_* is LawHand's relay. Falling back to it here would
+    put a LawHand address on a client's matter correspondence — and would do so
+    silently, the moment system email was switched on.
+    """
+    monkeypatch.setattr(
+        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", False
+    )
+    smtp = _SMTPRecorder()
+
+    delivery = await connected_mail.send_client_email(
+        **_send_args(db_session, test_tenant, test_user, smtp)
+    )
+
+    assert delivery.result == EmailDeliveryResult.UNCONFIGURED
+    assert delivery.provider is None
+    assert smtp.calls == []
+    assert "firm's own mailbox" in delivery.detail
+
+
+@pytest.mark.asyncio
+async def test_smtp_fallback_still_available_when_an_operator_opts_in(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    """A single-firm deployment may point EMAIL_* at that firm's own server."""
+    monkeypatch.setattr(
+        connected_mail.settings, "CLIENT_MAIL_SMTP_FALLBACK_ENABLED", True
+    )
     smtp = _SMTPRecorder()
 
     delivery = await connected_mail.send_client_email(

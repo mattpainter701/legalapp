@@ -124,8 +124,21 @@ def test_provider_webhooks_did_not_inherit_the_wider_api_zone(nginx: str):
     a per-caller zone at a much higher rate, so webhooks moved to their own
     per-IP zone that preserves the original ceiling.
     """
-    assert nginx.count("limit_req zone=webhook burst=20 nodelay;") == 8
+    # Five provider ingest locations, each present in both the edge-terminated
+    # HTTP and the direct-TLS server block: two Zoom Phone route forms, two
+    # Teams voice route forms, and the Resend delivery-event endpoint.
+    assert nginx.count("limit_req zone=webhook burst=20 nodelay;") == 10
     assert re.search(
         r"limit_req_zone\s+\$binary_remote_addr\s+zone=webhook:\d+m\s+rate=60r/m;",
         nginx,
+    )
+    # The relay sends no session cookie, so the per-caller key would collapse to
+    # the source address and put it in the wider api bucket. Pin it explicitly.
+    assert (
+        nginx.count(
+            "location = /api/platform/email/webhook/resend {\n"
+            "            client_max_body_size 256k;\n"
+            "            limit_req zone=webhook burst=20 nodelay;"
+        )
+        == 2
     )

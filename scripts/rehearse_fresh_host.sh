@@ -100,7 +100,8 @@ OFFSITE_RESTORE_PUBLIC_KEY_FILE=$APP_DIR/offsite-restore-public.pem
 EMAIL_ENABLED=false
 EMAIL_HOST=smtp.rehearsal.invalid
 EMAIL_PORT=587
-EMAIL_FROM=support@getlawhand.com
+EMAIL_FROM=notifications@getlawhand.com
+EMAIL_FROM_SECURITY=security@getlawhand.com
 APP_COMMIT=$PROJECT
 APP_VERSION=fresh-host
 # The disposable GitHub runner proves boot and behavior, not production

@@ -177,6 +177,10 @@ from app.models.inbound_email import (
     InboundEmailAlias,
     FirmInboundEmailAlias,
 )
+from app.models.email_suppression import (
+    EmailSuppression,
+    PlatformEmailWebhookEvent,
+)
 from app.models.prospect_follow_through import (
     ProspectFollowThrough,
     EngagementPacket,
@@ -243,6 +247,8 @@ from app.models.automation_service import (
 )
 
 __all__ = [
+    "EmailSuppression",
+    "PlatformEmailWebhookEvent",
     "WorkflowConfigurationProposal",
     "WorkflowRun",
     "WorkflowRunStep",

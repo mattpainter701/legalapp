@@ -421,7 +421,18 @@ import hashlib
 import json
 import os
 
-keys = ("EMAIL_ENABLED", "EMAIL_HOST", "EMAIL_PORT", "EMAIL_USER", "EMAIL_PASS", "EMAIL_FROM")
+keys = (
+    "EMAIL_ENABLED",
+    "EMAIL_HOST",
+    "EMAIL_PORT",
+    "EMAIL_USER",
+    "EMAIL_PASS",
+    "EMAIL_FROM",
+    # Security mail carries its own identity; a backend and scheduler that
+    # disagree about it would send password resets from two different
+    # addresses, so it belongs in the fingerprint both processes must match.
+    "EMAIL_FROM_SECURITY",
+)
 values = {key: os.environ.get(key, "") for key in keys}
 if values["EMAIL_ENABLED"] != "true" or any(not values[key] for key in keys[1:]):
     raise SystemExit(1)

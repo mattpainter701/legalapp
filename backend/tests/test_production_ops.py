@@ -312,7 +312,8 @@ def _production_env(**overrides: str) -> str:
         "EMAIL_PORT": "587",
         "EMAIL_USER": "",
         "EMAIL_PASS": "",
-        "EMAIL_FROM": "support@getlawhand.com",
+        "EMAIL_FROM": "notifications@getlawhand.com",
+        "EMAIL_FROM_SECURITY": "security@getlawhand.com",
         "ORIGIN_TLS_SERVER_NAME": "origin.getlawhand.internal",
         "ORIGIN_TLS_CA_FILE": "__TEST_ORIGIN_CA__",
         "CLOUDFLARED_CONFIG_FILE": "__TEST_CLOUDFLARED_CONFIG__",
@@ -1935,6 +1936,7 @@ def test_upload_bind_scheduler_and_launch_capability_contracts() -> None:
                 "EMAIL_USER",
                 "EMAIL_PASS",
                 "EMAIL_FROM",
+                "EMAIL_FROM_SECURITY",
             ):
                 assert email_key in services[service]["environment"]
     assert prod["scheduler"]["healthcheck"] == hypervisor["scheduler"]["healthcheck"]
@@ -1992,6 +1994,48 @@ def test_synthetic_tenants_are_excluded_from_scheduler_health_gates() -> None:
         "backend and scheduler runtime SMTP configurations differ" in production_check
     )
     assert "inherited EMAIL_ENABLED conflicts" in production_check
+
+
+def test_prod_preflight_requires_two_distinct_system_email_identities() -> None:
+    """The public contact address is not the From address for system mail.
+
+    `operator_email` once did double duty: it pinned VITE_CONTACT_URL *and*
+    EMAIL_FROM. Routine notifications and account-security mail now carry
+    separate identities, so that a user who filters or mutes "task due" mail has
+    not also filtered their own password reset. Pinning EMAIL_FROM back to the
+    contact address would silently collapse that split, which is exactly the
+    failure this guards.
+    """
+    preflight = PREFLIGHT.read_text(encoding="utf-8")
+
+    # The public contact address stays pinned to the human mailbox.
+    assert 'operator_email="support@getlawhand.com"' in preflight
+    assert '"mailto:$operator_email"' in preflight
+
+    # System mail does not use it.
+    assert 'EMAIL_FROM)" == "$operator_email"' not in preflight
+    assert 'notification_email="notifications@getlawhand.com"' in preflight
+    assert 'security_email="security@getlawhand.com"' in preflight
+    assert 'EMAIL_FROM)" == "$notification_email"' in preflight
+    assert 'EMAIL_FROM_SECURITY)" == "$security_email"' in preflight
+
+    # Both identities must be present and must not collapse to one address.
+    assert "EMAIL_FROM EMAIL_FROM_SECURITY" in preflight
+    assert "check_nonplaceholder EMAIL_FROM_SECURITY" in preflight
+    assert 'EMAIL_FROM)" != "$(get_env EMAIL_FROM_SECURITY)"' in preflight
+
+
+def test_runtime_email_fingerprint_covers_the_security_identity() -> None:
+    """Backend and scheduler must agree on which address sends security mail.
+
+    A fingerprint that omitted it would let the two processes send password
+    resets from different addresses without the check noticing.
+    """
+    production_check = (ROOT / "scripts" / "production_check.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"EMAIL_FROM_SECURITY",' in production_check
 
 
 def test_zoom_production_gate_is_independent_of_commercial_plan() -> None:
