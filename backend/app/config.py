@@ -484,6 +484,11 @@ class Settings(BaseSettings):
     EMAIL_USER: str = ""
     EMAIL_PASS: str = ""
     EMAIL_FROM: str = "support@getlawhand.com"
+    # Account-security mail (password reset, address verification) is sent from
+    # its own identity so that a user who filters or mutes routine product
+    # notifications has not thereby filtered their own password reset. Empty
+    # falls back to EMAIL_FROM, which keeps a single-identity deployment valid.
+    EMAIL_FROM_SECURITY: str = ""
     MARKETING_LEAD_EMAIL: str = "support@getlawhand.com"
     SLACK_WEBHOOK_URL: str = ""  # Optional: Slack incoming webhook URL
     # Deployments that carry real users must refuse to boot with system email
@@ -1301,6 +1306,12 @@ def validate_platform_email_settings(settings: Settings) -> None:
         if not sender or "@" not in sender:
             raise ValueError(
                 "EMAIL_FROM must be a valid address when EMAIL_ENABLED=true"
+            )
+        security_sender = (settings.EMAIL_FROM_SECURITY or "").strip()
+        if security_sender and "@" not in security_sender:
+            raise ValueError(
+                "EMAIL_FROM_SECURITY must be a valid address, or empty to send "
+                "security mail from EMAIL_FROM"
             )
         if not 1 <= settings.EMAIL_PORT <= 65535:
             raise ValueError("EMAIL_PORT must be between 1 and 65535")

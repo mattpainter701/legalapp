@@ -16,7 +16,7 @@ LawHand backend -> authenticated SMTP submission -> transactional relay (Resend)
 
 | | Matter correspondence | System email |
 |---|---|---|
-| Sends as | The lawyer's or firm's mailbox | `notifications@getlawhand.com` |
+| Sends as | The lawyer's or firm's mailbox | `security@` / `notifications@` |
 | Transport | Microsoft Graph / Gmail OAuth (`connected_mail.py`) | SMTP relay (`email.py`) |
 | Failure is | Visible to the user who clicked send | Silent unless preflight catches it |
 
@@ -67,28 +67,30 @@ whichever address is used still receives replies there.
 
 That makes the From address a product decision rather than a technical one:
 
-| Address | Purpose | Sends via |
+| Address | Purpose | Setting |
 |---|---|---|
-| `notifications@getlawhand.com` | Password reset, verification, security notices | Relay |
-| `support@getlawhand.com` | Human correspondence | M365 |
+| `security@getlawhand.com` | Password reset, address verification, security notices | `EMAIL_FROM_SECURITY` |
+| `notifications@getlawhand.com` | Every other system message | `EMAIL_FROM` |
+| `support@getlawhand.com` | Human correspondence, sent from M365 | — |
 
-Sending as `notifications@` keeps the support inbox for conversations people
-actually start, and keeps machine-sent mail identifiable at a glance.
+The split is by *purpose*, and it is the point of having two addresses: a user
+who filters or mutes "task due" and "document ready" mail must not thereby
+filter their own password reset. The platform relay already carries far more
+than auth mail — task reminders, digests, e-signature notices, trial and portal
+mail — so this is a live concern rather than a future one.
 
-A `no-reply@` address would buy nothing over this. Reputation is carried by the
-domain and the DKIM key, not the local part, so a distinct sending address
+`EmailService.send_email` takes an `EmailCategory` that selects the identity.
+It defaults to `NOTIFICATION`, so a newly added caller cannot silently borrow
+the security identity for routine mail; the two auth senders (password reset in
+`routers/auth.py`, alias verification in `routers/user_aliases.py`) pass
+`SECURITY` explicitly. Leaving `EMAIL_FROM_SECURITY` empty collapses both
+categories onto `EMAIL_FROM`, which keeps a single-identity deployment valid.
+
+A `no-reply@` address would buy nothing over either. Reputation is carried by
+the domain and the DKIM key, not the local part, so a distinct sending address
 isolates nothing — and a reply to a no-reply mailbox either bounces or is
 silently discarded, which for account-recovery mail is precisely when a
-confused user is most likely to reply. `notifications@` is therefore a real,
-monitored mailbox (see below), not a dead end.
-
-**One thing to revisit when product notifications are added.** The split worth
-keeping is by *purpose*: a user who filters or mutes "task due" and "document
-ready" mail must not thereby filter their own password reset. Today
-`notifications@` carries only security mail, so there is nothing to separate.
-When routine product mail is introduced, move it to its own address — or move
-auth mail to `security@` — rather than letting one address carry both. It is an
-`EMAIL_FROM` change plus a mailbox, not a rewrite.
+confused user is most likely to reply.
 
 ## Manual setup steps
 
@@ -213,19 +215,25 @@ message is forwarded, so at `p=reject` forwarded staff mail would start being
 rejected outright. Enable DKIM for the domain in the Microsoft 365 Defender
 portal and add the two CNAMEs it issues before tightening past `quarantine`.
 
-### 3. M365 shared mailbox
+### 3. Receiving replies
 
-Sending as `notifications@getlawhand.com` works the moment the domain is
-verified, whether or not the mailbox exists. Create it anyway, so that replies
-land somewhere a human reads instead of bouncing:
+Sending from either address works the moment the domain is verified, whether or
+not a mailbox exists — so strictly speaking neither is required. Create them
+anyway, because a bounce is the wrong answer to the replies these addresses
+attract.
 
-1. Microsoft 365 admin centre → **Teams & groups** → **Shared mailboxes** → add
-   `notifications@getlawhand.com`.
-2. Forward it to `support@getlawhand.com`.
-3. No licence is needed (shared mailboxes allow 50 GB).
+The lightest option is an **alias** on the existing support mailbox: Microsoft
+365 admin centre → **Users** (or **Shared mailboxes**) → the `support@` mailbox
+→ **Manage email aliases** → add `security@` and `notifications@`. Replies then
+land in `support@` with no new mailbox to maintain. Use separate **shared
+mailboxes** forwarding to `support@` only if these should be triaged apart.
 
-This is the step that separates `notifications@` from a no-reply address. Skip
-it and a user replying to their own password-reset mail gets a bounce.
+For `notifications@` this is politeness. For `security@` it is worth more than
+that: "I did not request this password reset" is the earliest signal of a
+credential-stuffing run or an account takeover attempt against a firm's data,
+and it is worth hearing. `security@` is also the address people conventionally
+try when reporting a vulnerability, and one that bounces reads badly for a
+legal platform.
 
 ### 4. Bounce webhook
 
@@ -262,6 +270,7 @@ EMAIL_PORT=587                   # STARTTLS; the client keys off 587 specificall
 EMAIL_USER=resend                # literal string, not an address
 EMAIL_PASS=<Resend API key>
 EMAIL_FROM=notifications@getlawhand.com
+EMAIL_FROM_SECURITY=security@getlawhand.com
 EMAIL_SUPPRESSION_ENABLED=true
 PLATFORM_EMAIL_WEBHOOK_SECRET=whsec_<from the Resend webhook endpoint>
 ```

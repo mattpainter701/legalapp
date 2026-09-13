@@ -53,7 +53,7 @@ from app.schemas.auth import (
     UserInfo,
     UserProfileUpdate,
 )
-from app.services.email import email_service
+from app.services.email import EmailCategory, email_service
 from app.utils.oauth_security import (
     generate_nonce,
     generate_pkce_pair,
@@ -1790,6 +1790,7 @@ async def forgot_password(
             html_body,
             text_body,
             db=db,
+            category=EmailCategory.SECURITY,
         )
         if not sent:
             logger.error("Password reset email failed for user_id=%s", user.id)

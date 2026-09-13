@@ -24,6 +24,28 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+class EmailCategory(str, Enum):
+    """Which platform identity a system message is sent from.
+
+    Account-security mail is deliberately separable from routine product
+    notifications: a user who filters or mutes "task due" and "document ready"
+    mail must not thereby filter their own password reset. The two categories
+    collapse to one address when ``EMAIL_FROM_SECURITY`` is left empty.
+    """
+
+    SECURITY = "security"
+    NOTIFICATION = "notification"
+
+
+def sender_for(category: "EmailCategory") -> str:
+    """Resolve the From address for a category, falling back to EMAIL_FROM."""
+    if category is EmailCategory.SECURITY:
+        security_sender = (settings.EMAIL_FROM_SECURITY or "").strip()
+        if security_sender:
+            return security_sender
+    return settings.EMAIL_FROM
+
+
 class EmailDeliveryResult(str, Enum):
     """Machine-readable result for every attempted email delivery.
 
@@ -464,6 +486,7 @@ class EmailService:
         attachment: MailAttachment | None = None,
         attachments: list[MailAttachment] | None = None,
         db=None,
+        category: EmailCategory = EmailCategory.NOTIFICATION,
     ) -> EmailDeliveryResult:
         """
         Send an email to one or more recipients.
@@ -475,6 +498,10 @@ class EmailService:
         Recipients on the platform suppression list are dropped before
         submission. Pass ``db`` when the caller already holds a session; the
         suppression lookup opens its own otherwise.
+
+        ``category`` selects the From identity. It defaults to NOTIFICATION;
+        account-security mail must pass SECURITY explicitly, so a new caller
+        cannot silently borrow the security identity for routine mail.
         """
         if not to:
             logger.warning("send_email called with empty recipient list — skipping")
@@ -505,7 +532,7 @@ class EmailService:
         try:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
-            msg["From"] = settings.EMAIL_FROM
+            msg["From"] = sender_for(category)
             msg["To"] = ", ".join(to)
 
             if text_body:

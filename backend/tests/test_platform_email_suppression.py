@@ -22,7 +22,7 @@ from app.config import validate_platform_email_settings
 from app.routers import platform_email_webhooks as webhook_routes
 from app.services import email as email_module
 from app.services import email_suppression as suppression_module
-from app.services.email import EmailDeliveryResult, EmailService
+from app.services.email import EmailCategory, EmailDeliveryResult, EmailService
 from app.services.email_suppression import filter_suppressed, normalize_address
 
 
@@ -39,6 +39,7 @@ def _email_settings(**overrides):
         "EMAIL_USER": "resend",
         "EMAIL_PASS": "re_relay_api_key",
         "EMAIL_FROM": "notifications@getlawhand.com",
+        "EMAIL_FROM_SECURITY": "security@getlawhand.com",
         "PLATFORM_EMAIL_WEBHOOK_SECRET": "",
     }
     values.update(overrides)
@@ -272,6 +273,75 @@ async def test_partial_suppression_still_delivers_to_the_rest(monkeypatch):
     assert result is EmailDeliveryResult.SENT
     assert len(sent) == 1
     assert sent[0]["To"] == "live@example.com"
+
+
+@pytest.mark.asyncio
+async def test_security_mail_sends_from_the_security_identity(monkeypatch):
+    """A password reset must not share an identity with product notifications.
+
+    A user who filters or mutes "task due" mail would otherwise have filtered
+    their own account recovery along with it.
+    """
+    _configure_smtp(monkeypatch)
+    monkeypatch.setattr(
+        email_module.settings, "EMAIL_FROM", "notifications@getlawhand.com"
+    )
+    monkeypatch.setattr(
+        email_module.settings, "EMAIL_FROM_SECURITY", "security@getlawhand.com"
+    )
+    monkeypatch.setattr(suppression_module.settings, "EMAIL_SUPPRESSION_ENABLED", False)
+    sent = []
+
+    async def fake_send(message, **kwargs):
+        sent.append(message)
+
+    monkeypatch.setattr(email_module.aiosmtplib, "send", fake_send)
+
+    await EmailService().send_email(
+        ["user@example.com"],
+        "Reset your LawHand password",
+        "<p>Reset</p>",
+        "Reset",
+        category=EmailCategory.SECURITY,
+    )
+    await EmailService().send_email(
+        ["user@example.com"], "Task due", "<p>Task</p>", "Task"
+    )
+
+    assert sent[0]["From"] == "security@getlawhand.com"
+    assert sent[1]["From"] == "notifications@getlawhand.com"
+
+
+def test_notification_is_the_default_category(monkeypatch):
+    """A new caller must not silently borrow the security identity."""
+    monkeypatch.setattr(
+        email_module.settings, "EMAIL_FROM", "notifications@getlawhand.com"
+    )
+    monkeypatch.setattr(
+        email_module.settings, "EMAIL_FROM_SECURITY", "security@getlawhand.com"
+    )
+    assert (
+        email_module.sender_for(EmailCategory.NOTIFICATION)
+        == "notifications@getlawhand.com"
+    )
+
+
+def test_unset_security_identity_falls_back_to_one_address(monkeypatch):
+    """A single-identity deployment stays valid rather than sending From ''."""
+    monkeypatch.setattr(
+        email_module.settings, "EMAIL_FROM", "support@getlawhand.com"
+    )
+    monkeypatch.setattr(email_module.settings, "EMAIL_FROM_SECURITY", "")
+    assert (
+        email_module.sender_for(EmailCategory.SECURITY) == "support@getlawhand.com"
+    )
+
+
+def test_malformed_security_identity_is_rejected_at_boot():
+    with pytest.raises(ValueError, match="EMAIL_FROM_SECURITY"):
+        validate_platform_email_settings(
+            _email_settings(EMAIL_FROM_SECURITY="not-an-address")
+        )
 
 
 def test_suppressed_result_maps_to_an_actionable_api_error():
