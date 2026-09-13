@@ -1,7 +1,7 @@
 # =============================================================================
 # Dependabot auto-merge
 # =============================================================================
-# Automatically approve and enable auto-merge for Dependabot PRs that pass CI.
+# Automatically enable auto-merge for Dependabot PRs that pass CI.
 # Only patches and minor versions are auto-merged; major bumps require manual
 # review.  The PR must still pass every required status check before GitHub
 # actually merges it.
@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   auto-merge:
-    name: Approve and enable auto-merge
+    name: Enable auto-merge
     if: github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -31,12 +31,6 @@ jobs:
         uses: dependabot/fetch-metadata@d7267f607e9d3fb96fc2fbe83e0af444e2571f86 # v2.4.0
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: Approve the PR
-        run: gh pr review --approve "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable auto-merge for patches and minors
         if: steps.metadata.outputs.update-type != 'version-update:semver-major'
